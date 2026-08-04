@@ -1,93 +1,90 @@
 [package]
-edition = "2021"
-name = "embassy-rp-starter"
+name = "explorer-robot"
 version = "0.1.0"
-license = "MIT OR Apache-2.0"
-resolver = "2"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Explorer robot v3 — tracked robot with LiDAR-based autonomous navigation and sensor-driven obstacle avoidance, written in Rust with Embassy."
+repository = "https://github.com/1-rafael-1/explorer-robot"
 
+[features]
+# Gate high-frequency diagnostic logging.
+# Keep this OFF by default so release runs without a log consumer don't spend time formatting/queuing logs.
+telemetry_logs = []
 
-[dependencies]
-cortex-m = { version = "0.7", features = ["inline-asm"] }
-cortex-m-rt = "0.7"
-
-defmt = "0.3"
-defmt-rtt = "0.4"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
-
-embassy-embedded-hal = { version = "0.3", features = ["defmt"] }
-
-embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt", "task-arena-size-32768"] }
-embassy-futures = { version = "0.1" }
-embassy-sync = { version = "0.6", features = ["defmt"] }
-embassy-time = { version = "0.4", features = ["defmt", "defmt-timestamp-uptime"] }
-
-embassy-rp = { version = "0.3", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
-## need these for pio
-pio-proc = "0.2"
-pio = "0.2"
-## USB + logging via USB support (note: embassy-usb-logger requires portable-atomic with critical-section feature enabled)
-embassy-usb-driver = { version = "0.1", features = ["defmt"] }
-embassy-usb-logger = { version = "0.4" }
-portable-atomic = { version = "1.10", features = ["critical-section"] }
-log = "0.4"
-## network support
-embassy-net = { version = "0.6", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet", "dns", "proto-ipv4", "proto-ipv6", "multicast"] }
-# wiznet ethernet driver support
-embassy-net-wiznet = { version = "0.2", features = ["defmt"] }
-## pico-w support
-cyw43 = { version = "0.3", features = ["defmt", "firmware-logs"] }
-cyw43-pio = { version = "0.3", features = ["defmt"] }
-static_cell = { version = "2" }
-
-# cargo build/run
 [profile.dev]
+lto = true
 codegen-units = 1
 debug = 2
 debug-assertions = true
-incremental = false
-opt-level = 1
-overflow-checks = true
-lto = "off"
+incremental = true
+opt-level = 0
 
-# cargo build/run --release
 [profile.release]
 codegen-units = 1
 debug = 2
 debug-assertions = false
-incremental = false
+incremental = true
 lto = 'fat'
 opt-level = 's'
-overflow-checks = false
 
-# do not optimize proc-macro crates = faster builds from scratch
-[profile.dev.build-override]
-codegen-units = 8
-debug = false
-debug-assertions = false
-opt-level = 0
-overflow-checks = false
+[lints.clippy]
+all = { level = "warn", priority = 1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "warn"
+missing_docs_in_private_items = "warn"
+cargo_common_metadata = "allow"
+future_not_send = "allow"
+multiple_crate_versions = "allow"
 
-[profile.release.build-override]
-codegen-units = 8
-debug = false
-debug-assertions = false
-opt-level = 0
-overflow-checks = false
+[dependencies]
+embassy-rp = { version = "0.10.0", features = [
+    "defmt",
+    "unstable-pac",
+    "time-driver",
+    "critical-section-impl",
+    "rp235xa",
+] }
+embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
+embassy-executor = { version = "0.10.0", features = [
+    "platform-cortex-m",
+    "executor-thread",
+    "executor-interrupt",
+    "defmt",
+] }
+embassy-time = { version = "0.5.0", features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+] }
+embassy-futures = { version = "0.1.2" }
+defmt = "1.0.1"
+defmt-rtt = "1.1.0"
+cortex-m-rt = "0.7.5"
+critical-section = "1.2.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+nanorand = { version = "0.8.0", features = ["wyrand"], default-features = false }
+ssd1306-async = { git = "https://github.com/kalkyl/ssd1306-async" }
+embedded-graphics = "0.8.1"
+static_cell = { version = "2.1.1", features = [] }
+heapless = "0.9.2"
+micromath = "2.1.0"
+libm = "0.2"
+icm20948-rs = { version = "0.2.3", features = ["async", "defmt", "dmp"] }
+nalgebra = { version = "0.34", default-features = false, features = ["libm"] }
+embedded-hal-async = "1.0.0"
+sequential-storage = "7.1.0"
+embedded-storage-async = "0.4.1"
 
-# cargo test
-[profile.test]
-codegen-units = 1
-debug = 2
-debug-assertions = true
-incremental = false
-opt-level = 's'
-overflow-checks = true
-
-# cargo test --release
-[profile.bench]
-codegen-units = 1
-debug = 2
-debug-assertions = false
-incremental = false
-lto = 'fat'
-opt-level = 's'
+# [patch.crates-io]
+# embassy-rp = { git = "https://github.com/embassy-rs/embassy" }
+# embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy" }
+# embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
+# embassy-executor = { git = "https://github.com/embassy-rs/embassy" }
+# embassy-time = { git = "https://github.com/embassy-rs/embassy" }
+# embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
