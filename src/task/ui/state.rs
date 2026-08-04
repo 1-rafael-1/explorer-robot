@@ -1,0 +1,95 @@
+//! UI state owned by the UI controller.
+
+use defmt::Format;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+
+use crate::system::state::{CalibrationSelection, DriveMode};
+
+/// Top-level UI mode
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Format)]
+#[allow(dead_code)]
+pub enum UiMode {
+    /// Main menu display
+    MainMenu,
+    /// System info screen (scrollable)
+    SystemInfo {
+        /// Current scroll offset into the system info line list
+        scroll_offset: u8,
+    },
+    /// Calibration submenu
+    CalibrateMenu,
+    /// Drive mode submenu
+    DriveModeMenu,
+    /// Test mode submenu
+    TestMenu,
+    /// Autonomous drive mode is active
+    RunningAutonomous {
+        /// Which drive mode is running
+        mode: DriveMode,
+    },
+    /// Turns test running
+    RunningTurnsTest,
+    /// Straight drive test running
+    RunningStraightDriveTest,
+    /// Arc drive test running
+    RunningArcDriveTest,
+    /// IMU test mode — 9-axis live display (accel + gyro + mag via SPI)
+    RunningImu9Test,
+    /// IMU test mode — 6-axis live display (accel + gyro via SPI)
+    RunningImu6Test,
+    /// Basic motor test mode (2 motors: left/right)
+    RunningBasicMotorTest,
+    /// `LiDAR` test placeholder screen
+    RunningLidarTest,
+    /// Rangefinder test placeholder screen
+    RunningRangefinderTest,
+    /// Calibration running state
+    Calibrating {
+        /// Selected calibration kind
+        kind: CalibrationSelection,
+    },
+    /// Distance calibration entry — user adjusts measured distance via rotary encoder.
+    EnteringDistance {
+        /// Current entered value in cm (preset to 150, range [0, 200]).
+        value: u8,
+    },
+    /// Attempt-straight-line target distance entry.
+    EnteringAttemptStraightDistance {
+        /// Current entered target distance in cm.
+        value: u16,
+    },
+}
+
+/// UI state owned by the UI controller.
+#[derive(Clone, Copy)]
+pub struct UiState {
+    /// Current UI mode.
+    pub mode: UiMode,
+    /// Selected index in the main menu.
+    pub main_index: usize,
+    /// Selected index in the calibration menu.
+    pub calibrate_index: usize,
+    /// Selected index in the drive mode menu.
+    pub drive_mode_index: usize,
+    /// Selected index in the test menu.
+    pub test_index: usize,
+    /// Whether the current calibration run has completed.
+    pub calibration_complete: bool,
+}
+
+impl UiState {
+    /// Creates the default UI state (main menu with first items selected).
+    pub const fn new() -> Self {
+        Self {
+            mode: UiMode::MainMenu,
+            main_index: 0,
+            calibrate_index: 0,
+            drive_mode_index: 0,
+            test_index: 0,
+            calibration_complete: false,
+        }
+    }
+}
+
+/// Global UI state mutex owned by the UI controller.
+pub static UI_STATE: Mutex<CriticalSectionRawMutex, UiState> = Mutex::new(UiState::new());

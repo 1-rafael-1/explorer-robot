@@ -1,0 +1,90 @@
+//! Testing task modules.
+//!
+//! Provides on-demand test mode tasks spawned via a controller task.
+//!
+//! # v3 Changes from v2
+//! - Removed: `coast_avoid_detection`, `ir_ultrasonic`, `ultrasonic_sweep` tests
+//!   (IR/ultrasonic sensors replaced by `LiDAR` + VL53L0X rangefinders).
+//! - `basic_motor` adapted for 2-track (left/right) instead of 4-motor.
+
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use embassy_executor::Spawner;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+
+pub mod arc_drive;
+pub mod basic_motor;
+pub mod imu_6axis;
+pub mod imu_9axis;
+pub mod straight_drive;
+pub mod turns;
+
+pub use arc_drive::start_arc_drive_test;
+pub use basic_motor::{start_basic_motor_test_mode, stop_basic_motor_test_mode};
+pub use imu_6axis::{start_imu6_test_mode, stop_imu6_test_mode};
+pub use imu_9axis::{start_imu_test_mode, stop_imu_test_mode};
+pub use straight_drive::start_straight_drive_test;
+pub use turns::start_turns_test;
+
+/// Command sent to the testmode controller.
+#[derive(Clone, Copy)]
+pub(super) enum TestCommand {
+    /// Spawn the turns test.
+    Turns,
+    /// Spawn the straight drive test.
+    StraightDrive,
+    /// Spawn the arc drive test.
+    ArcDrive,
+    /// Spawn the IMU 9-axis telemetry test.
+    Imu,
+    /// Spawn the IMU 6-axis telemetry test.
+    Imu6,
+    /// Spawn the basic motor test.
+    BasicMotor,
+}
+
+/// Tracks whether any testmode is currently active.
+static TESTMODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Command channel for testmode spawn requests.
+static TESTMODE_COMMAND: Channel<CriticalSectionRawMutex, TestCommand, 4> = Channel::new();
+
+/// Initialize testmode support (spawns the controller task).
+#[allow(clippy::unwrap_used)]
+pub fn init_testing(spawner: Spawner) {
+    spawner.spawn(testmode_controller(spawner).unwrap());
+}
+
+/// Request that a test be spawned on demand.
+/// Returns true if the request was accepted.
+pub(super) async fn request_start(command: TestCommand) -> bool {
+    if TESTMODE_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return false;
+    }
+
+    TESTMODE_COMMAND.send(command).await;
+    true
+}
+
+/// Mark the testmode controller as idle again.
+pub(super) fn release_testmode() {
+    TESTMODE_ACTIVE.store(false, Ordering::Release);
+}
+
+/// Controller task that spawns test tasks on demand.
+#[embassy_executor::task]
+async fn testmode_controller(spawner: Spawner) {
+    loop {
+        match TESTMODE_COMMAND.receive().await {
+            TestCommand::Turns => turns::spawn(spawner),
+            TestCommand::StraightDrive => straight_drive::spawn(spawner),
+            TestCommand::ArcDrive => arc_drive::spawn(spawner),
+            TestCommand::Imu => imu_9axis::spawn(spawner),
+            TestCommand::Imu6 => imu_6axis::spawn(spawner),
+            TestCommand::BasicMotor => basic_motor::spawn(spawner),
+        }
+    }
+}
