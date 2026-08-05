@@ -75,9 +75,8 @@ async fn handle_event(event: Events) {
             // Placeholder: log LiDAR scan completion for now.
             info!("Lidar scan completed");
         }
-        Events::RangefinderReading => {
-            // Rangefinder readings are polled directly from perception state
-            // by consumers — this event serves as a wake-up signal.
+        Events::FloorDropDetected { detected } => {
+            behavior::floor_drop::handle_floor_drop_detected(detected).await;
         }
     }
 }

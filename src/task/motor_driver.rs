@@ -9,13 +9,13 @@
 //!
 //! **Left Track Motor (PWM Slice 0):**
 //! - PWM: GPIO 0 (PWM0A)
-//! - Direction forward: GPIO 1 (direct)
+//! - Direction forward: GPIO 8 (direct)
 //! - Direction backward: GPIO 2 (direct)
 //!
 //! **Right Track Motor (PWM Slice 1):**
 //! - PWM: GPIO 3 (PWM1A)
-//! - Direction forward: GPIO 4 (direct)
-//! - Direction backward: GPIO 5 (direct)
+//! - Direction forward: GPIO 10 (direct)
+//! - Direction backward: GPIO 11 (direct)
 //!
 //! **Standby pin:** GPIO 6 (direct, active high)
 //!
@@ -384,20 +384,20 @@ async fn process_command(
 /// # Arguments
 /// * `pwm_left` — PWM slice for left track motor (GPIO 0, PWM0 CH A)
 /// * `pwm_right` — PWM slice for right track motor (GPIO 3, PWM1 CH A)
-/// * `left_fwd` — GPIO for left motor forward direction (GPIO 1)
+/// * `left_fwd` — GPIO for left motor forward direction (GPIO 8)
 /// * `left_bwd` — GPIO for left motor backward direction (GPIO 2)
-/// * `right_fwd` — GPIO for right motor forward direction (GPIO 4)
-/// * `right_bwd` — GPIO for right motor backward direction (GPIO 5)
+/// * `right_fwd` — GPIO for right motor forward direction (GPIO 10)
+/// * `right_bwd` — GPIO for right motor backward direction (GPIO 11)
 /// * `standby_pin` — GPIO for TB6612FNG standby pin (GPIO 6, active high)
 #[allow(clippy::similar_names)]
 #[embassy_executor::task]
 pub async fn motor_driver(
     pwm_left: Pwm<'static>,
     pwm_right: Pwm<'static>,
-    left_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_1>,
+    left_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_8>,
     left_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_2>,
-    right_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_4>,
-    right_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_5>,
+    right_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_10>,
+    right_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_11>,
     standby_pin: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_6>,
 ) {
     info!("Motor driver task starting");

@@ -23,9 +23,10 @@ use embassy_rp::{
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
     multicore::{Stack, spawn_core1},
     peripherals::{
-        ADC, DMA_CH0, DMA_CH1, DMA_CH2, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_9,
-        PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_28, PIO1,
-        PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0,
+        ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4,
+        PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_18,
+        PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_28, PIO1, PWM_SLICE0, PWM_SLICE1,
+        PWM_SLICE3, PWM_SLICE4, SPI0, UART0, UART1,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
     pio_programs::{
@@ -34,6 +35,7 @@ use embassy_rp::{
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
+    uart::{self, InterruptHandler as UartInterruptHandler, Uart, UartRx},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
@@ -47,7 +49,7 @@ mod task;
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
 /// Used by the SSD1306 OLED display and (eventually) the VL53L0X
-/// rangefinder array, both on core0.
+/// rangefinder, both on core0.
 pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 
 // ── Interrupt bindings ─────────────────────────────────────────────────────────
@@ -56,7 +58,10 @@ bind_interrupts!(pub struct Irqs {
     I2C0_IRQ => I2cInterruptHandler<I2C0>;
     ADC_IRQ_FIFO => AdcInterruptHandler;
     PIO1_IRQ_0 => PioInterruptHandler<PIO1>;
-    DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>;
+    DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>,
+        DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>;
+    UART0_IRQ => UartInterruptHandler<UART0>;
+    UART1_IRQ => UartInterruptHandler<UART1>;
 });
 
 // ── Boot descriptor ────────────────────────────────────────────────────────────
@@ -84,24 +89,26 @@ static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 /// Pins used by the TB6612FNG motor driver and motor encoders.
 ///
-/// Two-track configuration: left PWM on GPIO 0 (slice 0), right PWM on
-/// GPIO 3 (slice 1). Direction pins are direct-GPIO outputs (IN1/IN2 per
-/// channel). Encoders use PWM input mode on slices 3 and 4.
+/// Two-track configuration: left PWM on GPIO 0 (slice 0), right PWM on
+/// GPIO 3 (slice 1). Direction pins are direct-GPIO outputs (IN1/IN2 per
+/// channel), relocated off the RP2350's fixed UART RX pins (GPIO 1/4/5)
+/// to free those for the D6 `LiDAR` and AI cam UARTs. Encoders use PWM
+/// input mode on slices 3 and 4.
 pub struct MotorDriverPins {
     /// Left motor PWM slice + pin.
     pub left_pwm_slice: embassy_rp::Peri<'static, PWM_SLICE0>,
     pub left_pwm_pin: embassy_rp::Peri<'static, PIN_0>,
-    /// Left motor forward direction pin.
-    pub left_fwd: embassy_rp::Peri<'static, PIN_1>,
+    /// Left motor forward direction pin (GPIO 8; moved off GPIO 1 to free UART0 RX).
+    pub left_fwd: embassy_rp::Peri<'static, PIN_8>,
     /// Left motor backward direction pin.
     pub left_bwd: embassy_rp::Peri<'static, PIN_2>,
     /// Right motor PWM slice + pin.
     pub right_pwm_slice: embassy_rp::Peri<'static, PWM_SLICE1>,
     pub right_pwm_pin: embassy_rp::Peri<'static, PIN_3>,
-    /// Right motor forward direction pin.
-    pub right_fwd: embassy_rp::Peri<'static, PIN_4>,
-    /// Right motor backward direction pin.
-    pub right_bwd: embassy_rp::Peri<'static, PIN_5>,
+    /// Right motor forward direction pin (GPIO 10; moved off GPIO 4 to free UART1 TX).
+    pub right_fwd: embassy_rp::Peri<'static, PIN_10>,
+    /// Right motor backward direction pin (GPIO 11; moved off GPIO 5 to free UART1 RX).
+    pub right_bwd: embassy_rp::Peri<'static, PIN_11>,
     /// TB6612FNG standby pin (active high).
     pub standby: embassy_rp::Peri<'static, PIN_6>,
     /// Left encoder PWM slice + pin (input mode).
@@ -135,9 +142,64 @@ pub struct Ec11Pins {
     pub btn: embassy_rp::Peri<'static, PIN_24>,
 }
 
+/// Resources for the COIN-D6 360° spinning dTOF `LiDAR`.
+///
+/// Runs on **core1** over a dedicated UART0 peripheral. The sensor
+/// auto-starts on power-up and emits continuous scan data at 10 Hz
+/// (~230 400 baud). A power MOSFET (IRLS44N) on the supply rail allows
+/// firmware-controlled power cycling.
+///
+/// Pin choice is constrained by the RP2350's fixed UART alt-function
+/// table: UART0 RX only exists on GPIO 1/13/17, all otherwise claimed
+/// (motor/RGB/I2C0) except GPIO 1 after relocating the motor's
+/// `left_fwd` pin. UART0 TX (GPIO 12) was already free.
+pub struct D6LidarPins {
+    /// UART0 TX — connect to `LiDAR` RX, if command support is wired later
+    /// (GPIO 12). Reserved but not yet wired into `init_d6_lidar_uart`,
+    /// since the sensor only needs RX per the data-format spec.
+    #[allow(dead_code)]
+    pub uart_tx: embassy_rp::Peri<'static, PIN_12>,
+    /// UART0 RX — connect to `LiDAR` TX (GPIO 1).
+    pub uart_rx: embassy_rp::Peri<'static, PIN_1>,
+    /// Power MOSFET gate (IRLS44N low-side switch, active-high, GPIO 26).
+    pub power_mosfet: embassy_rp::Peri<'static, PIN_26>,
+    /// UART0 peripheral instance.
+    pub uart: embassy_rp::Peri<'static, UART0>,
+    /// DMA channel for UART0 RX streaming.
+    pub dma_rx: embassy_rp::Peri<'static, DMA_CH3>,
+}
+
+/// Resources for the Grove Vision AI V2 camera module.
+///
+/// Runs on **core0** over a dedicated UART1 peripheral. The module runs
+/// on-device ML inference (Himax `WiseEye2`) and reports results over
+/// serial. A power MOSFET (IRLS44N) on the supply rail allows
+/// firmware-controlled power cycling.
+///
+/// GPIO 25 is unavailable (hardwired to the onboard LED), so this uses
+/// UART1 on GPIO 4/5 after relocating the motor's `right_fwd`/`right_bwd`
+/// pins, which are the RP2350's only UART1 TX/RX pin pair besides GPIO 8/9
+/// (GPIO 9 is taken by the right encoder). Full duplex (unlike the D6),
+/// since the module expects host commands and returns results over the
+/// same UART — hence a second DMA channel for TX.
+pub struct AiCamPins {
+    /// UART1 TX — connect to AI cam RX (GPIO 4).
+    pub uart_tx: embassy_rp::Peri<'static, PIN_4>,
+    /// UART1 RX — connect to AI cam TX (GPIO 5).
+    pub uart_rx: embassy_rp::Peri<'static, PIN_5>,
+    /// Power MOSFET gate (IRLS44N low-side switch, active-high, GPIO 27).
+    pub power_mosfet: embassy_rp::Peri<'static, PIN_27>,
+    /// UART1 peripheral instance.
+    pub uart: embassy_rp::Peri<'static, UART1>,
+    /// DMA channel for UART1 TX streaming.
+    pub dma_tx: embassy_rp::Peri<'static, DMA_CH5>,
+    /// DMA channel for UART1 RX streaming.
+    pub dma_rx: embassy_rp::Peri<'static, DMA_CH4>,
+}
+
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
 
-/// Initialise the shared I2C0 bus for display and VL53L0X.
+/// Initialise the shared I2C0 bus for display and VL53L0X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new_async` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
@@ -347,6 +409,60 @@ fn init_imu(spawner: Spawner, spi: Spi<'static, SPI0, spi::Async>, cs: Output<'s
     spawner.spawn(task::sensors::imu::inertial_measurement_read(spi_bus, cs).unwrap());
 }
 
+/// Bring up the COIN-D6 `LiDAR`'s UART0 RX peripheral and power MOSFET.
+///
+/// RX-only: per the D6 data-format spec, command-based start/stop was
+/// unreliable in testing, so power cycling is done via the MOSFET gate
+/// instead of serial commands. The TX pin (GPIO 12, `D6LidarPins::uart_tx`)
+/// stays reserved but unwired — add it here if command support turns out
+/// to be needed.
+///
+/// Must be called on **core1** so `UART0_IRQ` is enabled on core1's NVIC,
+/// mirroring how `init_i2c_bus` must run on core0 for `I2C0_IRQ`.
+///
+/// This only brings the peripheral up — no frame parsing yet. Returns the
+/// UART RX half and the MOSFET output for the real driver task to consume
+/// once it exists; the `lidar_stub` task does not use these yet.
+fn init_d6_lidar_uart(d6_pins: D6LidarPins) -> (UartRx<'static, uart::Async>, Output<'static>) {
+    let mut uart_config = uart::Config::default();
+    uart_config.baudrate = 230_400;
+
+    let uart_rx = UartRx::new(d6_pins.uart, d6_pins.uart_rx, Irqs, d6_pins.dma_rx, uart_config);
+
+    // Powered off by default; the real driver drives this high to power the sensor.
+    let power_mosfet = Output::new(d6_pins.power_mosfet, embassy_rp::gpio::Level::Low);
+
+    (uart_rx, power_mosfet)
+}
+
+/// Bring up the Grove Vision AI V2's UART1 peripheral (full duplex) and power MOSFET.
+///
+/// Full duplex, unlike the D6: the module expects host commands (e.g.
+/// invoke/query) and returns inference results over the same UART.
+///
+/// This only brings the peripheral up — no protocol implementation yet.
+/// Returns the UART and the MOSFET output for the real driver task to
+/// consume once it exists.
+fn init_ai_cam_uart(ai_cam_pins: AiCamPins) -> (Uart<'static, uart::Async>, Output<'static>) {
+    let mut uart_config = uart::Config::default();
+    uart_config.baudrate = 115_200;
+
+    let uart = Uart::new(
+        ai_cam_pins.uart,
+        ai_cam_pins.uart_tx,
+        ai_cam_pins.uart_rx,
+        Irqs,
+        ai_cam_pins.dma_tx,
+        ai_cam_pins.dma_rx,
+        uart_config,
+    );
+
+    // Powered off by default; the real driver drives this high to power the module.
+    let power_mosfet = Output::new(ai_cam_pins.power_mosfet, embassy_rp::gpio::Level::Low);
+
+    (uart, power_mosfet)
+}
+
 /// Spawn the startup task that fires the `Initialize` event.
 #[allow(clippy::unwrap_used)]
 fn init_startup(spawner: Spawner) {
@@ -393,12 +509,12 @@ fn main() -> ! {
     let motor_pins = MotorDriverPins {
         left_pwm_slice: p.PWM_SLICE0,
         left_pwm_pin: p.PIN_0,
-        left_fwd: p.PIN_1,
+        left_fwd: p.PIN_8,
         left_bwd: p.PIN_2,
         right_pwm_slice: p.PWM_SLICE1,
         right_pwm_pin: p.PIN_3,
-        right_fwd: p.PIN_4,
-        right_bwd: p.PIN_5,
+        right_fwd: p.PIN_10,
+        right_bwd: p.PIN_11,
         standby: p.PIN_6,
         enc_left_slice: p.PWM_SLICE3,
         enc_left_pin: p.PIN_7,
@@ -406,9 +522,33 @@ fn main() -> ! {
         enc_right_pin: p.PIN_9,
     };
 
+    // D6 LiDAR — dedicated UART0 on core1 (currently stubbed).
+    let d6_pins = D6LidarPins {
+        uart_tx: p.PIN_12,
+        uart_rx: p.PIN_1,
+        power_mosfet: p.PIN_26,
+        uart: p.UART0,
+        dma_rx: p.DMA_CH3,
+    };
+
+    // Grove Vision AI V2 — dedicated UART1 on core0 (reserved, not yet driven).
+    let ai_cam_pins = AiCamPins {
+        uart_tx: p.PIN_4,
+        uart_rx: p.PIN_5,
+        power_mosfet: p.PIN_27,
+        uart: p.UART1,
+        dma_tx: p.DMA_CH5,
+        dma_rx: p.DMA_CH4,
+    };
+
     // ── Core1: LiDAR driver ─────────────────────────────────────────────────
     #[allow(static_mut_refs)]
     spawn_core1(p.CORE1, unsafe { &mut CORE1_STACK }, move || {
+        // Initialised on core1 so UART0_IRQ is enabled on core1's NVIC.
+        // Not yet consumed by `lidar_stub_task` — held here until the real
+        // driver task lands.
+        #[allow(clippy::no_effect_underscore_binding)]
+        let (_d6_uart_rx, _d6_power_mosfet) = init_d6_lidar_uart(d6_pins);
         let executor1 = EXECUTOR1.init(Executor::new());
         executor1.run(|spawner| {
             spawner.spawn(task::sensors::lidar_stub::lidar_stub_task().unwrap());
@@ -418,13 +558,18 @@ fn main() -> ! {
     // ── Core0: all other tasks ──────────────────────────────────────────────
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
-        // I2C0 bus for SSD1306 OLED display and VL53L0X rangefinder array.
+        // I2C0 bus for SSD1306 OLED display and VL53L0X rangefinder.
         // Initialised inside the closure so I2c::new_async enables I2C0_IRQ
         // on core0's NVIC.
         let i2c_bus = init_i2c_bus(p.I2C0, p.PIN_16, p.PIN_17);
 
         // SPI bus for ICM20948 IMU
         let (imu_spi, imu_cs) = init_imu_spi(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.PIN_21, p.DMA_CH1, p.DMA_CH2);
+
+        // UART1 for Grove Vision AI V2 — not yet consumed by any task, held
+        // here until the real driver lands.
+        #[allow(clippy::no_effect_underscore_binding)]
+        let (_ai_cam_uart, _ai_cam_power_mosfet) = init_ai_cam_uart(ai_cam_pins);
 
         init_orchestrate(spawner);
         init_battery_monitoring(spawner, p.ADC, p.PIN_28);

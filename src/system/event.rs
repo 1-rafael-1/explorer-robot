@@ -58,8 +58,6 @@ pub async fn wait() -> Events {
 pub enum ObstacleSource {
     /// Obstacle detected by spinning `LiDAR` (forward arc).
     Lidar,
-    /// Obstacle detected by VL53L0X rangefinder array.
-    Rangefinder,
 }
 
 /// Rotary encoder direction.
@@ -101,6 +99,22 @@ pub enum Events {
         detected: bool,
     },
 
+    /// Floor-drop detection status changed (stairs, ledges).
+    ///
+    /// Raised by the front-down VL53L0X rangefinder when the distance
+    /// reading crosses the drop threshold. This is *not* an obstacle —
+    /// the floor opening up (e.g. top of stairs) looks like a sudden
+    /// distance increase beyond range.
+    ///
+    /// In `CoastAndAvoid` mode a floor drop triggers the same
+    /// stop/back-up/turn response as an obstacle. In other drive modes
+    /// it is logged but does not interrupt motion.
+    FloorDropDetected {
+        /// true: Floor drop detected (distance exceeds threshold).
+        /// false: Floor is solid again.
+        detected: bool,
+    },
+
     /// Obstacle avoidance maneuver completed.
     /// - Triggered after attempting to navigate around obstacle.
     /// - Used to coordinate next movement decision.
@@ -109,12 +123,6 @@ pub enum Events {
     /// `LiDAR` buffered scan completed (360° point-cloud pass).
     /// The point cloud in perception state is now fully populated.
     LidarScanCompleted,
-
-    /// New VL53L0X rangefinder readings available.
-    /// - Triggered when the rangefinder array completes a sampling round.
-    /// - Consumers poll perception state for the latest readings.
-    #[allow(dead_code)]
-    RangefinderReading,
 
     /// Battery measurement (level percentage and raw voltage).
     /// - level: 0-100 percent, triggers LED color updates.

@@ -12,6 +12,12 @@
 //! - Quick alternating red/green blink sequence (5 blinks)
 //! - 30ms interval for noticeable but brief feedback
 //!
+//! # Obstacle Indication
+//! - Solid red blink pattern when an obstacle is detected
+//!
+//! # Floor-Drop Indication
+//! - Amber blink pattern when a floor drop / ledge is detected
+//!
 //! # PWM Control
 //! - 100Hz PWM frequency for flicker-free operation
 //! - Independent control of red, green, and blue channels via PIO PWM
@@ -32,6 +38,8 @@ pub enum IndicatorEvent {
     Affirm(bool),
     /// Obstacle status update (true = obstacle detected)
     Obstacle(bool),
+    /// Floor-drop status update (true = floor drop / ledge detected)
+    FloorDrop(bool),
 }
 
 /// Signal for triggering LED state updates
@@ -49,6 +57,13 @@ pub fn update_indicator(affirm: bool) {
 /// - detected: true for obstacle present, false for clear
 pub fn update_obstacle_indicator(detected: bool) {
     INDICATOR_CHANGED.signal(IndicatorEvent::Obstacle(detected));
+}
+
+/// Triggers an LED floor-drop status update
+///
+/// - detected: true for floor drop / ledge present, false for clear
+pub fn update_floor_drop_indicator(detected: bool) {
+    INDICATOR_CHANGED.signal(IndicatorEvent::FloorDrop(detected));
 }
 
 /// Waits for next indicator state change signal
@@ -141,6 +156,26 @@ pub async fn rgb_led_indicate(
 
                     led_on = !led_on;
                     Timer::after(OBSTACLE_BLINK_INTERVAL).await;
+                }
+
+                led_on = false;
+            }
+            IndicatorEvent::FloorDrop(detected) => {
+                if detected {
+                    // Amber blink: alternate between amber (red + green) and off.
+                    for _ in 0..5 {
+                        if led_on {
+                            set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, 100, 50, 0);
+                        } else {
+                            set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, 0, 0, 0);
+                        }
+
+                        led_on = !led_on;
+                        Timer::after(OBSTACLE_BLINK_INTERVAL).await;
+                    }
+                } else {
+                    // Floor drop cleared: turn LED off.
+                    set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, 0, 0, 0);
                 }
 
                 led_on = false;

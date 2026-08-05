@@ -1,13 +1,15 @@
-//! Obstacle-avoidance autonomous drive mode: coast until `LiDAR` detects an obstacle
-//! within the forward threshold, then back up and turn a random angle before resuming.
+//! Obstacle- and floor-drop-avoidance autonomous drive mode: coast until
+//! `LiDAR` detects an obstacle within the forward threshold or a floor-drop
+//! sensor detects a ledge, then back up and turn a random angle before resuming.
 //!
 //! # Control flow
 //!
 //! ```text
 //! start() ──► drive forward (SetTracks)
 //!                  │
-//!           obstacle detected
-//!  (perception::is_obstacle_detected)
+//!     obstacle or floor drop detected
+//!  (perception::is_obstacle_detected ||
+//!   perception::is_floor_drop_detected)
 //!                  │
 //!          ┌── ACTIVE? ──┐
 //!          No            Yes
@@ -25,8 +27,9 @@
 //!
 //! Call [`start`] to begin the mode and [`stop`] to request a graceful exit.
 //!
-//! Uses `LiDAR` `is_obstacle_ahead(30.0, 60)` for forward obstacle detection
-//! and `MotorCommand::SetTracks` for direct motor control.
+//! Uses `LiDAR` `is_obstacle_ahead(30.0, 60)` for forward obstacle detection,
+//! floor-drop sensors for ledge detection, and `MotorCommand::SetTracks` for
+//! direct motor control.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -183,9 +186,9 @@ async fn run_forward() -> State {
             return State::Forward;
         }
 
-        // Check perception state for obstacles ahead.
-        if perception::is_obstacle_detected() {
-            info!("coast-avoid: obstacle detected ahead, braking");
+        // Check perception state for obstacles or floor drops ahead.
+        if perception::is_obstacle_detected() || perception::is_floor_drop_detected() {
+            info!("coast-avoid: obstacle or floor drop detected ahead, braking");
             motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
             Timer::after(Duration::from_millis(200)).await;
 

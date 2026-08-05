@@ -9,9 +9,10 @@
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
 - **Encoder** — Single-channel hall sensor on each JGB37-520 motor. Produces 8 pulses per motor revolution, 1320 pulses per output shaft revolution (165:1 gear ratio). Pulse counting via PWM input mode. Direction is inferred from the motor command, not quadrature.
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO).
-- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART. Emits continuous scan data as a point cloud (one distance per degree). Owned by core1 (currently stubbed for development).
-- **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Four units on I2C bus: front-left (side collision), front-center (forward collision), front-down (stair/drop detection, angled downward), and rear. Single XSHUT line for address assignment at boot (currently stubbed for development).
-- **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X array.
+- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1), with a power MOSFET (IRLS44N) for firmware-controlled power cycling. Emits continuous scan data as a point cloud (one distance per degree). Owned by core1 (currently stubbed for development; UART/MOSFET pins reserved, driver not yet written).
+- **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
+- **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the shared I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
+- **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X rangefinder.
 - **Rotary Encoder** — EC11 quadrature rotary encoder with push button. Used for menu navigation (rotation) and selection (push).
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (8.4V max). Voltage read via ADC. Motors compensated to 6V target.
@@ -19,7 +20,7 @@
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), IMU (SPI0), I2C bus (OLED + VL53L0X array), flash storage, and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), IMU (SPI0), I2C bus (OLED + VL53L0X rangefinder), flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is planned.
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, rotary events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
@@ -62,7 +63,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (4 VL53L0X sensor distances).
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (VL53L0X front-down distance).
 - **ObstacleSource** — Enum (`Lidar` | `Rangefinder`) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds, encoder pulse counts, computed speeds (cm/s), odometry. Lock-free atomic mirrors for high-frequency readers.
@@ -87,3 +88,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **IMU Calibration** — Magnetometer hard/soft iron calibration and motor interference compensation (`MagCalibration`). Gyroscope and accelerometer bias are handled internally by the ICM-20948 DMP.
 - **Boot Sequence** — On `Initialize` event, the initialization module sends individual `GetData` commands to flash storage for motor, IMU, distance, and IMU flag calibration data. Each response raises a `CalibrationDataLoaded` event. When all four are received, the UI shows the main menu.
 - **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and magnetometer calibration flags (`ImuCalibrationFlags`) to dedicated FLASH_STORAGE region (last 8KB of flash).
+
+## Development Practices
+
+- **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the only automated quality gates. Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.

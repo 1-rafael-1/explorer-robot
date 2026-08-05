@@ -5,8 +5,8 @@ autonomous navigation and sensor-driven obstacle avoidance.
 
 Built in Rust on [Embassy](https://embassy.dev/) for the RP2350 microcontroller.
 This iteration builds on hardware experience from [simple-robot](https://github.com/1-rafael-1/simple-robot), adding a
-360° spinning LiDAR (COIN-D6), VL53L0X rangefinder array, ICM-20948 IMU over
-SPI, and an SSD1306 OLED display — all on custom PCB hardware. In turn ultrasoic/servo sweeping sensor array is ditched, so are the IR sensors.
+360° spinning LiDAR (COIN-D6), a VL53L0X rangefinder (front-down), ICM-20948 IMU over
+SPI, an SSD1306 OLED display, and a Grove Vision AI V2 camera module — all on custom PCB hardware. In turn ultrasoic/servo sweeping sensor array is ditched, so are the IR sensors.
 
 ## Status
 
@@ -29,8 +29,9 @@ The big ToDos, in no particuar order:
 - **MCU:** Raspberry Pi RP2350 (dual-core Cortex-M33)
 - **Motors:** 2× JGB37-520 6V DC with hall encoders, 165RPM
 - **Motor driver:** TB6612FNG dual 
-- **LiDAR:** COIN-D6 360° spinning dTOF (core1, currently stubbed)
-- **Rangefinders:** 4× VL53L0X ToF on I2C (currently stubbed)
+- **LiDAR:** COIN-D6 360° spinning dTOF (core1, UART0 + power MOSFET reserved, currently stubbed)
+- **AI Cam:** Grove Vision AI V2 (core0, UART1 + power MOSFET reserved, not yet integrated)
+- **Rangefinder:** 1× VL53L0X ToF, front-down (stair/drop detection), on shared I2C0 bus (currently stubbed)
 - **IMU:** ICM-20948 9-axis over dedicated SPI bus
 - **Display:** SSD1306 128×64 OLED over I2C
 - **Input:** EC11 rotary encoder with push button
