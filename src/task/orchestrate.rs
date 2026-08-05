@@ -72,8 +72,7 @@ async fn handle_event(event: Events) {
             ui::send_ui_event(UiEvent::TestingCompleted).await;
         }
         Events::LidarScanCompleted => {
-            // Placeholder: v2 signalled `attempt_straight_line::SWEEP_COMPLETED`.
-            // v3 does not have that signal yet; log for now.
+            // Placeholder: log LiDAR scan completion for now.
             info!("Lidar scan completed");
         }
         Events::RangefinderReading => {

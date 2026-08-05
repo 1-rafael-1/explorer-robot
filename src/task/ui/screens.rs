@@ -3,14 +3,9 @@
 //! This module provides small, reusable helpers to render UI screens
 //! and system info on the OLED via the display task.
 //!
-//! v3 adaptations from v2:
-//! - Test menu: 6 tests (`BasicMotor`, Turns, `StraightDrive`, `ArcDrive`, `Imu6Axis`, `Imu9Axis`)
-//! - Motor test: 2 motors (left/right) instead of 4
-//! - Encoder test: live pulse counts for 2 channels
-//! - System info: updated for v3 hardware
-//! - IMU tests: adapted for SPI (was I2C in v2)
-//! - LiDAR/rangefinder test placeholder screens added
-//! - Ultrasonic/IR screens removed
+//! Test menu: 6 tests (`BasicMotor`, Turns, `StraightDrive`, `ArcDrive`,
+//! `Imu6Axis`, `Imu9Axis`). Motor test: 2 motors (left/right). IMU tests
+//! use SPI. `LiDAR`/rangefinder test placeholder screens included.
 
 use core::fmt::Write;
 

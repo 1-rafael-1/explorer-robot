@@ -45,14 +45,12 @@
 //! High-frequency diagnostics are gated behind the `telemetry_logs` feature to keep
 //! production builds free of formatting overhead when no log consumer is attached.
 //!
-//! # v3 Changes from v2
+//! # Architecture
 //!
-//! - SPI bus instead of I2C for the ICM-20948 (dedicated bus via `SpiDevice`).
+//! - Dedicated SPI bus for the ICM-20948 via `SpiDevice`.
 //! - `inertial_measurement_read` takes the bus `Mutex` + CS `Output` pin.
 //! - `MagCalibration` is defined locally (`flash_storage` integration TBD).
-//! - Bus detection (`try_new`) attempted once (interface is consumed by value);
-//!   chip init retries remain for transient failures.
-
+//! - Chip initialisation retries on transient failures.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -179,8 +177,7 @@ pub const DEFAULT_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis6;
 
 /// Host-side magnetometer calibration data (hard/soft-iron + motor interference).
 ///
-/// In v2 this lived in `flash_storage::MagCalibration`. In v3 it is defined
-/// locally until flash storage integration is completed.
+/// Defined locally until flash storage integration is completed.
 #[derive(Debug, Clone, Copy)]
 pub struct MagCalibration {
     /// Hard-iron bias correction (µT).
@@ -483,11 +480,9 @@ async fn update_statics_from_dmp(
 
 /// Power-up, detect, and fully initialise the ICM-20948, retrying on failure.
 ///
-/// v3 changes from v2:
-/// - Uses `SpiInterface` + `SpiDevice` instead of `I2cInterface` + shared I2C bus.
-/// - Bus detection (`try_new`) is attempted once — the SPI interface owns the bus
-///   by value.
-/// - Chip initialisation (`init`) retries as in v2, handling transient errors.
+/// Uses `SpiInterface` + `SpiDevice` on the dedicated SPI bus. The SPI
+/// interface owns the bus by value. Chip initialisation (`init`) retries on
+/// transient failures.
 async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<'static> {
     info!("Waiting {}ms for IMU power-up...", IMU_BOOT_DELAY_MS);
     Timer::after(Duration::from_millis(IMU_BOOT_DELAY_MS)).await;
@@ -789,11 +784,8 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
 /// Initialises the sensor and DMP firmware, then enters the command/sampling
 /// loop. The task terminates only on unrecoverable sensor failures.
 ///
-/// # v3 changes from v2
-///
-/// Takes a reference to the SPI bus mutex and a CS output pin instead of a
-/// shared I2C bus reference. The SPI bus is exclusively owned by this task
-/// (no multi-device bus sharing).
+/// Takes a reference to the SPI bus mutex and a CS output pin. The SPI bus
+/// is exclusively owned by this task.
 #[embassy_executor::task]
 pub async fn inertial_measurement_read(spi_bus: &'static SpiMutex, cs: CsOutput) {
     let mut sensor = init_imu_sensor(spi_bus, cs).await;

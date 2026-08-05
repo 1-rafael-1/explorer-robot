@@ -2,9 +2,7 @@
 //!
 //! Spawns an IMU telemetry task when requested and exits on stop.
 //!
-//! # v3 Changes from v2
-//! - ICM-20948 communicates over SPI instead of I2C.
-//! - Display throttling adjusted for SPI bus (no I2C starvation concern).
+//! ICM-20948 communicates over SPI.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

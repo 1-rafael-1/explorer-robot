@@ -15,12 +15,9 @@
 //!                          └── stop() ──► exit (brake, release, ShowMainMenu)
 //! ```
 //!
-//! # v3 Changes from v2
-//! - `LiDAR` point cloud gap analysis replaces ultrasonic sweep buffer.
-//! - `perception::get_lidar_snapshot()` replaces `ultrasonic::SWEEP_BUFFER`.
-//! - `gap_analysis::analyze_gaps(cloud, remaining)` uses `&LidarPointCloud`.
-//! - All ultrasonic imports and usage removed.
-//! - IMU drift correction and odometry unchanged.
+//! Uses `LiDAR` point cloud gap analysis for navigation — `gap_analysis::analyze_gaps`
+//! operates on `&LidarPointCloud` to find navigable gaps within the forward cone.
+//! IMU drift correction and odometry provide per-leg heading and position tracking.
 
 // this entire module is deferred — waiting for LiDAR and rangefinder implementation
 #![allow(dead_code)]

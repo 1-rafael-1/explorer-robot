@@ -1,8 +1,7 @@
 //! Display driver — SSD1306 OLED over I2C.
 //!
-//! Ported from v2 `task/io/display.rs`, simplified for v3:
-//! - No radar sweep visualization (removed ultrasonic sweeper dependency).
-//! - Text-only display with 4 lines × 20 characters.
+//! Text-only display with 4 lines × 20 characters. `LiDAR` provides spatial
+//! awareness independently, so the display focuses on status and menu text.
 //!
 //! # Coordinate System
 //! - Origin (0,0): top-left
@@ -97,9 +96,8 @@ const DISPLAY_WIDTH: i32 = 128;
 
 /// Main display task — manages the SSD1306 OLED screen.
 ///
-/// Handles text-only display actions (Clear, `ShowText`, `ShowTextStyled`, `ShowLines`).
-/// The radar sweep visualization from v2 is removed — v3 uses `LiDAR` for
-/// spatial awareness and the display is purely text-based.
+/// Handles text-only display actions (Clear, `ShowText`, `ShowTextStyled`,
+/// `ShowLines`). `LiDAR` provides spatial awareness independently.
 #[embassy_executor::task]
 pub async fn display(i2c_bus: &'static I2cBusShared) {
     const INIT_RETRIES: u8 = 5;

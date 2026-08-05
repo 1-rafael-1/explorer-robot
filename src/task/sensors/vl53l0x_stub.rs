@@ -1,15 +1,14 @@
 //! VL53L0X rangefinder stub task — emits synthetic distance readings on a timer.
 //!
-//! This is a **stub for the VL53L0X Time-of-Flight sensor array**, matching
-//! the IR sensor's event contract from v2. It produces fixed distance readings
-//! to exercise the perception, obstacle-avoidance, and event pipelines without
-//! requiring physical hardware.
+//! This is a **stub for the VL53L0X Time-of-Flight sensor array**. It produces
+//! fixed distance readings to exercise the perception, obstacle-avoidance, and
+//! event pipelines without requiring physical hardware.
 //!
 //! # Architecture
 //!
 //! - Runs on **core0** as an embassy task.
 //! - Signal channel (`VL53L0X_SIGNAL_CHANNEL`) for timestamped boolean obstacle
-//!   signals per sensor (like v2's `IR_SIGNAL_CHANNEL`).
+//!   signals per sensor.
 //! - Edge-triggered obstacle detection: tracks `last_obstacle_detected` per
 
 #![allow(clippy::missing_docs_in_private_items)]
@@ -45,7 +44,7 @@ use crate::system::{
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-/// Which VL53L0X sensor reported a state change (matches v2 IR sensor ID pattern).
+/// Which VL53L0X sensor reported a state change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum Vl53l0xSensorId {
     /// Front-left corner sensor (side collision detection).
@@ -60,7 +59,7 @@ pub enum Vl53l0xSensorId {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Debounce delay to filter out noise (matches v2's `DEBOUNCE_DELAY`).
+/// Debounce delay to filter out noise.
 const DEBOUNCE_DELAY: Duration = Duration::from_millis(100);
 
 /// Obstacle detection threshold in cm.
@@ -71,7 +70,7 @@ const SCAN_INTERVAL_MS: u64 = 500;
 
 // ── Signal channel ────────────────────────────────────────────────────────────
 
-/// Signal channel for obstacle state changes per sensor (like v2's `IR_SIGNAL_CHANNEL`).
+/// Signal channel for obstacle state changes per sensor.
 ///
 /// Each message is a `(Vl53l0xSensorId, bool)` tuple — which sensor and whether
 /// an obstacle is detected (`true`) or cleared (`false`).
@@ -79,8 +78,7 @@ static VL53L0X_SIGNAL_CHANNEL: Channel<CriticalSectionRawMutex, (Vl53l0xSensorId
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Signal an obstacle state change from the VL53L0X sensor array (like v2's
-/// `signal_ir_obstacle`).
+/// Signal an obstacle state change from the VL53L0X sensor array.
 pub async fn signal_vl53l0x_obstacle(sensor: Vl53l0xSensorId, state: bool) {
     VL53L0X_SIGNAL_CHANNEL.sender().send((sensor, state)).await;
 }
@@ -162,8 +160,7 @@ impl StubState {
 /// VL53L0X rangefinder stub embassy task — generates periodic readings and
 /// runs the obstacle detection loop.
 ///
-/// Pattern matches v2's `ir_obstacle_detect` task but extended for four sensors:
-/// - The signal channel receives `(Vl53l0xSensorId, bool)` tuples.
+/// The signal channel receives `(Vl53l0xSensorId, bool)` tuples.
 /// - Edge-triggered: only raises `ObstacleDetected { source: Rangefinder }`
 ///   when obstacle state changes for any sensor.
 /// - A timer-driven loop emits fixed distance readings to perception.

@@ -5,10 +5,10 @@
 ## Hardware
 
 - **Track** — Left or right side of the robot. Each track has one JGB37-520 motor mechanically coupled to the track (treads or wheels).
-- **Motor** — A single JGB37-520 6V 165RPM DC motor with hall encoder. v3 has two motors (one per track); v2 had four (two per track: front and rear).
+- **Motor** — A single JGB37-520 6V 165RPM DC motor with hall encoder. Two motors (one per track).
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
 - **Encoder** — Single-channel hall sensor on each JGB37-520 motor. Produces 8 pulses per motor revolution, 1320 pulses per output shaft revolution (165:1 gear ratio). Pulse counting via PWM input mode. Direction is inferred from the motor command, not quadrature.
-- **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via SPI bus (CS, SCK, MOSI, MISO). v2 used I2C.
+- **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO).
 - **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART. Emits continuous scan data as a point cloud (one distance per degree). Owned by core1 (currently stubbed for development).
 - **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Four units on I2C bus: front-left (side collision), front-center (forward collision), front-down (stair/drop detection, angled downward), and rear. Single XSHUT line for address assignment at boot (currently stubbed for development).
 - **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X array.
@@ -62,7 +62,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (4 VL53L0X sensor distances). Replaces v2's ultrasonic sweep buffer.
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (4 VL53L0X sensor distances).
 - **ObstacleSource** — Enum (`Lidar` | `Rangefinder`) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds, encoder pulse counts, computed speeds (cm/s), odometry. Lock-free atomic mirrors for high-frequency readers.

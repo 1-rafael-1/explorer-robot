@@ -9,10 +9,8 @@
 //! - GPIO23: Encoder B
 //! - Button: direct GPIO Input with pull-up (pin assigned by caller in main.rs)
 //!
-//! # v3 changes from v2
-//! - Button moved from port expander (signal-based) to direct GPIO Input with `Pull::Up`.
-//! - Debounce pattern uses `wait_for_low` / `wait_for_high` on the GPIO pin directly.
-//! - Same press-vs-hold detection logic and event types preserved.
+//! The button is connected directly to a GPIO pin with internal pull-up,
+//! using `wait_for_low` / `wait_for_high` for debounced press-vs-hold detection.
 
 use defmt::debug;
 use embassy_futures::select::{Either, select};

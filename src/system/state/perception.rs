@@ -4,8 +4,8 @@
 //! interface. Obstacle detection flags are exposed via lock-free atomics
 //! (fast path) while full sensor data sits behind a mutex (rich path).
 //!
-//! v3 replaces the v2 ultrasonic sweep buffer with a 360° `LiDAR` point cloud
-//! and four VL53L0X rangefinder readings.
+//! Obstacle perception is driven by a 360° `LiDAR` point cloud and four
+//! VL53L0X rangefinder readings.
 //!
 //! Lock order (when multiple state mutexes are needed):
 //! 1) power state mutex (use power module accessors)

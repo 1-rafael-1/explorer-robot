@@ -2,11 +2,8 @@
 //!
 //! Provides on-demand autonomous mode tasks spawned via a controller task.
 //!
-//! # v3 Changes from v2
-//! - Gap analysis uses `LiDAR` point cloud instead of ultrasonic sweep buffer.
-//! - Obstacle detection uses `LiDAR` `is_obstacle_ahead()` instead of ultrasonic polling.
-//! - All ultrasonic/IR imports removed.
-
+//! Gap analysis uses `LiDAR` point cloud and obstacle detection uses
+//! `LiDAR` `is_obstacle_ahead()`.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

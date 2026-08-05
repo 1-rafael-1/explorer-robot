@@ -4,7 +4,7 @@
 //! RGB LED, rotary encoder, display, VL53L0X stub, flash storage, UI,
 //! testmode, autonomous mode controller, and startup.
 //!
-//! Core1 hosts the `LiDAR` stub task producing synthetic point-cloud data.
+//! Core1 hosts the `LiDAR` driver task (currently synthetic stub, real `COIN-D6` TBD).
 
 #![no_std]
 #![no_main]
@@ -24,8 +24,8 @@ use embassy_rp::{
     multicore::{Stack, spawn_core1},
     peripherals::{
         ADC, DMA_CH0, DMA_CH1, DMA_CH2, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_9,
-        PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_22, PIN_23, PIN_24, PIN_28, PIO1, PWM_SLICE0, PWM_SLICE1,
-        PWM_SLICE3, PWM_SLICE4, SPI0,
+        PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_28, PIO1,
+        PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
     pio_programs::{
@@ -56,28 +56,8 @@ bind_interrupts!(pub struct Irqs {
     I2C0_IRQ => I2cInterruptHandler<I2C0>;
     ADC_IRQ_FIFO => AdcInterruptHandler;
     PIO1_IRQ_0 => PioInterruptHandler<PIO1>;
-    DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>;
+    DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>;
 });
-
-// DMA_CH1 and DMA_CH2 share DMA_IRQ_0 with DMA_CH0 on this chip variant.
-// bind_interrupts! only allows one entry per interrupt, so we add the
-// remaining Binding impls manually for the SPI0 IMU bus.
-#[allow(unsafe_code)]
-unsafe impl
-    embassy_rp::interrupt::typelevel::Binding<
-        embassy_rp::interrupt::typelevel::DMA_IRQ_0,
-        embassy_rp::dma::InterruptHandler<DMA_CH1>,
-    > for Irqs
-{
-}
-#[allow(unsafe_code)]
-unsafe impl
-    embassy_rp::interrupt::typelevel::Binding<
-        embassy_rp::interrupt::typelevel::DMA_IRQ_0,
-        embassy_rp::dma::InterruptHandler<DMA_CH2>,
-    > for Irqs
-{
-}
 
 // ── Boot descriptor ────────────────────────────────────────────────────────────
 
@@ -88,13 +68,16 @@ pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 
 // ── Core stacks & executors ────────────────────────────────────────────────────
 
-/// Core1 stack — 4 KiB for the `LiDAR` stub task.
-static mut CORE1_STACK: Stack<4096> = Stack::new();
+/// Core1 stack — 16 KiB for the `LiDAR` task (stub → real `COIN-D6` driver).
+///
+/// Budget: ~1.5 KiB point cloud + ~8 KiB UART/DMA buffers + ~4 KiB
+/// frame-parser state + ~2 KiB embassy async overhead.
+static mut CORE1_STACK: Stack<16384> = Stack::new();
 
 /// Executor for core0 (orchestrator, drive, UI, sensors on I2C).
 static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 
-/// Executor for core1 (`LiDAR` stub).
+/// Executor for core1 (`LiDAR` driver).
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 // ── Pin structs ────────────────────────────────────────────────────────────────
@@ -195,7 +178,7 @@ fn encoder_pwm_config() -> PwmConfig {
     cfg
 }
 
-// ── Init functions (v2 pattern: one per subsystem) ─────────────────────────────
+// ── Init functions (one per subsystem) ────────────────────────────────────────
 
 /// Spawn the orchestrator event loop.
 #[allow(clippy::unwrap_used)]
@@ -334,6 +317,25 @@ fn init_autonomous_mode(spawner: Spawner) {
     task::autonomous_mode::init_autonomous_mode(spawner);
 }
 
+/// Initialise the dedicated SPI0 bus and chip-select for the IMU.
+///
+/// Returns the SPI bus and CS pin for passing to [`init_imu`].
+fn init_imu_spi(
+    spi0: embassy_rp::Peri<'static, SPI0>,
+    sck: embassy_rp::Peri<'static, PIN_18>,
+    mosi: embassy_rp::Peri<'static, PIN_19>,
+    miso: embassy_rp::Peri<'static, PIN_20>,
+    cs: embassy_rp::Peri<'static, PIN_21>,
+    dma_ch1: embassy_rp::Peri<'static, DMA_CH1>,
+    dma_ch2: embassy_rp::Peri<'static, DMA_CH2>,
+) -> (Spi<'static, SPI0, spi::Async>, Output<'static>) {
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = 7_000_000;
+    let imu_spi = Spi::new(spi0, sck, mosi, miso, dma_ch1, dma_ch2, Irqs, spi_config);
+    let imu_cs = Output::new(cs, embassy_rp::gpio::Level::High);
+    (imu_spi, imu_cs)
+}
+
 /// Initialise the IMU (ICM-20948) on the dedicated SPI0 bus.
 ///
 /// The IMU task owns the SPI bus exclusively — the `Mutex` wrapper is a
@@ -404,7 +406,7 @@ fn main() -> ! {
         enc_right_pin: p.PIN_9,
     };
 
-    // ── Core1: LiDAR stub task ──────────────────────────────────────────────
+    // ── Core1: LiDAR driver ─────────────────────────────────────────────────
     #[allow(static_mut_refs)]
     spawn_core1(p.CORE1, unsafe { &mut CORE1_STACK }, move || {
         let executor1 = EXECUTOR1.init(Executor::new());
@@ -418,8 +420,11 @@ fn main() -> ! {
     executor0.run(move |spawner| {
         // I2C0 bus for SSD1306 OLED display and VL53L0X rangefinder array.
         // Initialised inside the closure so I2c::new_async enables I2C0_IRQ
-        // on core0's NVIC (matching v2's core1 I2C pattern).
+        // on core0's NVIC.
         let i2c_bus = init_i2c_bus(p.I2C0, p.PIN_16, p.PIN_17);
+
+        // SPI bus for ICM20948 IMU
+        let (imu_spi, imu_cs) = init_imu_spi(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.PIN_21, p.DMA_CH1, p.DMA_CH2);
 
         init_orchestrate(spawner);
         init_battery_monitoring(spawner, p.ADC, p.PIN_28);
@@ -428,18 +433,7 @@ fn main() -> ! {
         init_motor_driver(spawner, motor_pins);
         init_display(spawner, i2c_bus);
         init_vl53l0x_stub(spawner);
-
-        // ── IMU on dedicated SPI0 bus (SCK＝18, MOSI＝19, MISO＝20, CS＝21) ──
-        {
-            let mut spi_config = spi::Config::default();
-            spi_config.frequency = 7_000_000;
-            let imu_spi = Spi::new(
-                p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.DMA_CH1, p.DMA_CH2, Irqs, spi_config,
-            );
-            let imu_cs = Output::new(p.PIN_21, embassy_rp::gpio::Level::High);
-            init_imu(spawner, imu_spi, imu_cs);
-        }
-
+        init_imu(spawner, imu_spi, imu_cs);
         init_flash_storage(spawner, p.FLASH, p.DMA_CH0);
         init_testing(spawner);
         init_ui(spawner);

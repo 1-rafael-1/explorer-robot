@@ -2,10 +2,7 @@
 //!
 //! Provides on-demand test mode tasks spawned via a controller task.
 //!
-//! # v3 Changes from v2
-//! - Removed: `coast_avoid_detection`, `ir_ultrasonic`, `ultrasonic_sweep` tests
-//!   (IR/ultrasonic sensors replaced by `LiDAR` + VL53L0X rangefinders).
-//! - `basic_motor` adapted for 2-track (left/right) instead of 4-motor.
+//! Tests cover motor, encoder, drive, and IMU subsystems.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

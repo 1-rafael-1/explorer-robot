@@ -2,11 +2,8 @@
 //!
 //! Renders UI screens based on the current UI state and system data.
 //!
-//! v3 adaptations from v2:
-//! - Dropped ultrasonic sweep, IR, and IR+US test renderers.
-//! - Added `LiDAR` and rangefinder placeholder test renderers.
-//! - Added Turns, `StraightDrive`, `ArcDrive` test renderers.
-//! - Autonomous running display simplified for v3 (no US sweep radar).
+//! Includes `LiDAR` and rangefinder placeholder test renderers, plus
+//! motor, encoder, and IMU telemetry screens.
 
 use heapless::String;
 

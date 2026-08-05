@@ -3,10 +3,9 @@
 //! Tests each track individually: left track then right track.
 //! Displays encoder pulse counts per track on the OLED.
 //!
-//! # v3 Changes from v2
-//! - 2-track test instead of 4-motor test (left/right tracks vs. front/rear motors).
-//! - Uses `MotorCommand::SetTracks { left, right }` with only one track active.
-//! - Encoder data from `get_latest_encoder_measurement()` (drive sensor channel).
+//! Uses `MotorCommand::SetTracks` with one track active at a time.
+//! Encoder data comes from `get_latest_encoder_measurement()` (drive sensor
+//! channel).
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

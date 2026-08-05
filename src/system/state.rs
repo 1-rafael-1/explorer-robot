@@ -48,7 +48,7 @@ pub enum DriveMode {
     AttemptStraightLine,
 }
 
-/// Test submenu selections (v3 — LiDAR/rangefinder based, no IR/ultrasonic).
+/// Test submenu selections.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Format)]
 pub enum TestSelection {
     /// Run left/right track at configurable speed via menu.

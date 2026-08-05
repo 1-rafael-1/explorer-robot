@@ -25,10 +25,8 @@
 //!
 //! Call [`start`] to begin the mode and [`stop`] to request a graceful exit.
 //!
-//! # v3 Changes from v2
-//! - `LiDAR` `is_obstacle_ahead(30.0, 60)` replaces ultrasonic polling.
-//! - `MotorCommand::SetTracks` for direct motor control replaces `DriveQueueBuilder`.
-//! - All ultrasonic/IR imports and usage removed.
+//! Uses `LiDAR` `is_obstacle_ahead(30.0, 60)` for forward obstacle detection
+//! and `MotorCommand::SetTracks` for direct motor control.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

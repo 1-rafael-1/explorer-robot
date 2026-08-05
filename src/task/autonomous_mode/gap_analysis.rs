@@ -3,12 +3,9 @@
 //! Pure, stateless algorithm that analyzes a 360-point `LiDAR` scan and
 //! returns the best gap to drive through within the forward cone.
 //!
-//! # v3 Changes from v2
-//! - `LiDAR` point cloud (`distances: [f32; 360]`) replaces ultrasonic sweep buffer
-//!   (0–160° servo → 0–360° world angles).
-//! - No servo coordinate mapping — angles are world-relative (0° = forward).
-//! - Simplified to widest-gap selection (no multi-pass scoring cascade needed
-//!   because `LiDAR` gives full 360° coverage).
+//! Operates on a full 360° point cloud (`distances: [f32; 360]`) with
+//! world-relative angles (0° = forward). Uses widest-gap selection within
+//! the forward cone (±60°).
 
 use crate::system::state::perception::LidarPointCloud;
 

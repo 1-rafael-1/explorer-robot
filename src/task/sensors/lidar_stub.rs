@@ -1,20 +1,17 @@
 //! `LiDAR` stub task — emits synthetic 360° point clouds on a timer.
 //!
-//! This is a **stub for the COIN-D6 `LiDAR`**, matching the ultrasonic sensor's
-//! event contract from v2. It produces fixed distance data to exercise the
-//! perception, obstacle-avoidance, and event pipelines without requiring
-//! physical hardware.
+//! This is a **stub for the COIN-D6 `LiDAR`**. It produces fixed distance data
+//! to exercise the perception, obstacle-avoidance, and event pipelines without
+//! requiring physical hardware.
 //!
 //! # Architecture
 //!
 //! - Runs on **core1** as an embassy task.
-//! - Command channel (`LIDAR_STUB_CONTROL`) for mode control (like v2's
-//!   `US_SWEEP_CONTROL`).
+//! - Command channel (`LIDAR_STUB_CONTROL`) for mode control.
 //! - Edge-triggered obstacle detection: tracks `last_obstacle_detected` and
 //!   only raises `ObstacleDetected { source: Lidar }` on state change.
 //! - Writes point cloud to `perception::update_lidar_points()` each cycle.
-//! - Raises `LidarScanCompleted` event when each scan finishes (like v2's
-//!   `UltrasonicSweepCompleted`).
+//! - Raises `LidarScanCompleted` event when each scan finishes.
 //!
 //! # Default pattern
 //!
@@ -33,7 +30,7 @@ use crate::system::{
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
-/// Commands for `LiDAR` stub mode control (matches v2 ultrasonic command pattern).
+/// Commands for `LiDAR` stub mode control.
 #[derive(Debug, Clone, Copy)]
 pub enum LidarStubCommand {
     /// Start continuous 360° scanning.
@@ -87,9 +84,8 @@ fn cloud_has_obstacle(cloud: &LidarPointCloud) -> bool {
 
 /// `LiDAR` stub embassy task — command loop + scanning loop.
 ///
-/// Pattern matches v2's `ultrasonic_sweep` task: an outer command loop waits
-/// for `StartScanning`/`Stop`, and an inner loop generates point clouds on
-/// a timer, raising `LidarScanCompleted` each cycle.
+/// An outer command loop waits for `StartScanning`/`Stop`, and an inner loop
+/// generates point clouds on a timer, raising `LidarScanCompleted` each cycle.
 ///
 /// Runs on **core1**.
 #[embassy_executor::task]
@@ -187,7 +183,7 @@ pub async fn lidar_stub_task() {
                 last_obstacle_detected = Some(detected);
             }
 
-            // Raise scan-completed event (like v2's UltrasonicSweepCompleted).
+            // Raise scan-completed event.
             raise_event(Events::LidarScanCompleted).await;
 
             #[cfg(feature = "telemetry_logs")]

@@ -13,14 +13,9 @@
 //! Test modes and calibration flows spawn their own display tasks and render
 //! directly, bypassing the controller.
 //!
-//! # v3 Adaptations from v2
-//! - Dropped ultrasonic/IR sensor references; added LiDAR/rangefinder placeholders.
-//! - Test menu reduced to 6 tests (`BasicMotor`, Turns, `StraightDrive`, `ArcDrive`,
-//!   `Imu6Axis`, `Imu9Axis`).
-//! - Motor test: 2 motors (left/right) instead of 4.
-//! - Distance calibration uses `calibration` module (was `flash_storage`).
-//! - Autonomous refresh simplified — v3 uses LiDAR/rangefinder, not IR+US sweep.
-//! - I2C bus for display: on core0 (same as v2).
+//! Uses `LiDAR`/rangefinder for perception. Test menu has 6 tests
+//! (`BasicMotor`, Turns, `StraightDrive`, `ArcDrive`, `Imu6Axis`, `Imu9Axis`).
+//! Motor test: 2 motors (left/right). Display shares core0 I2C bus.
 
 use defmt::debug;
 use embassy_executor::Spawner;
@@ -175,9 +170,7 @@ async fn dispatch_ui_event(event: UiEvent) {
 
 /// 15 Hz tick: re-render the autonomous screen when in autonomous mode.
 ///
-/// v3: simplified from v2 — no IR/ultrasonic perception reads. Re-renders
-/// the autonomous screen if in `RunningAutonomous` mode. Future: add
-/// LiDAR/rangefinder change detection for selective re-rendering.
+/// Re-renders the autonomous screen if in `RunningAutonomous` mode.
 async fn autonomous_refresh_tick() {
     let snapshot = {
         let ui = UI_STATE.lock().await;

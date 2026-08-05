@@ -1,16 +1,10 @@
-//! IMU calibration procedure (v3 — SPI).
+//! IMU calibration procedure (SPI).
 //!
 //! Calibrates gyroscope, accelerometer, and magnetometer, plus measures
 //! motor interference effects on magnetometer for runtime compensation.
 //!
-//! # v3 Adaptation
-//!
-//! The ICM-20948 is connected via a **dedicated SPI bus** (not I2C). The SPI bus
-//! is not shared, so no `Mutex` wrapping is needed. Driver initialization uses
-//! `Interface::Spi(spi_device, cs_pin)` instead of `Interface::I2c`.
-//!
-//! All algorithmic code (magnetometer calibration convergence, gyroscope bias
-//! estimation, DMP configuration) is ported unchanged from v2.
+//! The ICM-20948 is connected via a **dedicated SPI bus**. Driver
+//! initialization uses `Interface::Spi(spi_device, cs_pin)`.
 
 use core::fmt::Write;
 
@@ -860,7 +854,7 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Option<MagCa
 ///
 /// The ICM-20948 is connected via a dedicated SPI bus. The `sensors::imu` module
 /// (ticket 04) handles SPI initialization; this function drives the calibration
-/// algorithm which is identical to the v2 codebase.
+/// algorithm.
 async fn run_mag_calibration() {
     use crate::{
         system::event,
@@ -966,10 +960,7 @@ async fn run_mag_calibration() {
 /// Dispatch the requested IMU calibration routine.
 ///
 /// The ICM-20948 is connected via a dedicated SPI bus. The sensor module
-/// (`crate::task::sensors::imu`, ticket 04) owns SPI initialization via
-/// `Interface::Spi(spi_device, cs_pin)`. The SPI bus is not shared, so no
-/// `Mutex` wrapping is needed. All calibration algorithmic code is identical
-/// to the v2 codebase.
+/// (`crate::task::sensors::imu`) owns SPI initialization.
 pub async fn run_imu_calibration(kind: ImuCalibrationKind) {
     match kind {
         ImuCalibrationKind::Mag => run_mag_calibration().await,

@@ -1,7 +1,7 @@
-//! Motor Driver Task — v3 simplified version
+//! Motor Driver Task
 //!
 //! Controls 2× JGB37-520 motors (one per track) via a single TB6612FNG driver.
-//! Direction pins are direct GPIO (no port expander). Standby pin is direct GPIO.
+//! Direction and standby pins are direct GPIO.
 //!
 //! # Hardware Configuration
 
