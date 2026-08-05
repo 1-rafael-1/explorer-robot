@@ -8,8 +8,6 @@
 //! Also defines the [`IntentTeardown`] descriptor enum that forms the
 //! seam between the [`super::dispatch`] and the control modules.
 
-#![allow(dead_code)]
-
 // ── Geometry constants (shared across modules) ────────────────────────────
 
 /// Number of encoder pulses per motor shaft revolution
@@ -54,8 +52,8 @@ pub enum DriveAction {
     /// - Negative values: Backward motion
     /// - Zero: Coast (freewheel)
     ///
-    /// This is intened to be used for direct teleoperation or simple commands without feedback control.
-    #[allow(dead_code)] // (Unused for now, but will be used for teleop and simple commands)
+    /// This is intended for direct teleoperation or simple commands without feedback control.
+    #[allow(dead_code)]
     Differential {
         /// Left track speed (-100 to +100)
         left: i8,
@@ -88,8 +86,8 @@ pub enum DriveAction {
         /// Duration to remain idle (milliseconds).
         duration_ms: u64,
     },
-    /// Enter low-power standby mode
-    #[allow(dead_code)] // (Unused for now, but may be used for power-saving states or idle behavior)
+    /// Enter low-power standby mode.
+    #[allow(dead_code)]
     Standby,
     /// Precise rotation with optional forward/backward motion
     RotateExact {
@@ -112,7 +110,7 @@ pub enum DriveDirection {
 }
 
 /// Turn direction for curved motion.
-#[allow(dead_code)] // is in use partially but will be required
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TurnDirection {
     /// Left turn (counter-clockwise yaw).
@@ -141,7 +139,7 @@ pub enum DriveDistanceKind {
 }
 
 /// Interrupt commands that preempt active drive intents.
-#[allow(dead_code)] // for completeness and my own reference
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum InterruptKind {
     /// Immediately brake all motors.
@@ -242,7 +240,7 @@ pub enum RotationDirection {
 }
 
 /// Combined motion options during rotation
-#[allow(dead_code)] // for completeness and future use in combined motion commands
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, defmt::Format)]
 pub enum RotationMotion {
     /// Rotate in place at the given rotation speed (0-100)

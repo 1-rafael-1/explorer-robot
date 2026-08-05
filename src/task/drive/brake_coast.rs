@@ -18,7 +18,6 @@
 //! - `SETTLE_CONSECUTIVE_SAMPLES` (3): consecutive zero-delta readings to declare settled
 //! - `SETTLE_TIMEOUT_MS` (2000 ms): maximum time before failing
 
-#![allow(dead_code)]
 
 use embassy_time::{Duration, Instant};
 

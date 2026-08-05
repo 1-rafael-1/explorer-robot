@@ -23,7 +23,6 @@
 //! Rotation debug logs are rate-limited and compiled only when the `telemetry_logs`
 //! feature is enabled; otherwise no formatting/queueing cost is incurred.
 
-#![allow(dead_code)]
 
 use embassy_time::{Duration, Instant, Timer};
 use libm::roundf;

@@ -7,7 +7,6 @@
 //! Unlike other control modules, this is not an intent — commands complete
 //! instantly and never block the queue.
 
-#![allow(dead_code)]
 
 /// Passthrough: clamp and return the commanded speeds unchanged.
 ///

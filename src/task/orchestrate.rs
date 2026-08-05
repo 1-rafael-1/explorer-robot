@@ -76,6 +76,9 @@ async fn handle_event(event: Events) {
             // v3 does not have that signal yet; log for now.
             info!("Lidar scan completed");
         }
-        Events::ImuCalibrationFlagsLoaded(_) => {}
+        Events::RangefinderReading => {
+            // Rangefinder readings are polled directly from perception state
+            // by consumers — this event serves as a wake-up signal.
+        }
     }
 }

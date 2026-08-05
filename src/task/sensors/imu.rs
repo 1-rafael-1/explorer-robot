@@ -53,7 +53,6 @@
 //! - Bus detection (`try_new`) attempted once (interface is consumed by value);
 //!   chip init retries remain for transient failures.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

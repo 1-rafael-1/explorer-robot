@@ -7,7 +7,7 @@
 //! start() ──► drive forward (SetTracks)
 //!                  │
 //!           obstacle detected
-//!           (LiDAR is_obstacle_ahead)
+//!  (perception::is_obstacle_detected)
 //!                  │
 //!          ┌── ACTIVE? ──┐
 //!          No            Yes
@@ -29,8 +29,6 @@
 //! - `LiDAR` `is_obstacle_ahead(30.0, 60)` replaces ultrasonic polling.
 //! - `MotorCommand::SetTracks` for direct motor control replaces `DriveQueueBuilder`.
 //! - All ultrasonic/IR imports and usage removed.
-
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,12 +54,6 @@ use crate::{
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
-
-/// Obstacle detection threshold in centimeters.
-const OBSTACLE_THRESHOLD_CM: f32 = 30.0;
-
-/// Forward arc cone width for obstacle detection (degrees, ±30° = 60° total).
-const FORWARD_CONE_DEG: u16 = 60;
 
 /// Speed for forward coasting (−100 … +100).
 const FORWARD_SPEED: i8 = 80;

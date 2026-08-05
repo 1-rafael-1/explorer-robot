@@ -83,7 +83,6 @@ pub async fn display_update(display_action: DisplayAction) {
 
 /// Try to request a display update without blocking.
 /// Returns true if the update was queued.
-#[allow(dead_code)]
 pub fn display_try_update(display_action: DisplayAction) -> bool {
     DISPLAY_CHANNEL.sender().try_send(display_action).is_ok()
 }

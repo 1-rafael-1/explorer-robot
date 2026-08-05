@@ -17,7 +17,6 @@
 //!
 //! Any residual mismatch is corrected at runtime by the IMU-based heading correction.
 
-#![allow(dead_code)]
 
 use defmt::info;
 use embassy_time::{Duration, Timer};

@@ -109,16 +109,6 @@ pub async fn render_basic_motor_test() {
     show_line(3, "Press to exit").await;
 }
 
-/// Render the encoder test screen (live pulse counts for 2 channels).
-#[allow(dead_code)]
-pub async fn render_encoder_test() {
-    display_update(DisplayAction::Clear).await;
-    show_line(0, "Encoder Test").await;
-    show_line(1, "Left:  ------").await;
-    show_line(2, "Right: ------").await;
-    show_line(3, "Press to exit").await;
-}
-
 /// Render the turns test initial status screen.
 pub async fn render_turns_test() {
     display_update(DisplayAction::Clear).await;
@@ -203,20 +193,6 @@ pub async fn render_calibrating(label: &str) {
     show_line(3, "").await;
 }
 
-/// Render the distance entry screen with the current entered value.
-#[allow(dead_code)]
-pub async fn render_entering_distance(value: u8) {
-    display_update(DisplayAction::Clear).await;
-    show_line(0, "Enter distance:").await;
-    {
-        let mut s: String<20> = String::new();
-        let _ = write!(s, "  {value} cm");
-        display_update(DisplayAction::ShowText(s, 1)).await;
-    }
-    show_line(2, "Turn to adj").await;
-    show_line(3, "Press to save").await;
-}
-
 // ── Low-level helpers ─────────────────────────────────────────────────────
 
 /// Write a single line of text to the display.
@@ -228,12 +204,6 @@ pub async fn show_line(line: u8, msg: &str) {
         }
     }
     display_update(DisplayAction::ShowText(s, line)).await;
-}
-
-/// Write a single line of text to the display from an existing `String`.
-#[allow(dead_code)]
-pub async fn show_line_str(msg: &String<MAX_LINE_LEN>, line: u8) {
-    display_update(DisplayAction::ShowText(msg.clone(), line)).await;
 }
 
 /// Render a generic menu with a header and list of items.

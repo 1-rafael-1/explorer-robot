@@ -12,8 +12,6 @@
 //! All algorithmic code (magnetometer calibration convergence, gyroscope bias
 //! estimation, DMP configuration) is ported unchanged from v2.
 
-#![allow(dead_code)]
-
 use core::fmt::Write;
 
 use defmt::info;
@@ -51,9 +49,6 @@ struct MagCalibrationConfig {
     verify_max_ut: f32,
     /// Max allowed delta from baseline magnitude (μT).
     verify_max_delta_ut: f32,
-    /// Status update cadence (seconds).
-    #[allow(dead_code)]
-    status_interval_secs: u64,
 }
 
 /// Default magnetometer calibration thresholds.
@@ -66,7 +61,6 @@ const MAG_CALIBRATION_CONFIG: MagCalibrationConfig = MagCalibrationConfig {
     verify_min_ut: 20.0,
     verify_max_ut: 200.0,
     verify_max_delta_ut: 20.0,
-    status_interval_secs: 2,
 };
 
 /// Ensures IMU readings are stopped (and fusion mode restored) after calibration completes.
@@ -236,7 +230,6 @@ struct MagRotationStep {
 
 /// Magnetometer calibration phase machine.
 #[derive(Copy, Clone, Eq, PartialEq)]
-#[allow(dead_code)]
 enum MagCalibrationPhase {
     /// Manual yaw rotation phase.
     ManualYaw,
@@ -254,8 +247,6 @@ enum MagCalibrationPhase {
     MotorVerify,
     /// Save calibration results.
     Save,
-    /// Completed calibration flow.
-    Done,
     /// Calibration failed.
     Failed,
 }
@@ -272,7 +263,6 @@ impl MagCalibrationPhase {
             Self::MotorMeasure => "P6 MOTOR",
             Self::MotorVerify => "P7 VERIFY",
             Self::Save => "P8 SAVE",
-            Self::Done => "DONE",
             Self::Failed => "FAIL",
         }
     }
@@ -280,15 +270,14 @@ impl MagCalibrationPhase {
     /// 1-based phase number and total count for user-visible progress.
     const fn progress(self) -> Option<(u8, u8)> {
         match self {
-            Self::ManualYaw => Some((1, 8)),
-            Self::ManualPitch => Some((2, 8)),
-            Self::ManualRoll => Some((3, 8)),
-            Self::SettleDelay => Some((4, 8)),
-            Self::MotorBaseline => Some((5, 8)),
-            Self::MotorMeasure => Some((6, 8)),
-            Self::MotorVerify => Some((7, 8)),
-            Self::Save => Some((8, 8)),
-            Self::Done | Self::Failed => None,
+            Self::ManualYaw => Some((1, 7)),
+            Self::ManualPitch => Some((2, 7)),
+            Self::ManualRoll => Some((3, 7)),
+            Self::SettleDelay => Some((4, 7)),
+            Self::MotorBaseline => Some((5, 7)),
+            Self::MotorMeasure => Some((6, 7)),
+            Self::MotorVerify => Some((7, 7)),
+            Self::Save | Self::Failed => None,
         }
     }
 }

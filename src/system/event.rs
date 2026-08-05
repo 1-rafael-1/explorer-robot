@@ -27,8 +27,6 @@
 use defmt::Format;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
-use crate::task::io::flash_storage;
-
 /// Multi-producer, single-consumer event channel.
 ///
 /// Capacity of 64 events provides headroom for multiple producers raising
@@ -77,7 +75,6 @@ pub enum RotaryDirection {
 
 /// System-wide events that can occur during robot operation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum Events {
     /// System initialization requested.
     /// - Triggered at startup or after reset.
@@ -92,10 +89,6 @@ pub enum Events {
         crate::task::io::flash_storage::CalibrationKind,
         Option<crate::task::io::flash_storage::CalibrationDataKind>,
     ),
-
-    /// IMU calibration flags loaded from flash storage.
-    /// - Provides per-sensor calibration completion status.
-    ImuCalibrationFlagsLoaded(Option<flash_storage::ImuCalibrationFlags>),
 
     /// Obstacle detection status changed.
     /// - source: which sensor reported the change.
@@ -116,6 +109,12 @@ pub enum Events {
     /// `LiDAR` buffered scan completed (360° point-cloud pass).
     /// The point cloud in perception state is now fully populated.
     LidarScanCompleted,
+
+    /// New VL53L0X rangefinder readings available.
+    /// - Triggered when the rangefinder array completes a sampling round.
+    /// - Consumers poll perception state for the latest readings.
+    #[allow(dead_code)]
+    RangefinderReading,
 
     /// Battery measurement (level percentage and raw voltage).
     /// - level: 0-100 percent, triggers LED color updates.

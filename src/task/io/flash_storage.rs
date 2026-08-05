@@ -43,24 +43,10 @@ static FLASH_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FlashCommand, COM
 static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Option<CalibrationData>> =
     embassy_sync::mutex::Mutex::new(None);
 
-/// Return the latest cached motor calibration, if available.
-#[allow(dead_code)]
-pub async fn get_cached_motor_calibration() -> Option<MotorCalibration> {
-    let data = CALIBRATION_DATA.lock().await;
-    data.as_ref().map(|cal| cal.motor)
-}
-
 /// Return the latest cached IMU calibration flags, if available.
 pub async fn get_cached_imu_flags() -> Option<ImuCalibrationFlags> {
     let data = CALIBRATION_DATA.lock().await;
     data.as_ref().map(|cal| cal.imu_flags)
-}
-
-/// Return the latest cached distance factor (defaults to 1.0).
-#[allow(dead_code)]
-pub async fn get_distance_factor() -> f32 {
-    let data = CALIBRATION_DATA.lock().await;
-    data.as_ref().map_or(1.0, |cal| cal.distance)
 }
 
 /// Send a flash storage command.
@@ -99,16 +85,12 @@ pub enum CalibrationDataKind {
 
 /// Commands that can be sent to the flash storage task.
 #[derive(Debug, Clone, defmt::Format)]
-#[allow(dead_code)]
 pub enum FlashCommand {
     /// Save calibration data to flash.
     SaveData(CalibrationDataKind),
 
     /// Request calibration data (responds via event).
     GetData(CalibrationKind),
-
-    /// Load all calibration data from flash at boot.
-    LoadAll,
 }
 
 // ── Persisted data structures ───────────────────────────────────────────────────
@@ -290,107 +272,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
         debug!("Flash command received: {:?}", command);
 
         match command {
-            FlashCommand::LoadAll => {
-                info!("Loading all calibration data from flash...");
-
-                // Load motor calibration
-                #[allow(unreachable_patterns)]
-                let motor_cal = match storage
-                    .fetch_item::<MotorCalibration>(&mut data_buffer, &StorageKey::MotorCalibration)
-                    .await
-                {
-                    Ok(Some(cal)) => {
-                        info!(
-                            "Motor calibration loaded: left={}, right={}",
-                            cal.left_factor, cal.right_factor
-                        );
-                        cal
-                    }
-                    Ok(None) => {
-                        info!("No motor calibration found in flash (using defaults)");
-                        MotorCalibration::default()
-                    }
-                    Err(e) => {
-                        error!("Failed to load motor calibration: {}", defmt::Debug2Format(&e));
-                        MotorCalibration::default()
-                    }
-                    _ => MotorCalibration::default(),
-                };
-
-                // Load distance factor
-                #[allow(unreachable_patterns)]
-                let distance = match storage
-                    .fetch_item::<DistanceFactor>(&mut data_buffer, &StorageKey::DistanceFactor)
-                    .await
-                {
-                    Ok(Some(df)) => {
-                        info!("Distance calibration loaded: factor={}", df.0);
-                        df.0
-                    }
-                    Ok(None) => {
-                        info!("No distance calibration found in flash (defaulting to 1.0)");
-                        1.0
-                    }
-                    Err(e) => {
-                        error!("Failed to load distance calibration: {}", defmt::Debug2Format(&e));
-                        1.0
-                    }
-                    _ => 1.0,
-                };
-
-                // Load IMU calibration flags
-                #[allow(unreachable_patterns)]
-                let imu_flags = match storage
-                    .fetch_item::<ImuCalibrationFlags>(&mut data_buffer, &StorageKey::ImuFlags)
-                    .await
-                {
-                    Ok(Some(flags)) => {
-                        info!("IMU calibration flags loaded: mag={}", flags.mag);
-                        flags
-                    }
-                    Ok(None) => {
-                        info!("No IMU calibration flags found in flash (using defaults)");
-                        ImuCalibrationFlags::default()
-                    }
-                    Err(e) => {
-                        error!("Failed to load IMU calibration flags: {}", defmt::Debug2Format(&e));
-                        ImuCalibrationFlags::default()
-                    }
-                    _ => ImuCalibrationFlags::default(),
-                };
-
-                // Update cached data
-                let cal_data = CalibrationData {
-                    motor: motor_cal,
-                    imu_flags,
-                    distance,
-                };
-                {
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    *data = Some(cal_data);
-                }
-
-                // Sync to calibration state
-                {
-                    let mut state = calibration::CALIBRATION_STATE.lock().await;
-                    state.motor_cal_status = CalibrationStatus::Loaded;
-                    state.distance_factor = distance;
-                    state.distance_cal_status = CalibrationStatus::Loaded;
-                    if imu_flags.mag {
-                        state.mag_cal_status = CalibrationStatus::Loaded;
-                    }
-                    state.imu_cal_status = CalibrationStatus::Loaded;
-                }
-
-                // Notify motor driver of loaded calibration
-                crate::task::motor_driver::send_motor_command(
-                    crate::task::motor_driver::MotorCommand::LoadCalibration(motor_cal),
-                )
-                .await;
-
-                info!("All calibration data loaded and synced");
-            }
-
             FlashCommand::GetData(kind) => match kind {
                 CalibrationKind::Motor => {
                     info!("Loading motor calibration from flash...");
@@ -654,13 +535,4 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
         // Small delay to prevent tight loop
         Timer::after(Duration::from_millis(10)).await;
     }
-}
-
-/// Load calibration data from flash (convenience function).
-///
-/// Sends `LoadAll` to the flash storage task, which will load everything
-/// and publish to the calibration state and motor driver.
-#[allow(dead_code)]
-pub async fn load_calibration() {
-    send_flash_command(FlashCommand::LoadAll).await;
 }

@@ -21,7 +21,6 @@
 //! resolved as `Cancelled`. This assumes the single governing producer does
 //! not enqueue new commands during interrupt handling.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

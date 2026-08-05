@@ -8,8 +8,6 @@
 //!
 //! Only one queue may run at a time. Submitting while active yields `QueueBusy`.
 
-#![allow(dead_code)]
-
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
@@ -142,9 +140,11 @@ impl DriveQueueBuilder {
             .map_err(|_| DriveQueueBuildError::Full)
     }
 
-    /// Extend the queue with an iterator of commands.
+    /// Push every command from the iterator onto the queue, one at a time.
+    ///
+    /// Fails with `Full` if the queue capacity is exhausted partway through.
     #[allow(dead_code)]
-    pub fn extend<I>(&mut self, commands: I) -> Result<(), DriveQueueBuildError>
+    pub fn push_all<I>(&mut self, commands: I) -> Result<(), DriveQueueBuildError>
     where
         I: IntoIterator<Item = DriveCommand>,
     {

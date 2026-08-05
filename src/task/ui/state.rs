@@ -7,7 +7,6 @@ use crate::system::state::{CalibrationSelection, DriveMode};
 
 /// Top-level UI mode
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Format)]
-#[allow(dead_code)]
 pub enum UiMode {
     /// Main menu display
     MainMenu,
@@ -40,8 +39,10 @@ pub enum UiMode {
     /// Basic motor test mode (2 motors: left/right)
     RunningBasicMotorTest,
     /// `LiDAR` test placeholder screen
+    #[allow(dead_code)]
     RunningLidarTest,
     /// Rangefinder test placeholder screen
+    #[allow(dead_code)]
     RunningRangefinderTest,
     /// Calibration running state
     Calibrating {

@@ -98,7 +98,6 @@ pub enum MotorDirection {
 /// `SetTracks` is the primary calibrated command for normal operation.
 /// Calibration and voltage compensation are applied.
 /// `BrakeAll`, `CoastAll` are raw/safety commands.
-#[allow(dead_code)] // for completeness
 #[derive(Debug, Clone, Copy, Format)]
 pub enum MotorCommand {
     /// Set both tracks at once (calibrated + voltage compensated).
@@ -117,9 +116,6 @@ pub enum MotorCommand {
 
     /// Load calibration data from flash storage.
     LoadCalibration(MotorCalibration),
-
-    /// Update calibration for a single track.
-    UpdateCalibration { track: Track, factor: f32 },
 
     /// Update both calibration factors at once.
     UpdateAllCalibration { left_factor: f32, right_factor: f32 },
@@ -161,18 +157,6 @@ impl MotorCalibration {
         match track {
             Track::Left => self.left_factor,
             Track::Right => self.right_factor,
-        }
-    }
-
-    /// Set calibration factor for a track (clamped to valid range).
-    pub fn set_factor(&mut self, track: Track, factor: f32) {
-        let clamped = factor.clamp(Self::MIN_FACTOR, Self::MAX_FACTOR);
-        if (factor - clamped).abs() > f32::EPSILON {
-            warn!("Calibration factor {} clamped to {}", factor, clamped);
-        }
-        match track {
-            Track::Left => self.left_factor = clamped,
-            Track::Right => self.right_factor = clamped,
         }
     }
 
@@ -383,10 +367,6 @@ async fn process_command(
             );
             *cal = new_cal;
         }
-        MotorCommand::UpdateCalibration { track, factor } => {
-            info!("Updating calibration for {:?}: {}", track, factor);
-            cal.set_factor(track, factor);
-        }
         MotorCommand::UpdateAllCalibration {
             left_factor,
             right_factor,
@@ -491,9 +471,7 @@ pub async fn motor_driver(
                     false
                 }
             }
-            MotorCommand::LoadCalibration(_)
-            | MotorCommand::UpdateCalibration { .. }
-            | MotorCommand::UpdateAllCalibration { .. } => was_motors_active,
+            MotorCommand::LoadCalibration(_) | MotorCommand::UpdateAllCalibration { .. } => was_motors_active,
         };
 
         // Only update voltage compensation when motors are idle before and after

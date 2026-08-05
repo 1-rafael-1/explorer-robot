@@ -20,7 +20,6 @@
 //! *receives* their output. Together they form the full sensor infrastructure
 //! used by the drive task.
 
-#![allow(dead_code)]
 
 use crate::task::{
     drive::types,

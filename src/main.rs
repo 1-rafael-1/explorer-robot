@@ -19,12 +19,13 @@ use embassy_rp::{
     config::Config,
     dma::InterruptHandler as DmaInterruptHandler,
     flash::{Async, Flash},
-    gpio::{Input, Pull},
+    gpio::{Input, Output, Pull},
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
     multicore::{Stack, spawn_core1},
     peripherals::{
-        ADC, DMA_CH0, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_9, PIN_13, PIN_14,
-        PIN_15, PIN_16, PIN_17, PIN_22, PIN_23, PIN_24, PIN_28, PIO1, PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4,
+        ADC, DMA_CH0, DMA_CH1, DMA_CH2, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_9,
+        PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_22, PIN_23, PIN_24, PIN_28, PIO1, PWM_SLICE0, PWM_SLICE1,
+        PWM_SLICE3, PWM_SLICE4, SPI0,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
     pio_programs::{
@@ -32,6 +33,7 @@ use embassy_rp::{
         rotary_encoder::{PioEncoder, PioEncoderProgram},
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
+    spi::{self, Spi},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
@@ -56,6 +58,26 @@ bind_interrupts!(pub struct Irqs {
     PIO1_IRQ_0 => PioInterruptHandler<PIO1>;
     DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>;
 });
+
+// DMA_CH1 and DMA_CH2 share DMA_IRQ_0 with DMA_CH0 on this chip variant.
+// bind_interrupts! only allows one entry per interrupt, so we add the
+// remaining Binding impls manually for the SPI0 IMU bus.
+#[allow(unsafe_code)]
+unsafe impl
+    embassy_rp::interrupt::typelevel::Binding<
+        embassy_rp::interrupt::typelevel::DMA_IRQ_0,
+        embassy_rp::dma::InterruptHandler<DMA_CH1>,
+    > for Irqs
+{
+}
+#[allow(unsafe_code)]
+unsafe impl
+    embassy_rp::interrupt::typelevel::Binding<
+        embassy_rp::interrupt::typelevel::DMA_IRQ_0,
+        embassy_rp::dma::InterruptHandler<DMA_CH2>,
+    > for Irqs
+{
+}
 
 // ── Boot descriptor ────────────────────────────────────────────────────────────
 
@@ -267,6 +289,11 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverPins) {
         enc_cfg,
     );
     spawner.spawn(task::sensors::encoders::encoder_read(enc_left, enc_right).unwrap());
+
+    // Drive subsystem tasks: queue executor runs per-step completions;
+    // the drive task coordinates intents, sensors, and motor commands.
+    spawner.spawn(task::drive::drive_queue_executor().unwrap());
+    spawner.spawn(task::drive::drive().unwrap());
 }
 
 /// Initialise the SSD1306 OLED display on the shared I2C0 bus.
@@ -305,6 +332,17 @@ fn init_ui(spawner: Spawner) {
 /// Initialise the autonomous mode controller (coast-and-avoid etc.).
 fn init_autonomous_mode(spawner: Spawner) {
     task::autonomous_mode::init_autonomous_mode(spawner);
+}
+
+/// Initialise the IMU (ICM-20948) on the dedicated SPI0 bus.
+///
+/// The IMU task owns the SPI bus exclusively — the `Mutex` wrapper is a
+/// formality (single user, never contended) that satisfies the `SpiDevice` API.
+#[allow(clippy::unwrap_used)]
+fn init_imu(spawner: Spawner, spi: Spi<'static, SPI0, spi::Async>, cs: Output<'static>) {
+    static SPI_BUS: StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, SPI0, spi::Async>>> = StaticCell::new();
+    let spi_bus = SPI_BUS.init(Mutex::new(spi));
+    spawner.spawn(task::sensors::imu::inertial_measurement_read(spi_bus, cs).unwrap());
 }
 
 /// Spawn the startup task that fires the `Initialize` event.
@@ -390,6 +428,18 @@ fn main() -> ! {
         init_motor_driver(spawner, motor_pins);
         init_display(spawner, i2c_bus);
         init_vl53l0x_stub(spawner);
+
+        // ── IMU on dedicated SPI0 bus (SCK＝18, MOSI＝19, MISO＝20, CS＝21) ──
+        {
+            let mut spi_config = spi::Config::default();
+            spi_config.frequency = 7_000_000;
+            let imu_spi = Spi::new(
+                p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.DMA_CH1, p.DMA_CH2, Irqs, spi_config,
+            );
+            let imu_cs = Output::new(p.PIN_21, embassy_rp::gpio::Level::High);
+            init_imu(spawner, imu_spi, imu_cs);
+        }
+
         init_flash_storage(spawner, p.FLASH, p.DMA_CH0);
         init_testing(spawner);
         init_ui(spawner);

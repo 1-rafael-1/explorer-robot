@@ -7,7 +7,6 @@
 //! - Obstacle detection uses `LiDAR` `is_obstacle_ahead()` instead of ultrasonic polling.
 //! - All ultrasonic/IR imports removed.
 
-#![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

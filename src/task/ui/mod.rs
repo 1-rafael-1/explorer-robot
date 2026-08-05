@@ -27,6 +27,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Ticker, Timer};
+use heapless::String;
 
 use crate::{
     system::{
@@ -37,7 +38,7 @@ use crate::{
         autonomous_mode::coast_obstacle_avoid,
         behavior::obstacle,
         drive,
-        io::display::{DisplayAction, display_update},
+        io::display::{DisplayAction, display_try_update, display_update},
         testmode::{
             start_arc_drive_test, start_basic_motor_test_mode, start_imu_test_mode, start_imu6_test_mode,
             start_straight_drive_test, start_turns_test, stop_basic_motor_test_mode, stop_imu_test_mode,
@@ -187,7 +188,23 @@ async fn autonomous_refresh_tick() {
         return;
     }
 
-    render_current_ui(&snapshot).await;
+    // Build the rows but only re-render if the display channel isn't full.
+    // This avoids blocking the event loop when the display is busy.
+    if let UiMode::RunningAutonomous { mode } = snapshot.mode {
+        use crate::system::state::DriveMode;
+        let label = match mode {
+            DriveMode::CoastAndAvoid => "Coast & Avoid",
+            DriveMode::AttemptStraightLine => "Attempt Straight",
+        };
+        let mut rows: [String<20>; 4] = core::array::from_fn(|_| String::new());
+        let _ = rows[0].push_str(label);
+        let _ = rows[1].push_str("Running...");
+        let _ = rows[2].push_str("");
+        let _ = rows[3].push_str("Hold btn: stop");
+        if !display_try_update(DisplayAction::ShowLines(rows.clone())) {
+            display_update(DisplayAction::ShowLines(rows)).await;
+        }
+    }
 }
 
 // ── Calibration controller ───────────────────────────────────────────────────────

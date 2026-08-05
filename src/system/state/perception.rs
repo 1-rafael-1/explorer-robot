@@ -25,11 +25,11 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 /// A distance of `0.0` means no valid return at that angle (out of range,
 /// reflective surface, or measurement error).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LidarPointCloud {
     /// Distance in cm per degree. `0.0` = no return.
     pub distances: [f32; 360],
     /// Monotonically increasing scan sequence number.
+    #[allow(dead_code)]
     pub sequence: u64,
 }
 
@@ -73,15 +73,18 @@ impl LidarPointCloud {
 /// Each field is an `Option<f32>` — `None` means no valid reading (e.g. sensor
 /// not yet initialized, out of range, or measurement error).
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct RangefinderReadings {
     /// Front-left distance in cm (side collision detection).
+    #[allow(dead_code)]
     pub front_left: Option<f32>,
     /// Front-center distance in cm (forward collision detection).
+    #[allow(dead_code)]
     pub front_center: Option<f32>,
     /// Front-down distance in cm (stair/drop detection, angled downward).
+    #[allow(dead_code)]
     pub front_down: Option<f32>,
     /// Rear distance in cm (rear collision detection).
+    #[allow(dead_code)]
     pub rear: Option<f32>,
 }
 

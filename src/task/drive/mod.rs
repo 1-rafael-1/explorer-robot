@@ -119,7 +119,7 @@ pub use api::{send_drive_command, send_drive_interrupt};
 use brake_coast::BrakeCoastStepResult;
 use distance::DistanceStepResult;
 use intent::{ActiveIntentOutcome, apply_completion, poll_active_intent, step_idle};
-pub use queue::DriveQueueBuilder;
+pub use queue::{DriveQueueBuilder, drive_queue_executor};
 use rotation::RotationStepResult;
 pub use sensors::data::{
     clear_encoder_measurement, clear_imu_measurements, get_latest_encoder_measurement, send_mag_measurement,

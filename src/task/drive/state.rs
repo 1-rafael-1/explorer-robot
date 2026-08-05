@@ -29,7 +29,6 @@
 //! - [`DriveLoop`]: top-level state struct — holds `standby_enabled` and the
 //!   active intent (if any).
 
-#![allow(dead_code)]
 
 use embassy_time::Instant;
 

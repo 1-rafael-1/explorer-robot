@@ -53,8 +53,6 @@
 //! Curve debug logs are rate-limited and compiled only when the `telemetry_logs`
 //! feature is enabled; otherwise no formatting/queueing cost is incurred.
 
-#![allow(dead_code)]
-
 use embassy_time::{Duration, Instant, Timer};
 use libm::roundf;
 use micromath::F32Ext;
@@ -126,9 +124,6 @@ struct TrackSpeedData {
     left_track_avg: f32,
     /// Computed average for the right track.
     right_track_avg: f32,
-    /// Originating measurement timestamp (ms).
-    #[allow(dead_code)]
-    timestamp_ms: u64,
 }
 
 impl TrackSpeedData {
@@ -156,7 +151,6 @@ fn calculate_track_averages(measurement: EncoderMeasurement) -> TrackSpeedData {
         right: measurement.right,
         left_track_avg,
         right_track_avg,
-        timestamp_ms: measurement.timestamp_ms,
     }
 }
 

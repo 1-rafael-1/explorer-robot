@@ -22,6 +22,7 @@
 //! - All ultrasonic imports and usage removed.
 //! - IMU drift correction and odometry unchanged.
 
+// this entire module is deferred — waiting for LiDAR and rangefinder implementation
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};

@@ -19,7 +19,6 @@
 //! commands after a preemption. Active intents are cancelled immediately, while
 //! queued intents are cancelled when dequeued by comparing epochs.
 
-#![allow(dead_code)]
 
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
