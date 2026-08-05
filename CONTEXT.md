@@ -19,16 +19,42 @@
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), I2C bus (OLED + VL53L0X array), and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), IMU (SPI0), I2C bus (OLED + VL53L0X array), flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is planned.
-- **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Tasks raise events; the orchestrator consumes and dispatches them to behavior handlers.
-- **Orchestrator** — Central event loop in `task/orchestrate.rs`. Receives events and dispatches them to registered behavior handlers (battery, obstacle, input, calibration, autonomous modes).
-- **Behavior Handler** — A module that responds to specific event types. Registered with the orchestrator. Handlers are functions that respond to specific event types by reading system state and issuing commands.
-- **Drive Intent** — A command placed on the drive priority queue. Carries a `DriveCommand` variant, priority level, and preemption flag. Higher-priority intents (e.g., emergency brake) preempt lower ones.
-- **Drive Queue** — Priority queue that holds pending drive intents. Drained by the drive task. Supports preemption.
-- **Drive Task** — Consumes encoder data, computes speed/odometry, issues calibrated motor commands via the intent queue.
-- **SetTracks** — The primary drive command. Sets left and right track speeds (-100 to +100). Calibration and voltage compensation are applied.
-- **Voltage Compensation** — Scales PWM duty cycle to maintain 6V effective motor voltage as battery drains. Formula: `compensation = 6.0 / battery_voltage`.
+- **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, rotary events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
+- **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
+- **Behavior Handler** — A module under `task/behavior/` that reacts to specific event types. Domain logic lives here — obstacle fusion (perception atomics + EmergencyBrake interrupt), battery state updates, obstacle avoidance completion. Called by the orchestrator.
+- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → rotary_encoder → motor_driver → encoders → drive_queue_executor → drive → display → vl53l0x_stub → imu → flash_storage → testing → ui → autonomous_mode → startup. Core1 runs only lidar_stub.
+
+### Message Passing
+
+Three data flow patterns coexist, chosen by latency requirements:
+
+- **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
+- **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
+- **Perception atomics** — `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans provide lock-free obstacle reads on the hot path. Written by behavior handlers on `ObstacleDetected` events and by sensor stubs; read by autonomous modes and the UI without acquiring a mutex.
+
+## Driving
+
+The `drive` module tree owns all motion control. Commands flow through a thin dispatch that routes to control modules. Two public entry points: `send_drive_command` (queue a command) and `send_drive_interrupt` (preempt).
+
+- **SetTracks** — The primary motor command. Sets left and right track speeds (-100 to +100). Calibration and voltage compensation are applied before PWM output.
+- **Drive Distance** — A `DriveAction` that commands travel of a specified distance (straight or curved arc) using encoder feedback with optional IMU correction. Completes when target is reached or an interrupt preempts it.
+- **Rotate Exact** — A `DriveAction` that commands in-place rotation to a target angle using IMU feedback. Completes when the angle is reached within tolerance.
+- **Drift Compensation** — Encoder-based correction that equalizes left/right track speeds to prevent veering. Handled by higher-level intents (distance, rotation) via IMU heading correction and encoder feedback.
+- **Ramp-Down** — Progressive speed reduction as a distance or rotation command approaches its target. Prevents overshoot.
+- **Voltage Compensation** — Scales PWM duty cycle to maintain 6V effective motor voltage as battery drains: `compensation = 6.0 / battery_voltage`.
+
+### Drive Subsystem Internals
+
+- **Drive Queue** — A builder (`DriveQueueBuilder`) that accumulates `DriveCommand` steps and submits them for sequential execution. A single `drive_queue_executor` task runs one queue at a time, emitting one queue-level completion.
+- **Drive Task** — The main control loop (`drive()`). Polls active intents, steps idle when no intent is active, and handles interrupts. Selects over the command queue and the interrupt signal.
+- **Intent** — A state machine that owns a specific motion behavior — rotation, distance drive, brake/coast settle, or idle. Each intent is an `ActiveIntent` variant carrying its controller state and completion flag. Commands that complete instantly (e.g., `Differential`) are not intents; they are fire-and-forget.
+- **Dispatch** — The thin seam between the drive command queue and the control modules. Routes incoming `DriveCommand` envelopes, handles standby wake-up, and executes `IntentTeardown` descriptors on completion or interrupt. Owns no per-intent knowledge.
+- **IntentTeardown** — An enum declaring what sensor streams must be stopped when an intent completes or is interrupted. Each `ActiveIntent` returns its teardown descriptor; the dispatch executes it. Keeps the dispatch thin — it knows to stop sensors but not which specific sensors each intent required.
+- **InterruptKind** — An enum (`EmergencyBrake`, `Stop`, `CancelCurrent`) that specifies how the drive subsystem preempts the active intent. Sent via `send_drive_interrupt`.
+- **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when a combined obstacle is detected (LiDAR or rangefinder). Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on any obstacle detection.
+- **Epoch** — A monotonic counter incremented on each interrupt. Queued commands stamped with an old epoch are discarded when dequeued, preventing stale commands from executing after an interrupt.
 
 ## State Modules
 
@@ -36,17 +62,28 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Perception State** — Dual-path architecture: `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomics for lock-free obstacle checks on the hot path, plus a mutex-protected LiDAR point cloud (360 distances, one per degree) and VL53L0X rangefinder readings (4 sensors). Replaces v2's ultrasonic sweep buffer.
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (4 VL53L0X sensor distances). Replaces v2's ultrasonic sweep buffer.
+- **ObstacleSource** — Enum (`Lidar` | `Rangefinder`) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection.
+- **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds, encoder pulse counts, computed speeds (cm/s), odometry. Lock-free atomic mirrors for high-frequency readers.
 
 ## Autonomous Modes
 
-- **Coast-and-Avoid** — Drive forward until LiDAR detects obstacle within threshold (default 30 cm). Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. Simple, reliable.
-- **Attempt Straight Line** — User sets target distance (100–1000 cm). LiDAR point cloud analyzed for gaps: find widest gap within forward cone (±60°), orient toward gap center, drive a leg, repeat. IMU heading used for drift correction. Completes when target distance reached or dead-end encountered.
+- **Coast-and-Avoid** — Drive forward until the combined obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The LiDAR stub runs threshold/cone logic internally; the mode reads only the pre-computed boolean. Simple, reliable.
+- **Attempt Straight Line** — User sets target distance (100–1000 cm). The LiDAR point cloud is analyzed for navigable gaps; the widest gap within the forward cone (±60°) is chosen. The robot rotates toward the gap center, drives a leg, and repeats. IMU heading used for drift correction. Completes when target distance is reached or no forward path exists. *(Deferred — UI integration pending.)*
+
+### Gap Analysis
+
+- **Gap** — A contiguous angular arc in the LiDAR point cloud where no obstacle return is within threshold (default 30 cm). A valid gap has sufficient width at its constriction depth, is flanked by obstacles, and lies within the forward cone.
+- **Constriction Depth** — The minimum distance across the angles that make up a gap. Determines how far the robot can safely travel through that gap.
+- **Leg** — One rotate-then-drive maneuver through a chosen gap. The leg length is the constriction depth minus a safety margin, or the remaining target distance if shorter.
+- **Accumulated Drift** — The signed sum of deviation angles across all legs. Later legs apply a correction toward the ideal straight line.
+- **Correction Angle** — The gap midpoint angle that would cancel accumulated drift (= `-drift`). The gap closest to this angle is preferred.
 
 ## Calibration
 
-- **Motor Calibration** — Per-track speed multipliers (`left_factor`/`right_factor`, range 0.5–1.5). Computed by running each motor at fixed PWM and measuring encoder pulses. Compensates for manufacturing variation between motors.
-- **Distance Calibration** — Single factor mapping encoder pulses to real-world centimeters.
-- **IMU Calibration** — Magnetometer hard/soft iron calibration and motor interference compensation (`MagCalibration`). Gyroscope and accelerometer bias are handled internally by the ICM-20948 DMP. Carried over from v2.
+- **Motor Calibration** — Per-track speed multipliers (`left_factor`/`right_factor`, range `(0.0, 1.0]`). The faster track is always the reference at 1.0; the slower track gets a factor < 1.0. Computed by running each track at fixed PWM and measuring encoder pulses.
+- **Distance Calibration** — Single factor (range 0.5–2.0) mapping encoder pulses to real-world centimeters. Corrects for surface friction and tire wear.
+- **IMU Calibration** — Magnetometer hard/soft iron calibration and motor interference compensation (`MagCalibration`). Gyroscope and accelerometer bias are handled internally by the ICM-20948 DMP.
+- **Boot Sequence** — On `Initialize` event, the initialization module sends individual `GetData` commands to flash storage for motor, IMU, distance, and IMU flag calibration data. Each response raises a `CalibrationDataLoaded` event. When all four are received, the UI shows the main menu.
 - **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and magnetometer calibration flags (`ImuCalibrationFlags`) to dedicated FLASH_STORAGE region (last 8KB of flash).

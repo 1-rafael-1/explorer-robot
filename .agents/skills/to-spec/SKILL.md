@@ -16,7 +16,7 @@ This repo writes specs as local files, not GitHub issues.
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then write it to `docs/specs/<NN>-<slug>.md`. Number sequentially from the highest existing spec number + 1.
+3. Write the spec using the template below, then write it to `.scratch/specs/<NN>-<slug>.md`. Number sequentially from the highest existing spec number + 1.
 
 <spec-template>
 
