@@ -33,7 +33,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "build"
+          save-if: true
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
