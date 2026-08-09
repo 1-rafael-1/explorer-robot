@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main", "dev"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -15,6 +19,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build"
+
+      - name: Install stable toolchain (read from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          targets: thumbv8m.main-none-eabihf
+          components: clippy
 
       - name: Install latest nightly rustfmt
         uses: dtolnay/rust-toolchain@nightly
