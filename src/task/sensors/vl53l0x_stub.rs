@@ -78,10 +78,7 @@ pub async fn vl53l0x_stub_task() {
         }
 
         #[cfg(feature = "telemetry_logs")]
-        info!(
-            "[vl53l0x_stub] reading: {:.1} cm (floor_drop: {})",
-            reading_cm, detected
-        );
+        info!("[vl53l0x_stub] reading: {} cm (floor_drop: {})", reading_cm, detected);
 
         // Wait for the next scan interval.
         Timer::after(Duration::from_millis(SCAN_INTERVAL_MS)).await;

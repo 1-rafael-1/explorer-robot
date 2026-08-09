@@ -7,7 +7,6 @@
 //! Unlike other control modules, this is not an intent — commands complete
 //! instantly and never block the queue.
 
-
 /// Passthrough: clamp and return the commanded speeds unchanged.
 ///
 /// Returns (`left`, `right`) clamped to [-100, 100].

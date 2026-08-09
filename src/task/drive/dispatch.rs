@@ -8,7 +8,6 @@
 //! no port-expander. `SetTracks { left, right }` maps directly to the two motor
 //! channels (left track, right track).
 
-
 use defmt::info;
 use embassy_time::{Duration, Instant, Timer};
 

@@ -24,7 +24,6 @@
 //! needed; items used only within the drive task remain reachable only through
 //! the private module path.
 
-
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use nalgebra::Vector3;

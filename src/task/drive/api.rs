@@ -21,7 +21,6 @@
 //! resolved as `Cancelled`. This assumes the single governing producer does
 //! not enqueue new commands during interrupt handling.
 
-
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal};
