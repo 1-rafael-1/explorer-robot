@@ -29,7 +29,6 @@
 //! - [`DriveLoop`]: top-level state struct — holds `standby_enabled` and the
 //!   active intent (if any).
 
-
 use embassy_time::Instant;
 
 use super::{brake_coast::BrakeCoastState, rotation::RotationState};

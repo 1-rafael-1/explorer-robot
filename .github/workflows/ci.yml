@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main", "dev"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -16,10 +20,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: thumbv8m.main-none-eabihf
+          components: clippy
+
       - name: Install latest nightly rustfmt
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
