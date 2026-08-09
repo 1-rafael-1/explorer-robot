@@ -20,12 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build"
-
-      - name: Install stable toolchain (read from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@master
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: thumbv8m.main-none-eabihf
           components: clippy
@@ -34,6 +30,10 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build"
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
