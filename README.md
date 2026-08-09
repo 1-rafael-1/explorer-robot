@@ -6,7 +6,7 @@ autonomous navigation and sensor-driven obstacle avoidance.
 Built in Rust on [Embassy](https://embassy.dev/) for the RP2350 microcontroller.
 This iteration builds on hardware experience from [simple-robot](https://github.com/1-rafael-1/simple-robot), adding a
 360° spinning LiDAR (COIN-D6), a VL53L0X rangefinder (front-down), ICM-20948 IMU over
-SPI, an SSD1306 OLED display, and a Grove Vision AI V2 camera module — all on custom PCB hardware. In turn ultrasoic/servo sweeping sensor array is ditched, so are the IR sensors.
+SPI, an SSD1306 OLED display, and a Grove Vision AI V2 camera module — as much as i manage on custom PCB hardware. In turn ultrasoic/servo sweeping sensor array is ditched, so are the IR sensors.
 
 ## Status
 
@@ -28,6 +28,7 @@ The big ToDos, in no particuar order:
 
 - **MCU:** Raspberry Pi RP2350 (dual-core Cortex-M33)
 - **Motors:** 2× JGB37-520 6V DC with hall encoders, 165RPM
+- **Bearings:** 6× 6802-2RS (DIN 625 6802-2RS)
 - **Motor driver:** TB6612FNG dual 
 - **LiDAR:** COIN-D6 360° spinning dTOF (core1, UART0 + power MOSFET reserved, currently stubbed)
 - **AI Cam:** Grove Vision AI V2 (core0, UART1 + power MOSFET reserved, not yet integrated)

@@ -4,7 +4,8 @@
 
 ## Hardware
 
-- **Track** — Left or right side of the robot. Each track has one JGB37-520 motor mechanically coupled to the track (treads or wheels).
+- **Weight Distribution** — Motors (~400g) at the rear, battery (~100g) at the front. Remaining components (PCB, LiDAR, rangefinder) biased forward to achieve roughly centered center of mass for even track pressure and stable climbing.
+- **Track** — Left or right side of the robot. Each track has three sprockets: rear drive sprocket (motor-coupled, toothed), middle road wheel (weight-bearing, smooth), and front idler (tensioner, smooth). Rear drive keeps the bottom track run in tension under load, maximizing traction and preventing track bunching.
 - **Motor** — A single JGB37-520 6V 165RPM DC motor with hall encoder. Two motors (one per track).
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
 - **Encoder** — Single-channel hall sensor on each JGB37-520 motor. Produces 8 pulses per motor revolution, 1320 pulses per output shaft revolution (165:1 gear ratio). Pulse counting via PWM input mode. Direction is inferred from the motor command, not quadrature.
@@ -15,7 +16,7 @@
 - **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X rangefinder.
 - **Rotary Encoder** — EC11 quadrature rotary encoder with push button. Used for menu navigation (rotation) and selection (push).
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
-- **Battery** — 2S LiPo (8.4V max). Voltage read via ADC. Motors compensated to 6V target.
+- **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
 
 ## Architecture
