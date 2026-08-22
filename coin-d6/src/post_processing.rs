@@ -1,9 +1,12 @@
 //! Post-processing: aggregates multiple revolutions into a single stable scan.
 //!
 //! The COIN-D6 spins continuously and reports the same nominal angle across
-//! successive revolutions. [`aggregate`] combines several index-aligned
-//! [`Scan`]s into one, using a validity gate plus a median/mean reducer so that
-//! occasional no-return points (where `distance_mm == 0`) do not corrupt the
+//! successive revolutions, but every revolution starts at whatever angle its
+//! ring-start packet lands on and can contain a slightly different number of
+//! points (both effects are especially pronounced while the motor is spinning
+//! up). [`aggregate`] therefore reduces revolutions **by angle** — each point is
+//! binned into a fixed-width angular bucket — rather than by index, so that a
+//! revolution whose index-0 point sits at a different bearing cannot skew the
 //! fused scan.
 
 use crate::types::{AggregationConfig, AggregationMethod, Point, Scan};
@@ -29,36 +32,42 @@ pub fn angle_correction_deg(distance_mm: u16) -> f32 {
     libm::atanf(ANGLE_CORRECTION_COEFF * (d - ANGLE_CORRECTION_ZERO_MM) / (ANGLE_CORRECTION_ZERO_MM * d))
 }
 
-/// Reduce multiple aligned scans to a single sanitized [`Scan`].
+/// Reduce multiple revolutions to a single sanitized [`Scan`].
 ///
-/// `scans` must contain full revolutions that share the same nominal angle at
-/// every index: scan `s` is assumed to report the point at bearing `i` in
-/// `scans[s].points[i]`, so the output slot `i` is fused purely by index. A
-/// scan shorter than the longest one is treated as missing its trailing points,
-/// which are interpreted as no-return (`distance_mm == 0`).
+/// Each revolution is reduced **by angle**, not by index: points are assigned to
+/// fixed-width angular buckets of width [`AggregationConfig::resolution_deg`],
+/// and each bucket is fused independently. A point belongs to bucket `b` when
+/// its (angle-corrected, wrap-normalised) bearing falls in
+/// `[b * resolution, (b + 1) * resolution)`, so revolutions that start at
+/// different angles are matched correctly.
 ///
-/// For each index, a sample is *valid* when its `distance_mm` is non-zero. If
-/// the fraction of valid samples falls below
+/// For each bucket, a sample is *valid* when its `distance_mm` is non-zero. If
+/// the fraction of revolutions contributing a valid sample falls below
 /// [`AggregationConfig::validity_ratio`], the output point is a no-return
 /// (`distance_mm == 0`, `intensity == 0`); otherwise the valid distances and
 /// intensities are reduced with the configured [`AggregationMethod`].
 ///
-/// An empty input slice yields an empty [`Scan`].
+/// The output is a fixed grid of `bucket_count` points (one per bucket), sorted
+/// by bearing, with each point's angle set to its bucket's lower edge (the
+/// device's native angle for that bucket). An empty input slice yields an empty
+/// [`Scan`].
 #[must_use]
-pub fn aggregate(scans: &[Scan], config: &AggregationConfig) -> Scan {
+pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) -> Scan<N> {
     if scans.is_empty() {
         return Scan::new();
     }
 
-    let width = scans.iter().fold(0, |acc, scan| acc.max(scan.len));
+    let resolution = sanitise_resolution(config.resolution_deg);
+    let bins = bucket_count::<N>(resolution);
 
     let mut out = Scan::new();
-    out.len = width;
+    out.len = bins;
 
-    for i in 0..width {
-        let (distance, intensity) = reduce_slot(scans, i, config);
-        out.points[i] = Point {
-            angle_deg: angle_at(scans, i),
+    for bin in 0..bins {
+        let angle = bucket_angle_deg(bin, resolution);
+        let (distance, intensity) = reduce_bucket(scans, bin, resolution, config);
+        out.points[bin] = Point {
+            angle_deg: angle,
             distance_mm: distance,
             intensity,
         };
@@ -67,75 +76,112 @@ pub fn aggregate(scans: &[Scan], config: &AggregationConfig) -> Scan {
     out
 }
 
-/// The nominal angle of slot `i`: the first scan that reaches index `i` wins,
-/// falling back to `i * 0.9` degrees (the native 0.9° resolution) when none do.
-///
-/// In practice every scan shares the same nominal angle at each index, so the
-/// fallback is only a defensive default.
-fn angle_at(scans: &[Scan], i: usize) -> f32 {
-    for scan in scans {
-        if i < scan.len {
-            return scan.points[i].angle_deg;
-        }
-    }
-    // The index is bounded by the scan length (`<= 400`), which `f32` represents
-    // exactly, so this cast is lossless despite `clippy::cast_precision_loss`.
-    #[allow(clippy::cast_precision_loss)]
-    let fallback = i as f32 * 0.9;
-    fallback
+/// The number of angular buckets `aggregate` emits, clamped to `[1, N]`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn bucket_count<const N: usize>(resolution_deg: f32) -> usize {
+    // `resolution_deg` is already sanitised to a positive, finite value, so the
+    // quotient is finite and the cast saturates safely before the clamp.
+    (libm::roundf(360.0 / resolution_deg) as usize).clamp(1, N)
 }
 
-/// Reduce the valid samples at index `i` to a single `(distance, intensity)`,
-/// applying the validity gate and the configured aggregation method.
-fn reduce_slot(scans: &[Scan], i: usize, config: &AggregationConfig) -> (u16, u8) {
-    let count = scans.len();
+/// The representative bearing of bucket `bin`, in degrees.
+///
+/// Uses the bucket's lower edge so the output grid lines up with the device's
+/// native angles (`0°, 0.9°, 1.8°, …`) rather than an arbitrary half-bin
+/// offset.
+#[allow(clippy::cast_precision_loss)]
+fn bucket_angle_deg(bin: usize, resolution_deg: f32) -> f32 {
+    bin as f32 * resolution_deg
+}
+
+/// Coerce an angle into `[0, 360)`.
+///
+/// Angle correction can push a bearing just past 360° or just below 0°, so
+/// binning must normalise before deciding which bucket a point lands in. The
+/// `%` operator matches `rem_euclid(360.0)` here because the input is always
+/// within one correction step of the valid range.
+fn normalise_angle(angle_deg: f32) -> f32 {
+    let wrapped = angle_deg % 360.0;
+    if wrapped < 0.0 { wrapped + 360.0 } else { wrapped }
+}
+
+/// The point in `scan` that belongs to bucket `bin`, if any.
+///
+/// Points within a revolution are already in increasing bearing order, but the
+/// array is not globally sorted because it wraps through 360°, so this does a
+/// linear scan. At the native 0.9° resolution each revolution contributes at most
+/// one point per bucket, so the first match is returned.
+#[allow(clippy::cast_precision_loss)]
+fn point_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<Point> {
+    let lower = bin as f32 * resolution_deg;
+    let upper = lower + resolution_deg;
+
+    for point in &scan.points[..scan.len] {
+        let bearing = normalise_angle(point.angle_deg);
+        if bearing >= lower && bearing < upper {
+            return Some(*point);
+        }
+    }
+    None
+}
+
+/// Reduce all revolutions at one angular bucket to a single `(distance,
+/// intensity)`, applying the validity gate and the configured method.
+fn reduce_bucket<const N: usize>(
+    scans: &[Scan<N>],
+    bin: usize,
+    resolution_deg: f32,
+    config: &AggregationConfig,
+) -> (u16, u8) {
+    let spins = scans.len();
     let valid = scans
         .iter()
-        .filter(|scan| i < scan.len && scan.points[i].distance_mm > 0)
+        .filter(|scan| point_at_bin(scan, bin, resolution_deg).is_some_and(|p| p.distance_mm > 0))
         .count();
 
-    // `valid` and `count` are tiny (bounded by the number of spins, far below
+    // `valid` and `spins` are tiny (bounded by the number of spins, far below
     // `f32`'s exact-integer range), so these casts are lossless.
     #[allow(clippy::cast_precision_loss)]
-    let valid_fraction = (valid as f32) / (count as f32);
+    let valid_fraction = (valid as f32) / (spins as f32);
 
     if valid == 0 || valid_fraction < config.validity_ratio {
         return (0, 0);
     }
 
     let distance = match config.method {
-        AggregationMethod::Median => median_distance(scans, i, valid),
-        AggregationMethod::Mean => mean_distance(scans, i, valid),
+        AggregationMethod::Median => median_distance(scans, bin, resolution_deg, valid),
+        AggregationMethod::Mean => mean_distance(scans, bin, resolution_deg, valid),
     };
     let intensity = match config.method {
-        AggregationMethod::Median => median_intensity(scans, i, valid),
-        AggregationMethod::Mean => mean_intensity(scans, i, valid),
+        AggregationMethod::Median => median_intensity(scans, bin, resolution_deg, valid),
+        AggregationMethod::Mean => mean_intensity(scans, bin, resolution_deg, valid),
     };
 
     (distance, intensity)
 }
 
-/// The median of the valid distances at index `i` (reduced over `valid`
+/// The median of the valid distances in bucket `bin` (reduced over `valid`
 /// samples), computed with an `O(n²)` selection so the crate stays heap-free.
-fn median_distance(scans: &[Scan], i: usize, valid: usize) -> u16 {
+fn median_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u16 {
     let upper = valid / 2;
     if valid % 2 == 1 {
-        select_valid_distance(scans, i, upper)
+        select_distance(scans, bin, resolution_deg, upper)
     } else {
-        let lower = select_valid_distance(scans, i, upper - 1);
-        let upper = select_valid_distance(scans, i, upper);
+        let lower = select_distance(scans, bin, resolution_deg, upper - 1);
+        let upper = select_distance(scans, bin, resolution_deg, upper);
         // Both are `u16` and `lower <= upper`, so this stays in range.
         lower + (upper - lower) / 2
     }
 }
 
-/// The arithmetic mean of the valid distances at index `i`, truncated to a
+/// The arithmetic mean of the valid distances in bucket `bin`, truncated to a
 /// whole millimetre.
-fn mean_distance(scans: &[Scan], i: usize, valid: usize) -> u16 {
+fn mean_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u16 {
     let sum: usize = scans
         .iter()
-        .filter(|scan| i < scan.len && scan.points[i].distance_mm > 0)
-        .map(|scan| usize::from(scan.points[i].distance_mm))
+        .filter_map(|scan| point_at_bin(scan, bin, resolution_deg))
+        .filter(|point| point.distance_mm > 0)
+        .map(|point| usize::from(point.distance_mm))
         .sum();
     // An average of `u16` values cannot exceed `u16::MAX`, so the division is
     // always in range; `unwrap_or` only guards the (unreachable) conversion
@@ -143,27 +189,28 @@ fn mean_distance(scans: &[Scan], i: usize, valid: usize) -> u16 {
     u16::try_from(sum / valid).unwrap_or(u16::MAX)
 }
 
-/// The median of the valid intensities at index `i` (validity is still keyed on
-/// `distance_mm > 0`).
-fn median_intensity(scans: &[Scan], i: usize, valid: usize) -> u8 {
+/// The median of the valid intensities in bucket `bin` (validity is still keyed
+/// on `distance_mm > 0`).
+fn median_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u8 {
     let upper = valid / 2;
     if valid % 2 == 1 {
-        select_valid_intensity(scans, i, upper)
+        select_intensity(scans, bin, resolution_deg, upper)
     } else {
-        let lower = select_valid_intensity(scans, i, upper - 1);
-        let upper = select_valid_intensity(scans, i, upper);
+        let lower = select_intensity(scans, bin, resolution_deg, upper - 1);
+        let upper = select_intensity(scans, bin, resolution_deg, upper);
         // Both are `u8` and `lower <= upper`, so this stays in range.
         lower + (upper - lower) / 2
     }
 }
 
-/// The arithmetic mean of the valid intensities at index `i`, truncated to a
+/// The arithmetic mean of the valid intensities in bucket `bin`, truncated to a
 /// whole intensity step.
-fn mean_intensity(scans: &[Scan], i: usize, valid: usize) -> u8 {
+fn mean_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u8 {
     let sum: usize = scans
         .iter()
-        .filter(|scan| i < scan.len && scan.points[i].distance_mm > 0)
-        .map(|scan| usize::from(scan.points[i].intensity))
+        .filter_map(|scan| point_at_bin(scan, bin, resolution_deg))
+        .filter(|point| point.distance_mm > 0)
+        .map(|point| usize::from(point.intensity))
         .sum();
     // An average of `u8` values cannot exceed `u8::MAX`, so the division is
     // always in range; `unwrap_or` only guards the (unreachable) conversion
@@ -171,23 +218,23 @@ fn mean_intensity(scans: &[Scan], i: usize, valid: usize) -> u8 {
     u8::try_from(sum / valid).unwrap_or(u8::MAX)
 }
 
-/// The `k`-th smallest (0-indexed) valid distance at index `i`.
+/// The `k`-th smallest (0-indexed) valid distance in bucket `bin`.
 ///
 /// Selection by counting: for each candidate distance, count how many valid
 /// distances are strictly smaller and how many are equal; the first candidate
 /// whose rank bracket contains `k` is the answer. This is `O(n²)` over the small
 /// set of valid samples, avoiding a heap allocation.
-fn select_valid_distance(scans: &[Scan], i: usize, k: usize) -> u16 {
-    for candidate in scans {
-        if i >= candidate.len {
+fn select_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, k: usize) -> u16 {
+    for scan in scans {
+        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
             continue;
-        }
-        let value = candidate.points[i].distance_mm;
+        };
+        let value = point.distance_mm;
         if value == 0 {
             continue;
         }
 
-        let (less, equal) = rank_distance(scans, i, value);
+        let (less, equal) = rank_distance(scans, bin, resolution_deg, value);
         if less <= k && k < less + equal {
             return value;
         }
@@ -195,36 +242,43 @@ fn select_valid_distance(scans: &[Scan], i: usize, k: usize) -> u16 {
     0
 }
 
-/// Count the valid distances at index `i` that are strictly smaller than
+/// Count the valid distances in bucket `bin` that are strictly smaller than
 /// (`less`) and equal to (`equal`) `value`.
-fn rank_distance(scans: &[Scan], i: usize, value: u16) -> (usize, usize) {
+fn rank_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, value: u16) -> (usize, usize) {
     let mut less = 0usize;
     let mut equal = 0usize;
     for scan in scans {
-        if i < scan.len && scan.points[i].distance_mm > 0 {
-            let d = scan.points[i].distance_mm;
-            if d < value {
-                less += 1;
-            } else if d == value {
-                equal += 1;
-            }
+        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+            continue;
+        };
+        let d = point.distance_mm;
+        if d == 0 {
+            continue;
+        }
+        if d < value {
+            less += 1;
+        } else if d == value {
+            equal += 1;
         }
     }
     (less, equal)
 }
 
-/// The `k`-th smallest (0-indexed) valid intensity at index `i`.
+/// The `k`-th smallest (0-indexed) valid intensity in bucket `bin`.
 ///
 /// Validity is keyed on `distance_mm > 0` (not intensity), so an intensity of
 /// zero on a valid sample is still a real value.
-fn select_valid_intensity(scans: &[Scan], i: usize, k: usize) -> u8 {
-    for candidate in scans {
-        if i >= candidate.len || candidate.points[i].distance_mm == 0 {
+fn select_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, k: usize) -> u8 {
+    for scan in scans {
+        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+            continue;
+        };
+        if point.distance_mm == 0 {
             continue;
         }
-        let value = candidate.points[i].intensity;
+        let value = point.intensity;
 
-        let (less, equal) = rank_intensity(scans, i, value);
+        let (less, equal) = rank_intensity(scans, bin, resolution_deg, value);
         if less <= k && k < less + equal {
             return value;
         }
@@ -232,20 +286,33 @@ fn select_valid_intensity(scans: &[Scan], i: usize, k: usize) -> u8 {
     0
 }
 
-/// Count the valid intensities at index `i` that are strictly smaller than
+/// Count the valid intensities in bucket `bin` that are strictly smaller than
 /// (`less`) and equal to (`equal`) `value`.
-fn rank_intensity(scans: &[Scan], i: usize, value: u8) -> (usize, usize) {
+fn rank_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, value: u8) -> (usize, usize) {
     let mut less = 0usize;
     let mut equal = 0usize;
     for scan in scans {
-        if i < scan.len && scan.points[i].distance_mm > 0 {
-            let v = scan.points[i].intensity;
-            if v < value {
-                less += 1;
-            } else if v == value {
-                equal += 1;
-            }
+        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+            continue;
+        };
+        if point.distance_mm == 0 {
+            continue;
+        }
+        let v = point.intensity;
+        if v < value {
+            less += 1;
+        } else if v == value {
+            equal += 1;
         }
     }
     (less, equal)
+}
+
+/// Coerce the configured bucket width to a safe, positive, finite value.
+fn sanitise_resolution(resolution_deg: f32) -> f32 {
+    if resolution_deg.is_finite() && resolution_deg > 0.0 {
+        resolution_deg
+    } else {
+        1.0
+    }
 }

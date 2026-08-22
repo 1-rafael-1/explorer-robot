@@ -178,7 +178,8 @@ where
     /// Send the vendor start command (best-effort ack).
     ///
     /// The vendor spec's ack bytes are internally inconsistent, so the ack is
-    /// not verified; this only writes the command and awaits the write.
+    /// not verified; this only writes the command and awaits the write. The
+    /// device's response and spin-up bytes are left for the decoder to skip.
     ///
     /// # Errors
     ///
@@ -211,11 +212,14 @@ where
 
     /// Continuously drain the UART and return one complete revolution in `scan`.
     ///
+    /// A transient checksum mismatch is recovered transparently: the decoder
+    /// discards the in-progress revolution and re-synchronises on the next
+    /// ring-start, and this keeps reading until a full revolution is assembled.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Resync`] on a transient checksum mismatch, [`Error::Uart`]
-    /// on a fatal UART error, or [`Error::Timeout`] if no revolution arrives
-    /// within [`RING_START_WATCHDOG_BYTES`] bytes.
+    /// Returns [`Error::Uart`] on a fatal UART error, or [`Error::Timeout`] if no
+    /// revolution is assembled within [`RING_START_WATCHDOG_BYTES`] bytes.
     pub async fn read_scan(&mut self, scan: &mut Scan) -> Result<(), Error<UART::Error, POWER::Error>> {
         self.read_revolution(scan).await
     }
@@ -258,8 +262,11 @@ where
                     self.correct(scan);
                     return Ok(());
                 }
-                Decode::Resync => return Err(Error::Resync),
-                Decode::InProgress => {}
+                // A checksum mismatch has already reset the decoder (discarding
+                // the in-progress revolution and waiting for the next
+                // ring-start), so keep reading rather than failing the capture
+                // on a single corrupt packet during spin-up.
+                Decode::Resync | Decode::InProgress => {}
             }
             consumed += n;
             if consumed > RING_START_WATCHDOG_BYTES {

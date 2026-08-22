@@ -20,7 +20,8 @@ aggregation logic can be validated without hardware.
   `embedded-io-async` (the standard async serial trait) and the example adapts
   embassy's DMA `Uart` to it with a small example-local adapter.
 - Decoupled `Scan`/`Point` with no knowledge of the robot's point-cloud
-  representation; native 0.9° / 400 points, millimetres.
+  representation; native 0.9° / 400 points, millimetres, with `Scan` sized to
+  512 for headroom against slow-spin truncation.
 - A pure byte-stream `Decoder` (checksum, `55 AA` header resync, ring-start
   delimiting, angle interpolation incl. wrap, `0xFE`/`0xFF` spin-up skipping)
   plus pure `aggregate` (median/validity gate) and `angle_correction_deg`; the

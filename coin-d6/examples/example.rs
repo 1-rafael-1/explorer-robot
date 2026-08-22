@@ -36,7 +36,7 @@ use panic_probe as _;
 /// it can be gated behind the bare-metal target.
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 mod imp {
-    use coin_d6::{AggregationConfig, CoinD6, Config, Scan};
+    use coin_d6::{AggregationConfig, CoinD6, Config, Scan, aggregate};
     use defmt::info;
     use embassy_rp::{
         bind_interrupts,
@@ -57,6 +57,13 @@ mod imp {
     const INGEST_BUF_LEN: usize = 1024;
     /// Number of revolutions to aggregate into a stable scan.
     const SPINS: usize = 5;
+    /// Upper bound on how many revolutions to discard while the rotor spins up.
+    const WARMUP_MAX_SPINS: usize = 16;
+    /// Consecutive warm-up revolutions whose point count must be stable before
+    /// the scan is considered ready. Point count is a proxy for rotor speed.
+    const SETTLE_STABLE_SPINS: usize = 2;
+    /// Point-count tolerance (points) used to decide a spin is stable.
+    const POINT_COUNT_TOL: usize = 2;
     /// How many leading bytes of each UART read to dump in the diagnostic log.
     const HEAD_DUMP: usize = 16;
     /// How many bytes of the first data-stream read to dump in full (enough to
@@ -259,6 +266,22 @@ mod imp {
         }
     }
 
+    /// The ring-start bearing of a scan: the first point's angle.
+    const fn ring_start_deg(scan: &Scan) -> f32 {
+        if scan.len > 0 { scan.points[0].angle_deg } else { 0.0 }
+    }
+
+    /// Log a single revolution's point count and ring-start bearing.
+    fn log_spin(label: &str, index: usize, scan: &Scan) {
+        info!(
+            "[{} {}] points={} ring_start={}",
+            label,
+            index,
+            scan.len,
+            ring_start_deg(scan)
+        );
+    }
+
     /// Drive the COIN-D6 through one full power cycle.
     pub async fn run() {
         let p = embassy_rp::init(embassy_rp::config::Config::default());
@@ -285,22 +308,40 @@ mod imp {
         driver.start().await.unwrap();
         info!("started");
 
-        // Capture and summarize a single revolution. The first revolution after
-        // `start` may be partial: the device's first ring-start lands at an
-        // arbitrary angle while it spins up, so this scan is diagnostic only.
-        let mut scan = Scan::new();
-        let start = Instant::now();
-        driver.read_scan(&mut scan).await.unwrap();
-        summarize("scan", &scan, start.elapsed(), 1);
+        // Warm up: discard revolutions until the rotor speed (proxied by the
+        // point count) stops changing. While the rotor spins up both the
+        // ring-start bearing and the point count drift, so any scan captured
+        // before it settles is misleading.
+        let mut warmup = Scan::new();
+        let mut prev_points: Option<usize> = None;
+        let mut stable_spins = 0usize;
+        for spin in 0..WARMUP_MAX_SPINS {
+            driver.read_scan(&mut warmup).await.unwrap();
+            log_spin("warmup", spin, &warmup);
 
-        // Capture and summarize five aggregated revolutions.
+            if let Some(prev) = prev_points {
+                if warmup.len.abs_diff(prev) <= POINT_COUNT_TOL {
+                    stable_spins += 1;
+                } else {
+                    stable_spins = 0;
+                }
+            }
+            prev_points = Some(warmup.len);
+
+            if stable_spins >= SETTLE_STABLE_SPINS {
+                info!("speed stable after {} warmup spins", spin + 1);
+                break;
+            }
+        }
+
+        // Capture and reduce five revolutions by angle.
         let mut spins: [Scan; SPINS] = core::array::from_fn(|_| Scan::new());
-        let mut out = Scan::new();
         let start = Instant::now();
-        driver
-            .read_aggregated(&mut spins, &mut out, &AggregationConfig::default())
-            .await
-            .unwrap();
+        for (index, scan) in spins.iter_mut().enumerate() {
+            driver.read_scan(scan).await.unwrap();
+            log_spin("spin", index, scan);
+        }
+        let out = aggregate(&spins, &AggregationConfig::default());
         summarize("aggregated", &out, start.elapsed(), SPINS);
         dump_scan("aggregated", &out);
 

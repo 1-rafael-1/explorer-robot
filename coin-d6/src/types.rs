@@ -15,10 +15,11 @@ pub struct Point {
 /// A single 360° revolution of `LiDAR` returns.
 ///
 /// `points` holds up to `N` [`Point`]s; `len` records how many are actually
-/// present (always `<= N`). The COIN-D6 emits at a native 0.9° resolution, so
-/// the default `N = 400` holds exactly one full revolution.
+/// present (always `<= N`). The COIN-D6 emits at a native 0.9° resolution
+/// (400 points per revolution); the default `N = 512` leaves headroom so a
+/// slow-spinning revolution cannot be truncated.
 #[derive(Debug, Clone)]
-pub struct Scan<const N: usize = 400> {
+pub struct Scan<const N: usize = 512> {
     /// The measured points, in increasing angle order.
     pub points: [Point; N],
     /// The number of points in `points` that are valid.
@@ -75,6 +76,10 @@ pub struct AggregationConfig {
     pub validity_ratio: f32,
     /// How the aggregated distances are combined.
     pub method: AggregationMethod,
+    /// Angular bin width in degrees. Revolutions are reduced by angle, so this
+    /// must match the device's native angular resolution (0.9°, i.e. 400 points
+    /// per revolution).
+    pub resolution_deg: f32,
 }
 
 impl Default for AggregationConfig {
@@ -83,6 +88,7 @@ impl Default for AggregationConfig {
             spins: 5,
             validity_ratio: 0.5,
             method: AggregationMethod::Median,
+            resolution_deg: 0.9,
         }
     }
 }
@@ -92,7 +98,9 @@ impl Default for AggregationConfig {
 /// Combines the transient resync condition with fatal UART and power-pin errors.
 #[derive(Debug)]
 pub enum Error<UartE, PinE> {
-    /// Transient checksum mismatch; the stream needs resynchronising.
+    /// Malformed device-info frame during power-on (checksum or type mismatch).
+    /// The point-stream readers recover from transient checksum mismatches
+    /// transparently and do not return this variant.
     Resync,
     /// Fatal UART error.
     Uart(UartE),

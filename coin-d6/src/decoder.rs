@@ -34,8 +34,9 @@ const HEADER_1: u8 = 0x55;
 /// Longest possible packet: a 10-byte preamble plus three bytes for each of the
 /// at most `u8::MAX` samples.
 const MAX_PACKET_LEN: usize = 10 + 3 * 255;
-/// Maximum number of points in a single revolution (native 0.9° resolution).
-const MAX_POINTS: usize = 400;
+/// Maximum number of points retained in a single revolution. Larger than the
+/// native 400 so a slow-spinning revolution is never truncated.
+const MAX_POINTS: usize = 512;
 
 /// A stateful COIN-D6 byte-stream decoder.
 pub struct Decoder {
