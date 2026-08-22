@@ -39,10 +39,16 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
       - name: Run clippy (default features)
-        run: cargo clippy --target thumbv8m.main-none-eabihf -- -D warnings --no-deps
+        run: cargo clippy --workspace --target thumbv8m.main-none-eabihf --no-deps -- -D warnings
 
       - name: Run clippy (all features)
-        run: cargo clippy --target thumbv8m.main-none-eabihf --all-features -- -D warnings --no-deps
+        run: cargo clippy --workspace --target thumbv8m.main-none-eabihf --all-features --no-deps -- -D warnings
+
+      - name: Run clippy (examples)
+        run: cargo clippy --workspace --target thumbv8m.main-none-eabihf --examples --no-deps -- -D warnings
 
       - name: Build
-        run: cargo build --release --verbose --target thumbv8m.main-none-eabihf
+        run: cargo build --workspace --release --verbose --target thumbv8m.main-none-eabihf
+
+      - name: Build examples
+        run: cargo build --workspace --release --verbose --target thumbv8m.main-none-eabihf --examples
