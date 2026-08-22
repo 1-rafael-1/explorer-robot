@@ -2,26 +2,42 @@
 //!
 //! A minimal, hand-rolled driver for the ST7789 (and ST7789-compatible) TFT
 //! controller over a write-only SPI bus. Unlike [`mipidsi`], which is blocking
-//! and write-through, this driver owns an async SPI bus and exposes the DCS
-//! command set directly, so the caller can drive a RAM framebuffer and flush it
-//! asynchronously.
+//! and write-through, this driver owns an async SPI bus and a data/command pin,
+//! borrows a caller-allocated framebuffer, and exposes an
+//! [`embedded_graphics::DrawTarget`] implementation plus an async [`flush`]
+//! ([`St7789::flush`]).
 //!
 //! The driver is generic over [`embedded_hal_async::spi::SpiDevice`] and an
 //! async delay, so it is not coupled to any specific HAL. The data/command pin
 //! uses the synchronous [`embedded_hal::digital::OutputPin`] trait, since
 //! toggling a GPIO is instantaneous.
 //!
+//! The framebuffer is a caller-allocated byte slice of `width * height * 2`
+//! bytes, stored big-endian RGB565 so [`flush`](St7789::flush) can DMA it to
+//! the panel verbatim (the ST7789 expects 16-bit pixels MSB-first on the wire).
+//!
 //! # Example
 //!
 //! ```ignore
-//! let mut display = St7789::new(spi, dc);
+//! let mut display = St7789::new(spi, dc, framebuffer, 320, 240);
 //! display.init(&Config::default(), &mut delay).await?;
-//! display.fill_region(0, 0, 239, 319, framebuffer).await?;
+//! display.clear(Rgb565::BLACK)?;
+//! // ...draw with embedded-graphics...
+//! display.flush().await?;
 //! ```
 
 #![no_std]
 #![warn(missing_docs)]
 
+use core::convert::Infallible;
+
+use embedded_graphics::{
+    Pixel,
+    draw_target::DrawTarget,
+    geometry::{Dimensions, Point, Size},
+    pixelcolor::{IntoStorage, Rgb565},
+    primitives::Rectangle,
+};
 use embedded_hal::digital::OutputPin;
 use embedded_hal_async::{delay::DelayNs, spi::SpiDevice};
 
@@ -233,15 +249,21 @@ fn madctl(config: Config) -> u8 {
 
 /// An asynchronous ST7789 display driver.
 ///
-/// Owns an async SPI bus and a data/command pin. A reset pin is deliberately
-/// *not* owned here: the caller performs a hardware reset (or relies on the
-/// software reset issued during [`init`](Self::init)) before constructing the
-/// driver.
+/// Owns an async SPI bus and a data/command pin, and borrows a caller-allocated
+/// framebuffer. A reset pin is deliberately *not* owned here: the caller
+/// performs a hardware reset (or relies on the software reset issued during
+/// [`init`](Self::init)) before constructing the driver.
 pub struct St7789<SPI, DC> {
     /// The async SPI bus.
     spi: SPI,
     /// The data/command GPIO.
     dc: DC,
+    /// The caller-allocated framebuffer, big-endian RGB565.
+    framebuffer: &'static mut [u8],
+    /// Framebuffer width in pixels.
+    width: u16,
+    /// Framebuffer height in pixels.
+    height: u16,
 }
 
 impl<SPI, DC, PinE> St7789<SPI, DC>
@@ -249,9 +271,19 @@ where
     SPI: SpiDevice<u8>,
     DC: OutputPin<Error = PinE>,
 {
-    /// Create a new driver from an SPI device and a data/command pin.
-    pub const fn new(spi: SPI, dc: DC) -> Self {
-        Self { spi, dc }
+    /// Create a new driver from an SPI device, a data/command pin, a
+    /// framebuffer, and the framebuffer's dimensions.
+    ///
+    /// The framebuffer must hold exactly `width * height * 2` bytes, stored as
+    /// big-endian RGB565.
+    pub const fn new(spi: SPI, dc: DC, framebuffer: &'static mut [u8], width: u16, height: u16) -> Self {
+        Self {
+            spi,
+            dc,
+            framebuffer,
+            width,
+            height,
+        }
     }
 
     /// Initialise the display.
@@ -351,9 +383,28 @@ where
         self.write_pixels(data).await
     }
 
-    /// Consume the driver and return the SPI bus.
-    pub fn release(self) -> SPI {
-        self.spi
+    /// Borrow the raw framebuffer bytes (read access).
+    pub const fn data(&self) -> &[u8] {
+        &*self.framebuffer
+    }
+
+    /// Flush the entire framebuffer to the panel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Spi`] if the SPI bus fails, or [`Error::Pin`] if the
+    /// data/command GPIO fails.
+    pub async fn flush(&mut self) -> Result<(), Error<SPI::Error, PinE>> {
+        self.set_address_window(0, 0, self.width - 1, self.height - 1).await?;
+        self.write_framebuffer().await
+    }
+
+    /// Consume the driver and return the SPI bus and data/command pin.
+    ///
+    /// The borrowed framebuffer is simply dropped; the caller retains ownership
+    /// of its storage.
+    pub fn release(self) -> (SPI, DC) {
+        (self.spi, self.dc)
     }
 
     /// Send a command byte with the data/command line held low.
@@ -372,5 +423,55 @@ where
     async fn write_data(&mut self, data: &[u8]) -> Result<(), Error<SPI::Error, PinE>> {
         self.dc.set_high().map_err(Error::Pin)?;
         self.spi.write(data).await.map_err(Error::Spi)
+    }
+
+    /// Send the `RAMWR` command followed by the full framebuffer payload.
+    ///
+    /// Uses disjoint field borrows so the framebuffer can be read while the SPI
+    /// bus is written in the same statement.
+    async fn write_framebuffer(&mut self) -> Result<(), Error<SPI::Error, PinE>> {
+        self.write_command(RAMWR).await?;
+        self.dc.set_high().map_err(Error::Pin)?;
+        self.spi.write(self.framebuffer).await.map_err(Error::Spi)
+    }
+}
+
+impl<SPI, DC> St7789<SPI, DC> {
+    /// Write a single pixel into the framebuffer, clipping out-of-bounds points.
+    fn set_pixel(&mut self, x: i32, y: i32, color: Rgb565) {
+        let Ok(x) = usize::try_from(x) else { return };
+        let Ok(y) = usize::try_from(y) else { return };
+        if x >= self.width as usize || y >= self.height as usize {
+            return;
+        }
+
+        let index = (y * self.width as usize + x) * 2;
+        let bytes = color.into_storage().to_be_bytes();
+        self.framebuffer[index] = bytes[0];
+        self.framebuffer[index + 1] = bytes[1];
+    }
+}
+
+impl<SPI, DC> Dimensions for St7789<SPI, DC> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new(u32::from(self.width), u32::from(self.height)),
+        )
+    }
+}
+
+impl<SPI, DC> DrawTarget for St7789<SPI, DC> {
+    type Color = Rgb565;
+    type Error = Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(point, color) in pixels {
+            self.set_pixel(point.x, point.y, color);
+        }
+        Ok(())
     }
 }

@@ -2,8 +2,9 @@
 
 A custom async driver for the ST7789 (and ST7789-compatible) TFT
 controller. It's written against `embedded-hal-async` so it isn't tied to a
-specific HAL: it owns the SPI bus and exposes the DCS command set, and the
-caller drives a RAM framebuffer that's flushed asynchronously.
+specific HAL: it owns the SPI bus and data/command pin, borrows a
+caller-allocated framebuffer, and exposes an `embedded_graphics::DrawTarget`
+plus an async `flush`.
 
 ## Examples
 

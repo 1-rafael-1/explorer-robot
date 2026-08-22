@@ -33,14 +33,10 @@ use embassy_rp::{
 };
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use embedded_graphics::{
-    framebuffer::{Framebuffer, buffer_size},
     geometry::Size,
     image::{Image, ImageRawLE},
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
-    pixelcolor::{
-        Rgb565,
-        raw::{BigEndian, RawU16},
-    },
+    pixelcolor::Rgb565,
     prelude::*,
     primitives::Rectangle,
     text::Text,
@@ -48,6 +44,7 @@ use embedded_graphics::{
 use embedded_hal_bus::spi::ExclusiveDevice;
 use panic_probe as _;
 use st7789_async::{ColorOrder, Config, Orientation, Rotation, St7789};
+use static_cell::ConstStaticCell;
 
 bind_interrupts!(struct Irqs {
     DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH6>;
@@ -78,21 +75,14 @@ const WAVELENGTH: i32 = 160;
 /// Animation tick interval in milliseconds.
 const ANIM_INTERVAL_MS: u64 = 30;
 
-/// Full-frame RGB565 framebuffer, stored big-endian so it can be flushed to the
-/// panel verbatim (the ST7789 expects 16-bit pixels MSB-first on the wire).
-type Fb = Framebuffer<Rgb565, RawU16, BigEndian, FB_W, FB_H, { buffer_size::<Rgb565>(FB_W, FB_H) }>;
+/// The caller-allocated framebuffer (big-endian RGB565 bytes).
+type Fb = [u8; FB_W * FB_H * 2];
 
 /// The concrete display type built by this example.
 type Display = St7789<ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>, Output<'static>>;
 
 /// Statically-allocated framebuffer (`153_600` bytes of zeroed `.bss`).
-static mut FB: Fb = Fb::new();
-
-/// Borrow the statically-allocated framebuffer (`main` runs once).
-#[allow(static_mut_refs)]
-fn fb() -> &'static mut Fb {
-    unsafe { &mut *core::ptr::addr_of_mut!(FB) }
-}
+static FB: ConstStaticCell<Fb> = ConstStaticCell::new([0; FB_W * FB_H * 2]);
 
 /// Max dirty-rectangle size for this animation: full screen width (the
 /// wrap-around case) by the sprite height plus the per-frame vertical delta.
@@ -101,13 +91,7 @@ const DIRTY_MAX_BYTES: usize = (SCREEN_W as usize) * (FERRIS_H as usize + 2) * 2
 /// Scratch buffer used to gather the (non-contiguous) dirty-rectangle rows into
 /// one contiguous block, so the blit is a single SPI transaction instead of one
 /// per row.
-static mut BUF: [u8; DIRTY_MAX_BYTES] = [0; DIRTY_MAX_BYTES];
-
-/// Borrow the scratch buffer (`main` runs once).
-#[allow(static_mut_refs)]
-fn buf() -> &'static mut [u8; DIRTY_MAX_BYTES] {
-    unsafe { &mut *core::ptr::addr_of_mut!(BUF) }
-}
+static BUF: ConstStaticCell<[u8; DIRTY_MAX_BYTES]> = ConstStaticCell::new([0; DIRTY_MAX_BYTES]);
 
 /// Bhaskara I's sine approximation, valid on `[0, PI]`.
 fn sin_half_pi(x: f32) -> f32 {
@@ -127,7 +111,7 @@ fn sin(x: f32) -> f32 {
 /// gathered into a scratch buffer first, then written as a single SPI
 /// transaction. Many small async SPI writes are far more expensive than one
 /// write of the same total byte count.
-async fn blit_region(display: &mut Display, fb: &Fb, rect: Rectangle) {
+async fn blit_region(display: &mut Display, buf: &mut [u8], rect: Rectangle) {
     let x0 = rect.top_left.x as u16;
     let y0 = rect.top_left.y as u16;
     let x1 = (rect.top_left.x + rect.size.width as i32 - 1) as u16;
@@ -139,14 +123,15 @@ async fn blit_region(display: &mut Display, fb: &Fb, rect: Rectangle) {
 
     // Gather the (non-contiguous) framebuffer rows into one contiguous buffer.
     let t0 = Instant::now();
-    let out = buf();
-    let data = fb.data();
-    for (i, row) in (0..height).enumerate() {
-        let y = rect.top_left.y as usize + row;
-        let start = (y * FB_W + rect.top_left.x as usize) * 2;
-        let end = start + width * 2;
-        let dst = i * width * 2;
-        out[dst..dst + width * 2].copy_from_slice(&data[start..end]);
+    {
+        let data = display.data();
+        for (i, row) in (0..height).enumerate() {
+            let y = rect.top_left.y as usize + row;
+            let start = (y * FB_W + rect.top_left.x as usize) * 2;
+            let end = start + width * 2;
+            let dst = i * width * 2;
+            buf[dst..dst + width * 2].copy_from_slice(&data[start..end]);
+        }
     }
     let gather_us = t0.elapsed().as_micros();
 
@@ -155,7 +140,7 @@ async fn blit_region(display: &mut Display, fb: &Fb, rect: Rectangle) {
     let window_us = t1.elapsed().as_micros();
 
     let t2 = Instant::now();
-    display.write_pixels(&out[..bytes]).await.unwrap();
+    display.write_pixels(&buf[..bytes]).await.unwrap();
     let pixels_us = t2.elapsed().as_micros();
 
     info!(
@@ -198,7 +183,9 @@ async fn main(_spawner: Spawner) {
     let dev = ExclusiveDevice::new(spi, cs, Delay);
 
     let dcx = Output::new(dcx, Level::Low);
-    let mut display = St7789::new(dev, dcx);
+    let fb = FB.take();
+    let buf = BUF.take();
+    let mut display = St7789::new(dev, dcx, fb, FB_W as u16, FB_H as u16);
 
     let config = Config {
         color_order: ColorOrder::Bgr,
@@ -209,8 +196,6 @@ async fn main(_spawner: Spawner) {
     display.init(&config, &mut Delay).await.unwrap();
     info!("display initialised");
 
-    let fb = fb();
-
     let raw = ImageRawLE::new(include_bytes!("../assets/ferris.raw"), FERRIS_W as u32);
     let style = MonoTextStyle::new(&FONT_10X20, Rgb565::BLUE);
 
@@ -220,15 +205,12 @@ async fn main(_spawner: Spawner) {
 
     // Compose and flush the base frame once: static text + initial sprite.
     // The text is never redrawn; subsequent frames only blit the sprite region.
-    fb.clear(Rgb565::BLACK).unwrap();
+    display.clear(Rgb565::BLACK).unwrap();
     Text::new("Hello, async ST7789!", Point::new(20, 200), style)
-        .draw(fb)
+        .draw(&mut display)
         .unwrap();
-    Image::new(&raw, Point::new(x, prev_y)).draw(fb).unwrap();
-    display
-        .fill_region(0, 0, (SCREEN_W - 1) as u16, (SCREEN_H - 1) as u16, fb.data())
-        .await
-        .unwrap();
+    Image::new(&raw, Point::new(x, prev_y)).draw(&mut display).unwrap();
+    display.flush().await.unwrap();
 
     let mut ticker = Ticker::every(Duration::from_millis(ANIM_INTERVAL_MS));
     loop {
@@ -238,10 +220,12 @@ async fn main(_spawner: Spawner) {
         let y = FERRIS_CENTER_Y - FERRIS_H / 2 + (FERRIS_AMPLITUDE as f32 * sin(phase)) as i32;
 
         // Compose only the sprite in RAM (the text on the panel is untouched).
-        fb.clear(Rgb565::BLACK).unwrap();
-        Image::new(&raw, Point::new(x, y)).draw(fb).unwrap();
+        display.clear(Rgb565::BLACK).unwrap();
+        Image::new(&raw, Point::new(x, y)).draw(&mut display).unwrap();
         if x + FERRIS_W > SCREEN_W {
-            Image::new(&raw, Point::new(x - SCREEN_W, y)).draw(fb).unwrap();
+            Image::new(&raw, Point::new(x - SCREEN_W, y))
+                .draw(&mut display)
+                .unwrap();
         }
 
         // Dirty rectangle = union of the previous and current sprite copies.
@@ -267,7 +251,7 @@ async fn main(_spawner: Spawner) {
             Size::new((max_x - min_x) as u32, (max_y - min_y) as u32),
         );
 
-        blit_region(&mut display, fb, dirty).await;
+        blit_region(&mut display, buf, dirty).await;
 
         prev_x = x;
         prev_y = y;

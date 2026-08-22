@@ -1864,6 +1864,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "panic-probe",
+ "static_cell",
 ]
 
 [[package]]
