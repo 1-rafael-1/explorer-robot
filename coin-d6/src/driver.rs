@@ -14,10 +14,12 @@
 //!
 //! # Timeouts
 //!
-//! The driver is executor-agnostic and has no wall clock, so [`CoinD6::read_scan`]
-//! and [`CoinD6::read_aggregated`] use a byte-count watchdog rather than a timer:
-//! if no revolution is assembled within [`RING_START_WATCHDOG_BYTES`] bytes read
-//! since the start of the current revolution, they return [`Error::Timeout`].
+//! The driver is executor-agnostic and has no wall clock, so it uses byte-count
+//! watchdogs rather than timers. [`CoinD6::read_scan`] and
+//! [`CoinD6::read_aggregated`] return [`Error::Timeout`] if no revolution is
+//! assembled within [`RING_START_WATCHDOG_BYTES`] bytes read since the start of
+//! the current revolution; [`CoinD6::power_on`] returns [`Error::Timeout`] if the
+//! device-info frame does not arrive within [`DEVICE_INFO_WATCHDOG_BYTES`] bytes.
 //! Callers that need a hard wall-clock bound should additionally wrap the call in
 //! their own timeout.
 
@@ -45,6 +47,9 @@ const DEVICE_INFO_TYPE: u8 = 0x01;
 const DEVICE_INFO_RETRIES: u32 = 16;
 /// Byte watchdog: give up waiting for a ring-start after this many bytes.
 const RING_START_WATCHDOG_BYTES: usize = 128 * 1024;
+/// Byte watchdog: give up waiting for the device-info frame after this many
+/// bytes (header scan + fixed fields + declared data).
+const DEVICE_INFO_WATCHDOG_BYTES: usize = 1024;
 
 /// An asynchronous COIN-D6 driver owning the UART and power-MOSFET GPIO.
 pub struct CoinD6<'a, UART, POWER> {
@@ -104,6 +109,8 @@ where
     /// where the checksum is the sum of every byte except the checksum field.
     /// The power-on transition briefly glitches the RX line (a UART break), so
     /// an interrupted or malformed frame is retried, bounded by a retry budget.
+    /// A single attempt also gives up with [`Error::Timeout`] after
+    /// [`DEVICE_INFO_WATCHDOG_BYTES`] bytes without the frame.
     async fn read_device_info(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
         let mut retries = DEVICE_INFO_RETRIES;
         loop {
@@ -119,12 +126,18 @@ where
 
     /// One attempt at reading and validating the device-info frame.
     async fn try_read_device_info(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
+        let mut consumed = 0usize;
+
         // The motor emits a few speed-adjust bytes (0xFE/0xFF/0xFA) while it
         // spins up, so scan past them to the `A5 5A` header.
         let mut seen_header_0 = false;
         loop {
             let mut byte = [0u8; 1];
             self.read_exact(&mut byte).await?;
+            consumed += 1;
+            if consumed > DEVICE_INFO_WATCHDOG_BYTES {
+                return Err(Error::Timeout);
+            }
             match byte[0] {
                 DEVICE_INFO_HEADER_0 => seen_header_0 = true,
                 DEVICE_INFO_HEADER_1 if seen_header_0 => break,
@@ -135,16 +148,18 @@ where
         // length(2 LE) + checksum(2 LE) + type(1).
         let mut fixed = [0u8; 5];
         self.read_exact(&mut fixed).await?;
+        consumed += fixed.len();
+        if consumed > DEVICE_INFO_WATCHDOG_BYTES {
+            return Err(Error::Timeout);
+        }
         let len = usize::from(u16::from_le_bytes([fixed[0], fixed[1]]));
         let expected_sum = u16::from_le_bytes([fixed[2], fixed[3]]);
         let kind = fixed[4];
 
-        if kind != DEVICE_INFO_TYPE {
-            return Err(Error::Resync);
-        }
-
         // The checksum is the sum of every byte except the checksum field.
-        // Drain the data area while accumulating it.
+        // Always drain the declared data area first (accumulating the checksum),
+        // then validate the type and checksum together, so a malformed frame
+        // still consumes its data bytes before being rejected.
         let mut sum = u16::from(DEVICE_INFO_HEADER_0)
             + u16::from(DEVICE_INFO_HEADER_1)
             + u16::from(fixed[0])
@@ -159,9 +174,13 @@ where
                 sum += u16::from(byte);
             }
             remaining -= chunk;
+            consumed += chunk;
+            if consumed > DEVICE_INFO_WATCHDOG_BYTES {
+                return Err(Error::Timeout);
+            }
         }
 
-        if sum != expected_sum {
+        if kind != DEVICE_INFO_TYPE || sum != expected_sum {
             return Err(Error::Resync);
         }
         Ok(())
@@ -226,8 +245,7 @@ where
 
     /// Capture one revolution per entry in `spins`, then reduce them into `out`.
     ///
-    /// `spins.len()` is the spin count; the caller allocates
-    /// `spins.len() == config.spins`.
+    /// The number of revolutions to aggregate is `spins.len()`.
     ///
     /// # Errors
     ///

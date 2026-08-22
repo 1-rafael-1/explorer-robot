@@ -43,14 +43,14 @@ mod imp {
     use embassy_rp::{
         bind_interrupts,
         gpio::{Level, Output},
-        peripherals::{DMA_CH0, DMA_CH1, UART0},
-        uart::{self, Async, Error as UartErrorInner, Uart},
+        peripherals::UART0,
+        uart::{self, BufferedUart},
     };
     use embassy_time::{Duration, Instant};
+    use static_cell::StaticCell;
 
     bind_interrupts!(struct Irqs {
-        UART0_IRQ => uart::InterruptHandler<UART0>;
-        DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>;
+        UART0_IRQ => uart::BufferedInterruptHandler<UART0>;
     });
 
     /// COIN-D6 UART baud rate (230400 8N1).
@@ -66,145 +66,16 @@ mod imp {
     const SETTLE_STABLE_SPINS: usize = 2;
     /// Point-count tolerance (points) used to decide a spin is stable.
     const POINT_COUNT_TOL: usize = 2;
-    /// How many leading bytes of each UART read to dump in the diagnostic log.
-    const HEAD_DUMP: usize = 16;
-    /// How many bytes of the first data-stream read to dump in full (enough to
-    /// capture several complete packets for checksum reverse-engineering).
-    const FULL_DUMP_BYTES: usize = 256;
 
-    /// A thin wrapper around the DMA-backed embassy UART exposing it as an
-    /// `embedded_io_async` reader/writer.
-    struct AsyncUart<'d> {
-        /// The underlying embassy DMA UART.
-        inner: Uart<'d, Async>,
-        /// Whether the first full data-stream read has already been dumped.
-        dumped_data_head: bool,
-    }
+    /// `BufferedUart` RX ring buffer size (matches the ingest chunk).
+    const RX_BUF_LEN: usize = 1024;
+    /// `BufferedUart` TX ring buffer size (start/stop commands are 4 bytes).
+    const TX_BUF_LEN: usize = 16;
 
-    /// An `embedded_io_async::Error` wrapper for [`embassy_rp::uart::Error`].
-    ///
-    /// Embassy's error already implements [`core::error::Error`] but not
-    /// [`embedded_io_async::Error`], so this adapts the kinds.
-    struct UartError(UartErrorInner);
-
-    impl core::fmt::Debug for UartError {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            core::fmt::Debug::fmt(&self.0, f)
-        }
-    }
-
-    impl core::fmt::Display for UartError {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            core::fmt::Display::fmt(&self.0, f)
-        }
-    }
-
-    impl core::error::Error for UartError {}
-
-    impl embedded_io_async::Error for UartError {
-        fn kind(&self) -> embedded_io_async::ErrorKind {
-            match self.0 {
-                UartErrorInner::Parity | UartErrorInner::Framing => embedded_io_async::ErrorKind::InvalidData,
-                // Overrun, Break, and any future non-exhaustive variants have no
-                // more-specific `embedded_io_async` kind, so fall through to `Other`.
-                _ => embedded_io_async::ErrorKind::Other,
-            }
-        }
-    }
-
-    impl embedded_io_async::ErrorType for AsyncUart<'_> {
-        type Error = UartError;
-    }
-
-    impl embedded_io_async::Read for AsyncUart<'_> {
-        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, UartError> {
-            // DMA-backed: fills the whole buffer before returning.
-            self.inner.read(buf).await.map_err(UartError)?;
-            let n = buf.len();
-            if n >= FULL_DUMP_BYTES && !self.dumped_data_head {
-                log_bytes("uart-full", &buf[..FULL_DUMP_BYTES]);
-                self.dumped_data_head = true;
-            } else {
-                log_head("uart", buf);
-            }
-            Ok(n)
-        }
-    }
-
-    impl embedded_io_async::Write for AsyncUart<'_> {
-        async fn write(&mut self, buf: &[u8]) -> Result<usize, UartError> {
-            self.inner.write(buf).await.map_err(UartError)?;
-            Ok(buf.len())
-        }
-
-        async fn flush(&mut self) -> Result<(), UartError> {
-            Ok(())
-        }
-    }
-
-    /// Diagnostic hex dump of the leading bytes of a UART read.
-    ///
-    /// This is a troubleshooting aid: it logs how many bytes arrived and the
-    /// first [`HEAD_DUMP`] of them as hex, so the raw protocol can be checked
-    /// against the decoder's assumptions (header order, baud, framing).
-    fn log_head(tag: &str, buf: &[u8]) {
-        let mut head = [0u8; HEAD_DUMP];
-        let n = buf.len().min(HEAD_DUMP);
-        head[..n].copy_from_slice(&buf[..n]);
-        info!(
-            "{} read {} bytes head={:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
-            tag,
-            buf.len(),
-            head[0],
-            head[1],
-            head[2],
-            head[3],
-            head[4],
-            head[5],
-            head[6],
-            head[7],
-            head[8],
-            head[9],
-            head[10],
-            head[11],
-            head[12],
-            head[13],
-            head[14],
-            head[15],
-        );
-    }
-
-    /// Diagnostic hex dump of a whole buffer, in 16-byte lines.
-    fn log_bytes(tag: &str, buf: &[u8]) {
-        let mut offset = 0usize;
-        while offset < buf.len() {
-            let mut line = [0u8; 16];
-            let n = (buf.len() - offset).min(16);
-            line[..n].copy_from_slice(&buf[offset..offset + n]);
-            info!(
-                "{}[{}]: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
-                tag,
-                offset,
-                line[0],
-                line[1],
-                line[2],
-                line[3],
-                line[4],
-                line[5],
-                line[6],
-                line[7],
-                line[8],
-                line[9],
-                line[10],
-                line[11],
-                line[12],
-                line[13],
-                line[14],
-                line[15],
-            );
-            offset += n;
-        }
-    }
+    /// Static TX ring buffer for the buffered UART.
+    static TX_BUF: StaticCell<[u8; TX_BUF_LEN]> = StaticCell::new();
+    /// Static RX ring buffer for the buffered UART.
+    static RX_BUF: StaticCell<[u8; RX_BUF_LEN]> = StaticCell::new();
 
     /// The distance for display: `Some(mm)` for a return, `None` for no return.
     fn display_distance(point: &Point) -> Option<u16> {
@@ -302,11 +173,15 @@ mod imp {
         // UART0 with GPIO12 = TX and GPIO13 = RX.
         let mut uart_config = uart::Config::default();
         uart_config.baudrate = BAUD_RATE;
-        let uart = Uart::new(p.UART0, p.PIN_12, p.PIN_13, Irqs, p.DMA_CH0, p.DMA_CH1, uart_config);
-        let uart = AsyncUart {
-            inner: uart,
-            dumped_data_head: false,
-        };
+        let uart = BufferedUart::new(
+            p.UART0,
+            p.PIN_12,
+            p.PIN_13,
+            Irqs,
+            TX_BUF.init([0; TX_BUF_LEN]),
+            RX_BUF.init([0; RX_BUF_LEN]),
+            uart_config,
+        );
 
         let mut ingest = [0u8; INGEST_BUF_LEN];
         let mut driver = CoinD6::new(uart, power, &mut ingest, Config::default());

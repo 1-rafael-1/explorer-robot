@@ -81,9 +81,10 @@ pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) 
 /// The number of angular buckets `aggregate` emits, clamped to `[1, N]`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn bucket_count<const N: usize>(resolution_deg: f32) -> usize {
-    // `resolution_deg` is already sanitised to a positive, finite value, so the
-    // quotient is finite and the cast saturates safely before the clamp.
-    (libm::roundf(360.0 / resolution_deg) as usize).clamp(1, N)
+    // `ceil` (not `round`) so the bucket grid always covers the full `[0, 360)`
+    // range. `resolution_deg` is already sanitised to a positive, finite value,
+    // so the quotient is finite and the cast saturates safely before the clamp.
+    (libm::ceilf(360.0 / resolution_deg) as usize).clamp(1, N)
 }
 
 /// The representative bearing of bucket `bin`, in degrees.

@@ -22,7 +22,7 @@ aggregation logic can be validated without hardware.
 - Decoupled `Scan`/`Point` with no knowledge of the robot's point-cloud
   representation; native 0.9° / 400 points, millimetres, with `Scan` sized to
   512 for headroom against slow-spin truncation.
-- A pure byte-stream `Decoder` (checksum, `55 AA` header resync, ring-start
+- A pure byte-stream `Decoder` (checksum, `AA 55` header resync, ring-start
   delimiting, angle interpolation incl. wrap, `0xFE`/`0xFF` spin-up skipping)
   plus pure `aggregate` (median/validity gate) and `angle_correction_deg`; the
   pure layer is host-tested via `cargo test -p coin-d6 --features std`.

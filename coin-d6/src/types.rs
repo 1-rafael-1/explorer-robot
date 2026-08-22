@@ -22,7 +22,8 @@ pub struct Point {
 /// slow-spinning revolution cannot be truncated.
 #[derive(Debug, Clone)]
 pub struct Scan<const N: usize = 512> {
-    /// The measured points, in increasing angle order.
+    /// The measured points, in increasing angle order within a revolution; the
+    /// array wraps through 0° and so is not globally sorted.
     pub points: [Point; N],
     /// The number of points in `points` that are valid.
     pub len: usize,
@@ -71,8 +72,6 @@ pub enum AggregationMethod {
 /// Post-processing parameters that control multi-revolution aggregation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AggregationConfig {
-    /// Number of revolutions to aggregate.
-    pub spins: usize,
     /// Minimum fraction of revolutions that must report a valid distance for a
     /// point to be kept.
     pub validity_ratio: f32,
@@ -87,7 +86,6 @@ pub struct AggregationConfig {
 impl Default for AggregationConfig {
     fn default() -> Self {
         Self {
-            spins: 5,
             validity_ratio: 0.5,
             method: AggregationMethod::Median,
             resolution_deg: 0.9,
