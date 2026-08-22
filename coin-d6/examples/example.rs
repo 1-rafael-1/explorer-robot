@@ -1,0 +1,327 @@
+//! COIN-D6 power-cycle demo.
+//!
+//! Drives the physical COIN-D6 through one full power cycle on an RP2350: power
+//! on, start, capture a single revolution, aggregate five revolutions, stop,
+//! power off, and release the driver. Summary statistics are logged over RTT via
+//! defmt rather than dumping every point.
+//!
+//! The example only has a real body on the bare-metal target (where the embassy
+//! and defmt dev-dependencies are available); on other targets it compiles to a
+//! no-op `main` so host `cargo test` — which builds examples to check they
+//! compile — stays green without pulling in the ARM-only crates.
+
+#![cfg_attr(all(target_arch = "arm", target_os = "none"), no_std)]
+#![cfg_attr(all(target_arch = "arm", target_os = "none"), no_main)]
+// Demo code: `.unwrap()` on driver/GPIO results, the `f32` frequency cast
+// (`u64` milliseconds → `f32`), and the intentionally stack-resident scan/ingest
+// buffers (which make the `run` future large) are all intentional.
+#![allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::used_underscore_binding,
+    clippy::large_futures
+)]
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+use defmt_rtt as _;
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+use embassy_executor::Spawner;
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+use panic_probe as _;
+
+/// The RP2350 implementation: everything that needs embassy/defmt lives here so
+/// it can be gated behind the bare-metal target.
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+mod imp {
+    use coin_d6::{AggregationConfig, CoinD6, Config, Scan};
+    use defmt::info;
+    use embassy_rp::{
+        bind_interrupts,
+        gpio::{Level, Output},
+        peripherals::{DMA_CH0, DMA_CH1, UART0},
+        uart::{self, Async, Error as UartErrorInner, Uart},
+    };
+    use embassy_time::{Duration, Instant};
+
+    bind_interrupts!(struct Irqs {
+        UART0_IRQ => uart::InterruptHandler<UART0>;
+        DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>, embassy_rp::dma::InterruptHandler<DMA_CH1>;
+    });
+
+    /// COIN-D6 UART baud rate (230400 8N1).
+    const BAUD_RATE: u32 = 230_400;
+    /// Ingest buffer size; large enough for the largest possible packet.
+    const INGEST_BUF_LEN: usize = 1024;
+    /// Number of revolutions to aggregate into a stable scan.
+    const SPINS: usize = 5;
+    /// How many leading bytes of each UART read to dump in the diagnostic log.
+    const HEAD_DUMP: usize = 16;
+    /// How many bytes of the first data-stream read to dump in full (enough to
+    /// capture several complete packets for checksum reverse-engineering).
+    const FULL_DUMP_BYTES: usize = 256;
+
+    /// A thin wrapper around the DMA-backed embassy UART exposing it as an
+    /// `embedded_io_async` reader/writer.
+    struct AsyncUart<'d> {
+        /// The underlying embassy DMA UART.
+        inner: Uart<'d, Async>,
+        /// Whether the first full data-stream read has already been dumped.
+        dumped_data_head: bool,
+    }
+
+    /// An `embedded_io_async::Error` wrapper for [`embassy_rp::uart::Error`].
+    ///
+    /// Embassy's error already implements [`core::error::Error`] but not
+    /// [`embedded_io_async::Error`], so this adapts the kinds.
+    struct UartError(UartErrorInner);
+
+    impl core::fmt::Debug for UartError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Debug::fmt(&self.0, f)
+        }
+    }
+
+    impl core::fmt::Display for UartError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Display::fmt(&self.0, f)
+        }
+    }
+
+    impl core::error::Error for UartError {}
+
+    impl embedded_io_async::Error for UartError {
+        fn kind(&self) -> embedded_io_async::ErrorKind {
+            match self.0 {
+                UartErrorInner::Parity | UartErrorInner::Framing => embedded_io_async::ErrorKind::InvalidData,
+                // Overrun, Break, and any future non-exhaustive variants have no
+                // more-specific `embedded_io_async` kind, so fall through to `Other`.
+                _ => embedded_io_async::ErrorKind::Other,
+            }
+        }
+    }
+
+    impl embedded_io_async::ErrorType for AsyncUart<'_> {
+        type Error = UartError;
+    }
+
+    impl embedded_io_async::Read for AsyncUart<'_> {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, UartError> {
+            // DMA-backed: fills the whole buffer before returning.
+            self.inner.read(buf).await.map_err(UartError)?;
+            let n = buf.len();
+            if n >= FULL_DUMP_BYTES && !self.dumped_data_head {
+                log_bytes("uart-full", &buf[..FULL_DUMP_BYTES]);
+                self.dumped_data_head = true;
+            } else {
+                log_head("uart", buf);
+            }
+            Ok(n)
+        }
+    }
+
+    impl embedded_io_async::Write for AsyncUart<'_> {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, UartError> {
+            self.inner.write(buf).await.map_err(UartError)?;
+            Ok(buf.len())
+        }
+
+        async fn flush(&mut self) -> Result<(), UartError> {
+            Ok(())
+        }
+    }
+
+    /// Diagnostic hex dump of the leading bytes of a UART read.
+    ///
+    /// This is a troubleshooting aid: it logs how many bytes arrived and the
+    /// first [`HEAD_DUMP`] of them as hex, so the raw protocol can be checked
+    /// against the decoder's assumptions (header order, baud, framing).
+    fn log_head(tag: &str, buf: &[u8]) {
+        let mut head = [0u8; HEAD_DUMP];
+        let n = buf.len().min(HEAD_DUMP);
+        head[..n].copy_from_slice(&buf[..n]);
+        info!(
+            "{} read {} bytes head={:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+            tag,
+            buf.len(),
+            head[0],
+            head[1],
+            head[2],
+            head[3],
+            head[4],
+            head[5],
+            head[6],
+            head[7],
+            head[8],
+            head[9],
+            head[10],
+            head[11],
+            head[12],
+            head[13],
+            head[14],
+            head[15],
+        );
+    }
+
+    /// Diagnostic hex dump of a whole buffer, in 16-byte lines.
+    fn log_bytes(tag: &str, buf: &[u8]) {
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            let mut line = [0u8; 16];
+            let n = (buf.len() - offset).min(16);
+            line[..n].copy_from_slice(&buf[offset..offset + n]);
+            info!(
+                "{}[{}]: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                tag,
+                offset,
+                line[0],
+                line[1],
+                line[2],
+                line[3],
+                line[4],
+                line[5],
+                line[6],
+                line[7],
+                line[8],
+                line[9],
+                line[10],
+                line[11],
+                line[12],
+                line[13],
+                line[14],
+                line[15],
+            );
+            offset += n;
+        }
+    }
+
+    /// Log summary statistics for a scan without dumping every point.
+    ///
+    /// `spins` is the number of revolutions `elapsed` covers, so the reported
+    /// frequency is revolutions per second rather than per elapsed interval.
+    fn summarize(label: &str, scan: &Scan, elapsed: Duration, spins: usize) {
+        let mut min = u16::MAX;
+        let mut max = 0u16;
+        for point in &scan.points[..scan.len] {
+            if point.distance_mm > 0 {
+                min = min.min(point.distance_mm);
+                max = max.max(point.distance_mm);
+            }
+        }
+        // No valid returns in this scan: report an empty range.
+        if min == u16::MAX {
+            min = 0;
+        }
+
+        let elapsed_ms = elapsed.as_millis() as f32;
+        let frequency_hz = if elapsed_ms > 0.0 {
+            (spins as f32) * 1000.0 / elapsed_ms
+        } else {
+            0.0
+        };
+
+        info!(
+            "[{}] points={} frequency={} Hz min={} mm max={} mm",
+            label, scan.len, frequency_hz, min, max
+        );
+
+        if scan.len > 0 {
+            let first = scan.points[0];
+            let middle = scan.points[scan.len / 2];
+            let last = scan.points[scan.len - 1];
+            info!(
+                "[{}] samples first=({},{},{}) middle=({},{},{}) last=({},{},{})",
+                label,
+                first.angle_deg,
+                first.distance_mm,
+                first.intensity,
+                middle.angle_deg,
+                middle.distance_mm,
+                middle.intensity,
+                last.angle_deg,
+                last.distance_mm,
+                last.intensity
+            );
+        }
+    }
+
+    /// Dump every point of a scan so the physical layout can be eyeballed
+    /// against the room.
+    fn dump_scan(label: &str, scan: &Scan) {
+        info!("[{}] full point list ({} points):", label, scan.len);
+        for point in &scan.points[..scan.len] {
+            info!(
+                "    angle={} dist_mm={} intensity={}",
+                point.angle_deg, point.distance_mm, point.intensity
+            );
+        }
+    }
+
+    /// Drive the COIN-D6 through one full power cycle.
+    pub async fn run() {
+        let p = embassy_rp::init(embassy_rp::config::Config::default());
+        info!("coin-d6 power-cycle demo");
+
+        // Active-high power-enable pin (low-side IRLZ44N), starting off.
+        let power = Output::new(p.PIN_15, Level::Low);
+
+        // UART0 with GPIO12 = TX and GPIO13 = RX.
+        let mut uart_config = uart::Config::default();
+        uart_config.baudrate = BAUD_RATE;
+        let uart = Uart::new(p.UART0, p.PIN_12, p.PIN_13, Irqs, p.DMA_CH0, p.DMA_CH1, uart_config);
+        let uart = AsyncUart {
+            inner: uart,
+            dumped_data_head: false,
+        };
+
+        let mut ingest = [0u8; INGEST_BUF_LEN];
+        let mut driver = CoinD6::new(uart, power, &mut ingest, Config::default());
+
+        driver.power_on().await.unwrap();
+        info!("powered on");
+
+        driver.start().await.unwrap();
+        info!("started");
+
+        // Capture and summarize a single revolution. The first revolution after
+        // `start` may be partial: the device's first ring-start lands at an
+        // arbitrary angle while it spins up, so this scan is diagnostic only.
+        let mut scan = Scan::new();
+        let start = Instant::now();
+        driver.read_scan(&mut scan).await.unwrap();
+        summarize("scan", &scan, start.elapsed(), 1);
+
+        // Capture and summarize five aggregated revolutions.
+        let mut spins: [Scan; SPINS] = core::array::from_fn(|_| Scan::new());
+        let mut out = Scan::new();
+        let start = Instant::now();
+        driver
+            .read_aggregated(&mut spins, &mut out, &AggregationConfig::default())
+            .await
+            .unwrap();
+        summarize("aggregated", &out, start.elapsed(), SPINS);
+        dump_scan("aggregated", &out);
+
+        driver.stop().await.unwrap();
+        info!("stopped");
+
+        driver.power_off().await.unwrap();
+        info!("powered off");
+
+        let (_uart, _power) = driver.release();
+        info!("cycle complete");
+    }
+}
+
+/// The embassy entry point: run one full power cycle, then exit the executor.
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    imp::run().await;
+}
+
+/// Host fallback: the COIN-D6 demo only runs on the RP2350 bare-metal target.
+#[cfg(not(all(target_arch = "arm", target_os = "none")))]
+fn main() {}
