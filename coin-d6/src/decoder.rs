@@ -55,6 +55,10 @@ pub struct Decoder {
     points: [Point; MAX_POINTS],
     /// Number of valid points in `points`.
     points_len: usize,
+    /// Whether a valid ring-start has opened the current revolution. Samples
+    /// seen before the first ring-start (a mid-stream tail) are ignored until a
+    /// later ring-start closes the synchronised revolution.
+    synchronized: bool,
 }
 
 impl Decoder {
@@ -67,6 +71,7 @@ impl Decoder {
             seen_header_0: false,
             points: [Point::default(); MAX_POINTS],
             points_len: 0,
+            synchronized: false,
         }
     }
 
@@ -155,8 +160,10 @@ impl Decoder {
         }
         let cs = u16::from_le_bytes([self.carry[8], self.carry[9]]);
         if checksum != cs {
-            // Corrupt packet: discard it and the in-progress revolution.
+            // Corrupt packet: discard it and the in-progress revolution, and
+            // require a fresh ring-start before accumulating samples again.
             self.points_len = 0;
+            self.synchronized = false;
             return Some(Decode::Resync);
         }
 
@@ -174,7 +181,14 @@ impl Decoder {
             0.0
         };
 
-        let event = if is_ring_start && self.points_len > 0 {
+        // The first ring-start only opens the current revolution; it must not
+        // flush a partial tail (samples that arrived before synchronisation).
+        if is_ring_start && !self.synchronized {
+            self.synchronized = true;
+            self.points_len = 0;
+        }
+
+        let event = if is_ring_start && self.synchronized && self.points_len > 0 {
             // A ring-start delimits the previous revolution: flush it.
             let n = self.points_len;
             scan.points[..n].copy_from_slice(&self.points[..n]);
@@ -185,27 +199,29 @@ impl Decoder {
             None
         };
 
-        for i in 0..lsn {
-            let base = 10 + 3 * usize::from(i);
-            // Sample byte order on the wire is `Si_L`, `Si_2nd`, `Si_H`.
-            let si_l = self.carry[base];
-            let si_2nd = self.carry[base + 1];
-            let si_h = self.carry[base + 2];
+        if self.synchronized {
+            for i in 0..lsn {
+                let base = 10 + 3 * usize::from(i);
+                // Sample byte order on the wire is `Si_L`, `Si_2nd`, `Si_H`.
+                let si_l = self.carry[base];
+                let si_2nd = self.carry[base + 1];
+                let si_h = self.carry[base + 2];
 
-            let distance_mm = NonZeroU16::new(u16::from(si_h) * 64 + u16::from(si_2nd >> 2));
-            let intensity = (si_2nd & 0b11) * 64 + (si_l >> 2);
-            // The interpolated angle is always non-negative, so the `%`
-            // operator matches `rem_euclid(360.0)` (which is not available in
-            // `core`).
-            let angle = (fsa_deg + f32::from(i) * step) % 360.0;
+                let distance_mm = NonZeroU16::new(u16::from(si_h) * 64 + u16::from(si_2nd >> 2));
+                let intensity = (si_2nd & 0b11) * 64 + (si_l >> 2);
+                // The interpolated angle is always non-negative, so the `%`
+                // operator matches `rem_euclid(360.0)` (which is not available in
+                // `core`).
+                let angle = (fsa_deg + f32::from(i) * step) % 360.0;
 
-            if self.points_len < MAX_POINTS {
-                self.points[self.points_len] = Point {
-                    angle_deg: angle,
-                    distance_mm,
-                    intensity,
-                };
-                self.points_len += 1;
+                if self.points_len < MAX_POINTS {
+                    self.points[self.points_len] = Point {
+                        angle_deg: angle,
+                        distance_mm,
+                        intensity,
+                    };
+                    self.points_len += 1;
+                }
             }
         }
 

@@ -28,7 +28,7 @@ use embedded_io_async::{Read, ReadExactError, Write};
 
 use crate::{
     decoder::{Decode, Decoder},
-    post_processing::{aggregate, angle_correction_deg},
+    post_processing::{aggregate, angle_correction_deg, normalise_angle},
     types::{AggregationConfig, Config, Error, Scan},
 };
 
@@ -171,7 +171,9 @@ where
             let chunk = remaining.min(scratch.len());
             self.read_exact(&mut scratch[..chunk]).await?;
             for &byte in &scratch[..chunk] {
-                sum += u16::from(byte);
+                // Wrapping addition: the vendor sum is a `u16`, and the 1 KiB
+                // watchdog permits frames larger than 255 bytes.
+                sum = sum.wrapping_add(u16::from(byte));
             }
             remaining -= chunk;
             consumed += chunk;
@@ -197,23 +199,30 @@ where
     /// Send the vendor start command (best-effort ack).
     ///
     /// The vendor spec's ack bytes are internally inconsistent, so the ack is
-    /// not verified; this only writes the command and awaits the write. The
-    /// device's response and spin-up bytes are left for the decoder to skip.
+    /// not verified; this writes the command, flushes the UART, and awaits the
+    /// write. The device's response and spin-up bytes are left for the decoder
+    /// to skip.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Uart`] if writing the command fails.
+    /// Returns [`Error::Uart`] if writing or flushing the command fails.
     pub async fn start(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
-        self.uart.write_all(&START_CMD).await.map_err(Error::Uart)
+        self.uart.write_all(&START_CMD).await.map_err(Error::Uart)?;
+        // Flush so a buffered writer (e.g. `BufferedUart`) has actually
+        // transmitted the command before `start` reports success.
+        self.uart.flush().await.map_err(Error::Uart)
     }
 
     /// Send the vendor stop command (best-effort ack).
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Uart`] if writing the command fails.
+    /// Returns [`Error::Uart`] if writing or flushing the command fails.
     pub async fn stop(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
-        self.uart.write_all(&STOP_CMD).await.map_err(Error::Uart)
+        self.uart.write_all(&STOP_CMD).await.map_err(Error::Uart)?;
+        // Flush so the stop command is actually transmitted before the caller
+        // (which typically powers the device off immediately) returns.
+        self.uart.flush().await.map_err(Error::Uart)
     }
 
     /// Deassert the power pin.
@@ -275,6 +284,11 @@ where
         let mut consumed = 0usize;
         loop {
             let n = self.uart.read(&mut *self.ingest).await.map_err(Error::Uart)?;
+            // A `Read` that reports end-of-stream (or an empty ingest slice)
+            // returns `Ok(0)`; treat that as a timeout rather than spinning.
+            if n == 0 {
+                return Err(Error::Timeout);
+            }
             match self.decoder.push(&self.ingest[..n], scan) {
                 Decode::Revolution => {
                     self.correct(scan);
@@ -298,7 +312,7 @@ where
         if self.config.angle_correction {
             for point in &mut scan.points[..scan.len] {
                 if let Some(distance) = point.distance_mm {
-                    point.angle_deg += angle_correction_deg(distance);
+                    point.angle_deg = normalise_angle(point.angle_deg + angle_correction_deg(distance));
                 }
             }
         }

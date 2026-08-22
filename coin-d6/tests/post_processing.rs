@@ -195,3 +195,23 @@ fn post_processing_bucket_count_ceils_to_cover_full_range() {
     // 359.5° falls in the last bucket [359.1°, 361°).
     assert_eq!(out.points[189].distance_mm, NonZeroU16::new(100));
 }
+
+#[test]
+fn post_processing_coarsens_when_resolution_exceeds_capacity() {
+    // 0.5° would need 720 buckets, more than `Scan<400>` can hold. The grid is
+    // coarsened to 400 × 0.9° so the full circle is still represented.
+    let scans = [build_scan(&[(300.0, 100, 10)])];
+
+    let out = aggregate(
+        &scans,
+        &AggregationConfig {
+            validity_ratio: 1.0,
+            method: AggregationMethod::Median,
+            resolution_deg: 0.5,
+        },
+    );
+
+    assert_eq!(out.len, 400);
+    // 300° lands in bucket floor(300 / 0.9) = 333, not silently dropped.
+    assert_eq!(out.points[333].distance_mm, NonZeroU16::new(100));
+}

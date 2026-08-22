@@ -195,3 +195,31 @@ fn decoder_assembles_revolution_with_measured_point_count() {
     assert_eq!(scan.points[3].distance_mm, None);
     assert_eq!(scan.points[3].intensity, 255);
 }
+
+#[test]
+fn decoder_ignores_samples_before_first_ring_start() {
+    let mut decoder = Decoder::new();
+    let mut scan = Scan::new();
+
+    // A normal packet arriving mid-stream (no preceding ring-start) is a tail
+    // and must be ignored, not emitted when the first ring-start arrives.
+    let tail = packet(0x00, 257, 385, &[(0x00, 0x00, 0x10)]);
+    let open = packet(0x01, 129, 257, &[(0x00, 0x00, 0x20)]);
+    let close = packet(0x01, 257, 257, &[]);
+
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&tail);
+    stream.extend_from_slice(&open);
+
+    let result = decoder.push(&stream, &mut scan);
+    assert!(matches!(result, Decode::InProgress));
+    assert_eq!(scan.len, 0);
+
+    let mut stream = Vec::new();
+    stream.extend_from_slice(&close);
+
+    let result = decoder.push(&stream, &mut scan);
+    assert!(matches!(result, Decode::Revolution));
+    assert_eq!(scan.len, 1);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(2048));
+}

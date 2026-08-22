@@ -59,8 +59,7 @@ pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) 
         return Scan::new();
     }
 
-    let resolution = sanitise_resolution(config.resolution_deg);
-    let bins = bucket_count::<N>(resolution);
+    let (bins, resolution) = effective_grid::<N>(config.resolution_deg);
 
     let mut out = Scan::new();
     out.len = bins;
@@ -78,13 +77,25 @@ pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) 
     out
 }
 
-/// The number of angular buckets `aggregate` emits, clamped to `[1, N]`.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn bucket_count<const N: usize>(resolution_deg: f32) -> usize {
-    // `ceil` (not `round`) so the bucket grid always covers the full `[0, 360)`
-    // range. `resolution_deg` is already sanitised to a positive, finite value,
-    // so the quotient is finite and the cast saturates safely before the clamp.
-    (libm::ceilf(360.0 / resolution_deg) as usize).clamp(1, N)
+/// The number of angular buckets `aggregate` emits and the effective bin width.
+///
+/// `ceil(360 / resolution)` buckets are used when they fit within `N`. If that
+/// exceeds `N`, the grid is coarsened to `N` buckets of width `360 / N` so the
+/// full `[0, 360)` range is still represented rather than silently dropping
+/// higher-angle points.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn effective_grid<const N: usize>(resolution_deg: f32) -> (usize, f32) {
+    let resolution = sanitise_resolution(resolution_deg);
+    let exact_bins = libm::ceilf(360.0 / resolution);
+    if exact_bins <= N as f32 {
+        (exact_bins as usize, resolution)
+    } else {
+        (N, 360.0 / N as f32)
+    }
 }
 
 /// The representative bearing of bucket `bin`, in degrees.
@@ -103,7 +114,7 @@ fn bucket_angle_deg(bin: usize, resolution_deg: f32) -> f32 {
 /// binning must normalise before deciding which bucket a point lands in. The
 /// `%` operator matches `rem_euclid(360.0)` here because the input is always
 /// within one correction step of the valid range.
-fn normalise_angle(angle_deg: f32) -> f32 {
+pub(crate) fn normalise_angle(angle_deg: f32) -> f32 {
     let wrapped = angle_deg % 360.0;
     if wrapped < 0.0 { wrapped + 360.0 } else { wrapped }
 }
