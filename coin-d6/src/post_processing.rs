@@ -9,6 +9,8 @@
 //! revolution whose index-0 point sits at a different bearing cannot skew the
 //! fused scan.
 
+use core::num::NonZeroU16;
+
 use crate::types::{AggregationConfig, AggregationMethod, Point, Scan};
 
 /// Numerator constant of the vendor's distance-dependent angle correction.
@@ -24,11 +26,11 @@ pub const ANGLE_CORRECTION_ZERO_MM: f32 = 90.15;
 ///
 /// The `atan` result is *not* converted from radians to degrees — the vendor
 /// treats the raw `atan` output as a degree offset, so this quirk is preserved
-/// verbatim. `distance_mm` must be `> 0`; no-return points (`distance_mm == 0`)
-/// are filtered by callers before this is applied.
+/// verbatim. Takes a [`NonZeroU16`] because a no-return point (`None`) has no
+/// meaningful correction.
 #[must_use]
-pub fn angle_correction_deg(distance_mm: u16) -> f32 {
-    let d = f32::from(distance_mm);
+pub fn angle_correction_deg(distance_mm: NonZeroU16) -> f32 {
+    let d = f32::from(distance_mm.get());
     libm::atanf(ANGLE_CORRECTION_COEFF * (d - ANGLE_CORRECTION_ZERO_MM) / (ANGLE_CORRECTION_ZERO_MM * d))
 }
 
@@ -41,10 +43,10 @@ pub fn angle_correction_deg(distance_mm: u16) -> f32 {
 /// `[b * resolution, (b + 1) * resolution)`, so revolutions that start at
 /// different angles are matched correctly.
 ///
-/// For each bucket, a sample is *valid* when its `distance_mm` is non-zero. If
-/// the fraction of revolutions contributing a valid sample falls below
+/// For each bucket, a sample is *valid* when its `distance_mm` is `Some`. If the
+/// fraction of revolutions contributing a valid sample falls below
 /// [`AggregationConfig::validity_ratio`], the output point is a no-return
-/// (`distance_mm == 0`, `intensity == 0`); otherwise the valid distances and
+/// (`distance_mm == None`, `intensity == 0`); otherwise the valid distances and
 /// intensities are reduced with the configured [`AggregationMethod`].
 ///
 /// The output is a fixed grid of `bucket_count` points (one per bucket), sorted
@@ -68,7 +70,7 @@ pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) 
         let (distance, intensity) = reduce_bucket(scans, bin, resolution, config);
         out.points[bin] = Point {
             angle_deg: angle,
-            distance_mm: distance,
+            distance_mm: NonZeroU16::new(distance),
             intensity,
         };
     }
@@ -125,8 +127,31 @@ fn point_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32)
     None
 }
 
+/// The valid distance (in millimetres) of `scan` in bucket `bin`, if any.
+///
+/// `None` when the scan has no point in the bucket, or its point there is a
+/// no-return.
+fn distance_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<u16> {
+    point_at_bin(scan, bin, resolution_deg)
+        .and_then(|point| point.distance_mm)
+        .map(NonZeroU16::get)
+}
+
+/// The intensity of `scan`'s valid point in bucket `bin`, if any.
+///
+/// Validity is keyed on `distance_mm.is_some()`, so a no-return point's
+/// intensity is ignored even if it is non-zero.
+fn intensity_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<u8> {
+    point_at_bin(scan, bin, resolution_deg)
+        .filter(|point| point.distance_mm.is_some())
+        .map(|point| point.intensity)
+}
+
 /// Reduce all revolutions at one angular bucket to a single `(distance,
 /// intensity)`, applying the validity gate and the configured method.
+///
+/// The returned distance is raw millimetres, with `0` used internally to mean
+/// "no return"; [`aggregate`] maps it back onto `Option<NonZeroU16>`.
 fn reduce_bucket<const N: usize>(
     scans: &[Scan<N>],
     bin: usize,
@@ -136,7 +161,7 @@ fn reduce_bucket<const N: usize>(
     let spins = scans.len();
     let valid = scans
         .iter()
-        .filter(|scan| point_at_bin(scan, bin, resolution_deg).is_some_and(|p| p.distance_mm > 0))
+        .filter(|scan| distance_at_bin(scan, bin, resolution_deg).is_some())
         .count();
 
     // `valid` and `spins` are tiny (bounded by the number of spins, far below
@@ -179,9 +204,8 @@ fn median_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg
 fn mean_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u16 {
     let sum: usize = scans
         .iter()
-        .filter_map(|scan| point_at_bin(scan, bin, resolution_deg))
-        .filter(|point| point.distance_mm > 0)
-        .map(|point| usize::from(point.distance_mm))
+        .filter_map(|scan| distance_at_bin(scan, bin, resolution_deg))
+        .map(usize::from)
         .sum();
     // An average of `u16` values cannot exceed `u16::MAX`, so the division is
     // always in range; `unwrap_or` only guards the (unreachable) conversion
@@ -189,8 +213,8 @@ fn mean_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: 
     u16::try_from(sum / valid).unwrap_or(u16::MAX)
 }
 
-/// The median of the valid intensities in bucket `bin` (validity is still keyed
-/// on `distance_mm > 0`).
+/// The median of the valid intensities in bucket `bin` (validity is keyed on
+/// `distance_mm.is_some()`).
 fn median_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u8 {
     let upper = valid / 2;
     if valid % 2 == 1 {
@@ -208,9 +232,8 @@ fn median_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_de
 fn mean_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, valid: usize) -> u8 {
     let sum: usize = scans
         .iter()
-        .filter_map(|scan| point_at_bin(scan, bin, resolution_deg))
-        .filter(|point| point.distance_mm > 0)
-        .map(|point| usize::from(point.intensity))
+        .filter_map(|scan| intensity_at_bin(scan, bin, resolution_deg))
+        .map(usize::from)
         .sum();
     // An average of `u8` values cannot exceed `u8::MAX`, so the division is
     // always in range; `unwrap_or` only guards the (unreachable) conversion
@@ -226,19 +249,17 @@ fn mean_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg:
 /// set of valid samples, avoiding a heap allocation.
 fn select_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, k: usize) -> u16 {
     for scan in scans {
-        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+        let Some(value) = distance_at_bin(scan, bin, resolution_deg) else {
             continue;
         };
-        let value = point.distance_mm;
-        if value == 0 {
-            continue;
-        }
 
         let (less, equal) = rank_distance(scans, bin, resolution_deg, value);
         if less <= k && k < less + equal {
             return value;
         }
     }
+    // Unreachable: `reduce_bucket` only calls this when `valid > 0`, so at least
+    // one scan has a valid distance to select.
     0
 }
 
@@ -248,13 +269,9 @@ fn rank_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: 
     let mut less = 0usize;
     let mut equal = 0usize;
     for scan in scans {
-        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+        let Some(d) = distance_at_bin(scan, bin, resolution_deg) else {
             continue;
         };
-        let d = point.distance_mm;
-        if d == 0 {
-            continue;
-        }
         if d < value {
             less += 1;
         } else if d == value {
@@ -266,17 +283,13 @@ fn rank_distance<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: 
 
 /// The `k`-th smallest (0-indexed) valid intensity in bucket `bin`.
 ///
-/// Validity is keyed on `distance_mm > 0` (not intensity), so an intensity of
-/// zero on a valid sample is still a real value.
+/// Validity is keyed on `distance_mm.is_some()` (not intensity), so an
+/// intensity of zero on a valid sample is still a real value.
 fn select_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg: f32, k: usize) -> u8 {
     for scan in scans {
-        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+        let Some(value) = intensity_at_bin(scan, bin, resolution_deg) else {
             continue;
         };
-        if point.distance_mm == 0 {
-            continue;
-        }
-        let value = point.intensity;
 
         let (less, equal) = rank_intensity(scans, bin, resolution_deg, value);
         if less <= k && k < less + equal {
@@ -292,13 +305,9 @@ fn rank_intensity<const N: usize>(scans: &[Scan<N>], bin: usize, resolution_deg:
     let mut less = 0usize;
     let mut equal = 0usize;
     for scan in scans {
-        let Some(point) = point_at_bin(scan, bin, resolution_deg) else {
+        let Some(v) = intensity_at_bin(scan, bin, resolution_deg) else {
             continue;
         };
-        if point.distance_mm == 0 {
-            continue;
-        }
-        let v = point.intensity;
         if v < value {
             less += 1;
         } else if v == value {

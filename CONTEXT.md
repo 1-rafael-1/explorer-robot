@@ -23,9 +23,9 @@
 
 - **Spin** — One full 360° revolution of LiDAR returns: 400 points at the native 0.9° resolution.
 - **Snapshot** — A single-revolution capture, as returned by `read_scan`.
-- **Point** — One LiDAR return, `{ angle_deg, distance_mm, intensity }` (bearing in degrees, range in millimetres, return strength 0–255).
+- **Point** — One LiDAR return, `{ angle_deg, distance_mm, intensity }` (bearing in degrees, range in millimetres as an `Option` — `None` means no return — and return strength 0–255).
 - **Ring-start** — The packet flag (`T == 1`, the low bit of the `CT` byte) that delimits the start of a new spin.
-- **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm > 0`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
+- **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
 
 ## Architecture
 

@@ -279,8 +279,8 @@ where
     fn correct(&self, scan: &mut Scan) {
         if self.config.angle_correction {
             for point in &mut scan.points[..scan.len] {
-                if point.distance_mm > 0 {
-                    point.angle_deg += angle_correction_deg(point.distance_mm);
+                if let Some(distance) = point.distance_mm {
+                    point.angle_deg += angle_correction_deg(distance);
                 }
             }
         }

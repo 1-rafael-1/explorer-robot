@@ -1,14 +1,16 @@
 //! Public domain types shared across the decoder, post-processing, and driver
 //! stages.
 
+use core::num::NonZeroU16;
+
 /// A single `LiDAR` return, in polar coordinates.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Point {
     /// Bearing of the return, in degrees.
     pub angle_deg: f32,
-    /// Measured range, in millimetres.
-    pub distance_mm: u16,
-    /// Return signal strength (0–255).
+    /// Measured range in millimetres, or `None` when the sensor got no return.
+    pub distance_mm: Option<NonZeroU16>,
+    /// Return signal strength (0–255). `0` is a valid intensity on a return.
     pub intensity: u8,
 }
 

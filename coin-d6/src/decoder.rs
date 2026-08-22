@@ -13,6 +13,8 @@
 //! bytes are excluded from the accumulation and compared as a little-endian
 //! `u16`.
 
+use core::num::NonZeroU16;
+
 use crate::types::{Point, Scan};
 
 /// Outcome of feeding raw bytes to the decoder.
@@ -190,7 +192,7 @@ impl Decoder {
             let si_2nd = self.carry[base + 1];
             let si_h = self.carry[base + 2];
 
-            let distance_mm = u16::from(si_h) * 64 + u16::from(si_2nd >> 2);
+            let distance_mm = NonZeroU16::new(u16::from(si_h) * 64 + u16::from(si_2nd >> 2));
             let intensity = (si_2nd & 0b11) * 64 + (si_l >> 2);
             // The interpolated angle is always non-negative, so the `%`
             // operator matches `rem_euclid(360.0)` (which is not available in

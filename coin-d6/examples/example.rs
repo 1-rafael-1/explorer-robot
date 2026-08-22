@@ -36,7 +36,9 @@ use panic_probe as _;
 /// it can be gated behind the bare-metal target.
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 mod imp {
-    use coin_d6::{AggregationConfig, CoinD6, Config, Scan, aggregate};
+    use core::num::NonZeroU16;
+
+    use coin_d6::{AggregationConfig, CoinD6, Config, Point, Scan, aggregate};
     use defmt::info;
     use embassy_rp::{
         bind_interrupts,
@@ -204,6 +206,11 @@ mod imp {
         }
     }
 
+    /// The distance for display: `Some(mm)` for a return, `None` for no return.
+    fn display_distance(point: &Point) -> Option<u16> {
+        point.distance_mm.map(NonZeroU16::get)
+    }
+
     /// Log summary statistics for a scan without dumping every point.
     ///
     /// `spins` is the number of revolutions `elapsed` covers, so the reported
@@ -212,9 +219,9 @@ mod imp {
         let mut min = u16::MAX;
         let mut max = 0u16;
         for point in &scan.points[..scan.len] {
-            if point.distance_mm > 0 {
-                min = min.min(point.distance_mm);
-                max = max.max(point.distance_mm);
+            if let Some(distance) = point.distance_mm {
+                min = min.min(distance.get());
+                max = max.max(distance.get());
             }
         }
         // No valid returns in this scan: report an empty range.
@@ -242,13 +249,13 @@ mod imp {
                 "[{}] samples first=({},{},{}) middle=({},{},{}) last=({},{},{})",
                 label,
                 first.angle_deg,
-                first.distance_mm,
+                display_distance(&first),
                 first.intensity,
                 middle.angle_deg,
-                middle.distance_mm,
+                display_distance(&middle),
                 middle.intensity,
                 last.angle_deg,
-                last.distance_mm,
+                display_distance(&last),
                 last.intensity
             );
         }
@@ -261,7 +268,9 @@ mod imp {
         for point in &scan.points[..scan.len] {
             info!(
                 "    angle={} dist_mm={} intensity={}",
-                point.angle_deg, point.distance_mm, point.intensity
+                point.angle_deg,
+                display_distance(point),
+                point.intensity
             );
         }
     }

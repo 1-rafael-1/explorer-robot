@@ -8,7 +8,7 @@ scans either one revolution at a time or aggregated over several revolutions.
 ## Public API
 
 - **`Point`** — one LiDAR return: `angle_deg` (degrees), `distance_mm`
-  (millimetres), `intensity` (0–255).
+  (`Option<NonZeroU16>`, millimetres — `None` means no return), `intensity` (0–255).
 - **`Scan<const N = 512>`** — one revolution (native 400 points at 0.9°, with
   512-point capacity), plus `len`.
 - **`Decoder`** — pure byte-stream decoder (checksum, `AA 55` header resync,

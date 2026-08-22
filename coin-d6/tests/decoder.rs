@@ -4,6 +4,8 @@
 //! computed with the same rule the decoder implements. Expected decoded values
 //! are written as literals, not recomputed through the decoder.
 
+use core::num::NonZeroU16;
+
 use coin_d6::{Decode, Decoder, Scan};
 
 /// Compute the COIN-D6 16-bit XOR checksum over a built packet, matching the
@@ -61,7 +63,7 @@ fn decoder_decodes_distance_and_intensity() {
     let result = decoder.push(&stream, &mut scan);
     assert!(matches!(result, Decode::Revolution));
     assert_eq!(scan.len, 1);
-    assert_eq!(scan.points[0].distance_mm, 1056);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(1056));
     assert_eq!(scan.points[0].intensity, 255);
     assert_eq!(scan.points[0].angle_deg, 1.0_f32);
 }
@@ -93,7 +95,7 @@ fn decoder_resyncs_on_checksum_mismatch_and_recovers() {
     let result = decoder.push(&stream, &mut scan);
     assert!(matches!(result, Decode::Revolution));
     assert_eq!(scan.len, 1);
-    assert_eq!(scan.points[0].distance_mm, 2048);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(2048));
 }
 
 #[test]
@@ -117,7 +119,7 @@ fn decoder_reassembles_packet_split_across_chunks() {
     let result = decoder.push(&rest, &mut scan);
     assert!(matches!(result, Decode::Revolution));
     assert_eq!(scan.len, 1);
-    assert_eq!(scan.points[0].distance_mm, 1024);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(1024));
 }
 
 #[test]
@@ -162,7 +164,7 @@ fn decoder_skips_spin_up_speed_adjust_bytes() {
     let result = decoder.push(&stream, &mut scan);
     assert!(matches!(result, Decode::Revolution));
     assert_eq!(scan.len, 1);
-    assert_eq!(scan.points[0].distance_mm, 1024);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(1024));
 }
 
 #[test]
@@ -187,9 +189,9 @@ fn decoder_assembles_revolution_with_measured_point_count() {
     assert_eq!(scan.points[1].angle_deg, 2.0_f32);
     assert_eq!(scan.points[2].angle_deg, 3.0_f32);
     assert_eq!(scan.points[3].angle_deg, 4.0_f32);
-    assert_eq!(scan.points[0].distance_mm, 64);
-    assert_eq!(scan.points[1].distance_mm, 128);
-    assert_eq!(scan.points[2].distance_mm, 1);
-    assert_eq!(scan.points[3].distance_mm, 0);
+    assert_eq!(scan.points[0].distance_mm, NonZeroU16::new(64));
+    assert_eq!(scan.points[1].distance_mm, NonZeroU16::new(128));
+    assert_eq!(scan.points[2].distance_mm, NonZeroU16::new(1));
+    assert_eq!(scan.points[3].distance_mm, None);
     assert_eq!(scan.points[3].intensity, 255);
 }
