@@ -79,7 +79,8 @@ const ANIM_INTERVAL_MS: u64 = 30;
 type Fb = [u8; FB_W * FB_H * 2];
 
 /// The concrete display type built by this example.
-type Display = St7789<ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>, Output<'static>>;
+type Display =
+    St7789<'static, ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>, Output<'static>>;
 
 /// Statically-allocated framebuffer (`153_600` bytes of zeroed `.bss`).
 static FB: ConstStaticCell<Fb> = ConstStaticCell::new([0; FB_W * FB_H * 2]);

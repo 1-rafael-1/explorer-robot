@@ -253,20 +253,20 @@ fn madctl(config: Config) -> u8 {
 /// framebuffer. A reset pin is deliberately *not* owned here: the caller
 /// performs a hardware reset (or relies on the software reset issued during
 /// [`init`](Self::init)) before constructing the driver.
-pub struct St7789<SPI, DC> {
+pub struct St7789<'fb, SPI, DC> {
     /// The async SPI bus.
     spi: SPI,
     /// The data/command GPIO.
     dc: DC,
     /// The caller-allocated framebuffer, big-endian RGB565.
-    framebuffer: &'static mut [u8],
+    framebuffer: &'fb mut [u8],
     /// Framebuffer width in pixels.
     width: u16,
     /// Framebuffer height in pixels.
     height: u16,
 }
 
-impl<SPI, DC, PinE> St7789<SPI, DC>
+impl<'fb, SPI, DC, PinE> St7789<'fb, SPI, DC>
 where
     SPI: SpiDevice<u8>,
     DC: OutputPin<Error = PinE>,
@@ -276,7 +276,17 @@ where
     ///
     /// The framebuffer must hold exactly `width * height * 2` bytes, stored as
     /// big-endian RGB565.
-    pub const fn new(spi: SPI, dc: DC, framebuffer: &'static mut [u8], width: u16, height: u16) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width` or `height` is zero, or if `framebuffer` is not
+    /// exactly `width * height * 2` bytes long.
+    pub const fn new(spi: SPI, dc: DC, framebuffer: &'fb mut [u8], width: u16, height: u16) -> Self {
+        assert!(width != 0 && height != 0, "width and height must be non-zero");
+        assert!(
+            framebuffer.len() == width as usize * height as usize * 2,
+            "framebuffer must hold exactly width * height * 2 bytes"
+        );
         Self {
             spi,
             dc,
@@ -436,7 +446,7 @@ where
     }
 }
 
-impl<SPI, DC> St7789<SPI, DC> {
+impl<SPI, DC> St7789<'_, SPI, DC> {
     /// Write a single pixel into the framebuffer, clipping out-of-bounds points.
     fn set_pixel(&mut self, x: i32, y: i32, color: Rgb565) {
         let Ok(x) = usize::try_from(x) else { return };
@@ -452,7 +462,7 @@ impl<SPI, DC> St7789<SPI, DC> {
     }
 }
 
-impl<SPI, DC> Dimensions for St7789<SPI, DC> {
+impl<SPI, DC> Dimensions for St7789<'_, SPI, DC> {
     fn bounding_box(&self) -> Rectangle {
         Rectangle::new(
             Point::new(0, 0),
@@ -461,7 +471,7 @@ impl<SPI, DC> Dimensions for St7789<SPI, DC> {
     }
 }
 
-impl<SPI, DC> DrawTarget for St7789<SPI, DC> {
+impl<SPI, DC> DrawTarget for St7789<'_, SPI, DC> {
     type Color = Rgb565;
     type Error = Infallible;
 
