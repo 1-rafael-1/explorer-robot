@@ -45,7 +45,7 @@ workspace's
 host target explicitly:
 
 ```sh
-cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu
+cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
 ## Running the example

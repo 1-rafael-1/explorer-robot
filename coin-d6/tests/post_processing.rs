@@ -215,3 +215,51 @@ fn post_processing_coarsens_when_resolution_exceeds_capacity() {
     // 300° lands in bucket floor(300 / 0.9) = 333, not silently dropped.
     assert_eq!(out.points[333].distance_mm, NonZeroU16::new(100));
 }
+
+#[test]
+fn post_processing_bucket_reduces_to_nearest_valid_return() {
+    // Two samples in the same 1° bucket (10.1° at 150mm, 10.9° at 90mm). The
+    // nearest return (90mm) is the representative, not the first sample.
+    let scans = [build_scan(&[(10.1, 150, 50), (10.9, 90, 10)])];
+
+    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+
+    assert_eq!(out.points[10].distance_mm, NonZeroU16::new(90));
+    assert_eq!(out.points[10].intensity, 10);
+}
+
+#[test]
+fn post_processing_valid_return_not_shadowed_by_no_return() {
+    // A no-return (10.1°) precedes a valid 90mm return (10.9°) in the same 1°
+    // bucket. The valid return must surface, not the no-return.
+    let scans = [build_scan(&[(10.1, 0, 0), (10.9, 90, 10)])];
+
+    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+
+    assert_eq!(out.points[10].distance_mm, NonZeroU16::new(90));
+    assert_eq!(out.points[10].intensity, 10);
+}
+
+#[test]
+fn post_processing_counts_validity_once_per_revolution() {
+    // One revolution contributes two samples to the same 1° bucket; the other
+    // contributes none. Validity is keyed per revolution, so 1/2 = 0.5 < 0.75
+    // and the bucket must drop — even though there are two valid *samples*.
+    let scans = [build_scan(&[(10.1, 90, 10), (10.9, 150, 50)]), build_scan(&[])];
+
+    let out = aggregate(&scans, &config(0.75, AggregationMethod::Median));
+
+    assert_eq!(out.points[10].distance_mm, None);
+}
+
+#[test]
+fn post_processing_tie_break_prefers_higher_intensity() {
+    // Two samples in the same bucket at equal distance (100mm), with intensities
+    // 5 and 90. The tie is broken by higher intensity.
+    let scans = [build_scan(&[(10.1, 100, 5), (10.9, 100, 90)])];
+
+    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+
+    assert_eq!(out.points[10].distance_mm, NonZeroU16::new(100));
+    assert_eq!(out.points[10].intensity, 90);
+}

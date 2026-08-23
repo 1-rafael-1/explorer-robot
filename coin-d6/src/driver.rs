@@ -252,8 +252,11 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Uart`] on a fatal UART error, or [`Error::Timeout`] if no
-    /// revolution is assembled within [`RING_START_WATCHDOG_BYTES`] bytes.
+    /// Returns [`Error::Timeout`] if no revolution is assembled within
+    /// [`RING_START_WATCHDOG_BYTES`] bytes. UART read errors (overrun, break,
+    /// framing, or parity) are recovered transparently — the decoder resyncs and
+    /// the missed bytes count toward the watchdog — so this never returns
+    /// [`Error::Uart`].
     pub async fn read_scan(&mut self, scan: &mut Scan) -> Result<(), Error<UART::Error, POWER::Error>> {
         self.read_revolution(scan).await
     }
@@ -264,8 +267,9 @@ where
     ///
     /// # Errors
     ///
-    /// Propagates the first error from [`Self::read_scan`] across any of the
-    /// spins.
+    /// Returns [`Error::Timeout`] if any spin fails to assemble a revolution
+    /// within the watchdog. As with [`Self::read_scan`], UART read errors are
+    /// recovered by resync and never surface as [`Error::Uart`].
     pub async fn read_aggregated(
         &mut self,
         spins: &mut [Scan],

@@ -43,6 +43,13 @@ pub fn angle_correction_deg(distance_mm: NonZeroU16) -> f32 {
 /// `[b * resolution, (b + 1) * resolution)`, so revolutions that start at
 /// different angles are matched correctly.
 ///
+/// Within a single revolution, when several samples land in the same bucket
+/// (the grid coarser than the device's native resolution, or angle correction
+/// pushing adjacent samples together), the bucket collapses to its **nearest
+/// valid return** — the smallest `distance_mm` — so coarsening never hides a
+/// closer obstacle. No-return samples are ignored unless the whole bucket is a
+/// no-return.
+///
 /// For each bucket, a sample is *valid* when its `distance_mm` is `Some`. If the
 /// fraction of revolutions contributing a valid sample falls below
 /// [`AggregationConfig::validity_ratio`], the output point is a no-return
@@ -119,44 +126,65 @@ pub(crate) fn normalise_angle(angle_deg: f32) -> f32 {
     if wrapped < 0.0 { wrapped + 360.0 } else { wrapped }
 }
 
-/// The point in `scan` that belongs to bucket `bin`, if any.
+/// The representative valid return of `scan` in bucket `bin`, if any.
+///
+/// Several native samples can land in one bucket when the configured grid is
+/// coarser than the device's native resolution (the capacity-coarsening path)
+/// or when angle correction pushes adjacent samples together. The
+/// representative is the **nearest valid return** — the smallest `distance_mm`
+/// — so coarsening a bucket never hides a closer obstacle. No-return samples
+/// are ignored; a bucket is a no-return only when every sample in it is a
+/// no-return. Distance ties are broken by higher intensity, then by
+/// first-in-revolution order.
 ///
 /// Points within a revolution are already in increasing bearing order, but the
 /// array is not globally sorted because it wraps through 360°, so this does a
-/// linear scan. At the native 0.9° resolution each revolution contributes at most
-/// one point per bucket, so the first match is returned.
+/// linear scan.
 #[allow(clippy::cast_precision_loss)]
-fn point_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<Point> {
+fn representative_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<(u16, u8)> {
     let lower = bin as f32 * resolution_deg;
     let upper = lower + resolution_deg;
 
+    let mut best: Option<(u16, u8)> = None;
     for point in &scan.points[..scan.len] {
         let bearing = normalise_angle(point.angle_deg);
-        if bearing >= lower && bearing < upper {
-            return Some(*point);
+        if bearing < lower || bearing >= upper {
+            continue;
+        }
+        // A no-return in a mixed bucket is simply ignored; the bucket is a
+        // no-return only when no valid sample is found.
+        let Some(distance) = point.distance_mm else {
+            continue;
+        };
+        let distance = distance.get();
+        match best {
+            None => best = Some((distance, point.intensity)),
+            Some((best_distance, best_intensity)) => {
+                if distance < best_distance || (distance == best_distance && point.intensity > best_intensity) {
+                    best = Some((distance, point.intensity));
+                }
+            }
         }
     }
-    None
+    best
 }
 
-/// The valid distance (in millimetres) of `scan` in bucket `bin`, if any.
+/// The representative distance (in millimetres) of `scan` in bucket `bin`, if
+/// any.
 ///
-/// `None` when the scan has no point in the bucket, or its point there is a
-/// no-return.
+/// `None` when the scan has no valid return in the bucket (no point, or only
+/// no-returns).
 fn distance_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<u16> {
-    point_at_bin(scan, bin, resolution_deg)
-        .and_then(|point| point.distance_mm)
-        .map(NonZeroU16::get)
+    representative_at_bin(scan, bin, resolution_deg).map(|(distance, _)| distance)
 }
 
-/// The intensity of `scan`'s valid point in bucket `bin`, if any.
+/// The intensity of `scan`'s representative valid return in bucket `bin`, if
+/// any.
 ///
 /// Validity is keyed on `distance_mm.is_some()`, so a no-return point's
 /// intensity is ignored even if it is non-zero.
 fn intensity_at_bin<const N: usize>(scan: &Scan<N>, bin: usize, resolution_deg: f32) -> Option<u8> {
-    point_at_bin(scan, bin, resolution_deg)
-        .filter(|point| point.distance_mm.is_some())
-        .map(|point| point.intensity)
+    representative_at_bin(scan, bin, resolution_deg).map(|(_, intensity)| intensity)
 }
 
 /// Reduce all revolutions at one angular bucket to a single `(distance,

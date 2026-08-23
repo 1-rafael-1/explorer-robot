@@ -26,11 +26,15 @@ framing, aggregation, and settle logic can be validated without hardware.
 - A pure byte-stream `Decoder` (checksum, `AA 55` header resync, ring-start
   delimiting, angle interpolation incl. wrap, `0xFE`/`0xFF` spin-up skipping)
   plus pure `aggregate` (median/validity gate) and `angle_correction_deg`.
+- `aggregate` fuses two orthogonal axes: within a revolution each angular bucket
+  collapses to its **nearest valid return** (so coarsening the grid can never
+  hide a closer obstacle), while across revolutions buckets are combined by the
+  configured median/mean with a validity gate.
 - An optional rotor warm-up phase (`CoinD6::warm_up`) driven by a pure `Warmup`
   state machine: the per-revolution point count proxies rotor speed, and the
   phase settles, plateaus, or exhausts according to a `WarmupConfig`. The pure
   decoder, post-processing, and warm-up stages are host-tested via
-  `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu`.
+  `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests`.
 - The passive concurrency model: no spawned tasks; the caller awaits
   `read_scan`/`read_aggregated`/`warm_up`.
 - UART read errors (overrun, break, framing, parity) are treated as recoverable

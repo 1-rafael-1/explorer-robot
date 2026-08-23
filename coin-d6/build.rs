@@ -14,14 +14,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=memory.x");
 
-    // The `--nmagic`/`-Tlink.x`/`-Tdefmt.x` linker flags are ARM-bare-metal
-    // specific. Emitting them on host targets (where `cargo test` builds the
-    // auto-discovered example) makes the host linker reject the command line.
-    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if arch == "arm" && os == "none" {
-        println!("cargo:rustc-link-arg-examples=--nmagic");
-        println!("cargo:rustc-link-arg-examples=-Tlink.x");
-        println!("cargo:rustc-link-arg-examples=-Tdefmt.x");
-    }
+    println!("cargo:rustc-link-arg-examples=--nmagic");
+    println!("cargo:rustc-link-arg-examples=-Tlink.x");
+    println!("cargo:rustc-link-arg-examples=-Tdefmt.x");
 }
