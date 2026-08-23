@@ -1,0 +1,39 @@
+[package]
+name = "hardware-tests"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Standalone, breadboard-scale hardware tests for the explorer-robot sensors (LiDAR + TFT)."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+coin-d6 = { path = "../coin-d6" }
+st7789-async = { path = "../st7789-async" }
+embedded-graphics = "0.8.1"
+embedded-hal-bus = { version = "0.1.0", features = ["async"] }
+libm = "0.2"
+
+[dev-dependencies]
+embassy-rp = { version = "0.10.0", features = [
+    "defmt",
+    "unstable-pac",
+    "time-driver",
+    "critical-section-impl",
+    "rp235xa",
+] }
+embassy-executor = { version = "0.10.0", features = [
+    "platform-cortex-m",
+    "executor-thread",
+    "executor-interrupt",
+    "defmt",
+] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+defmt = "1.0.1"
+defmt-rtt = "1.1.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m-rt = "0.7.5"
+static_cell = "2.1.1"
