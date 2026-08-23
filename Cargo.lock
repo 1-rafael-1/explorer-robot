@@ -1069,6 +1069,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hardware-tests"
+version = "0.1.0"
+dependencies = [
+ "coin-d6",
+ "cortex-m-rt",
+ "defmt 1.1.1",
+ "defmt-rtt",
+ "embassy-executor",
+ "embassy-rp",
+ "embassy-time",
+ "embedded-graphics",
+ "embedded-hal-bus",
+ "libm",
+ "panic-probe",
+ "st7789-async",
+ "static_cell",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

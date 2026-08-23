@@ -8,7 +8,7 @@ description = "Explorer robot v3 — tracked robot with LiDAR-based autonomous n
 repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [workspace]
-members = ["st7789-async", "coin-d6"]
+members = ["st7789-async", "coin-d6", "hardware-tests"]
 resolver = "3"
 
 [features]
