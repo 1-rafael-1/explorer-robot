@@ -93,6 +93,57 @@ impl Default for AggregationConfig {
     }
 }
 
+/// Points per revolution the COIN-D6 emits at its native 0.9° resolution
+/// (steady state).
+pub const NATIVE_POINTS: usize = 400;
+
+/// Parameters controlling the optional rotor warm-up phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WarmupConfig {
+    /// A spin counts as "settled" when within this many points of
+    /// [`NATIVE_POINTS`].
+    pub settle_tolerance: usize,
+    /// Consecutive in-band spins (or, conversely, spins without a new
+    /// point-count high) needed to declare the rotor settled or plateaued.
+    pub settle_stable_spins: usize,
+    /// Upper bound on how many spins to discard before giving up.
+    pub max_spins: usize,
+}
+
+impl Default for WarmupConfig {
+    fn default() -> Self {
+        Self {
+            settle_tolerance: 3,
+            settle_stable_spins: 12,
+            max_spins: 50,
+        }
+    }
+}
+
+/// The result of an optional rotor warm-up phase (see `CoinD6::warm_up`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmupOutcome {
+    /// The rotor reached steady state (point count within the settle band).
+    Settled {
+        /// Warm-up spins discarded before settling.
+        spins: usize,
+        /// Point count at which the rotor settled.
+        points: usize,
+    },
+    /// The point count plateaued below the settle band.
+    Plateaued {
+        /// Warm-up spins discarded before giving up.
+        spins: usize,
+        /// The plateaued point count (highest seen).
+        points: usize,
+    },
+    /// The spin budget was exhausted without settling or plateauing.
+    Exhausted {
+        /// Warm-up spins discarded.
+        spins: usize,
+    },
+}
+
 /// Driver error.
 ///
 /// Combines the transient resync condition with fatal UART and power-pin errors.

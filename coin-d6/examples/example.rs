@@ -38,7 +38,7 @@ use panic_probe as _;
 mod imp {
     use core::num::NonZeroU16;
 
-    use coin_d6::{AggregationConfig, CoinD6, Config, Point, Scan, aggregate};
+    use coin_d6::{AggregationConfig, CoinD6, Config, Point, Scan, WarmupConfig, WarmupOutcome, aggregate};
     use defmt::{info, warn};
     use embassy_rp::{
         bind_interrupts,
@@ -46,7 +46,7 @@ mod imp {
         peripherals::UART0,
         uart::{self, BufferedUart},
     };
-    use embassy_time::{Duration, Instant};
+    use embassy_time::{Duration, Instant, Timer};
     use static_cell::StaticCell;
 
     bind_interrupts!(struct Irqs {
@@ -59,16 +59,6 @@ mod imp {
     const INGEST_BUF_LEN: usize = 1024;
     /// Number of revolutions to aggregate into a stable scan.
     const SPINS: usize = 5;
-    /// Upper bound on how many revolutions to discard while the rotor spins up.
-    const WARMUP_MAX_SPINS: usize = 50;
-    /// Points per revolution the COIN-D6 emits at steady state (native 0.9°).
-    const NATIVE_POINTS: usize = 400;
-    /// A warm-up spin counts as "settled" when within this many points of
-    /// `NATIVE_POINTS`.
-    const SETTLE_TOLERANCE: usize = 3;
-    /// Consecutive spins needed to declare the rotor settled (stays within the
-    /// settle band) or plateaued (fails to set a new point-count high).
-    const SETTLE_STABLE_SPINS: usize = 12;
 
     /// `BufferedUart` RX ring buffer size. Large enough to absorb the RTT
     /// logging pauses in this demo (~178 ms at 230400 baud) so the sensor's
@@ -193,70 +183,25 @@ mod imp {
 
         driver.power_on().await.unwrap();
         info!("powered on");
+        Timer::after(Duration::from_millis(1500)).await;
 
         driver.start().await.unwrap();
         info!("started");
+        Timer::after(Duration::from_millis(2500)).await;
 
         // Warm up: discard revolutions until the rotor reaches steady state.
-        // The point count proxies rotor speed — it starts below 400 and climbs
-        // as the rotor accelerates. A slow ramp can look "flat" (near-equal
-        // counts) while still far from the target, so we judge against the
-        // native count rather than the previous spin, and also stop early if the
-        // count plateaus or the spin budget runs out.
         let mut warmup = Scan::new();
-        let mut spin = 0usize;
-        // Consecutive spins whose point count has stayed within the settle band.
-        let mut in_band = 0usize;
-        // Highest point count seen so far.
-        let mut ceiling = 0usize;
-        // Consecutive spins that have failed to set a new point-count high.
-        let mut flat = 0usize;
-        // Set when the loop stops by settling or plateauing (not the budget).
-        let mut stopped_early = false;
-
-        while spin < WARMUP_MAX_SPINS {
-            driver.read_scan(&mut warmup).await.unwrap();
-            log_spin("warmup", spin, &warmup);
-            spin += 1;
-
-            let points = warmup.len;
-
-            if points.abs_diff(NATIVE_POINTS) <= SETTLE_TOLERANCE {
-                in_band += 1;
-            } else {
-                in_band = 0;
+        let outcome = driver.warm_up(&mut warmup, &WarmupConfig::default()).await.unwrap();
+        match outcome {
+            WarmupOutcome::Settled { spins, points } => {
+                info!("speed settled after {} warmup spins ({} points)", spins, points);
             }
-
-            if points > ceiling {
-                ceiling = points;
-                flat = 0;
-            } else {
-                flat += 1;
+            WarmupOutcome::Plateaued { spins, points } => {
+                warn!("warm-up plateaued at {} points after {} spins", points, spins);
             }
-
-            if in_band >= SETTLE_STABLE_SPINS {
-                info!("speed settled after {} warmup spins ({} points)", spin, points);
-                stopped_early = true;
-                break;
+            WarmupOutcome::Exhausted { spins } => {
+                warn!("warm-up did not settle after {} spins", spins);
             }
-            // A plateau is only a give-up when it sits below the settle band:
-            // an overshoot above the band (e.g. 408) is a transient that
-            // descends back to 400, so keep waiting for `in_band` to fill.
-            if flat >= SETTLE_STABLE_SPINS && ceiling < NATIVE_POINTS - SETTLE_TOLERANCE {
-                warn!(
-                    "warm-up plateaued at {} points after {} spins (target {} +/- {})",
-                    ceiling, spin, NATIVE_POINTS, SETTLE_TOLERANCE
-                );
-                stopped_early = true;
-                break;
-            }
-        }
-
-        if !stopped_early {
-            warn!(
-                "warm-up did not settle after {} spins (target {} +/- {})",
-                WARMUP_MAX_SPINS, NATIVE_POINTS, SETTLE_TOLERANCE
-            );
         }
 
         // Capture and reduce five revolutions by angle.

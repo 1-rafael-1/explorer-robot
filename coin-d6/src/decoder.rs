@@ -99,6 +99,19 @@ impl Decoder {
         result
     }
 
+    /// Discard any partially-assembled packet and in-progress revolution so the
+    /// decoder re-synchronises on the next `AA 55` header.
+    ///
+    /// The driver calls this when the UART reports a recoverable glitch
+    /// (overrun, break, framing, or parity error), which means some bytes were
+    /// lost and the stream position is no longer trustworthy.
+    pub const fn resync(&mut self) {
+        self.carry_len = 0;
+        self.seen_header_0 = false;
+        self.points_len = 0;
+        self.synchronized = false;
+    }
+
     /// Advance the decoder by one input byte, returning an event when a packet
     /// completes (a checksum mismatch → [`Decode::Resync`], or a revolution
     /// boundary → [`Decode::Revolution`]).

@@ -29,7 +29,8 @@ use embedded_io_async::{Read, ReadExactError, Write};
 use crate::{
     decoder::{Decode, Decoder},
     post_processing::{aggregate, angle_correction_deg, normalise_angle},
-    types::{AggregationConfig, Config, Error, Scan},
+    types::{AggregationConfig, Config, Error, Scan, WarmupConfig, WarmupOutcome},
+    warmup::Warmup,
 };
 
 /// The vendor start command, little-endian as transmitted.
@@ -278,6 +279,35 @@ where
         Ok(())
     }
 
+    /// Discard revolutions until the rotor reaches steady state.
+    ///
+    /// The point count proxies rotor speed: it starts below
+    /// [`crate::NATIVE_POINTS`] and climbs as the rotor accelerates, and both
+    /// the ring-start bearing and the point count drift until it settles.
+    /// `scratch` is reused for each discarded revolution. The settle band,
+    /// patience, and spin budget come from `config`.
+    ///
+    /// Returns a [`WarmupOutcome`] describing how the phase ended; the caller
+    /// decides how to report it (the driver is log-agnostic).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Timeout`] if the stream ends or the byte watchdog trips
+    /// while waiting for a revolution.
+    pub async fn warm_up(
+        &mut self,
+        scratch: &mut Scan,
+        config: &WarmupConfig,
+    ) -> Result<WarmupOutcome, Error<UART::Error, POWER::Error>> {
+        let mut warmup = Warmup::new(config);
+        loop {
+            self.read_revolution(scratch).await?;
+            if let Some(outcome) = warmup.observe(scratch.len) {
+                return Ok(outcome);
+            }
+        }
+    }
+
     /// Return the UART and power pin (borrowed buffers are returned by drop).
     #[must_use]
     pub fn release(self) -> (UART, POWER) {
@@ -288,7 +318,18 @@ where
     async fn read_revolution(&mut self, scan: &mut Scan) -> Result<(), Error<UART::Error, POWER::Error>> {
         let mut consumed = 0usize;
         loop {
-            let n = self.uart.read(&mut *self.ingest).await.map_err(Error::Uart)?;
+            // A UART glitch (overrun, break, framing, parity) means bytes were
+            // lost and the stream position is untrustworthy. Resync the decoder
+            // and keep reading rather than failing the capture. The missed chunk
+            // counts toward the watchdog so a dead UART cannot spin forever.
+            let Ok(n) = self.uart.read(&mut *self.ingest).await else {
+                self.decoder.resync();
+                consumed += self.ingest.len();
+                if consumed > RING_START_WATCHDOG_BYTES {
+                    return Err(Error::Timeout);
+                }
+                continue;
+            };
             // `read` returns `Ok(0)` only at end-of-stream (an empty `ingest`
             // slice is a contract violation caught by the `debug_assert` in
             // `new`); treat it as a timeout rather than spinning forever.

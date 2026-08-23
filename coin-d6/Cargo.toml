@@ -51,3 +51,7 @@ required-features = ["std"]
 name = "driver"
 required-features = ["std"]
 
+[[test]]
+name = "warmup"
+required-features = ["std"]
+

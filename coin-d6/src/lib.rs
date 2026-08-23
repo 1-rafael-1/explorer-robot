@@ -21,8 +21,12 @@ pub mod decoder;
 pub mod driver;
 pub mod post_processing;
 pub mod types;
+pub mod warmup;
 
 pub use decoder::{Decode, Decoder};
 pub use driver::CoinD6;
 pub use post_processing::{ANGLE_CORRECTION_COEFF, ANGLE_CORRECTION_ZERO_MM, aggregate, angle_correction_deg};
-pub use types::{AggregationConfig, AggregationMethod, Config, Error, Point, Scan};
+pub use types::{
+    AggregationConfig, AggregationMethod, Config, Error, NATIVE_POINTS, Point, Scan, WarmupConfig, WarmupOutcome,
+};
+pub use warmup::Warmup;

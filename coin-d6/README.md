@@ -16,9 +16,13 @@ scans either one revolution at a time or aggregated over several revolutions.
 - **`aggregate`** — fuse several scans by angle with a validity gate and a
   median/mean reducer.
 - **`angle_correction_deg`** — the vendor's distance-dependent angle correction.
+- **`Warmup`** — pure warm-up settle state machine (settle/plateau/exhaust from
+  per-revolution point counts), configured by **`WarmupConfig`** and reporting a
+  **`WarmupOutcome`**.
+- **`NATIVE_POINTS`** — the steady-state point count per revolution (400).
 - **`CoinD6`** — owns the UART and power pin; lifecycle is `power_on` →
-  `start` → `read_scan`/`read_aggregated` → `stop` → `power_off` (or `release`
-  to hand the peripherals back).
+  `start` → `warm_up` (optional) → `read_scan`/`read_aggregated` → `stop` →
+  `power_off` (or `release` to hand the peripherals back).
 
 ## Wiring
 
@@ -30,9 +34,13 @@ scans either one revolution at a time or aggregated over several revolutions.
 | GND | GND |
 | +5 V | 5 V rail |
 
+> These are the standalone example's pins. The robot integration uses different
+> pins (LiDAR RX on GPIO1, MOSFET on GPIO26); see the repository `CONTEXT.md`.
+
 ## Tests
 
-The pure decoder and post-processing stages are host-tested. The workspace's
+The pure decoder, post-processing, and warm-up stages are host-tested. The
+workspace's
 `.cargo/config.toml` defaults to the bare-metal `thumbv8m` target, so pass the
 host target explicitly:
 

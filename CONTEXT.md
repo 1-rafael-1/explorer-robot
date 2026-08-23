@@ -26,6 +26,7 @@
 - **Point** — One LiDAR return, `{ angle_deg, distance_mm, intensity }` (bearing in degrees, range in millimetres as an `Option` — `None` means no return — and return strength 0–255).
 - **Ring-start** — The packet flag (`T == 1`, the low bit of the `CT` byte) that delimits the start of a new spin.
 - **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
+- **Warm-up** — The post-`start` phase during which revolutions are discarded until the rotor reaches steady-state speed. Settling is proxied by the per-revolution point count stabilising near the native 400 (as opposed to plateauing below it, or exhausting a spin budget).
 
 ## Architecture
 
@@ -100,4 +101,4 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Development Practices
 
-- **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the automated compile-time gates; the `coin-d6` crate additionally has host-side decoder/aggregation tests run with `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu` (the explicit host target is required because the default build target is `thumbv8m.main-none-eabihf`). Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.
+- **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the automated compile-time gates; the `coin-d6` crate additionally has host-side decoder/aggregation/warm-up tests run with `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu` (the explicit host target is required because the default build target is `thumbv8m.main-none-eabihf`). Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.
