@@ -154,7 +154,7 @@ where
     // Centre marker: the `LiDAR` position.
     draw_cross(display, CENTER_X, CENTER_Y, Rgb565::WHITE)?;
 
-    // One red cross per valid return, at its angle (0° = up, clockwise) and
+    // One highly visible cross per valid return, at its angle (0° = up, clockwise) and
     // range (clamped to the outer ring).
     for point in &scan.points[..scan.len] {
         let Some(distance) = point.distance_mm else {
