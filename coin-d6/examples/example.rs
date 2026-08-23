@@ -39,7 +39,7 @@ mod imp {
     use core::num::NonZeroU16;
 
     use coin_d6::{AggregationConfig, CoinD6, Config, Point, Scan, aggregate};
-    use defmt::info;
+    use defmt::{info, warn};
     use embassy_rp::{
         bind_interrupts,
         gpio::{Level, Output},
@@ -60,12 +60,15 @@ mod imp {
     /// Number of revolutions to aggregate into a stable scan.
     const SPINS: usize = 5;
     /// Upper bound on how many revolutions to discard while the rotor spins up.
-    const WARMUP_MAX_SPINS: usize = 16;
-    /// Consecutive warm-up revolutions whose point count must be stable before
-    /// the scan is considered ready. Point count is a proxy for rotor speed.
-    const SETTLE_STABLE_SPINS: usize = 2;
-    /// Point-count tolerance (points) used to decide a spin is stable.
-    const POINT_COUNT_TOL: usize = 2;
+    const WARMUP_MAX_SPINS: usize = 50;
+    /// Points per revolution the COIN-D6 emits at steady state (native 0.9°).
+    const NATIVE_POINTS: usize = 400;
+    /// A warm-up spin counts as "settled" when within this many points of
+    /// `NATIVE_POINTS`.
+    const SETTLE_TOLERANCE: usize = 3;
+    /// Consecutive spins needed to declare the rotor settled (stays within the
+    /// settle band) or plateaued (fails to set a new point-count high).
+    const SETTLE_STABLE_SPINS: usize = 12;
 
     /// `BufferedUart` RX ring buffer size. Large enough to absorb the RTT
     /// logging pauses in this demo (~178 ms at 230400 baud) so the sensor's
@@ -194,30 +197,66 @@ mod imp {
         driver.start().await.unwrap();
         info!("started");
 
-        // Warm up: discard revolutions until the rotor speed (proxied by the
-        // point count) stops changing. While the rotor spins up both the
-        // ring-start bearing and the point count drift, so any scan captured
-        // before it settles is misleading.
+        // Warm up: discard revolutions until the rotor reaches steady state.
+        // The point count proxies rotor speed — it starts below 400 and climbs
+        // as the rotor accelerates. A slow ramp can look "flat" (near-equal
+        // counts) while still far from the target, so we judge against the
+        // native count rather than the previous spin, and also stop early if the
+        // count plateaus or the spin budget runs out.
         let mut warmup = Scan::new();
-        let mut prev_points: Option<usize> = None;
-        let mut stable_spins = 0usize;
-        for spin in 0..WARMUP_MAX_SPINS {
+        let mut spin = 0usize;
+        // Consecutive spins whose point count has stayed within the settle band.
+        let mut in_band = 0usize;
+        // Highest point count seen so far.
+        let mut ceiling = 0usize;
+        // Consecutive spins that have failed to set a new point-count high.
+        let mut flat = 0usize;
+        // Set when the loop stops by settling or plateauing (not the budget).
+        let mut stopped_early = false;
+
+        while spin < WARMUP_MAX_SPINS {
             driver.read_scan(&mut warmup).await.unwrap();
             log_spin("warmup", spin, &warmup);
+            spin += 1;
 
-            if let Some(prev) = prev_points {
-                if warmup.len.abs_diff(prev) <= POINT_COUNT_TOL {
-                    stable_spins += 1;
-                } else {
-                    stable_spins = 0;
-                }
+            let points = warmup.len;
+
+            if points.abs_diff(NATIVE_POINTS) <= SETTLE_TOLERANCE {
+                in_band += 1;
+            } else {
+                in_band = 0;
             }
-            prev_points = Some(warmup.len);
 
-            if stable_spins >= SETTLE_STABLE_SPINS {
-                info!("speed stable after {} warmup spins", spin + 1);
+            if points > ceiling {
+                ceiling = points;
+                flat = 0;
+            } else {
+                flat += 1;
+            }
+
+            if in_band >= SETTLE_STABLE_SPINS {
+                info!("speed settled after {} warmup spins ({} points)", spin, points);
+                stopped_early = true;
                 break;
             }
+            // A plateau is only a give-up when it sits below the settle band:
+            // an overshoot above the band (e.g. 408) is a transient that
+            // descends back to 400, so keep waiting for `in_band` to fill.
+            if flat >= SETTLE_STABLE_SPINS && ceiling < NATIVE_POINTS - SETTLE_TOLERANCE {
+                warn!(
+                    "warm-up plateaued at {} points after {} spins (target {} +/- {})",
+                    ceiling, spin, NATIVE_POINTS, SETTLE_TOLERANCE
+                );
+                stopped_early = true;
+                break;
+            }
+        }
+
+        if !stopped_early {
+            warn!(
+                "warm-up did not settle after {} spins (target {} +/- {})",
+                WARMUP_MAX_SPINS, NATIVE_POINTS, SETTLE_TOLERANCE
+            );
         }
 
         // Capture and reduce five revolutions by angle.
