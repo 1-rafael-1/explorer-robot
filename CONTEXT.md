@@ -10,7 +10,7 @@
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
 - **Encoder** — Single-channel hall sensor on each JGB37-520 motor. Produces 8 pulses per motor revolution, 1320 pulses per output shaft revolution (165:1 gear ratio). Pulse counting via PWM input mode. Direction is inferred from the motor command, not quadrature.
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO).
-- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1), with a power MOSFET (IRLS44N) for firmware-controlled power cycling. Emits continuous scan data as a point cloud (one distance per degree). Owned by core1 (currently stubbed for development; UART/MOSFET pins reserved, driver not yet written).
+- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26 for firmware-controlled power cycling. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate; rewiring the core1 firmware task to it is a follow-up.
 - **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
 - **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the shared I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
 - **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X rangefinder.
@@ -19,10 +19,20 @@
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
 
+### LiDAR
+
+- **Spin** — One full 360° revolution of LiDAR returns: 400 points at the native 0.9° resolution.
+- **Snapshot** — A single-revolution capture, as returned by `read_scan`.
+- **Point** — One LiDAR return, `{ angle_deg, distance_mm, intensity }` (bearing in degrees, range in millimetres as an `Option` — `None` means no return — and return strength 0–255).
+- **Ring-start** — The packet flag (`T == 1`, the low bit of the `CT` byte) that delimits the start of a new spin.
+- **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
+- **Bin representative** — The single LiDAR return chosen to stand for all native samples that fall within one angular bucket during aggregation. It is the *nearest valid return*, so coarsening a bucket never hides a closer obstacle (not the first sample, strongest return, or a mean).
+- **Warm-up** — The post-`start` phase during which revolutions are discarded until the rotor reaches steady-state speed. Settling is proxied by the per-revolution point count stabilising near the native 400 (as opposed to plateauing below it, or exhausting a spin budget).
+
 ## Architecture
 
 - **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), IMU (SPI0), I2C bus (OLED + VL53L0X rangefinder), flash storage, and the main event loop.
-- **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is planned.
+- **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is provided by the `coin-d6` crate, with rewiring the task to it still a follow-up.
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, rotary events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
 - **Behavior Handler** — A module under `task/behavior/` that reacts to specific event types. Domain logic lives here — obstacle fusion (perception atomics + EmergencyBrake interrupt), battery state updates, obstacle avoidance completion. Called by the orchestrator.
@@ -92,4 +102,4 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Development Practices
 
-- **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the only automated quality gates. Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.
+- **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the automated compile-time gates; the `coin-d6` crate additionally has host-side decoder/aggregation/warm-up tests run with `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests` (the explicit host target is required because the default build target is `thumbv8m.main-none-eabihf`). Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.

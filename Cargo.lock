@@ -209,6 +209,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "coin-d6"
+version = "0.1.0"
+dependencies = [
+ "cortex-m-rt",
+ "defmt 1.1.1",
+ "defmt-rtt",
+ "embassy-executor",
+ "embassy-rp",
+ "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-io-async 0.7.0",
+ "libm",
+ "panic-probe",
+ "static_cell",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
