@@ -4,8 +4,8 @@ The COIN-D6 360° spinning dToF LiDAR streams a continuous point cloud over
 UART. We chose to hand-roll a `#![no_std]`, HAL-agnostic async driver — owning
 the UART and the power-MOSFET pin, feeding bytes through a pure decoder, and
 exposing single-revolution and aggregated scans — modelled on `st7789-async`.
-The pure decoder and post-processing stages are host-tested so the framing and
-aggregation logic can be validated without hardware.
+The pure decoder, post-processing, and warm-up stages are host-tested so the
+framing, aggregation, and settle logic can be validated without hardware.
 
 **Status:** accepted
 

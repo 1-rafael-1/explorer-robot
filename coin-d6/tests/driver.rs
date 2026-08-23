@@ -1,8 +1,9 @@
 //! Host-side integration tests for the driver's ingest loop.
 //!
-//! The decoder and post-processing stages are pure and covered separately; this
-//! exercises the one driver behaviour that is host-testable without hardware —
-//! how [`CoinD6::read_scan`] reacts when the UART stops producing bytes.
+//! The decoder, post-processing, and warm-up stages are pure and covered
+//! separately; this exercises the one driver behaviour that is host-testable
+//! without hardware — how [`CoinD6::read_scan`] reacts when the UART stops
+//! producing bytes.
 
 use core::convert::Infallible;
 use std::{
