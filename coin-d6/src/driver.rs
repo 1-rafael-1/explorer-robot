@@ -77,6 +77,11 @@ where
     /// packet plus a packet split across a chunk boundary.
     #[must_use]
     pub fn new(uart: UART, power: POWER, ingest: &'a mut [u8], config: Config) -> Self {
+        // `read` returns `Ok(0)` at end-of-stream only when `ingest` is
+        // non-empty; an empty buffer would return `Ok(0)` even while data
+        // flows, which the ingest loop would mistake for EOF. Catch the
+        // violation at construction.
+        debug_assert!(!ingest.is_empty(), "ingest buffer must be non-empty");
         Self {
             uart,
             power,
@@ -284,8 +289,9 @@ where
         let mut consumed = 0usize;
         loop {
             let n = self.uart.read(&mut *self.ingest).await.map_err(Error::Uart)?;
-            // A `Read` that reports end-of-stream (or an empty ingest slice)
-            // returns `Ok(0)`; treat that as a timeout rather than spinning.
+            // `read` returns `Ok(0)` only at end-of-stream (an empty `ingest`
+            // slice is a contract violation caught by the `debug_assert` in
+            // `new`); treat it as a timeout rather than spinning forever.
             if n == 0 {
                 return Err(Error::Timeout);
             }

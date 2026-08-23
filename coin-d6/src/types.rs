@@ -106,6 +106,7 @@ pub enum Error<UartE, PinE> {
     Uart(UartE),
     /// Power-pin GPIO error.
     Pin(PinE),
-    /// Timed out waiting for the start of a revolution.
+    /// Data stopped flowing while waiting for a revolution: the byte-count
+    /// watchdog was exhausted, or the stream ended (end-of-stream).
     Timeout,
 }

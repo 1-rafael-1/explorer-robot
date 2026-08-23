@@ -31,9 +31,9 @@ aggregation logic can be validated without hardware.
   `read_scan`/`read_aggregated`.
 - The distance-dependent angle correction transcribed verbatim from the vendor
   SDK and gated by `Config::angle_correction` (flagged for hardware validation).
-- A portable data-starvation watchdog for the `Error::Timeout` variant — the
-  driver is executor-agnostic and has no wall clock; the example can add a
-  wall-clock timeout at the caller level.
+- A portable data-starvation watchdog (and end-of-stream) for the
+  `Error::Timeout` variant — the driver is executor-agnostic and has no wall
+  clock; the example can add a wall-clock timeout at the caller level.
 
 **Consequences**
 

@@ -47,3 +47,7 @@ required-features = ["std"]
 name = "post_processing"
 required-features = ["std"]
 
+[[test]]
+name = "driver"
+required-features = ["std"]
+

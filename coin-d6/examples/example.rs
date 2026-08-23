@@ -67,8 +67,10 @@ mod imp {
     /// Point-count tolerance (points) used to decide a spin is stable.
     const POINT_COUNT_TOL: usize = 2;
 
-    /// `BufferedUart` RX ring buffer size (matches the ingest chunk).
-    const RX_BUF_LEN: usize = 1024;
+    /// `BufferedUart` RX ring buffer size. Large enough to absorb the RTT
+    /// logging pauses in this demo (~178 ms at 230400 baud) so the sensor's
+    /// stream does not overrun while the task logs a full scan.
+    const RX_BUF_LEN: usize = 4096;
     /// `BufferedUart` TX ring buffer size (start/stop commands are 4 bytes).
     const TX_BUF_LEN: usize = 16;
 
@@ -226,11 +228,14 @@ mod imp {
             log_spin("spin", index, scan);
         }
         let out = aggregate(&spins, &AggregationConfig::default());
-        summarize("aggregated", &out, start.elapsed(), SPINS);
-        dump_scan("aggregated", &out);
 
+        // Stop the stream before the (slow) RTT logging below, so the sensor
+        // isn't still streaming while the task logs the scan.
         driver.stop().await.unwrap();
         info!("stopped");
+
+        summarize("aggregated", &out, start.elapsed(), SPINS);
+        dump_scan("aggregated", &out);
 
         driver.power_off().await.unwrap();
         info!("powered off");
