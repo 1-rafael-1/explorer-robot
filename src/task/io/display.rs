@@ -226,7 +226,10 @@ pub async fn display(
         let action = wait_for_action().await;
 
         if !display_online {
-            // Drain actions so senders don't block. Periodically retry init.
+            // Display offline: handle one action per iteration while retrying
+            // init. Blocking senders under sustained updates is acceptable — a
+            // display that won't initialize is a defective robot, not a state
+            // worth optimizing for.
             for attempt in 1..=INIT_RETRIES {
                 if display.init(&config, &mut Delay).await.is_ok() {
                     display_online = true;
