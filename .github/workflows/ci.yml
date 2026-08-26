@@ -44,14 +44,26 @@ jobs:
       - name: Run clippy (all features)
         run: cargo clippy --workspace --target thumbv8m.main-none-eabihf --all-features --no-deps -- -D warnings
 
-      - name: Run clippy (examples)
-        run: cargo clippy --workspace --target thumbv8m.main-none-eabihf --examples --no-deps -- -D warnings
+      - name: Run clippy (examples, coin-d6)
+        run: cargo clippy -p coin-d6 --target thumbv8m.main-none-eabihf --examples --no-deps -- -D warnings
+
+      - name: Run clippy (examples, st7789-async)
+        run: cargo clippy -p st7789-async --target thumbv8m.main-none-eabihf --examples --no-deps -- -D warnings
+
+      - name: Run clippy (examples, hardware-tests)
+        run: cargo clippy -p hardware-tests --target thumbv8m.main-none-eabihf --examples --no-deps -- -D warnings
 
       - name: Build
         run: cargo build --workspace --release --verbose --target thumbv8m.main-none-eabihf
 
-      - name: Build examples
-        run: cargo build --workspace --release --verbose --target thumbv8m.main-none-eabihf --examples
+      - name: Build examples (coin-d6)
+        run: cargo build -p coin-d6 --release --verbose --target thumbv8m.main-none-eabihf --examples
+
+      - name: Build examples (st7789-async)
+        run: cargo build -p st7789-async --release --verbose --target thumbv8m.main-none-eabihf --examples
+
+      - name: Build examples (hardware-tests)
+        run: cargo build -p hardware-tests --release --verbose --target thumbv8m.main-none-eabihf --examples
 
       - name: Test coin-d6 (host)
         run: cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
