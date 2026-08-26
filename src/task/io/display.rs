@@ -1,43 +1,78 @@
-//! Display driver — SSD1306 OLED over I2C.
+//! Display driver — ST7789 TFT over a write-only SPI1 bus.
 //!
-//! Text-only display with 4 lines × 20 characters. `LiDAR` provides spatial
+//! Text-only display with 14 lines × 26 characters. `LiDAR` provides spatial
 //! awareness independently, so the display focuses on status and menu text.
 //!
 //! # Coordinate System
 //! - Origin (0,0): top-left
 //! - Y axis increases downward
-//! - Line 0: y=0, Line 1: y=16, Line 2: y=32, Line 3: y=48
-//! - Each line is 16 px tall (7×14 font with 2 px padding)
+//! - Line 0: y=0, Line n: y=n×17
+//! - Each line is 17 px tall (9×15 font with 2 px padding)
 
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Timer};
+use embassy_rp::{
+    gpio::Output,
+    peripherals::SPI1,
+    spi::{Async as SpiAsync, Spi},
+};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
+use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::{
     geometry::Size,
     mono_font::{
         MonoTextStyle, MonoTextStyleBuilder,
-        ascii::{FONT_7X14, FONT_7X14_BOLD},
+        ascii::{FONT_9X15, FONT_9X15_BOLD},
     },
-    pixelcolor::BinaryColor,
+    pixelcolor::Rgb565,
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text},
 };
+use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
 use heapless::String;
-use ssd1306_async::{
-    I2CDisplayInterface, Ssd1306, i2c_interface::I2CInterface, mode::BufferedGraphicsMode, prelude::*,
-};
+use st7789_async::{ColorOrder, Config, Orientation, St7789};
+use static_cell::ConstStaticCell;
 
-use crate::I2cBusShared;
+/// The dedicated write-only SPI1 bus.
+type SpiPeripheral = Spi<'static, SPI1, SpiAsync>;
 
-/// Handle for a device on the shared I2C bus.
+/// The dedicated SPI1 bus wrapped in a critical-section mutex.
+type SpiMutex = Mutex<CriticalSectionRawMutex, SpiPeripheral>;
+
+/// CS-less [`SpiDevice`] adapter: locks the dedicated bus for each transaction.
 ///
-/// Obtained via `I2cDevice::new(&shared_bus)`.
-type I2cDeviceHandle = I2cDevice<
-    'static,
-    CriticalSectionRawMutex,
-    embassy_rp::i2c::I2c<'static, embassy_rp::peripherals::I2C0, embassy_rp::i2c::Async>,
->;
+/// The panel has no chip-select line, so the bus is never shared; the mutex is
+/// a formality that satisfies the `SpiDevice` API used by the ST7789 driver.
+struct NoCsSpiDevice {
+    /// The mutex-protected SPI bus.
+    bus: &'static SpiMutex,
+}
+
+impl ErrorType for NoCsSpiDevice {
+    type Error = embassy_rp::spi::Error;
+}
+
+impl SpiDevice<u8> for NoCsSpiDevice {
+    async fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Self::Error> {
+        let mut bus = self.bus.lock().await;
+        for op in operations {
+            match op {
+                Operation::Read(buf) => bus.read(buf).await?,
+                Operation::Write(buf) => bus.write(buf).await?,
+                Operation::Transfer(read, write) => bus.transfer(read, write).await?,
+                Operation::TransferInPlace(buf) => bus.transfer_in_place(buf).await?,
+                // The ST7789 driver issues its command delays through a separate
+                // `DelayNs` handle, never via `Operation::DelayNs`.
+                Operation::DelayNs(_) => {}
+            }
+        }
+
+        // The transaction's operations are complete; release the bus before
+        // returning so the guard doesn't outlive the critical section.
+        drop(bus);
+
+        Ok(())
+    }
+}
 
 /// Text style for display rendering.
 #[derive(Clone, Copy)]
@@ -49,13 +84,14 @@ pub enum TextStyle {
 }
 
 /// Display actions that can be requested by other tasks.
+#[allow(clippy::large_enum_variant)]
 pub enum DisplayAction {
     /// Show a text message on the display (bold style).
-    ShowText(String<20>, u8),
+    ShowText(String<MAX_LINE_LEN>, u8),
     /// Show a text message with an explicit style.
-    ShowTextStyled(String<20>, u8, TextStyle),
-    /// Show all 4 text lines in a single update.
-    ShowLines([String<20>; 4]),
+    ShowTextStyled(String<MAX_LINE_LEN>, u8, TextStyle),
+    /// Show all text lines in a single update.
+    ShowLines([String<MAX_LINE_LEN>; DISPLAY_LINES]),
     /// Clear the entire display.
     Clear,
 }
@@ -65,15 +101,37 @@ pub enum DisplayAction {
 enum DisplayError {
     /// Invalid text line number.
     InvalidLine,
-    /// Drawing operation failed.
-    DrawError,
 }
 
-/// SSD1306 display driver type.
-type DisplayDriver = Ssd1306<I2CInterface<I2cDeviceHandle>, DisplaySize128x64, BufferedGraphicsMode<DisplaySize128x64>>;
+/// ST7789 display driver type.
+type DisplayDriver = St7789<'static, NoCsSpiDevice, Output<'static>>;
 
 /// Control channel for display update requests.
 static DISPLAY_CHANNEL: Channel<CriticalSectionRawMutex, DisplayAction, 16> = Channel::new();
+
+/// Display width in pixels.
+const DISPLAY_WIDTH: u16 = 240;
+
+/// Display height in pixels.
+const DISPLAY_HEIGHT: u16 = 240;
+
+/// Number of text lines the display can show.
+pub const DISPLAY_LINES: usize = 14;
+
+/// Maximum line length in characters supported by the display text contract.
+pub const MAX_LINE_LEN: usize = 26;
+
+/// Height of a single text line in pixels (9×15 font with 2 px padding).
+const LINE_HEIGHT: u16 = 17;
+
+/// Framebuffer size in bytes (240 × 240 pixels × 2 bytes/pixel RGB565).
+const FRAMEBUFFER_LEN: usize = 240 * 240 * 2;
+
+/// Framebuffer type.
+type Framebuffer = [u8; FRAMEBUFFER_LEN];
+
+/// Statically-allocated framebuffer (115,200 bytes of zeroed `.bss`).
+static FRAMEBUFFER: ConstStaticCell<Framebuffer> = ConstStaticCell::new([0; FRAMEBUFFER_LEN]);
 
 /// Request a display update — blocks until the action is queued.
 pub async fn display_update(display_action: DisplayAction) {
@@ -91,32 +149,49 @@ async fn wait_for_action() -> DisplayAction {
     DISPLAY_CHANNEL.receive().await
 }
 
-/// Display dimensions.
-const DISPLAY_WIDTH: i32 = 128;
-
-/// Main display task — manages the SSD1306 OLED screen.
+/// Main display task — manages the ST7789 TFT screen.
 ///
 /// Handles text-only display actions (Clear, `ShowText`, `ShowTextStyled`,
 /// `ShowLines`). `LiDAR` provides spatial awareness independently.
 #[embassy_executor::task]
-pub async fn display(i2c_bus: &'static I2cBusShared) {
+pub async fn display(
+    spi_bus: &'static SpiMutex,
+    dc: Output<'static>,
+    mut rst: Output<'static>,
+    mut blk: Output<'static>,
+) {
     const INIT_RETRIES: u8 = 5;
     const INIT_RETRY_DELAY: Duration = Duration::from_millis(200);
     const REINIT_BACKOFF: Duration = Duration::from_secs(2);
 
-    let i2c = I2cDevice::new(i2c_bus);
-    let interface = I2CDisplayInterface::new(i2c);
-    let mut display =
-        Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode();
+    // Turn on the backlight before bringing the controller up.
+    blk.set_high();
+
+    // Hardware reset: RST low, settle, RST high, settle.
+    rst.set_low();
+    Timer::after(Duration::from_millis(10)).await;
+    rst.set_high();
+    Timer::after(Duration::from_millis(120)).await;
+
+    let fb = FRAMEBUFFER.take();
+    let mut display = St7789::new(NoCsSpiDevice { bus: spi_bus }, dc, fb, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+
+    let config = Config {
+        color_order: ColorOrder::Bgr,
+        orientation: Orientation::new(),
+        invert_colors: false,
+    };
 
     let text_style_bold = MonoTextStyleBuilder::new()
-        .font(&FONT_7X14_BOLD)
-        .text_color(BinaryColor::On)
+        .font(&FONT_9X15_BOLD)
+        .text_color(Rgb565::WHITE)
+        .background_color(Rgb565::BLACK)
         .build();
 
     let text_style_regular = MonoTextStyleBuilder::new()
-        .font(&FONT_7X14)
-        .text_color(BinaryColor::On)
+        .font(&FONT_9X15)
+        .text_color(Rgb565::WHITE)
+        .background_color(Rgb565::BLACK)
         .build();
 
     // Try to initialize the display. If it fails, continue in
@@ -124,7 +199,7 @@ pub async fn display(i2c_bus: &'static I2cBusShared) {
     // and periodically retry.
     let mut display_online = false;
     for attempt in 1..=INIT_RETRIES {
-        if display.init().await.is_ok() {
+        if display.init(&config, &mut Delay).await.is_ok() {
             display_online = true;
             break;
         }
@@ -133,9 +208,9 @@ pub async fn display(i2c_bus: &'static I2cBusShared) {
     }
 
     if display_online {
-        display.clear();
+        let _ = display.clear(Rgb565::BLACK);
 
-        let mut txt: String<20> = String::new();
+        let mut txt: String<MAX_LINE_LEN> = String::new();
         let _ = txt.push_str("explorer-robot v3");
         let _ = handle_show_text(&mut display, text_style_bold, &txt, 0);
 
@@ -151,11 +226,14 @@ pub async fn display(i2c_bus: &'static I2cBusShared) {
         let action = wait_for_action().await;
 
         if !display_online {
-            // Drain actions so senders don't block. Periodically retry init.
+            // Display offline: handle one action per iteration while retrying
+            // init. Blocking senders under sustained updates is acceptable — a
+            // display that won't initialize is a defective robot, not a state
+            // worth optimizing for.
             for attempt in 1..=INIT_RETRIES {
-                if display.init().await.is_ok() {
+                if display.init(&config, &mut Delay).await.is_ok() {
                     display_online = true;
-                    display.clear();
+                    let _ = display.clear(Rgb565::BLACK);
                     if display.flush().await.is_err() {
                         defmt::warn!("display flush failed after re-init; staying offline");
                         display_online = false;
@@ -194,8 +272,8 @@ pub async fn display(i2c_bus: &'static I2cBusShared) {
 /// Handle a single display action.
 fn handle_display_action(
     display: &mut DisplayDriver,
-    text_style_bold: MonoTextStyle<'_, BinaryColor>,
-    text_style_regular: MonoTextStyle<'_, BinaryColor>,
+    text_style_bold: MonoTextStyle<'_, Rgb565>,
+    text_style_regular: MonoTextStyle<'_, Rgb565>,
     action: DisplayAction,
 ) -> Result<(), DisplayError> {
     match action {
@@ -208,14 +286,20 @@ fn handle_display_action(
             handle_show_text(display, chosen, &text, line)
         }
         DisplayAction::ShowLines(lines) => {
-            display.clear();
-            handle_show_text(display, text_style_bold, &lines[0], 0)?;
-            handle_show_text(display, text_style_regular, &lines[1], 1)?;
-            handle_show_text(display, text_style_regular, &lines[2], 2)?;
-            handle_show_text(display, text_style_regular, &lines[3], 3)
+            let _ = display.clear(Rgb565::BLACK);
+            for (index, text) in lines.iter().enumerate() {
+                let line = u8::try_from(index).unwrap_or(u8::MAX);
+                let style = if index == 0 {
+                    text_style_bold
+                } else {
+                    text_style_regular
+                };
+                handle_show_text(display, style, text, line)?;
+            }
+            Ok(())
         }
         DisplayAction::Clear => {
-            display.clear();
+            let _ = display.clear(Rgb565::BLACK);
             Ok(())
         }
     }
@@ -224,28 +308,23 @@ fn handle_display_action(
 /// Render a single text line at the requested display row.
 fn handle_show_text(
     display: &mut DisplayDriver,
-    text_style: MonoTextStyle<BinaryColor>,
-    text: &String<20>,
+    text_style: MonoTextStyle<'_, Rgb565>,
+    text: &String<MAX_LINE_LEN>,
     line: u8,
 ) -> Result<(), DisplayError> {
-    let point: Point = match line {
-        0 => Point::new(0, 0),
-        1 => Point::new(0, 16),
-        2 => Point::new(0, 32),
-        3 => Point::new(0, 48),
-        _ => return Err(DisplayError::InvalidLine),
-    };
+    if usize::from(line) >= DISPLAY_LINES {
+        return Err(DisplayError::InvalidLine);
+    }
+
+    let point = Point::new(0, i32::from(line) * i32::from(LINE_HEIGHT));
 
     // Clear the line area first.
-    Rectangle::new(point, Size::new(DISPLAY_WIDTH as u32, 16))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
-        .draw(display)
-        .map_err(|_| DisplayError::DrawError)?;
+    let _ = Rectangle::new(point, Size::new(u32::from(DISPLAY_WIDTH), u32::from(LINE_HEIGHT)))
+        .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
+        .draw(display);
 
     // Draw the text.
-    Text::with_baseline(text, point, text_style, Baseline::Top)
-        .draw(display)
-        .map_err(|_| DisplayError::DrawError)?;
+    let _ = Text::with_baseline(text, point, text_style, Baseline::Top).draw(display);
 
     Ok(())
 }

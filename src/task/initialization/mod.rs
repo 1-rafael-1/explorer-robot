@@ -11,7 +11,7 @@ use crate::{
     system::state::{CalibrationStatus, calibration},
     task::{
         io::{
-            display,
+            display::{self, MAX_LINE_LEN},
             flash_storage::{self, CalibrationDataKind, CalibrationKind},
         },
         motor_driver::{self, MotorCommand},
@@ -25,7 +25,7 @@ pub async fn handle_initialize() {
 
     // Display initialization message.
     display::display_update(display::DisplayAction::Clear).await;
-    let mut txt: String<20> = String::new();
+    let mut txt: String<MAX_LINE_LEN> = String::new();
     let _ = write!(txt, "Initializing...");
     display::display_update(display::DisplayAction::ShowText(txt, 0)).await;
 
@@ -74,7 +74,7 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
                 )))
                 .await;
 
-                let mut txt: String<20> = String::new();
+                let mut txt: String<MAX_LINE_LEN> = String::new();
                 let _ = write!(txt, "Calibration loaded");
                 display::display_update(display::DisplayAction::ShowText(txt, 1)).await;
             } else {
@@ -85,7 +85,7 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
                     state.motor_cal_status = CalibrationStatus::NotAvailable;
                 }
 
-                let mut txt: String<20> = String::new();
+                let mut txt: String<MAX_LINE_LEN> = String::new();
                 let _ = write!(txt, "Need motor calib");
                 display::display_update(display::DisplayAction::ShowText(txt, 1)).await;
             }
@@ -164,10 +164,10 @@ async fn check_initialization_complete() {
 
 /// Handle calibration status updates.
 pub async fn handle_calibration_status(
-    header: Option<heapless::String<20>>,
-    line1: Option<heapless::String<20>>,
-    line2: Option<heapless::String<20>>,
-    line3: Option<heapless::String<20>>,
+    header: Option<heapless::String<MAX_LINE_LEN>>,
+    line1: Option<heapless::String<MAX_LINE_LEN>>,
+    line2: Option<heapless::String<MAX_LINE_LEN>>,
+    line3: Option<heapless::String<MAX_LINE_LEN>>,
 ) {
     if let Some(text) = header {
         display::display_update(display::DisplayAction::ShowText(text, 0)).await;

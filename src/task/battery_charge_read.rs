@@ -16,7 +16,7 @@
 //! ```text
 //! Battery+ ----[R1=20kΩ]----+----[R2=10kΩ]---- GND
 //!                           |
-//!                     GPIO26 (ADC0)
+//!                    GPIO40 (ADC0)
 //!
 //! Voltage Divider Ratio: R2/(R1+R2) = 10k/(20k+10k) = 0.333
 //! Source Impedance: R1||R2 = ~6.7kΩ (suitable for ADC)
@@ -26,7 +26,8 @@
 //! ```
 //!
 //! # Pin Connection
-//! - ADC Pin: GPIO26 (ADC0)
+//! - ADC Pin: GPIO40 (ADC0) — RP2350B variant ADC pin (provisional; confirm
+//!   against the board's battery voltage-divider wiring before first flash)
 //! - Voltage Source: Battery pack before voltage regulator (6V-8.4V range)
 //! - The voltage divider scales battery voltage to ADC input range (< 3.3V)
 //!

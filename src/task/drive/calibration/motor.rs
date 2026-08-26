@@ -46,7 +46,10 @@ pub async fn run_motor_calibration() {
 
     use crate::{
         system::event,
-        task::{io::flash_storage, sensors::encoders as encoder_read},
+        task::{
+            io::{display::MAX_LINE_LEN, flash_storage},
+            sensors::encoders as encoder_read,
+        },
     };
 
     info!("=== Starting Motor Calibration (2-motor) ===");
@@ -269,9 +272,9 @@ pub async fn run_motor_calibration() {
     info!("=== Calibration Complete ===");
 
     // Show final results.
-    let mut line2 = String::<20>::new();
+    let mut line2 = String::<MAX_LINE_LEN>::new();
     let _ = core::fmt::write(&mut line2, format_args!("Left: {:.2}", calibration.left_factor));
-    let mut line3 = String::<20>::new();
+    let mut line3 = String::<MAX_LINE_LEN>::new();
     let _ = core::fmt::write(&mut line3, format_args!("Right: {:.2}", calibration.right_factor));
     event::raise_event(event::Events::CalibrationStatus {
         header: None,

@@ -275,8 +275,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
             FlashCommand::GetData(kind) => match kind {
                 CalibrationKind::Motor => {
                     info!("Loading motor calibration from flash...");
-
-                    #[allow(unreachable_patterns)]
                     match storage
                         .fetch_item::<MotorCalibration>(&mut data_buffer, &StorageKey::MotorCalibration)
                         .await
@@ -314,13 +312,10 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                             error!("Failed to load motor calibration: {}", defmt::Debug2Format(&e));
                             raise_event(Events::CalibrationDataLoaded(CalibrationKind::Motor, None)).await;
                         }
-                        _ => {}
                     }
                 }
                 CalibrationKind::ImuFlags => {
                     info!("Loading IMU calibration flags from flash...");
-
-                    #[allow(unreachable_patterns)]
                     match storage
                         .fetch_item::<ImuCalibrationFlags>(&mut data_buffer, &StorageKey::ImuFlags)
                         .await
@@ -361,13 +356,10 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                             error!("Failed to load IMU calibration flags: {}", defmt::Debug2Format(&e));
                             raise_event(Events::CalibrationDataLoaded(CalibrationKind::ImuFlags, None)).await;
                         }
-                        _ => {}
                     }
                 }
                 CalibrationKind::Distance => {
                     info!("Loading distance calibration from flash...");
-
-                    #[allow(unreachable_patterns)]
                     match storage
                         .fetch_item::<DistanceFactor>(&mut data_buffer, &StorageKey::DistanceFactor)
                         .await
@@ -406,7 +398,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                             error!("Failed to load distance calibration: {}", defmt::Debug2Format(&e));
                             raise_event(Events::CalibrationDataLoaded(CalibrationKind::Distance, None)).await;
                         }
-                        _ => {}
                     }
                 }
             },
@@ -428,7 +419,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                     }
                     drop(data);
 
-                    #[allow(unreachable_patterns)]
                     match storage
                         .store_item(&mut data_buffer, &StorageKey::MotorCalibration, &motor_cal)
                         .await
@@ -445,7 +435,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                         Err(e) => {
                             error!("Failed to save motor calibration: {}", defmt::Debug2Format(&e));
                         }
-                        _ => {}
                     }
                 }
                 CalibrationDataKind::ImuFlags(flags) => {
@@ -463,7 +452,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                     }
                     drop(data);
 
-                    #[allow(unreachable_patterns)]
                     match storage
                         .store_item(&mut data_buffer, &StorageKey::ImuFlags, &flags)
                         .await
@@ -486,7 +474,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                         Err(e) => {
                             error!("Failed to save IMU calibration flags: {}", defmt::Debug2Format(&e));
                         }
-                        _ => {}
                     }
                 }
                 CalibrationDataKind::Distance(factor) => {
@@ -505,7 +492,7 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                     drop(data);
 
                     let df = DistanceFactor(factor);
-                    #[allow(unreachable_patterns)]
+
                     match storage
                         .store_item(&mut data_buffer, &StorageKey::DistanceFactor, &df)
                         .await
@@ -526,7 +513,6 @@ pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH,
                         Err(e) => {
                             error!("Failed to save distance calibration: {}", defmt::Debug2Format(&e));
                         }
-                        _ => {}
                     }
                 }
             },

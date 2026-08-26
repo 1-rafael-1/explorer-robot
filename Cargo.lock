@@ -154,12 +154,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "byte-slice-cast"
-version = "1.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
-
-[[package]]
 name = "bytemuck"
 version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -809,7 +803,7 @@ dependencies = [
  "nanorand",
  "panic-probe",
  "sequential-storage",
- "ssd1306-async",
+ "st7789-async",
  "static_cell",
 ]
 
@@ -1871,18 +1865,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7f4441a131924d58da6b83a7ad765c460e64630cce504376c3a87a2558c487f"
 dependencies = [
  "rgb",
-]
-
-[[package]]
-name = "ssd1306-async"
-version = "0.1.0"
-source = "git+https://github.com/kalkyl/ssd1306-async#21b611be2f0dc85cf7ff6dca01f53a71dbe1c622"
-dependencies = [
- "byte-slice-cast",
- "embassy-futures",
- "embedded-graphics-core",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
 ]
 
 [[package]]

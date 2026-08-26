@@ -11,16 +11,13 @@ use core::fmt::Write;
 
 use heapless::{String, Vec};
 
+/// Maximum number of text lines supported by the display layout.
+/// Maximum line length supported by the display text contract.
+pub use crate::task::io::display::{DISPLAY_LINES, MAX_LINE_LEN};
 use crate::{
     system::state::CalibrationStatus,
     task::io::display::{DisplayAction, TextStyle, display_update},
 };
-
-/// Maximum number of text lines supported by the OLED layout.
-pub const DISPLAY_LINES: usize = 4;
-
-/// Maximum line length supported by the display text contract.
-pub const MAX_LINE_LEN: usize = 20;
 
 /// Main menu entries.
 pub const MAIN_MENU_ITEMS: [&str; 4] = ["System Info", "Calibrate", "Drive Mode", "Test Mode"];
@@ -171,7 +168,7 @@ pub async fn render_rangefinder_test() {
 
 /// Render the autonomous drive mode running screen.
 pub async fn render_autonomous_running(mode_label: &str) {
-    let mut rows: [String<MAX_LINE_LEN>; 4] = core::array::from_fn(|_| String::new());
+    let mut rows: [String<MAX_LINE_LEN>; DISPLAY_LINES] = core::array::from_fn(|_| String::new());
     let _ = rows[0].push_str(mode_label);
     let _ = rows[1].push_str("Running...");
     let _ = rows[2].push_str("");
@@ -192,7 +189,7 @@ pub async fn render_calibrating(label: &str) {
 
 /// Write a single line of text to the display.
 pub async fn show_line(line: u8, msg: &str) {
-    let mut s: String<20> = String::new();
+    let mut s: String<MAX_LINE_LEN> = String::new();
     for ch in msg.chars() {
         if s.push(ch).is_err() {
             break;

@@ -12,8 +12,9 @@
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO).
 - **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26 for firmware-controlled power cycling. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate; rewiring the core1 firmware task to it is a follow-up.
 - **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
-- **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the shared I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
-- **OLED** — SSD1306 128×64 monochrome display on I2C bus, shared with VL53L0X rangefinder.
+- **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
+- **Display** — ST7789 240×240 TFT panel over a dedicated write-only SPI1 bus with an RGB565 framebuffer. Renders the text-based UI (menus, system info, test screens).
+  _Avoid_: OLED, screen, panel
 - **Rotary Encoder** — EC11 quadrature rotary encoder with push button. Used for menu navigation (rotation) and selection (push).
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
@@ -31,7 +32,7 @@
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (OLED, rotary encoder, RGB LED), IMU (SPI0), I2C bus (OLED + VL53L0X rangefinder), flash storage, and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, rotary encoder, RGB LED), IMU (SPI0), I2C bus (VL53L0X rangefinder), flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is provided by the `coin-d6` crate, with rewiring the task to it still a follow-up.
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, rotary events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
