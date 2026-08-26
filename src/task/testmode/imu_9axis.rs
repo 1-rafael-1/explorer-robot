@@ -15,7 +15,7 @@ use micromath::F32Ext;
 
 use super::{TestCommand, release_testmode, request_start};
 use crate::task::{
-    io::display::{DisplayAction, display_update},
+    io::display::{DisplayAction, MAX_LINE_LEN, display_update},
     sensors::imu::{
         DmpFusionMode, Orientation, get_latest_readings, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
     },
@@ -249,8 +249,8 @@ fn log_mag_diagnostics(
 }
 
 /// Format an IMU orientation line (Euler angles).
-fn format_orientation_line(orientation: Option<Orientation>) -> String<20> {
-    let mut s: String<20> = String::new();
+fn format_orientation_line(orientation: Option<Orientation>) -> String<MAX_LINE_LEN> {
+    let mut s: String<MAX_LINE_LEN> = String::new();
     match orientation {
         Some(ori) => {
             let _ = core::fmt::write(
@@ -266,8 +266,8 @@ fn format_orientation_line(orientation: Option<Orientation>) -> String<20> {
 }
 
 /// Format a 3-axis sensor line (accel/gyro/mag).
-fn format_axis_line(prefix: &str, data: Option<nalgebra::Vector3<f32>>) -> String<20> {
-    let mut s: String<20> = String::new();
+fn format_axis_line(prefix: &str, data: Option<nalgebra::Vector3<f32>>) -> String<MAX_LINE_LEN> {
+    let mut s: String<MAX_LINE_LEN> = String::new();
     match data {
         Some(v) => {
             let _ = core::fmt::write(&mut s, format_args!("{prefix} x{:.1}/y{:.1}/z{:.1}", v.x, v.y, v.z));

@@ -26,7 +26,7 @@ use crate::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, types::DriveQueueBuildError,
         },
-        io::display::{DisplayAction, display_update},
+        io::display::{DisplayAction, MAX_LINE_LEN, display_update},
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -63,7 +63,7 @@ async fn straight_drive_test_task() {
 #[allow(clippy::too_many_lines)]
 async fn run_straight_drive_test() {
     async fn show_line(line: u8, msg: &str) {
-        let mut s: String<20> = String::new();
+        let mut s: String<MAX_LINE_LEN> = String::new();
         let _ = s.push_str(msg);
         display_update(DisplayAction::ShowText(s, line)).await;
     }

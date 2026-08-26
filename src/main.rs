@@ -23,10 +23,10 @@ use embassy_rp::{
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
     multicore::{Stack, spawn_core1},
     peripherals::{
-        ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4,
-        PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_18,
-        PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_28, PIO1, PWM_SLICE0, PWM_SLICE1,
-        PWM_SLICE3, PWM_SLICE4, SPI0, UART0, UART1,
+        ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3,
+        PIN_4, PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17,
+        PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_30, PIN_31, PIN_40, PIO1,
+        PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0, SPI1, UART0, UART1,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
     pio_programs::{
@@ -48,8 +48,7 @@ mod task;
 
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
-/// Used by the SSD1306 OLED display and (eventually) the VL53L0X
-/// rangefinder, both on core0.
+/// Reserved for the VL53L0X rangefinder on core0.
 pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 
 // ── Interrupt bindings ─────────────────────────────────────────────────────────
@@ -59,7 +58,8 @@ bind_interrupts!(pub struct Irqs {
     ADC_IRQ_FIFO => AdcInterruptHandler;
     PIO1_IRQ_0 => PioInterruptHandler<PIO1>;
     DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>,
-        DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>;
+        DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>,
+        DmaInterruptHandler<DMA_CH6>;
     UART0_IRQ => UartInterruptHandler<UART0>;
     UART1_IRQ => UartInterruptHandler<UART1>;
 });
@@ -199,7 +199,7 @@ pub struct AiCamPins {
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
 
-/// Initialise the shared I2C0 bus for display and VL53L0X rangefinder.
+/// Initialise the shared I2C0 bus for the VL53L0X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new_async` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
@@ -253,7 +253,9 @@ fn init_orchestrate(spawner: Spawner) {
 fn init_battery_monitoring(
     spawner: Spawner,
     adc: embassy_rp::Peri<'static, ADC>,
-    adc_pin: embassy_rp::Peri<'static, PIN_28>,
+    // RP2350B ADC pin (ADC0). Provisional: confirm against the board's battery
+    // voltage-divider wiring before first flash.
+    adc_pin: embassy_rp::Peri<'static, PIN_40>,
 ) {
     let adc = Adc::new(adc, Irqs, AdcConfig::default());
     let battery_channel = Channel::new_pin(adc_pin, Pull::None);
@@ -341,10 +343,35 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverPins) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Initialise the SSD1306 OLED display on the shared I2C0 bus.
+/// Initialise the dedicated write-only SPI1 bus for the ST7789 display.
+///
+/// TX-only: the ST7789 has no MISO line, so this bus never reads data.
+fn init_display_spi(
+    spi1: embassy_rp::Peri<'static, SPI1>,
+    sck: embassy_rp::Peri<'static, PIN_30>,
+    mosi: embassy_rp::Peri<'static, PIN_31>,
+    dma_ch6: embassy_rp::Peri<'static, DMA_CH6>,
+) -> Spi<'static, SPI1, spi::Async> {
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = 64_000_000;
+    spi_config.phase = spi::Phase::CaptureOnSecondTransition;
+    spi_config.polarity = spi::Polarity::IdleHigh;
+    Spi::new_txonly(spi1, sck, mosi, dma_ch6, Irqs, spi_config)
+}
+
+/// Initialise the ST7789 TFT display on the dedicated write-only SPI1 bus.
 #[allow(clippy::unwrap_used)]
-fn init_display(spawner: Spawner, i2c_bus: &'static I2cBusShared) {
-    spawner.spawn(task::io::display::display(i2c_bus).unwrap());
+fn init_display(
+    spawner: Spawner,
+    spi: Spi<'static, SPI1, spi::Async>,
+    dc: Output<'static>,
+    rst: Output<'static>,
+    blk: Output<'static>,
+) {
+    static DISPLAY_SPI_BUS: StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, SPI1, spi::Async>>> =
+        StaticCell::new();
+    let spi_bus = DISPLAY_SPI_BUS.init(Mutex::new(spi));
+    spawner.spawn(task::io::display::display(spi_bus, dc, rst, blk).unwrap());
 }
 
 /// Spawn the VL53L0X rangefinder stub task on core0.
@@ -547,7 +574,6 @@ fn main() -> ! {
         // Initialised on core1 so UART0_IRQ is enabled on core1's NVIC.
         // Not yet consumed by `lidar_stub_task` — held here until the real
         // driver task lands.
-        #[allow(clippy::no_effect_underscore_binding)]
         let (_d6_uart_rx, _d6_power_mosfet) = init_d6_lidar_uart(d6_pins);
         let executor1 = EXECUTOR1.init(Executor::new());
         executor1.run(|spawner| {
@@ -558,25 +584,30 @@ fn main() -> ! {
     // ── Core0: all other tasks ──────────────────────────────────────────────
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
-        // I2C0 bus for SSD1306 OLED display and VL53L0X rangefinder.
+        // I2C0 bus reserved for the VL53L0X rangefinder stub.
         // Initialised inside the closure so I2c::new_async enables I2C0_IRQ
         // on core0's NVIC.
-        let i2c_bus = init_i2c_bus(p.I2C0, p.PIN_16, p.PIN_17);
+        let _i2c_bus = init_i2c_bus(p.I2C0, p.PIN_16, p.PIN_17);
 
         // SPI bus for ICM20948 IMU
         let (imu_spi, imu_cs) = init_imu_spi(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.PIN_21, p.DMA_CH1, p.DMA_CH2);
 
+        // Write-only SPI1 bus and control pins for the ST7789 TFT display.
+        let display_spi = init_display_spi(p.SPI1, p.PIN_30, p.PIN_31, p.DMA_CH6);
+        let display_dc = Output::new(p.PIN_32, embassy_rp::gpio::Level::Low);
+        let display_rst = Output::new(p.PIN_33, embassy_rp::gpio::Level::Low);
+        let display_blk = Output::new(p.PIN_34, embassy_rp::gpio::Level::Low);
+
         // UART1 for Grove Vision AI V2 — not yet consumed by any task, held
         // here until the real driver lands.
-        #[allow(clippy::no_effect_underscore_binding)]
         let (_ai_cam_uart, _ai_cam_power_mosfet) = init_ai_cam_uart(ai_cam_pins);
 
         init_orchestrate(spawner);
-        init_battery_monitoring(spawner, p.ADC, p.PIN_28);
+        init_battery_monitoring(spawner, p.ADC, p.PIN_40);
         init_rgb_led(spawner, &mut pio1_common, pio1_sm0, pio1_sm1, pio1_sm2, rgb_pins);
         init_rotary_encoder(spawner, &mut pio1_common, pio1_sm3, ec11_pins);
         init_motor_driver(spawner, motor_pins);
-        init_display(spawner, i2c_bus);
+        init_display(spawner, display_spi, display_dc, display_rst, display_blk);
         init_vl53l0x_stub(spawner);
         init_imu(spawner, imu_spi, imu_cs);
         init_flash_storage(spawner, p.FLASH, p.DMA_CH0);

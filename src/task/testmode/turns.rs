@@ -34,7 +34,7 @@ use crate::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveQueueBuilder,
             types::{DriveQueueBuildError, RotationDirection, RotationMotion},
         },
-        io::display::{DisplayAction, display_update},
+        io::display::{DisplayAction, MAX_LINE_LEN, display_update},
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -71,7 +71,7 @@ async fn turns_test_task() {
 #[allow(clippy::too_many_lines)]
 async fn run_turns_test() {
     async fn show_line(line: u8, msg: &str) {
-        let mut s: String<20> = String::new();
+        let mut s: String<MAX_LINE_LEN> = String::new();
         let _ = s.push_str(msg);
         display_update(DisplayAction::ShowText(s, line)).await;
     }
@@ -80,19 +80,19 @@ async fn run_turns_test() {
         show_line(0, "TURN TEST").await;
 
         {
-            let mut s: String<20> = String::new();
+            let mut s: String<MAX_LINE_LEN> = String::new();
             let _ = write(&mut s, format_args!("TGT:{target_deg:>4.1} ACT:{current_deg:>4.1}"));
             display_update(DisplayAction::ShowText(s, 1)).await;
         }
 
         {
-            let mut s: String<20> = String::new();
+            let mut s: String<MAX_LINE_LEN> = String::new();
             let _ = write(&mut s, format_args!("YAW:{yaw_deg:>6.1}"));
             display_update(DisplayAction::ShowText(s, 2)).await;
         }
 
         {
-            let mut s: String<20> = String::new();
+            let mut s: String<MAX_LINE_LEN> = String::new();
             let _ = write(&mut s, format_args!("DEV:{deviation_deg:>6.1}"));
             display_update(DisplayAction::ShowText(s, 3)).await;
         }
@@ -148,7 +148,7 @@ async fn run_turns_test() {
 
         show_line(0, "TURN TEST").await;
         {
-            let mut s: String<20> = String::new();
+            let mut s: String<MAX_LINE_LEN> = String::new();
             let _ = write(&mut s, format_args!("SPD:{speed:>3} TGT:{target_deg:>4.1}"));
             display_update(DisplayAction::ShowText(s, 1)).await;
         }

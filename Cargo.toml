@@ -55,7 +55,7 @@ embassy-rp = { version = "0.10.0", features = [
     "unstable-pac",
     "time-driver",
     "critical-section-impl",
-    "rp235xa",
+    "rp235xb",
 ] }
 embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
 embassy-sync = { version = "0.8.0", features = ["defmt"] }
@@ -76,7 +76,7 @@ cortex-m-rt = "0.7.5"
 critical-section = "1.2.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 nanorand = { version = "0.8.0", features = ["wyrand"], default-features = false }
-ssd1306-async = { git = "https://github.com/kalkyl/ssd1306-async" }
+st7789-async = { path = "st7789-async" }
 embedded-graphics = "0.8.1"
 static_cell = { version = "2.1.1", features = [] }
 heapless = "0.9.2"

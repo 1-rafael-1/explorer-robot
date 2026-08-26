@@ -27,6 +27,8 @@
 use defmt::Format;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
+use crate::task::io::display::MAX_LINE_LEN;
+
 /// Multi-producer, single-consumer event channel.
 ///
 /// Capacity of 64 events provides headroom for multiple producers raising
@@ -157,13 +159,13 @@ pub enum Events {
     /// - Contains optional header (line 0) and up to 3 status lines (lines 1-3).
     CalibrationStatus {
         /// Optional header text (line 0).
-        header: Option<heapless::String<20>>,
+        header: Option<heapless::String<MAX_LINE_LEN>>,
         /// Optional status line 1.
-        line1: Option<heapless::String<20>>,
+        line1: Option<heapless::String<MAX_LINE_LEN>>,
         /// Optional status line 2.
-        line2: Option<heapless::String<20>>,
+        line2: Option<heapless::String<MAX_LINE_LEN>>,
         /// Optional status line 3.
-        line3: Option<heapless::String<20>>,
+        line3: Option<heapless::String<MAX_LINE_LEN>>,
     },
 
     /// Calibration procedure finished (success or failure).

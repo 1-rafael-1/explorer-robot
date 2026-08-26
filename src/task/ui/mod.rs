@@ -33,7 +33,7 @@ use crate::{
         autonomous_mode::coast_obstacle_avoid,
         behavior::obstacle,
         drive,
-        io::display::{DisplayAction, display_try_update, display_update},
+        io::display::{DISPLAY_LINES, DisplayAction, MAX_LINE_LEN, display_try_update, display_update},
         testmode::{
             start_arc_drive_test, start_basic_motor_test_mode, start_imu_test_mode, start_imu6_test_mode,
             start_straight_drive_test, start_turns_test, stop_basic_motor_test_mode, stop_imu_test_mode,
@@ -189,7 +189,7 @@ async fn autonomous_refresh_tick() {
             DriveMode::CoastAndAvoid => "Coast & Avoid",
             DriveMode::AttemptStraightLine => "Attempt Straight",
         };
-        let mut rows: [String<20>; 4] = core::array::from_fn(|_| String::new());
+        let mut rows: [String<MAX_LINE_LEN>; DISPLAY_LINES] = core::array::from_fn(|_| String::new());
         let _ = rows[0].push_str(label);
         let _ = rows[1].push_str("Running...");
         let _ = rows[2].push_str("");
@@ -594,7 +594,7 @@ async fn handle_distance_entry_press(value: u8) {
     display_update(DisplayAction::Clear).await;
     show_line(0, "Distance Cal").await;
     {
-        let mut s: heapless::String<20> = heapless::String::new();
+        let mut s: heapless::String<MAX_LINE_LEN> = heapless::String::new();
         let _ = core::fmt::write(&mut s, format_args!("Factor: {factor:.2}"));
         display_update(DisplayAction::ShowText(s, 1)).await;
     }
@@ -612,7 +612,7 @@ async fn run_distance_calibration() {
     show_line(0, "Distance Cal").await;
     show_line(1, "Driving 150cm").await;
     for sec in (1u8..=3).rev() {
-        let mut s: heapless::String<20> = heapless::String::new();
+        let mut s: heapless::String<MAX_LINE_LEN> = heapless::String::new();
         let _ = core::fmt::write(&mut s, format_args!("in {sec}..."));
         show_line(2, &s).await;
         Timer::after(Duration::from_secs(1)).await;
@@ -697,7 +697,7 @@ async fn render_entering_distance(value: u8) {
     display_update(DisplayAction::Clear).await;
     show_line(0, "Enter distance:").await;
     {
-        let mut s: heapless::String<20> = heapless::String::new();
+        let mut s: heapless::String<MAX_LINE_LEN> = heapless::String::new();
         let _ = core::fmt::write(&mut s, format_args!("  {value} cm"));
         display_update(DisplayAction::ShowText(s, 1)).await;
     }
@@ -720,7 +720,7 @@ async fn render_entering_attempt_straight_distance(value: u16) {
     display_update(DisplayAction::Clear).await;
     show_line(0, "Enter distance:").await;
     {
-        let mut s: heapless::String<20> = heapless::String::new();
+        let mut s: heapless::String<MAX_LINE_LEN> = heapless::String::new();
         let _ = core::fmt::write(&mut s, format_args!("  {value} cm"));
         display_update(DisplayAction::ShowText(s, 1)).await;
     }

@@ -18,7 +18,7 @@ use heapless::String;
 use super::{TestCommand, release_testmode, request_start};
 use crate::task::{
     drive::{clear_encoder_measurement, get_latest_encoder_measurement},
-    io::display::{DisplayAction, display_update},
+    io::display::{DisplayAction, MAX_LINE_LEN, display_update},
     motor_driver::{self, MotorCommand, Track},
     sensors::encoders::{self, EncoderCommand},
 };
@@ -107,15 +107,15 @@ async fn basic_motor_test_task() {
             }
 
             // ── Show header ──────────────────────────────────────────────
-            let mut header: String<20> = String::new();
+            let mut header: String<MAX_LINE_LEN> = String::new();
             let _ = header.push_str("Basic Motor Test");
             display_update(DisplayAction::ShowText(header, 0)).await;
 
-            let mut line1: String<20> = String::new();
+            let mut line1: String<MAX_LINE_LEN> = String::new();
             let _ = line1.push_str(track_spec.name);
             display_update(DisplayAction::ShowText(line1, 1)).await;
 
-            let mut line3: String<20> = String::new();
+            let mut line3: String<MAX_LINE_LEN> = String::new();
             let _ = line3.push_str("Press to exit");
             display_update(DisplayAction::ShowText(line3, 3)).await;
 
@@ -158,7 +158,7 @@ async fn basic_motor_test_task() {
                                     Track::Right => measurement.right,
                                 });
 
-                        let mut line2: String<20> = String::new();
+                        let mut line2: String<MAX_LINE_LEN> = String::new();
                         let _ = core::fmt::write(&mut line2, format_args!("ENC: {count:>6}"));
                         display_update(DisplayAction::ShowText(line2, 2)).await;
                     }
@@ -173,7 +173,7 @@ async fn basic_motor_test_task() {
             }
 
             // ── Test backward ────────────────────────────────────────────
-            let mut line1b: String<20> = String::new();
+            let mut line1b: String<MAX_LINE_LEN> = String::new();
             let _ = line1b.push_str(track_spec.name);
             let _ = line1b.push_str(" REV");
             display_update(DisplayAction::ShowText(line1b, 1)).await;
@@ -213,7 +213,7 @@ async fn basic_motor_test_task() {
                                     Track::Right => measurement.right,
                                 });
 
-                        let mut line2: String<20> = String::new();
+                        let mut line2: String<MAX_LINE_LEN> = String::new();
                         let _ = core::fmt::write(&mut line2, format_args!("ENC: {count:>6}"));
                         display_update(DisplayAction::ShowText(line2, 2)).await;
                     }

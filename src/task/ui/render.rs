@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     system::state::{calibration, power},
-    task::io::display::{self, DisplayAction},
+    task::io::display::{self, DisplayAction, MAX_LINE_LEN},
 };
 
 /// Render the current UI view based on the UI state.
@@ -76,7 +76,7 @@ const fn drive_mode_label(mode: crate::system::state::DriveMode) -> &'static str
 
 /// Write a single line of text to the display.
 pub async fn show_line(line: u8, msg: &str) {
-    let mut s: String<20> = String::new();
+    let mut s: String<MAX_LINE_LEN> = String::new();
     for ch in msg.chars() {
         if s.push(ch).is_err() {
             break;

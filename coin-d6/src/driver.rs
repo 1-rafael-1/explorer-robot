@@ -239,8 +239,7 @@ where
     /// # Errors
     ///
     /// Returns [`Error::Pin`] if deasserting the pin fails.
-    #[allow(clippy::unused_async)]
-    pub async fn power_off(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
+    pub fn power_off(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
         self.power.set_low().map_err(Error::Pin)
     }
 
