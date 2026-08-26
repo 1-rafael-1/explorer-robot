@@ -210,7 +210,7 @@ async fn main(_spawner: Spawner) {
     summarize("aggregated", &out, start.elapsed(), SPINS);
     dump_scan("aggregated", &out);
 
-    driver.power_off().await.unwrap();
+    driver.power_off().unwrap();
     info!("powered off");
 
     let (_uart, _power) = driver.release();
