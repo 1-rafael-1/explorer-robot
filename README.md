@@ -16,22 +16,15 @@ implemented with synthetic sensor stubs. Real sensor drivers are planned.
 The big ToDos, in no particuar order:
 
 [X] Make a new chassis to accomodate the new motors and also ball bearinggs.
-
-[X] Make a D6 lidar driver [ ] and integrate that
-
-[X] Make an async tft driver and integrate that
-
+[X] Make a D6 lidar driver 
+[X] Make an async tft driver 
+[ ] Integrate the D6 lidar driver into the firmware
+[ ] Integrate the tft driver into the firmware
 [ ] Make a async-capable VL53L0X driver and intergrate that
-
 [ ] Make a new schematic adapting from simple-robot
-
 [ ] Full breadboard demonstrator to see if the firmware is botched
-
 [ ] Make a async Grove Vision AI V2 driver and integrate that
-
 [ ] Design a new PCB from that. Depending on how mad I feel, maybe ditch some dev boards in favor of smd design.
-
-
 
 ## Hardware
 
