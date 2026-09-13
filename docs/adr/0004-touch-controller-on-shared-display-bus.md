@@ -66,8 +66,8 @@ bench only; the robot's own display bus is left untouched.
   (noise, or a release mid-read) and busy-spin SPI/CPU. A falling-edge wait is
   unusable here because the arming conversion is itself what drives the line low,
   so the edge would already have passed.
-- The panel is RGB-ordered: `ColorOrder::Bgr` (as used by the LiDAR example)
-  swaps red and blue on this panel, so the coexistence example uses `Rgb`.
+- The panel is RGB-ordered: `ColorOrder::Bgr` swaps red and blue on this panel,
+  so the examples use `Rgb`.
 - Calibration measured from the four coexistence corner targets is recorded as
   `Calibration::MEASURED`: raw endpoints `x1=3810, x2=160, y1=276, y2=3844` for
   the 320 × 240 framebuffer in the coexistence orientation. The measurement

@@ -4,8 +4,8 @@
 //! bus — the same wiring and per-device configuration as `touch_coexistence` —
 //! and draws the robot's menus as columns of wide buttons under a titled header.
 //! A caller-side 5-sample moving-median filter smooths the raw `x`/`y` counts
-//! before [`Calibration::MEASURED`] maps them to a pixel; taps, drags, and slider
-//! positions are hit-tested against the on-screen regions and logged.
+//! before this example's `CALIBRATION` maps them to a pixel; taps, drags, and
+//! slider positions are hit-tested against the on-screen regions and logged.
 //!
 //! The whole flow is navigable by touch alone: the Main Menu opens the Calibrate,
 //! Drive Mode, and Test Mode submenus and the mocked System Info screen; leaf
@@ -120,11 +120,12 @@ const MEDIAN_WINDOW: usize = 5;
 /// landscape orientation as `lidar_tft_radar`. [`Calibration::MEASURED`] was
 /// measured in `touch_coexistence`'s orientation, which is that orientation
 /// plus a horizontal mirror; a horizontally mirrored display flips the raw X
-/// axis, so the X endpoints are swapped here relative to `MEASURED` and the Y
-/// endpoints are unchanged. Using `MEASURED` directly with this orientation
-/// mirrors touch horizontally: the header Back, the value screen's `-`/`+` and
-/// Cancel, and the slider all respond as if the panel were flipped.
-const CALIBRATION: Calibration = Calibration::new(160, 3810, 276, 3844, 320, 240);
+/// axis, so [`Calibration::mirrored_x`] swaps the X endpoints and leaves the Y
+/// endpoints unchanged, deriving from `MEASURED` so a re-measurement there flows
+/// through. Using `MEASURED` directly with this orientation mirrors touch
+/// horizontally: the header Back, the value screen's `-`/`+` and Cancel, and the
+/// slider all respond as if the panel were flipped.
+const CALIBRATION: Calibration = Calibration::MEASURED.mirrored_x();
 
 /// The caller-allocated framebuffer (big-endian RGB565 bytes).
 type Fb = [u8; FB_W * FB_H * 2];
@@ -747,8 +748,9 @@ impl Ui {
     /// the total movement is below [`TAP_MAX_MOVE`], the press lasted at least
     /// [`TAP_MIN_DURATION_MS`], and the release landed on the same region the
     /// press began on; a tap on a region activates it. A drag never activates,
-    /// but the release still redraws so the pressed highlight and the final
-    /// scroll position are rendered.
+    /// but any press that began on a region still redraws on release: the
+    /// throttled move redraws may not have cleared the pressed highlight or
+    /// rendered the final scroll position or slider value.
     fn pointer_up(&mut self, now_ms: u64) -> bool {
         let Some(press) = self.press.take() else {
             return false;
@@ -757,7 +759,6 @@ impl Ui {
         let released = self.hit_test(press.last);
         let tap_candidate = !press.dragging && !press.on_slider;
         let same_region = released.is_some() && released == press.target;
-        let had_highlight = tap_candidate && same_region;
         let dx = i64::from(press.last.x) - i64::from(press.start.x);
         let dy = i64::from(press.last.y) - i64::from(press.start.y);
         let max_move = i64::from(TAP_MAX_MOVE);
@@ -777,7 +778,7 @@ impl Ui {
         }
         let activated = released.is_some_and(|hit| self.activate(hit));
 
-        activated || had_highlight || press.dragging
+        activated || press.target.is_some() || press.dragging
     }
 
     /// Run the action for a completed tap on `hit`, reporting whether the screen
@@ -1601,22 +1602,30 @@ async fn main(_spawner: Spawner) {
         let mut last_drag_render = now_ms;
 
         // Poll while the pen is down so continuous drag positions are available.
+        // `PENIRQ` is the pen-up authority: `read` can return `Ok(None)` on noise
+        // or `Err` on a transient bus error while a finger is still down, so the
+        // gesture ends only once the IRQ line is high, not on a single bad read.
         loop {
             Timer::after(Duration::from_millis(TICK_MS)).await;
             let now_ms = Instant::now().as_millis();
-            if let Ok(Some(raw)) = panel.read().await {
-                let point = filter_and_calibrate(&mut x_filter, &mut y_filter, calibration, raw);
-                if ui.pointer_move(point, now_ms) && now_ms.saturating_sub(last_drag_render) >= DRAG_RENDER_MS {
-                    ui.render(&mut display).unwrap();
-                    display.flush().await.unwrap();
-                    last_drag_render = now_ms;
+            match panel.read().await {
+                Ok(Some(raw)) => {
+                    let point = filter_and_calibrate(&mut x_filter, &mut y_filter, calibration, raw);
+                    if ui.pointer_move(point, now_ms) && now_ms.saturating_sub(last_drag_render) >= DRAG_RENDER_MS {
+                        ui.render(&mut display).unwrap();
+                        display.flush().await.unwrap();
+                        last_drag_render = now_ms;
+                    }
                 }
-            } else {
-                if ui.pointer_up(now_ms) {
-                    ui.render(&mut display).unwrap();
-                    display.flush().await.unwrap();
+                Ok(None) | Err(_) => {
+                    if irq.is_high() {
+                        if ui.pointer_up(now_ms) {
+                            ui.render(&mut display).unwrap();
+                            display.flush().await.unwrap();
+                        }
+                        break;
+                    }
                 }
-                break;
             }
         }
     }

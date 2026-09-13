@@ -48,9 +48,9 @@ examples (which do not collide):
 > robot firmware's GPIO 26 — GPIO 26 is the TFT DC pin on this wiring.
 
 > Panel notes (2.8″ 240×320, measured on the bench): the display is
-> **RGB-ordered** (`ColorOrder::Bgr`, as the LiDAR example uses, swaps red and
-> blue), and the touch calibration measured from the coexistence corner targets
-> is recorded as `touch_async::Calibration::MEASURED`.
+> **RGB-ordered** (`ColorOrder::Bgr` swaps red and blue, so the examples here
+> use `ColorOrder::Rgb`), and the touch calibration measured from the coexistence
+> corner targets is recorded as `touch_async::Calibration::MEASURED`.
 
 ## Calibrating the touch panel
 

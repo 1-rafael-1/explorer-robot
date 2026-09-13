@@ -225,11 +225,12 @@ async fn main(_spawner: Spawner) {
 
     let config = DisplayConfig {
         // This panel is RGB-ordered: with `Bgr` the red and blue channels swap
-        // (red targets show blue, yellow shows cyan). The LiDAR example's `Bgr`
-        // is not correct for this panel.
+        // (red targets show blue, yellow shows cyan).
         color_order: ColorOrder::Rgb,
-        // Matches `lidar_tft_radar`'s mounting-derived orientation: rotate 90°,
-        // flip vertically, then rotate 180°.
+        // The orientation `Calibration::MEASURED` was measured in: rotate 90°,
+        // flip vertically, then rotate 180°. `lidar_tft_radar` and `touch_menu`
+        // display with `Deg90` alone; because that is this orientation plus a
+        // horizontal mirror, `touch_menu` derives `Calibration::mirrored_x`.
         orientation: Orientation::new()
             .rotate(Rotation::Deg90)
             .flip_vertical()
