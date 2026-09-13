@@ -10,3 +10,6 @@ target/
 
 # scratch files used for handoffs and temp things for my agents
 .scratch/
+
+# FreeCAD auto-generated backup files
+**/*.FCBak
