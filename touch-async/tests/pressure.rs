@@ -34,3 +34,11 @@ fn pressure_rejects_zero_z1() {
 fn pressure_uses_the_full_z_range_without_overflow() {
     assert_eq!(pressure(1, 4095, 1000), Some(4_094_000));
 }
+
+#[test]
+fn pressure_survives_the_largest_u16_inputs() {
+    // `u16::MAX` plate resistance with the largest possible Z spread: the
+    // product is `4_294_770_690`, just under `u32::MAX`, so the `u64`
+    // intermediate keeps the result exact.
+    assert_eq!(pressure(1, 65_535, 65_535), Some(4_294_770_690));
+}

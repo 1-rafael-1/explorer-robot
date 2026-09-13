@@ -43,7 +43,7 @@ pub mod driver;
 pub mod pressure;
 pub mod types;
 
-pub use calibration::Calibration;
+pub use calibration::{Calibration, CalibrationError};
 pub use driver::TouchPanel;
 pub use pressure::pressure;
 pub use types::{Error, TouchSample};

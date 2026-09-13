@@ -5,11 +5,11 @@
 //! than re-deriving it.
 
 use embedded_graphics::geometry::Point;
-use touch_async::{Calibration, TouchSample};
+use touch_async::{Calibration, CalibrationError, TouchSample};
 
 /// Build a [`TouchSample`] from literal raw coordinates; the Z channels are
 /// irrelevant to pixel mapping and are set to arbitrary non-zero values.
-fn sample(x: u16, y: u16) -> TouchSample {
+const fn sample(x: u16, y: u16) -> TouchSample {
     TouchSample { x, y, z1: 1, z2: 2 }
 }
 
@@ -69,4 +69,42 @@ fn calibration_measured_maps_the_bring_up_targets_to_their_coordinates() {
             "({raw_x}, {raw_y}) mapped to {point:?}, expected ~({fb_x}, {fb_y})"
         );
     }
+}
+
+#[test]
+fn try_new_accepts_a_valid_calibration() {
+    assert_eq!(
+        Calibration::try_new(3880, 340, 262, 3850, 320, 240),
+        Ok(Calibration::REFERENCE)
+    );
+}
+
+#[test]
+fn try_new_rejects_a_non_positive_dimension() {
+    assert_eq!(
+        Calibration::try_new(3880, 340, 262, 3850, 0, 240),
+        Err(CalibrationError::NonPositiveDimension)
+    );
+    assert_eq!(
+        Calibration::try_new(3880, 340, 262, 3850, 320, 0),
+        Err(CalibrationError::NonPositiveDimension)
+    );
+}
+
+#[test]
+fn try_new_rejects_a_degenerate_axis() {
+    assert_eq!(
+        Calibration::try_new(3880, 3880, 262, 3850, 320, 240),
+        Err(CalibrationError::DegenerateAxis)
+    );
+    assert_eq!(
+        Calibration::try_new(3880, 340, 262, 262, 320, 240),
+        Err(CalibrationError::DegenerateAxis)
+    );
+}
+
+#[test]
+#[should_panic(expected = "raw endpoints must differ")]
+fn new_panics_on_a_degenerate_axis() {
+    let _ = Calibration::new(3880, 3880, 262, 3850, 320, 240);
 }

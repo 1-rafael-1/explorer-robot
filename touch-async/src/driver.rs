@@ -92,9 +92,13 @@ impl<D: SpiDevice<u8>> TouchPanel<D> {
     /// which the PD bits of a conversion command select. On a cold start no
     /// conversion has run, so `PENIRQ` is not yet armed and would never fire.
     ///
-    /// A low edge that yields no valid sample ([`read`](Self::read) returning
-    /// `Ok(None)`) is not an error — it can happen on noise or before a stable
-    /// conversion — so the loop simply awaits the next low edge.
+    /// A low level that yields no valid sample ([`read`](Self::read) returning
+    /// `Ok(None)`) is not an error — it can happen on noise or when the pen was
+    /// released mid-read. Rather than awaiting the next low edge immediately,
+    /// which would busy-spin on a line that is still low, the loop first waits
+    /// for `PENIRQ` to return high (pen release) and only then awaits the next
+    /// low edge. That makes every read after the first correspond to a genuine
+    /// new pen-down instead of hammering SPI/CPU on a stuck-low line.
     ///
     /// # Errors
     ///
@@ -111,7 +115,10 @@ impl<D: SpiDevice<u8>> TouchPanel<D> {
             irq.wait_for_low().await.map_err(Error::Wait)?;
             match self.read().await {
                 Ok(Some(sample)) => return Ok(sample),
-                Ok(None) => {}
+                // No valid sample while the line is low: wait for release so the
+                // next `wait_for_low` is a new pen-down, not an immediate re-read
+                // of a line that never went high.
+                Ok(None) => irq.wait_for_high().await.map_err(Error::Wait)?,
                 Err(error) => return Err(lift_wait(error)),
             }
         }

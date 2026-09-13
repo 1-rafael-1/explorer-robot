@@ -59,6 +59,13 @@ bench only; the robot's own display bus is left untouched.
   auto-power-down, so the driver performs one discarded read to arm it before
   waiting on the edge. Without that, `wait_for_touch` blocks forever on a cold
   start.
+- `PENIRQ` is level-sensitive, not an edge per touch, so `wait_for_touch` waits
+  on `wait_for_low` rather than a falling edge. After a low level that yields no
+  valid sample it waits for the line to return high before awaiting the next low
+  edge; a bare level wait would re-read immediately while the line stayed low
+  (noise, or a release mid-read) and busy-spin SPI/CPU. A falling-edge wait is
+  unusable here because the arming conversion is itself what drives the line low,
+  so the edge would already have passed.
 - The panel is RGB-ordered: `ColorOrder::Bgr` (as used by the LiDAR example)
   swaps red and blue on this panel, so the coexistence example uses `Rgb`.
 - Calibration measured from the four coexistence corner targets is recorded as

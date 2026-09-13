@@ -35,8 +35,10 @@
 - **Touch Panel** — The 2.8″ 240×320 SPI panel's resistive touch layer, used as a secondary input alongside the rotary encoder; its controller IC is unmarked. The 2.8″ panel is the intended future robot panel.
 - **Touch Sample** — One raw reading from the touch panel: X, Y, and the two Z (pressure) channels in unfiltered 12-bit counts.
 - **Touch Calibration** — The mapping from raw touch counts to screen pixels, measured at the panel's corners.
+- **Reference Calibration** — The vendor reference board's raw endpoints, shipped as `Calibration::REFERENCE` for first bring-up only; not measured on this robot's panel.
+- **Measured Calibration** — This robot's panel raw endpoints, measured from the corner calibration targets during bring-up and recorded as `Calibration::MEASURED`.
 - **Calibration Target** — A marked point on the display at a known screen coordinate, touched during calibration to pair a raw reading with that coordinate.
-- **Touch Pressure** — A pressure-like value derived from a touch sample's two Z channels, distinguishing a firm press from a light one.
+- **Touch Pressure** — A position-independent resistance proxy derived from a touch sample's two Z channels, distinguishing a firm press from a light one; a proxy, not a calibrated physical pressure.
 - **Touch IRQ** — The touch controller's active-low pen-down interrupt line (`PENIRQ`).
 - **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the display and touch controller share SPI0).
 

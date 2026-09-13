@@ -11,9 +11,10 @@
 //! A caller-side 5-sample moving-median filter smooths the raw `x`/`y` counts
 //! before calibration; the driver itself stays unfiltered and returns raw counts.
 //!
-//! The touch mapping uses [`Calibration::default`], which is the vendor's
-//! reference curve rather than this panel's measured calibration, so the drawn
-//! point is indicative until the corners are re-measured with `touch_probe`.
+//! The touch mapping uses [`Calibration::MEASURED`], this panel's bench-measured
+//! calibration, so the drawn point lands on the touched target. [`Calibration::default`]
+//! would be the vendor's uncalibrated reference curve and would draw the point
+//! off-target.
 //!
 //! Run from the repository root with:
 //!
