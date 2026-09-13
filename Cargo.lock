@@ -1070,15 +1070,20 @@ dependencies = [
  "cortex-m-rt",
  "defmt 1.1.1",
  "defmt-rtt",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-rp",
+ "embassy-sync",
  "embassy-time",
  "embedded-graphics",
+ "embedded-hal-async",
  "embedded-hal-bus",
  "libm",
+ "moving_median",
  "panic-probe",
  "st7789-async",
  "static_cell",
+ "touch-async",
 ]
 
 [[package]]
@@ -1276,6 +1281,12 @@ name = "micromath"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
+
+[[package]]
+name = "moving_median"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b878e5b5cc5371bdad820eaf95cb289c0f18f7b7c8c165e8a4c1abaf247d42eb"
 
 [[package]]
 name = "nalgebra"
@@ -1991,6 +2002,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "touch-async"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]

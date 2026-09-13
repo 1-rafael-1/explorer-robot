@@ -13,9 +13,12 @@ workspace = true
 [dependencies]
 coin-d6 = { path = "../coin-d6" }
 st7789-async = { path = "../st7789-async" }
+touch-async = { path = "../touch-async" }
 embedded-graphics = "0.8.1"
 embedded-hal-bus = { version = "0.1.0", features = ["async"] }
+embedded-hal-async = "1.0.0"
 libm = "0.2"
+moving_median = "0.4.0"
 
 [dev-dependencies]
 embassy-rp = { version = "0.10.0", features = [
@@ -37,3 +40,5 @@ defmt-rtt = "1.1.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 cortex-m-rt = "0.7.5"
 static_cell = "2.1.1"
+embassy-embedded-hal = { version = "0.6.0", features = ["defmt"] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
