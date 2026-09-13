@@ -125,8 +125,12 @@ async fn main(_spawner: Spawner) {
     let mut display = St7789::new(dev, dcx, fb, FB_W as u16, FB_H as u16);
 
     let config = Config {
-        color_order: ColorOrder::Bgr,
-        orientation: Orientation::new().rotate(Rotation::Deg90).flip_vertical(),
+        // Panel-specific: this panel is RGB-ordered. Flip to `Bgr` for a
+        // BGR-ordered panel.
+        color_order: ColorOrder::Rgb,
+        // Mounting-specific: add `.flip_vertical()` if the image comes out
+        // upside-down.
+        orientation: Orientation::new().rotate(Rotation::Deg90),
         invert_colors: false,
     };
 

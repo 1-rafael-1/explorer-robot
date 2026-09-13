@@ -67,3 +67,6 @@ jobs:
 
       - name: Test coin-d6 (host)
         run: cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Test touch-async (host)
+        run: cargo test -p touch-async --features std --target x86_64-unknown-linux-gnu --tests
