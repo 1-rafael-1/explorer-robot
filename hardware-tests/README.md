@@ -13,11 +13,13 @@ This is where small "does the hardware work" checks live; the in-firmware
 | `lidar_tft_radar`    | Top-down radar: 1–5 m white range rings centred on the LiDAR, one red cross per valid return at its angle/range. |
 | `touch_probe`        | Raw XPT2046/TSC2046-class samples alone on SPI0: logs every sample's `x`/`y`/`z1`/`z2` and the raw extents per corner, to confirm the protocol and seed calibration. |
 | `touch_coexistence`  | ST7789 TFT and touch controller sharing one full-duplex SPI0 bus: draws the moving-median-filtered, calibrated touch point, with four coloured corner targets for calibration. |
+| `touch_menu`         | Touch-driven mock of the robot's real menu tree on the 2.8″ panel: Main Menu → submenus → placeholder leaves, a mocked System Info screen, and draggable value entry. |
 
 Run one with (from the repository root):
 
 ```sh
 cargo run -p hardware-tests --example lidar_tft_radar --release
+cargo run -p hardware-tests --example touch_menu --release
 ```
 
 Use `--release`: at `opt-level = 0` the framebuffer clear/draw is unusably slow.
@@ -46,9 +48,9 @@ examples (which do not collide):
 > robot firmware's GPIO 26 — GPIO 26 is the TFT DC pin on this wiring.
 
 > Panel notes (2.8″ 240×320, measured on the bench): the display is
-> **RGB-ordered** (`ColorOrder::Bgr`, as the LiDAR example uses, swaps red and
-> blue), and the touch calibration measured from the coexistence corner targets
-> is recorded as `touch_async::Calibration::MEASURED`.
+> **RGB-ordered** (`ColorOrder::Bgr` swaps red and blue, so the examples here
+> use `ColorOrder::Rgb`), and the touch calibration measured from the coexistence
+> corner targets is recorded as `touch_async::Calibration::MEASURED`.
 
 ## Calibrating the touch panel
 

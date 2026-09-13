@@ -154,8 +154,11 @@ where
     // Centre marker: the `LiDAR` position.
     draw_cross(display, CENTER_X, CENTER_Y, Rgb565::WHITE)?;
 
-    // One highly visible cross per valid return, at its angle (0° = up, clockwise) and
-    // range (clamped to the outer ring).
+    // One highly visible cross per valid return, at its angle and range
+    // (clamped to the outer ring). The LiDAR's mounting reverses both axes
+    // relative to the panel, so the plotted offsets are negated — equivalent to
+    // rotating the returns 180° while 0° still points forward and increasing
+    // angles stay clockwise.
     for point in &scan.points[..scan.len] {
         let Some(distance) = point.distance_mm else {
             continue;
@@ -163,8 +166,8 @@ where
         let metres = f32::from(distance.get()) / 1000.0;
         let radius = (metres * PX_PER_M).min(MAX_RADIUS_PX as f32);
         let angle_rad = point.angle_deg.to_radians();
-        let x = CENTER_X + (radius * libm::sinf(angle_rad)) as i32;
-        let y = CENTER_Y - (radius * libm::cosf(angle_rad)) as i32;
+        let x = CENTER_X - (radius * libm::sinf(angle_rad)) as i32;
+        let y = CENTER_Y + (radius * libm::cosf(angle_rad)) as i32;
         draw_cross(display, x, y, Rgb565::CSS_GREEN_YELLOW)?;
     }
 
@@ -211,14 +214,12 @@ async fn main(_spawner: Spawner) {
     let mut display = St7789::new(dev, dcx, fb, FB_W as u16, FB_H as u16);
 
     let config = DisplayConfig {
-        color_order: ColorOrder::Bgr,
-        // The LiDAR's physical mounting inverts front/back and mirrors
-        // left/right relative to the panel, so rotate the whole frame 180° to
-        // match physical reality.
-        orientation: Orientation::new()
-            .rotate(Rotation::Deg90)
-            .flip_vertical()
-            .rotate(Rotation::Deg180),
+        color_order: ColorOrder::Rgb,
+        // Landscape panel: rotate 90° so the 320×240 framebuffer maps onto the
+        // physical 240×320 display. The LiDAR mounting reverses both axes
+        // relative to the panel; that correction is applied when plotting
+        // returns in `draw_radar`.
+        orientation: Orientation::new().rotate(Rotation::Deg90),
         invert_colors: false,
     };
     display.init(&config, &mut Delay).await.unwrap();

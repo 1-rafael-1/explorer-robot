@@ -70,6 +70,19 @@ impl Calibration {
     /// rises as the pixel row rises.
     pub const MEASURED: Self = Self::new(3810, 160, 276, 3844, 320, 240);
 
+    /// This calibration for a display orientation that is [`MEASURED`](Self::MEASURED)'s
+    /// orientation plus a horizontal mirror.
+    ///
+    /// A horizontal mirror reverses the on-screen X axis, so the two raw X
+    /// endpoints swap and the Y endpoints and dimensions are unchanged. The
+    /// `touch_menu` example, which displays with `Orientation::Deg90` alone, uses
+    /// this rather than restating the measured numbers, so a re-measurement of
+    /// [`MEASURED`](Self::MEASURED) flows through instead of drifting.
+    #[must_use]
+    pub const fn mirrored_x(self) -> Self {
+        Self::new(self.x2, self.x1, self.y1, self.y2, self.width, self.height)
+    }
+
     /// Create a calibration from its two raw endpoints per axis and the target
     /// pixel dimensions.
     ///

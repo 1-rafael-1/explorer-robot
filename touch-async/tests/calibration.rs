@@ -72,6 +72,16 @@ fn calibration_measured_maps_the_bring_up_targets_to_their_coordinates() {
 }
 
 #[test]
+fn mirrored_x_swaps_the_raw_x_endpoints_only() {
+    let mirrored = Calibration::MEASURED.mirrored_x();
+    assert_eq!(mirrored, Calibration::new(160, 3810, 276, 3844, 320, 240));
+    // The mirrored X axis maps the swapped endpoints back onto the same corners,
+    // leaving the Y mapping untouched.
+    assert_eq!(mirrored.to_pixels(sample(160, 276)), Point::new(0, 0));
+    assert_eq!(mirrored.to_pixels(sample(3810, 3844)), Point::new(319, 239));
+}
+
+#[test]
 fn try_new_accepts_a_valid_calibration() {
     assert_eq!(
         Calibration::try_new(3880, 340, 262, 3850, 320, 240),
