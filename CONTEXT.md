@@ -8,14 +8,13 @@
 - **Track** — Left or right side of the robot. Each track has three sprockets: rear drive sprocket (motor-coupled, toothed), middle road wheel (weight-bearing, smooth), and front idler (tensioner, smooth). Rear drive keeps the bottom track run in tension under load, maximizing traction and preventing track bunching.
 - **Motor** — A single JGB37-520 6V 165RPM DC motor with hall encoder. Two motors (one per track).
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
-- **Encoder** — Single-channel hall sensor on each JGB37-520 motor. Produces 8 pulses per motor revolution, 1320 pulses per output shaft revolution (165:1 gear ratio). Pulse counting via PWM input mode. Direction is inferred from the motor command, not quadrature.
+- **Encoder** — Two-channel (A/B) hall encoder on each JGB37-520 motor. Counts 1320 pulses per output shaft revolution (165:1 gear ratio) via PWM input mode. Only one channel is read, so direction is inferred from the motor command rather than measured from the A/B phase.
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO).
-- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26 for firmware-controlled power cycling. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate; rewiring the core1 firmware task to it is a follow-up.
+- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate on core1, and powered only while a mode needs it.
 - **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
 - **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
-- **Display** — ST7789 240×240 TFT panel over a dedicated write-only SPI1 bus with an RGB565 framebuffer. Renders the text-based UI (menus, system info, test screens).
+- **Display** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT panel, sharing a full-duplex SPI1 bus with the Touch Panel and rendering a graphics UI from an RGB565 framebuffer.
   _Avoid_: OLED, screen, panel
-- **Rotary Encoder** — EC11 quadrature rotary encoder with push button. Used for menu navigation (rotation) and selection (push).
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
@@ -29,10 +28,13 @@
 - **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
 - **Bin representative** — The single LiDAR return chosen to stand for all native samples that fall within one angular bucket during aggregation. It is the *nearest valid return*, so coarsening a bucket never hides a closer obstacle (not the first sample, strongest return, or a mean).
 - **Warm-up** — The post-`start` phase during which revolutions are discarded until the rotor reaches steady-state speed. Settling is proxied by the per-revolution point count stabilising near the native 400 (as opposed to plateauing below it, or exhausting a spin budget).
+- **No Return** — A bin for which no valid range was measured. It is not an obstacle, and it must not be read as a clear angle: gap selection never treats it as navigable.
+- **Front Sector** — The angular window about dead ahead that the Coast-and-Avoid stop test sweeps: ±45° by default, with a 30 cm stop threshold.
+- **Room Scan** — The operator-initiated mode that renders live Spins as a radar on the Display, for verifying the LiDAR and surveying a room. It does not drive.
 
 ### Touch
 
-- **Touch Panel** — The 2.8″ 240×320 SPI panel's resistive touch layer, used as a secondary input alongside the rotary encoder; its controller IC is unmarked. The 2.8″ panel is the intended future robot panel.
+- **Touch Panel** — The 2.8″ 240×320 SPI panel's resistive touch layer, and the robot's sole operator input. Its controller IC is unmarked; the XPT2046/TSC2046-class protocol is an assumption confirmed on the bench.
 - **Touch Sample** — One raw reading from the touch panel: X, Y, and the two Z (pressure) channels in unfiltered 12-bit counts.
 - **Touch Calibration** — The mapping from raw touch counts to screen pixels, measured at the panel's corners.
 - **Reference Calibration** — The vendor reference board's raw endpoints, shipped as `Calibration::REFERENCE` for first bring-up only; not measured on this robot's panel.
@@ -40,16 +42,16 @@
 - **Calibration Target** — A marked point on the display at a known screen coordinate, touched during calibration to pair a raw reading with that coordinate.
 - **Touch Pressure** — A position-independent resistance proxy derived from a touch sample's two Z channels, distinguishing a firm press from a light one; a proxy, not a calibrated physical pressure.
 - **Touch IRQ** — The touch controller's active-low pen-down interrupt line (`PENIRQ`).
-- **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the display and touch controller share SPI0).
+- **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the Display and Touch Panel share SPI1).
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, rotary encoder, RGB LED), IMU (SPI0), I2C bus (VL53L0X rangefinder), flash storage, and the main event loop.
-- **Core1** — Runs the LiDAR task. Currently runs a synthetic point-cloud stub; real COIN-D6 UART parsing is provided by the `coin-d6` crate, with rewiring the task to it still a follow-up.
-- **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, rotary events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), I2C bus (VL53L0X rangefinder), flash storage, and the main event loop.
+- **Core1** — Runs the LiDAR task: the `coin-d6` driver, its on-demand power lifecycle, and the spin-to-point-cloud mapping.
+- **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, lifecycle events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
 - **Behavior Handler** — A module under `task/behavior/` that reacts to specific event types. Domain logic lives here — obstacle fusion (perception atomics + EmergencyBrake interrupt), battery state updates, obstacle avoidance completion. Called by the orchestrator.
-- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → rotary_encoder → motor_driver → encoders → drive_queue_executor → drive → display → vl53l0x_stub → imu → flash_storage → testing → ui → autonomous_mode → startup. Core1 runs only lidar_stub.
+- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → motor_driver → encoders → drive_queue_executor → drive → panel → vl53l0x_stub → imu → flash_storage → testing → autonomous_mode → startup. Core1 runs only the LiDAR task.
 
 ### Message Passing
 
@@ -57,7 +59,7 @@ Three data flow patterns coexist, chosen by latency requirements:
 
 - **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
 - **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
-- **Perception atomics** — `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans provide lock-free obstacle reads on the hot path. Written by behavior handlers on `ObstacleDetected` events and by sensor stubs; read by autonomous modes and the UI without acquiring a mutex.
+- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. Written by the LiDAR task and the floor-drop stub, and by behavior handlers on `ObstacleDetected` events; read by autonomous modes and the UI without acquiring a mutex.
 
 ## Driving
 
@@ -81,6 +83,30 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 - **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when a combined obstacle is detected (LiDAR or rangefinder). Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on any obstacle detection.
 - **Epoch** — A monotonic counter incremented on each interrupt. Queued commands stamped with an old epoch are discarded when dequeued, preventing stale commands from executing after an interrupt.
 
+## Odometry
+
+- **Odometry** — The self-contained estimate of the robot's pose and its change, from onboard sensing alone; any reference it aligns against is one it built itself.
+  _Avoid_: position tracking, dead reckoning (that is the uncorrected subset)
+- **Pose** — The robot's position and heading `(x, y, yaw)` in the World Frame.
+  _Avoid_: position, location
+- **World Frame** — The reference frame that pose is expressed in; its origin is the robot's pose at the start of a mission. Convention: `+x` forward, `+y` left, `yaw` counter-clockwise positive, degrees at the API boundary and radians internally.
+- **Dead Reckoning** — Propagating pose from a motion model (encoders plus IMU) with no absolute correction, so error grows without bound.
+  _Avoid_: inertial navigation
+- **Scan Matching** — Estimating the rigid transform `(Δx, Δy, Δθ)` that best aligns one LiDAR spin with a reference, either the previous spin or the Odometry Grid.
+  _Avoid_: registration, alignment
+- **Odometry Grid** — The occupancy grid that scan matching aligns spins against. It is built from the robot's own scans and anchors the estimate to the world, bounding drift rather than merely slowing it.
+  _Avoid_: map (reserved for the mission's map of the environment)
+- **Scan Plane** — The plane swept by the LiDAR rotor over one spin. It is fixed to the chassis, so it tilts with the robot.
+- **Flat-World Assumption** — The premise that every spin slices the world at a constant height and orientation. It is what makes 2D scan matching well-posed, and what terrain tilt violates.
+- **Tilt Gate** — The IMU-driven admission test that admits or discards a scan-match pose according to roll and pitch.
+- **Drift** — Unbounded growth of pose error under dead reckoning.
+  _Avoid_: accumulated drift (that names the gap-analysis term **Leg Drift**)
+- **Pose Confidence** — The system's uncertainty in the pose, raised by track slip and by tilt-gate closures.
+- **Pose State** — The module holding the fused pose and its uncertainty, with lock-free mirrors for hot-path readers.
+- **Estimation Error** — The difference between the robot's believed pose and its true pose. The error that odometry work is measured by.
+- **Execution Error** — The difference between the robot's true pose and the pose the drive was commanded to reach, caused by slip, calibration and ramp-down overshoot. Odometry does not fix it.
+- **Closure Error** — The pose discrepancy measured after the robot returns to its starting point, expressed as a fraction of the path length. The mission-level accuracy figure.
+
 ## State Modules
 
 Lock order (documented in each module): **power → calibration → perception → motion**
@@ -88,13 +114,13 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (VL53L0X front-down distance).
-- **ObstacleSource** — Enum (`Lidar` | `Rangefinder`) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection.
+- **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR reports obstacles: the rangefinder is a stair/drop sensor, and a rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
-- **Motion State** — Track speeds, encoder pulse counts, computed speeds (cm/s), odometry. Lock-free atomic mirrors for high-frequency readers.
+- **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.
 
 ## Autonomous Modes
 
-- **Coast-and-Avoid** — Drive forward until the combined obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The LiDAR stub runs threshold/cone logic internally; the mode reads only the pre-computed boolean. Simple, reliable.
+- **Coast-and-Avoid** — Drive forward until the obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The flag comes from the LiDAR's Front Sector test; the mode reads only the pre-computed boolean, and refuses to run if the LiDAR cannot be acquired. Simple, reliable.
 - **Attempt Straight Line** — User sets target distance (100–1000 cm). The LiDAR point cloud is analyzed for navigable gaps; the widest gap within the forward cone (±60°) is chosen. The robot rotates toward the gap center, drives a leg, and repeats. IMU heading used for drift correction. Completes when target distance is reached or no forward path exists. *(Deferred — UI integration pending.)*
 
 ### Gap Analysis
@@ -102,8 +128,9 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Gap** — A contiguous angular arc in the LiDAR point cloud where no obstacle return is within threshold (default 30 cm). A valid gap has sufficient width at its constriction depth, is flanked by obstacles, and lies within the forward cone.
 - **Constriction Depth** — The minimum distance across the angles that make up a gap. Determines how far the robot can safely travel through that gap.
 - **Leg** — One rotate-then-drive maneuver through a chosen gap. The leg length is the constriction depth minus a safety margin, or the remaining target distance if shorter.
-- **Accumulated Drift** — The signed sum of deviation angles across all legs. Later legs apply a correction toward the ideal straight line.
-- **Correction Angle** — The gap midpoint angle that would cancel accumulated drift (= `-drift`). The gap closest to this angle is preferred.
+- **Leg Drift** — The signed sum of deviation angles across all legs of a gap-following run. Later legs apply a correction toward the ideal straight line.
+  _Avoid_: Accumulated Drift (that names the estimation concept **Drift**)
+- **Correction Angle** — The gap midpoint angle that would cancel the current leg drift (= `-drift`). The gap closest to this angle is preferred.
 
 ## Calibration
 
@@ -117,3 +144,4 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the automated compile-time gates; the `coin-d6` crate additionally has host-side decoder/aggregation/warm-up tests run with `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests` (the explicit host target is required because the default build target is `thumbv8m.main-none-eabihf`). Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.
 - **Hardware-tests crate** — `hardware-tests` is a workspace member for standalone, breadboard-scale HIL checks that exercise one or two sensors in isolation (e.g. the LiDAR→TFT radar), running as their own embassy binaries under `examples/`. Distinct from the in-firmware `testmode` tasks: these run outside the robot firmware, on a breadboard, rather than inside the running robot.
+- **Testable logic in workspace crates** — Calculations that are hardware-independent (decoders, state machines, controllers, estimators) belong in `#![no_std]`, HAL-agnostic workspace crates that can be host-tested behind a `std` feature, as `coin-d6` does. This is the desired pattern. Older firmware code still performs such calculations inline, where they can only be verified by driving the robot, and extracting them is a standing refactoring opportunity.

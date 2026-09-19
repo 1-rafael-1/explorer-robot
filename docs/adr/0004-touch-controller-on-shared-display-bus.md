@@ -7,7 +7,7 @@ for the display and ~200 kHz for the touch controller — so a single bus must b
 arbitrated and reconfigured per device. This is developed and proven on the
 bench only; the robot's own display bus is left untouched.
 
-**Status:** accepted
+**Status:** accepted; its deferred robot migration has since landed as ADR-0008, which reopens ADR-0003 as this ADR predicted. The bench findings below (protocol confirmation, PENIRQ arming, RGB colour order, measured calibration) carry over to the robot unchanged.
 
 **Considered Options**
 
