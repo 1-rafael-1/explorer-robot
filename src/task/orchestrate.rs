@@ -71,10 +71,6 @@ async fn handle_event(event: Events) {
         Events::TestingCompleted => {
             ui::send_ui_event(UiEvent::TestingCompleted).await;
         }
-        Events::LidarScanCompleted => {
-            // Placeholder: log LiDAR scan completion for now.
-            info!("Lidar scan completed");
-        }
         Events::FloorDropDetected { detected } => {
             behavior::floor_drop::handle_floor_drop_detected(detected).await;
         }

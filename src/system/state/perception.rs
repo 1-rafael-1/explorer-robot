@@ -173,6 +173,26 @@ pub async fn get_rangefinder_snapshot() -> Option<RangefinderReadings> {
     PERCEPTION_STATE.lock().await.rangefinder
 }
 
+/// Clear the stored `LiDAR` cloud and its obstacle flag.
+///
+/// Called by the `LiDAR` task's release and terminal-failure paths so stale data
+/// cannot outlive a powered-down sensor: the cloud becomes absent and the
+/// obstacle flag is cleared, both in the lock-free snapshot and in the mutex.
+///
+/// Returns [`ChangeDetected::ChangedToCleared`] when the obstacle flag had been
+/// set, so the caller can raise the matching cleared edge. Takes only the
+/// perception mutex (lock-order step 3) and holds no other lock.
+pub async fn clear_lidar_state() -> ChangeDetected {
+    let old = LIDAR_OBSTACLE.swap(false, Ordering::Relaxed);
+
+    let mut state = PERCEPTION_STATE.lock().await;
+    state.lidar = None;
+    state.lidar_obstacle = false;
+    drop(state);
+
+    change_detected(old, false)
+}
+
 /// Reset all obstacle flags, floor-drop flag, and sensor data to defaults.
 #[allow(dead_code)]
 pub async fn reset_all() {

@@ -4,7 +4,7 @@
 //! RGB LED, rotary encoder, panel (TFT + touch), VL53L0X stub, flash storage,
 //! UI, testmode, autonomous mode controller, and startup.
 //!
-//! Core1 hosts the `LiDAR` driver task (currently synthetic stub, real `COIN-D6` TBD).
+//! Core1 hosts the real COIN-D6 `LiDAR` driver task, powered on demand.
 
 #![no_std]
 #![no_main]
@@ -36,7 +36,7 @@ use embassy_rp::{
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
-    uart::{self, InterruptHandler as UartInterruptHandler, Uart, UartRx},
+    uart::{self, BufferedUart, InterruptHandler as UartInterruptHandler, Uart},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
@@ -61,7 +61,7 @@ bind_interrupts!(pub struct Irqs {
     DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>,
         DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>,
         DmaInterruptHandler<DMA_CH6>, DmaInterruptHandler<DMA_CH7>;
-    UART0_IRQ => UartInterruptHandler<UART0>;
+    UART0_IRQ => uart::BufferedInterruptHandler<UART0>;
     UART1_IRQ => UartInterruptHandler<UART1>;
 });
 
@@ -74,7 +74,7 @@ pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 
 // ── Core stacks & executors ────────────────────────────────────────────────────
 
-/// Core1 stack — 16 KiB for the `LiDAR` task (stub → real `COIN-D6` driver).
+/// Core1 stack — 16 KiB for the real COIN-D6 `LiDAR` driver task.
 ///
 /// Budget: ~1.5 KiB point cloud + ~8 KiB UART/DMA buffers + ~4 KiB
 /// frame-parser state + ~2 KiB embassy async overhead.
@@ -145,20 +145,19 @@ pub struct Ec11Pins {
 
 /// Resources for the COIN-D6 360° spinning dTOF `LiDAR`.
 ///
-/// Runs on **core1** over a dedicated UART0 peripheral. The sensor
-/// auto-starts on power-up and emits continuous scan data at 10 Hz
+/// Runs on **core1** over a dedicated UART0 peripheral. The sensor is off at
+/// boot; the driver task powers it on demand and streams scan data at 10 Hz
 /// (~230 400 baud). A power MOSFET (IRLS44N) on the supply rail allows
 /// firmware-controlled power cycling.
 ///
 /// Pin choice is constrained by the RP2350's fixed UART alt-function
 /// table: UART0 RX only exists on GPIO 1/13/17, all otherwise claimed
 /// (motor/RGB/I2C0) except GPIO 1 after relocating the motor's
-/// `left_fwd` pin. UART0 TX (GPIO 12) was already free.
+/// `left_fwd` pin. UART0 TX (GPIO 12) was already free and is now wired: the
+/// driver's bound needs a readable and writable stream even though start and
+/// stop are best-effort.
 pub struct D6LidarPins {
-    /// UART0 TX — connect to `LiDAR` RX, if command support is wired later
-    /// (GPIO 12). Reserved but not yet wired into `init_d6_lidar_uart`,
-    /// since the sensor only needs RX per the data-format spec.
-    #[allow(dead_code)]
+    /// UART0 TX — connect to `LiDAR` RX (GPIO 12).
     pub uart_tx: embassy_rp::Peri<'static, PIN_12>,
     /// UART0 RX — connect to `LiDAR` TX (GPIO 1).
     pub uart_rx: embassy_rp::Peri<'static, PIN_1>,
@@ -166,8 +165,6 @@ pub struct D6LidarPins {
     pub power_mosfet: embassy_rp::Peri<'static, PIN_26>,
     /// UART0 peripheral instance.
     pub uart: embassy_rp::Peri<'static, UART0>,
-    /// DMA channel for UART0 RX streaming.
-    pub dma_rx: embassy_rp::Peri<'static, DMA_CH3>,
 }
 
 /// Resources for the Grove Vision AI V2 camera module.
@@ -475,30 +472,45 @@ fn init_imu(spawner: Spawner, spi: Spi<'static, SPI0, spi::Async>, cs: Output<'s
     spawner.spawn(task::sensors::imu::inertial_measurement_read(spi_bus, cs).unwrap());
 }
 
-/// Bring up the COIN-D6 `LiDAR`'s UART0 RX peripheral and power MOSFET.
+/// `LiDAR` UART baud rate (230400 8N1).
+const D6_LIDAR_BAUD: u32 = 230_400;
+/// `BufferedUart` TX ring buffer size (start/stop commands are 4 bytes).
+const D6_LIDAR_TX_BUF_LEN: usize = 16;
+/// `BufferedUart` RX ring buffer size; absorbs stream data between reads.
+const D6_LIDAR_RX_BUF_LEN: usize = 4096;
+
+/// Static TX ring buffer for the `LiDAR`'s buffered UART.
+static D6_LIDAR_TX_BUF: StaticCell<[u8; D6_LIDAR_TX_BUF_LEN]> = StaticCell::new();
+/// Static RX ring buffer for the `LiDAR`'s buffered UART.
+static D6_LIDAR_RX_BUF: StaticCell<[u8; D6_LIDAR_RX_BUF_LEN]> = StaticCell::new();
+
+/// Bring up the COIN-D6 `LiDAR`'s buffered UART0 and spawn its task on core1.
 ///
-/// RX-only: per the D6 data-format spec, command-based start/stop was
-/// unreliable in testing, so power cycling is done via the MOSFET gate
-/// instead of serial commands. The TX pin (GPIO 12, `D6LidarPins::uart_tx`)
-/// stays reserved but unwired — add it here if command support turns out
-/// to be needed.
+/// The UART is full duplex — the driver's bound needs a readable and writable
+/// stream even though start and stop are best-effort — on the reserved RX/TX pair
+/// (GPIO 1 / GPIO 12). The power gate starts low, so the sensor is off at boot.
 ///
 /// Must be called on **core1** so `UART0_IRQ` is enabled on core1's NVIC,
 /// mirroring how `init_i2c_bus` must run on core0 for `I2C0_IRQ`.
-///
-/// This only brings the peripheral up — no frame parsing yet. Returns the
-/// UART RX half and the MOSFET output for the real driver task to consume
-/// once it exists; the `lidar_stub` task does not use these yet.
-fn init_d6_lidar_uart(d6_pins: D6LidarPins) -> (UartRx<'static, uart::Async>, Output<'static>) {
+#[allow(clippy::unwrap_used)]
+fn init_lidar(spawner: Spawner, d6_pins: D6LidarPins) {
     let mut uart_config = uart::Config::default();
-    uart_config.baudrate = 230_400;
+    uart_config.baudrate = D6_LIDAR_BAUD;
 
-    let uart_rx = UartRx::new(d6_pins.uart, d6_pins.uart_rx, Irqs, d6_pins.dma_rx, uart_config);
+    let uart = BufferedUart::new(
+        d6_pins.uart,
+        d6_pins.uart_tx,
+        d6_pins.uart_rx,
+        Irqs,
+        D6_LIDAR_TX_BUF.init([0u8; D6_LIDAR_TX_BUF_LEN]),
+        D6_LIDAR_RX_BUF.init([0u8; D6_LIDAR_RX_BUF_LEN]),
+        uart_config,
+    );
 
-    // Powered off by default; the real driver drives this high to power the sensor.
-    let power_mosfet = Output::new(d6_pins.power_mosfet, embassy_rp::gpio::Level::Low);
+    // Powered off by default; the driver asserts this only while acquired.
+    let power = Output::new(d6_pins.power_mosfet, Level::Low);
 
-    (uart_rx, power_mosfet)
+    spawner.spawn(task::sensors::lidar::lidar_task(uart, power).unwrap());
 }
 
 /// Bring up the Grove Vision AI V2's UART1 peripheral (full duplex) and power MOSFET.
@@ -588,13 +600,12 @@ fn main() -> ! {
         enc_right_pin: p.PIN_9,
     };
 
-    // D6 LiDAR — dedicated UART0 on core1 (currently stubbed).
+    // D6 LiDAR — dedicated buffered UART0 on core1, powered on demand.
     let d6_pins = D6LidarPins {
         uart_tx: p.PIN_12,
         uart_rx: p.PIN_1,
         power_mosfet: p.PIN_26,
         uart: p.UART0,
-        dma_rx: p.DMA_CH3,
     };
 
     // Grove Vision AI V2 — dedicated UART1 on core0 (reserved, not yet driven).
@@ -611,12 +622,9 @@ fn main() -> ! {
     #[allow(static_mut_refs)]
     spawn_core1(p.CORE1, unsafe { &mut CORE1_STACK }, move || {
         // Initialised on core1 so UART0_IRQ is enabled on core1's NVIC.
-        // Not yet consumed by `lidar_stub_task` — held here until the real
-        // driver task lands.
-        let (_d6_uart_rx, _d6_power_mosfet) = init_d6_lidar_uart(d6_pins);
         let executor1 = EXECUTOR1.init(Executor::new());
         executor1.run(|spawner| {
-            spawner.spawn(task::sensors::lidar_stub::lidar_stub_task().unwrap());
+            init_lidar(spawner, d6_pins);
         });
     });
 

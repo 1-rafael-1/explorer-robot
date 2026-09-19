@@ -6,7 +6,7 @@
 //! - `battery_charge_read` — ADC battery voltage monitoring
 //! - `indicators` — RGB LED status indication
 //! - `io` — graphics panel (TFT + touch), legacy display shim, flash storage
-//! - `sensors` — encoder reader, IMU, `LiDAR` stub, VL53L0X stub
+//! - `sensors` — encoder reader, IMU, `LiDAR` driver, VL53L0X stub
 //! - `ui` — OLED menu system with rotary encoder
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
 //! - `control` — rotary encoder input
@@ -28,7 +28,7 @@ pub mod initialization;
 pub mod io;
 pub mod motor_driver;
 pub mod orchestrate;
-/// Sensor tasks (`IMU`, encoders, `LiDAR` stub, `VL53L0X` stub).
+/// Sensor tasks (`IMU`, encoders, `LiDAR` driver, `VL53L0X` stub).
 pub mod sensors;
 pub mod startup;
 pub mod testmode;

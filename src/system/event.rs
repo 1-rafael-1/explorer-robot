@@ -122,10 +122,6 @@ pub enum Events {
     /// - Used to coordinate next movement decision.
     ObstacleAvoidanceAttempted,
 
-    /// `LiDAR` buffered scan completed (360° point-cloud pass).
-    /// The point cloud in perception state is now fully populated.
-    LidarScanCompleted,
-
     /// Battery measurement (level percentage and raw voltage).
     /// - level: 0-100 percent, triggers LED color updates.
     /// - voltage: raw voltage in volts, used for motor driver voltage compensation.
