@@ -17,55 +17,13 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use lidar_cloud::Cloud;
 
 // ── LiDAR point cloud ────────────────────────────────────────────────────────
-
-/// A full 360° `LiDAR` scan, one distance per degree.
-///
-/// Index 0 = 0° (straight ahead), index 90 = 90° (left), etc.
-/// A distance of `0.0` means no valid return at that angle (out of range,
-/// reflective surface, or measurement error).
-#[derive(Debug, Clone)]
-pub struct LidarPointCloud {
-    /// Distance in cm per degree. `0.0` = no return.
-    pub distances: [f32; 360],
-    /// Monotonically increasing scan sequence number.
-    #[allow(dead_code)]
-    pub sequence: u64,
-}
-
-impl LidarPointCloud {
-    /// Check whether an obstacle lies within a forward cone.
-    ///
-    /// The cone is centered on 0° (forward) and extends `cone_width_deg/2`
-    /// degrees to either side. Only non-zero distances are considered.
-    ///
-    /// # Arguments
-    /// * `threshold_cm` — distances ≤ this value count as obstacles.
-    /// * `cone_width_deg` — total cone width in degrees (e.g. 60 = ±30°).
-    pub fn is_obstacle_ahead(&self, threshold_cm: f32, cone_width_deg: u16) -> bool {
-        let half = cone_width_deg as usize / 2;
-
-        // Right side of the cone: 0° .. half°
-        for i in 0..=half {
-            let d = self.distances[i];
-            if d > 0.0 && d <= threshold_cm {
-                return true;
-            }
-        }
-
-        // Left side of the cone: (360 - half)° .. 359°
-        let start = 360usize.saturating_sub(half);
-        for i in start..360 {
-            let d = self.distances[i];
-            if d > 0.0 && d <= threshold_cm {
-                return true;
-            }
-        }
-
-        false
-    }
-}
+//
+// The cloud type is the `lidar-cloud` crate's [`Cloud`]: 360 one-degree slots of
+// an optional distance in centimetres, slot 0 dead ahead, increasing slots
+// counter-clockwise. A missing return is `None`, never a zero distance.
 
 // ── Rangefinder readings ─────────────────────────────────────────────────────
 
@@ -110,7 +68,7 @@ static PERCEPTION_STATE: Mutex<CriticalSectionRawMutex, PerceptionState> = Mutex
 /// Internal state behind the mutex — holds both `LiDAR` and rangefinder data.
 struct PerceptionState {
     /// Latest `LiDAR` point cloud, if available.
-    lidar: Option<LidarPointCloud>,
+    lidar: Option<Cloud>,
     /// Latest rangefinder readings, if available.
     rangefinder: Option<RangefinderReadings>,
     /// `LiDAR` obstacle flag snapshot in the mutex.
@@ -193,7 +151,7 @@ pub async fn floor_drop() -> bool {
 // ── Public accessors (async — touch the mutex) ────────────────────────────────
 
 /// Replace the stored `LiDAR` point cloud with a new scan.
-pub async fn update_lidar_points(cloud: LidarPointCloud) {
+pub async fn update_lidar_points(cloud: Cloud) {
     let mut state = PERCEPTION_STATE.lock().await;
     state.lidar = Some(cloud);
 }
@@ -205,7 +163,7 @@ pub async fn update_rangefinder_readings(readings: RangefinderReadings) {
 }
 
 /// Return a clone of the current `LiDAR` point cloud, if available.
-pub async fn get_lidar_snapshot() -> Option<LidarPointCloud> {
+pub async fn get_lidar_snapshot() -> Option<Cloud> {
     PERCEPTION_STATE.lock().await.lidar.clone()
 }
 

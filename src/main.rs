@@ -1,8 +1,8 @@
 //! explorer-robot v3 firmware entry point
 //!
 //! Core0 hosts orchestrator, motor driver, encoders, battery monitor,
-//! RGB LED, rotary encoder, display, VL53L0X stub, flash storage, UI,
-//! testmode, autonomous mode controller, and startup.
+//! RGB LED, rotary encoder, panel (TFT + touch), VL53L0X stub, flash storage,
+//! UI, testmode, autonomous mode controller, and startup.
 //!
 //! Core1 hosts the `LiDAR` driver task (currently synthetic stub, real `COIN-D6` TBD).
 
@@ -19,14 +19,15 @@ use embassy_rp::{
     config::Config,
     dma::InterruptHandler as DmaInterruptHandler,
     flash::{Async, Flash},
-    gpio::{Input, Output, Pull},
+    gpio::{Input, Level, Output, Pull},
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
     multicore::{Stack, spawn_core1},
     peripherals::{
-        ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, FLASH, I2C0, PIN_0, PIN_1, PIN_2, PIN_3,
-        PIN_4, PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17,
-        PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_30, PIN_31, PIN_40, PIO1,
-        PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0, SPI1, UART0, UART1,
+        ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, DMA_CH7, FLASH, I2C0, PIN_0, PIN_1, PIN_2,
+        PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16,
+        PIN_17, PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_38, PIN_39, PIN_40, PIN_41,
+        PIN_42, PIN_43, PIN_44, PIN_45, PIN_46, PIN_47, PIO1, PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0,
+        SPI1, UART0, UART1,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
     pio_programs::{
@@ -59,7 +60,7 @@ bind_interrupts!(pub struct Irqs {
     PIO1_IRQ_0 => PioInterruptHandler<PIO1>;
     DMA_IRQ_0 => DmaInterruptHandler<DMA_CH0>, DmaInterruptHandler<DMA_CH1>, DmaInterruptHandler<DMA_CH2>,
         DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>,
-        DmaInterruptHandler<DMA_CH6>;
+        DmaInterruptHandler<DMA_CH6>, DmaInterruptHandler<DMA_CH7>;
     UART0_IRQ => UartInterruptHandler<UART0>;
     UART1_IRQ => UartInterruptHandler<UART1>;
 });
@@ -195,6 +196,39 @@ pub struct AiCamPins {
     pub dma_tx: embassy_rp::Peri<'static, DMA_CH5>,
     /// DMA channel for UART1 RX streaming.
     pub dma_rx: embassy_rp::Peri<'static, DMA_CH4>,
+}
+
+/// Resources for the shared `SPI1` panel bus (ST7789 display + touch layer).
+///
+/// One full-duplex bus carries both devices, each arbitrated by its own chip
+/// select through `SpiDeviceWithConfig`; see `docs/adr/0008`. The panel occupies
+/// the contiguous high GPIO block 41–47, with the touch controller on 38/39 and
+/// the battery ADC keeping GPIO 40.
+pub struct PanelPins {
+    /// `SPI1` peripheral instance.
+    pub spi: embassy_rp::Peri<'static, SPI1>,
+    /// SPI clock (GPIO 42).
+    pub sck: embassy_rp::Peri<'static, PIN_42>,
+    /// SPI data out / MOSI (GPIO 43).
+    pub mosi: embassy_rp::Peri<'static, PIN_43>,
+    /// SPI data in / MISO (GPIO 44).
+    pub miso: embassy_rp::Peri<'static, PIN_44>,
+    /// DMA channel for the bus's transmit direction.
+    pub tx_dma: embassy_rp::Peri<'static, DMA_CH6>,
+    /// DMA channel for the bus's receive direction.
+    pub rx_dma: embassy_rp::Peri<'static, DMA_CH7>,
+    /// Display chip select (GPIO 41).
+    pub display_cs: embassy_rp::Peri<'static, PIN_41>,
+    /// Display data/command (GPIO 45).
+    pub dc: embassy_rp::Peri<'static, PIN_45>,
+    /// Display reset (GPIO 46).
+    pub rst: embassy_rp::Peri<'static, PIN_46>,
+    /// Display backlight (GPIO 47).
+    pub blk: embassy_rp::Peri<'static, PIN_47>,
+    /// Touch chip select (GPIO 38).
+    pub touch_cs: embassy_rp::Peri<'static, PIN_38>,
+    /// Touch pen-down interrupt (GPIO 39, active-low with a pull-up).
+    pub penirq: embassy_rp::Peri<'static, PIN_39>,
 }
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
@@ -343,35 +377,40 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverPins) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Initialise the dedicated write-only SPI1 bus for the ST7789 display.
+/// Initialise the shared full-duplex SPI1 panel bus and spawn the panel task.
 ///
-/// TX-only: the ST7789 has no MISO line, so this bus never reads data.
-fn init_display_spi(
-    spi1: embassy_rp::Peri<'static, SPI1>,
-    sck: embassy_rp::Peri<'static, PIN_30>,
-    mosi: embassy_rp::Peri<'static, PIN_31>,
-    dma_ch6: embassy_rp::Peri<'static, DMA_CH6>,
-) -> Spi<'static, SPI1, spi::Async> {
-    let mut spi_config = spi::Config::default();
-    spi_config.frequency = 64_000_000;
-    spi_config.phase = spi::Phase::CaptureOnSecondTransition;
-    spi_config.polarity = spi::Polarity::IdleHigh;
-    Spi::new_txonly(spi1, sck, mosi, dma_ch6, Irqs, spi_config)
+/// The bus carries both the ST7789 display and the touch controller, each with
+/// its own chip select and per-device configuration (ADR-0008).
+#[allow(clippy::unwrap_used)]
+fn init_panel(spawner: Spawner, pins: PanelPins) {
+    static PANEL_SPI_BUS: StaticCell<task::io::panel::PanelBus> = StaticCell::new();
+    let bus = PANEL_SPI_BUS.init(task::io::panel::new_shared_bus(
+        pins.spi,
+        pins.sck,
+        pins.mosi,
+        pins.miso,
+        pins.tx_dma,
+        pins.rx_dma,
+        Irqs,
+    ));
+    spawner.spawn(
+        task::io::panel::panel(
+            bus,
+            Output::new(pins.display_cs, Level::High),
+            Output::new(pins.dc, Level::Low),
+            Output::new(pins.rst, Level::Low),
+            Output::new(pins.blk, Level::Low),
+            Output::new(pins.touch_cs, Level::High),
+            Input::new(pins.penirq, Pull::Up),
+        )
+        .unwrap(),
+    );
 }
 
-/// Initialise the ST7789 TFT display on the dedicated write-only SPI1 bus.
+/// Spawn the legacy text-display drain shim (deleted by ticket 10).
 #[allow(clippy::unwrap_used)]
-fn init_display(
-    spawner: Spawner,
-    spi: Spi<'static, SPI1, spi::Async>,
-    dc: Output<'static>,
-    rst: Output<'static>,
-    blk: Output<'static>,
-) {
-    static DISPLAY_SPI_BUS: StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, SPI1, spi::Async>>> =
-        StaticCell::new();
-    let spi_bus = DISPLAY_SPI_BUS.init(Mutex::new(spi));
-    spawner.spawn(task::io::display::display(spi_bus, dc, rst, blk).unwrap());
+fn init_legacy_display(spawner: Spawner) {
+    spawner.spawn(task::io::display::legacy_display_drain().unwrap());
 }
 
 /// Spawn the VL53L0X rangefinder stub task on core0.
@@ -592,11 +631,22 @@ fn main() -> ! {
         // SPI bus for ICM20948 IMU
         let (imu_spi, imu_cs) = init_imu_spi(p.SPI0, p.PIN_18, p.PIN_19, p.PIN_20, p.PIN_21, p.DMA_CH1, p.DMA_CH2);
 
-        // Write-only SPI1 bus and control pins for the ST7789 TFT display.
-        let display_spi = init_display_spi(p.SPI1, p.PIN_30, p.PIN_31, p.DMA_CH6);
-        let display_dc = Output::new(p.PIN_32, embassy_rp::gpio::Level::Low);
-        let display_rst = Output::new(p.PIN_33, embassy_rp::gpio::Level::Low);
-        let display_blk = Output::new(p.PIN_34, embassy_rp::gpio::Level::Low);
+        // Shared full-duplex SPI1 bus and pins for the ST7789 panel and its
+        // touch layer (ADR-0008).
+        let panel_pins = PanelPins {
+            spi: p.SPI1,
+            sck: p.PIN_42,
+            mosi: p.PIN_43,
+            miso: p.PIN_44,
+            tx_dma: p.DMA_CH6,
+            rx_dma: p.DMA_CH7,
+            display_cs: p.PIN_41,
+            dc: p.PIN_45,
+            rst: p.PIN_46,
+            blk: p.PIN_47,
+            touch_cs: p.PIN_38,
+            penirq: p.PIN_39,
+        };
 
         // UART1 for Grove Vision AI V2 — not yet consumed by any task, held
         // here until the real driver lands.
@@ -607,7 +657,8 @@ fn main() -> ! {
         init_rgb_led(spawner, &mut pio1_common, pio1_sm0, pio1_sm1, pio1_sm2, rgb_pins);
         init_rotary_encoder(spawner, &mut pio1_common, pio1_sm3, ec11_pins);
         init_motor_driver(spawner, motor_pins);
-        init_display(spawner, display_spi, display_dc, display_rst, display_blk);
+        init_panel(spawner, panel_pins);
+        init_legacy_display(spawner);
         init_vl53l0x_stub(spawner);
         init_imu(spawner, imu_spi, imu_cs);
         init_flash_storage(spawner, p.FLASH, p.DMA_CH0);

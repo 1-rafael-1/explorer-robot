@@ -16,7 +16,7 @@
 //! ```
 //!
 //! Uses `LiDAR` point cloud gap analysis for navigation — `gap_analysis::analyze_gaps`
-//! operates on `&LidarPointCloud` to find navigable gaps within the forward cone.
+//! operates on a [`lidar_cloud::Cloud`] to find navigable gaps within the forward cone.
 //! IMU drift correction and odometry provide per-leg heading and position tracking.
 
 // this entire module is deferred — waiting for LiDAR and rangefinder implementation

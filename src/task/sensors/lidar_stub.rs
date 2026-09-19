@@ -22,10 +22,11 @@
 use defmt::info;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
+use lidar_cloud::Cloud;
 
 use crate::system::{
     event::{Events, ObstacleSource, raise_event},
-    state::perception::{self, LidarPointCloud},
+    state::perception,
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -61,23 +62,18 @@ pub async fn stop_lidar() {
 /// Generate a default 360° point cloud:
 /// - 200 cm clear in all directions
 /// - 50 cm walls at ±90° (left/right)
-const fn generate_default_cloud(sequence: u64) -> LidarPointCloud {
-    let mut distances = [200.0_f32; 360];
+const fn generate_default_cloud(sequence: u64) -> Cloud {
+    let mut distances = [Some(200.0_f32); 360];
     // Walls at ±90°
-    distances[90] = 50.0;
-    distances[270] = 50.0;
+    distances[90] = Some(50.0);
+    distances[270] = Some(50.0);
 
-    LidarPointCloud { distances, sequence }
+    Cloud::from_slots(distances, sequence)
 }
 
-/// Obstacle detection threshold in cm for the forward cone.
-const OBSTACLE_THRESHOLD_CM: f32 = 20.0;
-/// Forward cone width in degrees (±45°).
-const CONE_WIDTH_DEG: u16 = 90;
-
-/// Check whether the generated cloud has an obstacle in the forward cone.
-fn cloud_has_obstacle(cloud: &LidarPointCloud) -> bool {
-    cloud.is_obstacle_ahead(OBSTACLE_THRESHOLD_CM, CONE_WIDTH_DEG)
+/// Check whether the generated cloud has an obstacle in the Front Sector.
+fn cloud_has_obstacle(cloud: &Cloud) -> bool {
+    cloud.front_sector_obstacle()
 }
 
 // ── Embassy task ──────────────────────────────────────────────────────────────

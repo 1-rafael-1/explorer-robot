@@ -5,7 +5,7 @@
 //! - `orchestrate` — central event loop dispatching to behavior handlers
 //! - `battery_charge_read` — ADC battery voltage monitoring
 //! - `indicators` — RGB LED status indication
-//! - `io` — I2C display, flash storage
+//! - `io` — graphics panel (TFT + touch), legacy display shim, flash storage
 //! - `sensors` — encoder reader, IMU, `LiDAR` stub, VL53L0X stub
 //! - `ui` — OLED menu system with rotary encoder
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
