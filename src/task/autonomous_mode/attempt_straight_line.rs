@@ -78,6 +78,16 @@ pub async fn display_state_snapshot() -> ModeDisplayState {
     *DISPLAY_STATE.lock().await
 }
 
+/// Record the target distance the operator set on the panel, in centimetres.
+///
+/// This only stores the value for the deferred mode to pick up when it becomes
+/// startable; it does not start the mode. The panel's value-entry flow clamps
+/// the range, so the value is stored as given.
+pub async fn set_requested_target_cm(target_cm: u16) {
+    let mut ds = DISPLAY_STATE.lock().await;
+    ds.target_cm = target_cm;
+}
+
 // ── Mode entry constants ──────────────────────────────────────────────────────
 
 /// Minimum target distance (cm).

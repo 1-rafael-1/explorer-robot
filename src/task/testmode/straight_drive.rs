@@ -5,45 +5,44 @@
 //! # Test Sequence
 //!
 //! 1. Load calibration from flash (if available)
-//! 2. Wait 5 seconds
-//! 3. Drive forward 150 cm at speed 70
-//! 4. Drive backward 150 cm at speed 70
+//! 2. Wait five seconds
+//! 3. Drive forward 150 cm at speed 70, brake, settle
+//! 4. Drive backward 150 cm at speed 70, brake, settle, coast
 //!
-//! Completion telemetry (achieved left/right revs and status) is logged
-//! after the queue drains.
+//! Each direction is its own queue, so the running screen's phase and percent
+//! follow the test, and the operator's Stop cancels the drive in flight or lands
+//! between the legs. Completion telemetry (achieved left/right revs and status)
+//! is logged per leg.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
+use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use heapless::String;
 
-use super::{TestCommand, release_testmode, request_start};
+use super::{arm_stop, is_stop_requested, release_testmode, status_label, submit, wait_or_stop};
 use crate::{
-    system::event::{Events, raise_event},
+    system::{
+        event::{Events, raise_event},
+        state::{activity, calibration},
+    },
     task::{
         drive::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-            DriveQueueBuilder, types::DriveQueueBuildError,
+            DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
         },
-        io::display::{DisplayAction, MAX_LINE_LEN, display_update},
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
 
-/// Tracks whether the straight drive test is currently active.
-static STRAIGHT_DRIVE_TEST_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Distance each leg drives, in centimetres.
+const LEG_DISTANCE_CM: f32 = 150.0;
 
-/// Request the straight drive test to start.
-pub async fn start_straight_drive_test() {
-    if STRAIGHT_DRIVE_TEST_ACTIVE.swap(true, Ordering::Relaxed) {
-        return;
-    }
+/// Speed each leg drives at (0-100).
+const LEG_SPEED: u8 = 70;
 
-    if !request_start(TestCommand::StraightDrive).await {
-        STRAIGHT_DRIVE_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    }
-}
+/// Countdown before the first leg, in milliseconds.
+const COUNTDOWN_MS: u64 = 5_000;
+
+/// Settle time after a brake, in milliseconds.
+const SETTLE_MS: u64 = 500;
 
 /// Spawn the straight drive test task via the controller.
 #[allow(clippy::unwrap_used)]
@@ -51,137 +50,115 @@ pub(super) fn spawn(spawner: Spawner) {
     spawner.spawn(straight_drive_test_task().unwrap());
 }
 
+/// Straight drive test task: runs both legs, then reports completion.
 #[embassy_executor::task]
 async fn straight_drive_test_task() {
-    run_straight_drive_test().await;
-    release_testmode();
-    STRAIGHT_DRIVE_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    raise_event(Events::TestingCompleted).await;
+    if run_straight_drive_test().await {
+        activity::complete("Straight drive complete").await;
+        release_testmode();
+        raise_event(Events::TestingCompleted).await;
+    } else {
+        release_testmode();
+    }
 }
 
-/// Run the straight-line distance test.
-#[allow(clippy::too_many_lines)]
-async fn run_straight_drive_test() {
-    async fn show_line(line: u8, msg: &str) {
-        let mut s: String<MAX_LINE_LEN> = String::new();
-        let _ = s.push_str(msg);
-        display_update(DisplayAction::ShowText(s, line)).await;
-    }
+/// Run the straight-line distance test, reporting whether both legs ran.
+async fn run_straight_drive_test() -> bool {
+    arm_stop().await;
 
-    fn build_straight_queue() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
-        let mut queue = DriveQueueBuilder::new();
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::DriveDistance {
-            kind: DriveDistanceKind::Straight { distance_cm: 150.0 },
-            direction: DriveDirection::Forward,
-            speed: 70,
-        }))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Brake))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Idle { duration_ms: 500 }))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::DriveDistance {
-            kind: DriveDistanceKind::Straight { distance_cm: 150.0 },
-            direction: DriveDirection::Backward,
-            speed: 70,
-        }))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Brake))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Idle { duration_ms: 500 }))?;
-
-        queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Coast))?;
-
-        Ok(queue)
-    }
-
-    // Clear display at start of test.
-    display_update(DisplayAction::Clear).await;
-    show_line(0, "DIST TEST").await;
-    show_line(1, "Initializing...").await;
-    show_line(2, "").await;
-    show_line(3, "").await;
-
-    // Send initialization event to orchestrator (only if not already initialized).
-    Timer::after(Duration::from_millis(100)).await;
-    if !crate::system::state::calibration::is_initialized().await {
+    if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }
 
-    // Wait for system to stabilize and calibration to load.
-    defmt::info!("🧪 DIST: Waiting for system initialization and calibration loading...");
-    Timer::after(Duration::from_secs(3)).await;
-
     // Force 6-axis fusion (gyro + accel).
-    defmt::info!("🧪 DIST: Setting IMU DMP fusion mode to Axis6");
+    info!("straight: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
-    show_line(1, "Fusion: Axis6").await;
-    Timer::after(Duration::from_millis(250)).await;
 
-    // Countdown before driving.
-    let wait_s = 5u64;
-    defmt::info!("🧪 DIST: Waiting {} seconds before driving...", wait_s);
-    show_line(1, "Starting in a few s").await;
-    Timer::after(Duration::from_secs(wait_s)).await;
-
-    // Queue forward + backward 50 cm.
-    show_line(0, "DIST TEST").await;
-    show_line(1, "FWD then REV").await;
-    show_line(2, "Queueing...").await;
-    show_line(3, "").await;
-
-    let Ok(queue) = build_straight_queue() else {
-        defmt::warn!("🧪 DIST: queue full");
-        return;
-    };
-
-    let Ok(completion) = queue.submit().await else {
-        defmt::warn!("🧪 DIST: queue busy");
-        return;
-    };
-
-    if let Some(step) = completion.last_step_completion
-        && let CompletionTelemetry::DriveDistance {
-            achieved_left_revs,
-            achieved_right_revs,
-            target_left_revs,
-            target_right_revs,
-            duration_ms,
-        } = step.telemetry
-    {
-        let status_str = match step.status {
-            CompletionStatus::Success => "Success",
-            CompletionStatus::Cancelled => "Cancelled",
-            CompletionStatus::Failed(_) => "Failed",
-        };
-
-        let left_pct = if target_left_revs > 0.0 {
-            (achieved_left_revs / target_left_revs) * 100.0
-        } else {
-            0.0
-        };
-        let right_pct = if target_right_revs > 0.0 {
-            (achieved_right_revs / target_right_revs) * 100.0
-        } else {
-            0.0
-        };
-
-        defmt::info!("🧪 DIST: complete: status={=str}", status_str,);
-        defmt::info!(
-            "🧪 DIST:   target   L={=f32} R={=f32} revs",
-            target_left_revs,
-            target_right_revs,
-        );
-        defmt::info!(
-            "🧪 DIST:   achieved L={=f32} ({=f32}%) R={=f32} ({=f32}%)",
-            achieved_left_revs,
-            left_pct,
-            achieved_right_revs,
-            right_pct,
-        );
-        defmt::info!("🧪 DIST:   duration_ms={=u64}", duration_ms,);
+    if wait_or_stop(COUNTDOWN_MS).await {
+        return false;
     }
 
-    defmt::info!("🧪 DIST: Straight drive test complete");
+    let legs = [
+        ("Forward 150 cm", DriveDirection::Forward),
+        ("Backward 150 cm", DriveDirection::Backward),
+    ];
+
+    for (index, (phase, direction)) in legs.iter().enumerate() {
+        if is_stop_requested() {
+            return false;
+        }
+        activity::set_running(phase, Some(activity::percent_done(index, legs.len()))).await;
+
+        match submit(build_leg(*direction)).await {
+            Ok(completion) => report_leg(&completion),
+            Err(reason) => {
+                activity::fail(reason).await;
+                return false;
+            }
+        }
+
+        // Brake, then let the robot settle before the operator's next leg or the
+        // measurement. The settle is a queue step so a Stop can cancel it.
+        match submit(build_settle()).await {
+            Ok(_) => {}
+            Err(reason) => {
+                activity::fail(reason).await;
+                return false;
+            }
+        }
+    }
+
+    send_drive_command(DriveCommand::Drive(DriveAction::Coast)).await;
+    true
+}
+
+/// Build one leg's queue: the straight drive alone, so its telemetry is the
+/// queue's last step.
+fn build_leg(direction: DriveDirection) -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::DriveDistance {
+        kind: DriveDistanceKind::Straight {
+            distance_cm: LEG_DISTANCE_CM,
+        },
+        direction,
+        speed: LEG_SPEED,
+    }))?;
+    Ok(queue)
+}
+
+/// Build the settle queue: brake, then idle for the settle time.
+fn build_settle() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Brake))?;
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Idle { duration_ms: SETTLE_MS }))?;
+    Ok(queue)
+}
+
+/// Log one leg's achieved distance telemetry.
+fn report_leg(completion: &DriveQueueCompletion) {
+    let Some(step) = completion.last_step_completion.as_ref() else {
+        return;
+    };
+
+    if let CompletionTelemetry::DriveDistance {
+        achieved_left_revs,
+        achieved_right_revs,
+        target_left_revs,
+        target_right_revs,
+        duration_ms,
+    } = step.telemetry
+    {
+        info!(
+            "straight: status={=str} target L={=f32} R={=f32} achieved L={=f32} R={=f32} duration_ms={=u64}",
+            status_label(&step.status),
+            target_left_revs,
+            target_right_revs,
+            achieved_left_revs,
+            achieved_right_revs,
+            duration_ms
+        );
+    }
+    if let CompletionStatus::Failed(reason) = step.status {
+        warn!("straight: leg failed: {=str}", reason);
+    }
 }

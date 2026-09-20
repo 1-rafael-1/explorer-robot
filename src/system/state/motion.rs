@@ -8,6 +8,7 @@
 //! 2) `CALIBRATION_STATE`
 //! 3) perception mutex (use accessor functions, see `perception` module)
 //! 4) `MOTION_STATE`
+//! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
 //!
 //! UI state is separate and does not participate in this order.
 

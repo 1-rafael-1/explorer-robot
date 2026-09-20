@@ -1,50 +1,79 @@
 //! Basic motor test mode task.
 //!
-//! Tests each track individually: left track then right track.
-//! Displays encoder pulse counts per track on the OLED.
+//! Tests each track individually: left track then right track, each forward then
+//! backward, logging the encoder pulse count for every leg. The four legs cycle
+//! until the operator stops the test.
 //!
-//! Uses `MotorCommand::SetTracks` with one track active at a time.
-//! Encoder data comes from `get_latest_encoder_measurement()` (drive sensor
-//! channel).
+//! Uses `MotorCommand::SetTracks` with one track active at a time. Encoder data
+//! comes from `get_latest_encoder_measurement()` (drive sensor channel).
+//!
+//! The running screen reads the current leg and its percent from the activity
+//! state; the live pulse counts go to the log. The test is interactive: it runs
+//! until the operator taps Stop on the running screen.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_time::{Duration, Timer};
-use heapless::String;
 
-use super::{TestCommand, release_testmode, request_start};
-use crate::task::{
-    drive::{clear_encoder_measurement, get_latest_encoder_measurement},
-    io::display::{DisplayAction, MAX_LINE_LEN, display_update},
-    motor_driver::{self, MotorCommand, Track},
-    sensors::encoders::{self, EncoderCommand},
+use super::{arm_stop, is_stop_requested, release_testmode, wait_or_stop};
+use crate::{
+    system::state::activity,
+    task::{
+        drive::{clear_encoder_measurement, get_latest_encoder_measurement},
+        motor_driver::{self, MotorCommand, Track},
+        sensors::encoders::{self, EncoderCommand},
+    },
 };
 
-/// Signal used to stop the basic motor test mode.
-static BASIC_MOTOR_TEST_STOP_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+/// How long one leg (one track, one direction) drives, in milliseconds.
+const LEG_DURATION_MS: u64 = 2_000;
 
-/// Tracks whether the basic motor test mode is active.
-static BASIC_MOTOR_TEST_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// How often the encoder count is sampled during a leg, in milliseconds.
+const SAMPLE_INTERVAL_MS: u64 = 100;
 
-/// Request the basic motor test mode to start (spawns the task on demand).
-pub async fn start_basic_motor_test_mode() {
-    if BASIC_MOTOR_TEST_ACTIVE.swap(true, Ordering::Relaxed) {
-        return;
-    }
+/// Motor speed commanded for a leg (0-100).
+const LEG_SPEED: i8 = 50;
 
-    if !request_start(TestCommand::BasicMotor).await {
-        BASIC_MOTOR_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    }
+/// One leg of the test: the track under test, its phase label, and the commanded
+/// speeds.
+struct Leg {
+    /// The track under test.
+    track: Track,
+    /// The phase line shown while this leg runs.
+    phase: &'static str,
+    /// Left track command.
+    left: i8,
+    /// Right track command.
+    right: i8,
 }
 
-/// Request the basic motor test mode to stop.
-pub fn stop_basic_motor_test_mode() {
-    BASIC_MOTOR_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    BASIC_MOTOR_TEST_STOP_SIGNAL.signal(());
-}
+/// The legs, in order: each track forward, then each track backward.
+const LEGS: [Leg; 4] = [
+    Leg {
+        track: Track::Left,
+        phase: "Left forward",
+        left: LEG_SPEED,
+        right: 0,
+    },
+    Leg {
+        track: Track::Left,
+        phase: "Left reverse",
+        left: -LEG_SPEED,
+        right: 0,
+    },
+    Leg {
+        track: Track::Right,
+        phase: "Right forward",
+        left: 0,
+        right: LEG_SPEED,
+    },
+    Leg {
+        track: Track::Right,
+        phase: "Right reverse",
+        left: 0,
+        right: -LEG_SPEED,
+    },
+];
 
 /// Spawn the basic motor test task via the controller.
 #[allow(clippy::unwrap_used)]
@@ -52,29 +81,10 @@ pub(super) fn spawn(spawner: Spawner) {
     spawner.spawn(basic_motor_test_task().unwrap());
 }
 
-/// Track configuration for the test loop.
-#[derive(Clone, Copy)]
-struct TrackSpec {
-    /// Display name for the track.
-    name: &'static str,
-    /// Which track side (left/right).
-    track: Track,
-}
-
 /// Basic motor test mode runner.
-///
-/// Tests each track individually:
-/// 1. Left track forward → show encoder counts → backward → show counts
-/// 2. Right track forward → show encoder counts → backward → show counts
 #[embassy_executor::task]
-#[allow(clippy::too_many_lines)]
 async fn basic_motor_test_task() {
-    display_update(DisplayAction::Clear).await;
-
-    // Clear any pending stop signal so the next test doesn't end immediately.
-    while BASIC_MOTOR_TEST_STOP_SIGNAL.signaled() {
-        BASIC_MOTOR_TEST_STOP_SIGNAL.wait().await;
-    }
+    arm_stop().await;
 
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
@@ -89,136 +99,30 @@ async fn basic_motor_test_task() {
     encoders::send_command(EncoderCommand::Start { interval_ms: 50 }).await;
     Timer::after(Duration::from_millis(100)).await;
 
-    let tracks = [
-        TrackSpec {
-            name: "Left Track",
-            track: Track::Left,
-        },
-        TrackSpec {
-            name: "Right Track",
-            track: Track::Right,
-        },
-    ];
-
-    'test: loop {
-        for track_spec in tracks {
-            if !BASIC_MOTOR_TEST_ACTIVE.load(Ordering::Relaxed) {
-                break 'test;
+    // The test is interactive: the legs cycle until the operator stops them.
+    'cycling: loop {
+        for (index, leg) in LEGS.iter().enumerate() {
+            if is_stop_requested() {
+                break 'cycling;
             }
 
-            // ── Show header ──────────────────────────────────────────────
-            let mut header: String<MAX_LINE_LEN> = String::new();
-            let _ = header.push_str("Basic Motor Test");
-            display_update(DisplayAction::ShowText(header, 0)).await;
+            // Progress done so far, so the bar never claims a leg that has not run.
+            let percent = activity::percent_done(index, LEGS.len());
+            activity::set_running(leg.phase, Some(percent)).await;
 
-            let mut line1: String<MAX_LINE_LEN> = String::new();
-            let _ = line1.push_str(track_spec.name);
-            display_update(DisplayAction::ShowText(line1, 1)).await;
-
-            let mut line3: String<MAX_LINE_LEN> = String::new();
-            let _ = line3.push_str("Press to exit");
-            display_update(DisplayAction::ShowText(line3, 3)).await;
-
-            // ── Test forward ─────────────────────────────────────────────
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(100)).await;
             encoders::send_command(EncoderCommand::Reset).await;
             Timer::after(Duration::from_millis(100)).await;
             clear_encoder_measurement().await;
 
-            // Activate only the track under test.
-            let (left_speed, right_speed) = match track_spec.track {
-                Track::Left => (50i8, 0i8),
-                Track::Right => (0i8, 50i8),
-            };
             motor_driver::send_motor_command(MotorCommand::SetTracks {
-                left_speed,
-                right_speed,
+                left_speed: leg.left,
+                right_speed: leg.right,
             })
             .await;
 
-            for _ in 0..20 {
-                match select(
-                    BASIC_MOTOR_TEST_STOP_SIGNAL.wait(),
-                    Timer::after(Duration::from_millis(100)),
-                )
-                .await
-                {
-                    Either::First(()) => break 'test,
-                    Either::Second(()) => {
-                        if !BASIC_MOTOR_TEST_ACTIVE.load(Ordering::Relaxed) {
-                            break 'test;
-                        }
-
-                        let count =
-                            get_latest_encoder_measurement()
-                                .await
-                                .map_or(0, |measurement| match track_spec.track {
-                                    Track::Left => measurement.left,
-                                    Track::Right => measurement.right,
-                                });
-
-                        let mut line2: String<MAX_LINE_LEN> = String::new();
-                        let _ = core::fmt::write(&mut line2, format_args!("ENC: {count:>6}"));
-                        display_update(DisplayAction::ShowText(line2, 2)).await;
-                    }
-                }
-            }
-
-            motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-            Timer::after(Duration::from_millis(200)).await;
-
-            if !BASIC_MOTOR_TEST_ACTIVE.load(Ordering::Relaxed) {
-                break 'test;
-            }
-
-            // ── Test backward ────────────────────────────────────────────
-            let mut line1b: String<MAX_LINE_LEN> = String::new();
-            let _ = line1b.push_str(track_spec.name);
-            let _ = line1b.push_str(" REV");
-            display_update(DisplayAction::ShowText(line1b, 1)).await;
-
-            encoders::send_command(EncoderCommand::Reset).await;
-            Timer::after(Duration::from_millis(100)).await;
-            clear_encoder_measurement().await;
-
-            let (left_speed, right_speed) = match track_spec.track {
-                Track::Left => (-50i8, 0i8),
-                Track::Right => (0i8, -50i8),
-            };
-            motor_driver::send_motor_command(MotorCommand::SetTracks {
-                left_speed,
-                right_speed,
-            })
-            .await;
-
-            for _ in 0..20 {
-                match select(
-                    BASIC_MOTOR_TEST_STOP_SIGNAL.wait(),
-                    Timer::after(Duration::from_millis(100)),
-                )
-                .await
-                {
-                    Either::First(()) => break 'test,
-                    Either::Second(()) => {
-                        if !BASIC_MOTOR_TEST_ACTIVE.load(Ordering::Relaxed) {
-                            break 'test;
-                        }
-
-                        let count =
-                            get_latest_encoder_measurement()
-                                .await
-                                .map_or(0, |measurement| match track_spec.track {
-                                    Track::Left => measurement.left,
-                                    Track::Right => measurement.right,
-                                });
-
-                        let mut line2: String<MAX_LINE_LEN> = String::new();
-                        let _ = core::fmt::write(&mut line2, format_args!("ENC: {count:>6}"));
-                        display_update(DisplayAction::ShowText(line2, 2)).await;
-                    }
-                }
-            }
+            run_leg(leg).await;
 
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(200)).await;
@@ -229,5 +133,23 @@ async fn basic_motor_test_task() {
     encoders::send_command(EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
     release_testmode();
-    BASIC_MOTOR_TEST_ACTIVE.store(false, Ordering::Relaxed);
+}
+
+/// Drive one leg for its duration, logging the encoder count as it goes.
+async fn run_leg(leg: &Leg) {
+    let mut elapsed_ms = 0;
+    while elapsed_ms < LEG_DURATION_MS {
+        if wait_or_stop(SAMPLE_INTERVAL_MS).await {
+            return;
+        }
+        elapsed_ms += SAMPLE_INTERVAL_MS;
+
+        let count = get_latest_encoder_measurement()
+            .await
+            .map_or(0, |measurement| match leg.track {
+                Track::Left => measurement.left,
+                Track::Right => measurement.right,
+            });
+        info!("basic-motor: {=str} encoder={=u16}", leg.phase, count);
+    }
 }

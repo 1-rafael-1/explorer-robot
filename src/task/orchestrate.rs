@@ -38,12 +38,6 @@ async fn handle_event(event: Events) {
         Events::CalibrationDataLoaded(kind, data) => {
             initialization::handle_calibration_data_loaded(kind, data).await;
         }
-        Events::CalibrationStatus {
-            header,
-            line1,
-            line2,
-            line3,
-        } => initialization::handle_calibration_status(header, line1, line2, line3).await,
         Events::CalibrationCompleted => {
             ui::send_ui_event(UiEvent::CalibrationCompleted).await;
         }
@@ -55,18 +49,6 @@ async fn handle_event(event: Events) {
         }
         Events::ObstacleAvoidanceAttempted => {
             behavior::obstacle::handle_obstacle_avoidance_attempted();
-        }
-        Events::RotaryTurned(direction) => {
-            ui::send_ui_event(UiEvent::RotaryTurned(direction)).await;
-        }
-        Events::RotaryButtonPressed => {
-            ui::send_ui_event(UiEvent::RotaryButtonPressed).await;
-        }
-        Events::RotaryButtonHoldStart => {
-            ui::send_ui_event(UiEvent::RotaryButtonHoldStart).await;
-        }
-        Events::RotaryButtonHoldEnd => {
-            ui::send_ui_event(UiEvent::RotaryButtonHoldEnd).await;
         }
         Events::TestingCompleted => {
             ui::send_ui_event(UiEvent::TestingCompleted).await;

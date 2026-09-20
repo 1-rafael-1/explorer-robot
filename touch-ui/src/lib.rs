@@ -25,6 +25,8 @@
 //! - [`widgets`] holds the drawing functions.
 //! - [`system_info`] holds the neutral System Info snapshot the firmware maps
 //!   onto.
+//! - [`sensor`] holds the neutral sensor lifecycle state the Room Scan caption
+//!   shows.
 //! - [`radar`] holds the Room Scan radar widget, fed by a neutral 360-slot
 //!   input.
 //! - [`hit`] names the interactive regions and the header action button.
@@ -58,6 +60,7 @@ pub mod hit;
 pub mod palette;
 pub mod radar;
 pub mod screens;
+pub mod sensor;
 pub mod system_info;
 pub mod ui;
 pub mod widgets;
@@ -65,5 +68,6 @@ pub mod widgets;
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit};
 pub use screens::{PlaceholderKind, Screen, StatusView, ValueFlow};
+pub use sensor::SensorState;
 pub use system_info::{CalibrationStatus, SystemInfo};
 pub use ui::{DRAG_RENDER_MS, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, TICK_MS, Ui};

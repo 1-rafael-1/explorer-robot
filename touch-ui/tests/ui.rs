@@ -7,10 +7,11 @@
 
 use embedded_graphics::{prelude::*, primitives::Rectangle};
 use touch_ui::{
-    Hit, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    Hit, SensorState, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     geometry::{
         back_button_rect, cancel_button_rect, info_row_rect, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
-        readout_rect, save_button_rect, scroll_track_rect, slider_touch_rect,
+        panel_rect, progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
+        slider_touch_rect,
     },
     radar,
     screens::{CALIBRATE_MENU, DRIVE_MODE_MENU, MAIN_MENU, PlaceholderKind, Screen, StatusView, TEST_MENU, ValueFlow},
@@ -292,6 +293,78 @@ fn a_running_screen_stops_back_to_its_parent() {
     assert_eq!(ui.screen(), Screen::TestMode);
 }
 
+/// Test that the running screen's content is replaced wholesale, that progress
+/// rides along with it, and that the update reports only real changes.
+#[test]
+fn a_running_screen_reports_its_progress() {
+    let mut ui = Ui::new();
+    let view = StatusView::new("Turns Test", "Turning 90 deg", Screen::TestMode).with_progress(25);
+    assert!(ui.show_status(view));
+    assert_eq!(ui.status_view().map(|view| view.progress), Some(Some(25)));
+
+    assert!(ui.set_status(view.with_progress(50)));
+    assert_eq!(ui.status_view().map(|view| view.progress), Some(Some(50)));
+    assert!(!ui.set_status(view.with_progress(50)));
+    assert_eq!(ui.status_view().and_then(|view| view.progress), Some(50));
+
+    // Leaving the running screen makes the update a no-op.
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.screen(), Screen::TestMode);
+    assert!(!ui.set_status(view));
+}
+
+/// Test that the progress bar is drawn inside the status panel and nowhere else.
+#[test]
+fn the_progress_bar_sits_inside_the_status_panel() {
+    let bar = progress_bar_rect();
+    let panel = panel_rect();
+    assert!(bar.top_left.x > panel.top_left.x);
+    assert!(bar.size.width < panel.size.width);
+    assert!(bottom_right(bar).y < bottom_right(panel).y);
+}
+
+/// Test that a completed tap is reported as the region it activated, and that a
+/// drag, a slider drag, and a release that does not activate report nothing.
+#[test]
+fn the_ui_reports_the_region_a_tap_activated() {
+    let mut ui = Ui::new();
+    assert_eq!(ui.last_activation(), None);
+
+    tap_item(&mut ui, 1);
+    assert_eq!(ui.last_activation(), Some(Hit::MenuItem(1)));
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.last_activation(), Some(Hit::Back));
+
+    // A drag never activates.
+    let start = menu_item_rect(0, 0).center();
+    let _ = ui.pointer_down(start, 0);
+    let _ = ui.pointer_move(Point::new(start.x, start.y + tap_max_move_px() + 1), 0);
+    let _ = ui.pointer_up(TAP_MIN_DURATION_MS);
+    assert_eq!(ui.last_activation(), None);
+
+    // Neither does a slider drag.
+    let ui = open_value_entry(ValueFlow::DistanceCalibration);
+    let track = slider_touch_rect();
+    let y = track.center().y;
+    let mut ui = ui;
+    let _ = ui.pointer_down(Point::new(track.center().x, y), 0);
+    let _ = ui.pointer_move(Point::new(bottom_right(track).x, y), 0);
+    let _ = ui.pointer_up(TAP_MIN_DURATION_MS);
+    assert_eq!(ui.last_activation(), None);
+}
+
+/// Test that a flow with a step before its value screen can open that screen
+/// with its preset.
+#[test]
+fn a_flow_can_open_its_value_screen_after_a_first_step() {
+    let mut ui = Ui::new();
+    assert!(ui.show_value_entry(ValueFlow::DistanceCalibration));
+    assert_eq!(ui.screen(), Screen::ValueEntry(ValueFlow::DistanceCalibration));
+    assert_eq!(ui.value(), 150);
+    tap(&mut ui, cancel_button_rect().center());
+    assert_eq!(ui.screen(), Screen::Calibrate);
+}
+
 /// Test that Cancel and Save both leave the value screen for its parent.
 #[test]
 fn cancel_and_save_leave_the_value_screen() {
@@ -522,6 +595,119 @@ fn the_ui_reports_the_system_info_snapshot_it_was_given() {
     assert!(ui.set_system_info(info));
     assert!(!ui.set_system_info(info));
     assert_eq!(ui.system_info(), &info);
+}
+
+/// Open the Room Scan screen by tapping its entry in the Test Mode menu.
+fn open_room_scan() -> Ui {
+    let mut ui = Ui::new();
+    tap_item(&mut ui, 3);
+    drag_scroll_to_bottom(&mut ui);
+    tap_item(&mut ui, ROOM_SCAN_INDEX);
+    assert_eq!(ui.screen(), Screen::RoomScan);
+    ui
+}
+
+/// The Room Scan entry's index in the Test Mode menu.
+const ROOM_SCAN_INDEX: usize = 6;
+
+/// Test that the Room Scan entry opens from the Test Mode menu and Back returns.
+#[test]
+fn room_scan_opens_from_test_mode_and_back_returns() {
+    assert_eq!(TEST_MENU[ROOM_SCAN_INDEX], "Room Scan");
+    assert_eq!(Screen::RoomScan.parent(), Some(Screen::TestMode));
+    assert!(Screen::RoomScan.items().is_empty());
+
+    let mut ui = open_room_scan();
+    assert_eq!(ui.title(), "Room Scan");
+    // The radar screen offers Back, not Stop.
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Back));
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.screen(), Screen::TestMode);
+}
+
+/// Test that the model holds the radar frame and sensor caption it was given, and
+/// that a fresh entry starts with no frame rather than a stale one.
+#[test]
+fn room_scan_holds_the_radar_frame_and_sensor_state() {
+    let mut ui = open_room_scan();
+    assert!(ui.radar().is_none());
+    assert_eq!(ui.sensor_state(), SensorState::Off);
+
+    let mut slots: radar::Slots = [None; radar::SLOTS];
+    slots[0] = Some(120.0);
+    assert!(ui.set_sensor_state(SensorState::Warming));
+    assert!(!ui.set_sensor_state(SensorState::Warming));
+    assert!(ui.set_radar(Some(slots)));
+    assert!(!ui.set_radar(Some(slots)));
+    assert_eq!(ui.radar(), Some(&slots));
+    assert_eq!(ui.sensor_state(), SensorState::Warming);
+
+    // Leaving the screen makes both updates no-ops, and re-entering clears them.
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.screen(), Screen::TestMode);
+    assert!(!ui.set_radar(None));
+    assert!(!ui.set_sensor_state(SensorState::Failed));
+
+    drag_scroll_to_bottom(&mut ui);
+    tap_item(&mut ui, ROOM_SCAN_INDEX);
+    assert_eq!(ui.screen(), Screen::RoomScan);
+    assert!(ui.radar().is_none());
+    assert_eq!(ui.sensor_state(), SensorState::Off);
+}
+
+/// Test that the four sensor states are distinguishable and the caption sits at
+/// the bottom of the radar screen.
+#[test]
+fn the_sensor_states_are_distinguishable() {
+    let labels = [
+        SensorState::Off.label(),
+        SensorState::Warming.label(),
+        SensorState::Streaming.label(),
+        SensorState::Failed.label(),
+    ];
+    for (index, label) in labels.iter().enumerate() {
+        assert!(!label.is_empty());
+        assert!(!labels[..index].contains(label), "duplicate sensor label {label}");
+    }
+
+    let caption = room_scan_caption_rect();
+    assert_eq!(caption.top_left.x, 0);
+    assert_eq!(caption.size.width, 320);
+    assert_eq!(
+        caption.top_left.y + i32::try_from(caption.size.height).unwrap_or(i32::MAX),
+        240
+    );
+}
+
+/// Test that the model can leave a screen through its parent, as the firmware
+/// does when it refuses an entry.
+#[test]
+fn back_leaves_for_the_parent() {
+    let mut ui = open_room_scan();
+    assert!(ui.back());
+    assert_eq!(ui.screen(), Screen::TestMode);
+
+    // The Main Menu is the root: there is nowhere to go back to.
+    let mut ui = Ui::new();
+    assert!(!ui.back());
+    assert_eq!(ui.screen(), Screen::MainMenu);
+}
+
+/// Test that a missing snapshot is reported as no frame, not as an empty room.
+#[test]
+fn a_missing_snapshot_is_no_data() {
+    let mut ui = open_room_scan();
+    let empty: radar::Slots = [None; radar::SLOTS];
+
+    // An all-`None` frame is a real measurement of no returns, distinct from an
+    // absent snapshot.
+    assert!(ui.set_radar(Some(empty)));
+    assert_eq!(ui.radar(), Some(&empty));
+
+    // Dropping back to an absent snapshot clears the frame rather than showing
+    // the previous measurement.
+    assert!(ui.set_radar(None));
+    assert!(ui.radar().is_none());
 }
 
 /// Test the radar's plotting transform: angle, range, and the outer-ring clamp.

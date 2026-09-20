@@ -15,13 +15,17 @@ pub const CALIBRATE_MENU: [&str; 3] = ["Motor", "Mag", "Distance"];
 pub const DRIVE_MODE_MENU: [&str; 2] = ["Coast & Avoid", "Attempt Straight"];
 
 /// The Test Mode submenu labels (no in-list Back).
-pub const TEST_MENU: [&str; 6] = [
+///
+/// Room Scan is the last entry: it opens the sensor's live radar rather than
+/// running a test-mode task, but it shares the menu and its single-active guard.
+pub const TEST_MENU: [&str; 7] = [
     "Basic Motor Test",
     "Turns Test",
     "Straight Drive",
     "Arc Drive",
     "IMU Test (6-axis)",
     "IMU Test (9-axis)",
+    "Room Scan",
 ];
 
 /// Which menu screen the UI is showing.
@@ -46,6 +50,11 @@ pub enum Screen {
     /// Later tickets use this for a procedure's progress and sensor state; it
     /// offers a touch Stop in the header.
     Status,
+    /// The Room Scan screen: the sensor's live spins drawn as a radar.
+    ///
+    /// It is not a running procedure: its header offers Back, and the firmware
+    /// acquires the `LiDAR` on entry and releases it on exit.
+    RoomScan,
 }
 
 impl Screen {
@@ -65,6 +74,7 @@ impl Screen {
             Self::SystemInfo => "System Info",
             Self::ValueEntry(flow) => flow.title(),
             Self::Status => "Running",
+            Self::RoomScan => "Room Scan",
         }
     }
 
@@ -79,7 +89,7 @@ impl Screen {
             Self::Calibrate => &CALIBRATE_MENU,
             Self::DriveMode => &DRIVE_MODE_MENU,
             Self::TestMode => &TEST_MENU,
-            Self::Placeholder(_) | Self::SystemInfo | Self::ValueEntry(_) | Self::Status => &[],
+            Self::Placeholder(_) | Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan => &[],
         }
     }
 
@@ -87,7 +97,7 @@ impl Screen {
     ///
     /// [`Screen::Status`]'s parent is held in the active [`StatusView`] and is
     /// resolved by [`crate::Ui`] rather than here, so this returns `None` for
-    /// it.
+    /// it. Room Scan returns to the Test Mode menu it is opened from.
     #[must_use]
     pub const fn parent(self) -> Option<Self> {
         match self {
@@ -95,6 +105,7 @@ impl Screen {
             Self::Calibrate | Self::DriveMode | Self::TestMode | Self::SystemInfo => Some(Self::MainMenu),
             Self::Placeholder(kind) => Some(kind.parent()),
             Self::ValueEntry(flow) => Some(flow.parent()),
+            Self::RoomScan => Some(Self::TestMode),
         }
     }
 }
@@ -247,22 +258,40 @@ impl ValueFlow {
 /// The neutral content of a running/status screen.
 ///
 /// The firmware maps its activity state onto this and calls
-/// [`crate::Ui::show_status`] on entry and [`crate::Ui::set_status_body`] as
-/// progress advances. `parent` is where the header Stop returns to.
+/// [`crate::Ui::show_status`] on entry and [`crate::Ui::set_status`] as progress
+/// advances. `parent` is where the header Stop returns to, and `progress` is the
+/// percent the widget draws as a bar when the procedure can report one — the
+/// model never formats a number, so no dynamic text crosses this boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatusView {
     /// The header title.
     pub title: &'static str,
-    /// The body line: the procedure's progress or the sensor's state.
+    /// The body line: the procedure's phase or the sensor's state.
     pub body: &'static str,
+    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
+    pub progress: Option<u8>,
     /// The screen Stop returns to.
     pub parent: Screen,
 }
 
 impl StatusView {
-    /// Build a status view.
+    /// Build a status view with no progress bar.
     #[must_use]
     pub const fn new(title: &'static str, body: &'static str, parent: Screen) -> Self {
-        Self { title, body, parent }
+        Self {
+            title,
+            body,
+            progress: None,
+            parent,
+        }
+    }
+
+    /// The same view carrying a percent progress bar.
+    #[must_use]
+    pub const fn with_progress(self, percent: u8) -> Self {
+        Self {
+            progress: Some(percent),
+            ..self
+        }
     }
 }

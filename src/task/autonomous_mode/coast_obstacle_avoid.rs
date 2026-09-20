@@ -25,11 +25,15 @@
 //!
 //! # Starting and stopping
 //!
-//! Call [`start`] to begin the mode and [`stop`] to request a graceful exit.
+//! Call [`start`] to acquire the `LiDAR` and begin the mode, and [`stop`] to
+//! request a graceful exit. If the `LiDAR` cannot be acquired, [`start`] fails and
+//! the mode never drives: the downward rangefinder is a floor-drop sensor, not an
+//! obstacle sensor.
 //!
-//! Uses `LiDAR` `is_obstacle_ahead(30.0, 60)` for forward obstacle detection,
-//! floor-drop sensors for ledge detection, and `MotorCommand::SetTracks` for
-//! direct motor control.
+//! The obstacle decision reads perception's lock-free flag, which the `LiDAR`
+//! task drives through the Front Sector test in the `lidar-cloud` crate (half-angle
+//! and threshold defined there, once). Floor-drop sensors cover ledge detection, and
+//! `MotorCommand::SetTracks` does direct motor control.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,6 +50,7 @@ use crate::{
     task::{
         autonomous_mode::{self, AutonomousCommand},
         motor_driver::{self, MotorCommand},
+        sensors::lidar::{self, AcquireError},
     },
 };
 
@@ -93,6 +98,29 @@ enum State {
     Turning,
 }
 
+// ── Start errors ───────────────────────────────────────────────────────────────
+
+/// Why coast-and-avoid could not start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum StartError {
+    /// Another autonomous mode, or another `LiDAR` lifecycle, is already active.
+    Busy,
+    /// The `LiDAR` could not be acquired. The mode refuses to run, because the
+    /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
+    LidarUnavailable,
+}
+
+impl StartError {
+    /// A short, operator-facing description for the running screen.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Busy => "Already running",
+            Self::LidarUnavailable => "LiDAR unavailable",
+        }
+    }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────────
 
 /// Spawn the coast-and-avoid autonomous task.
@@ -101,16 +129,31 @@ pub(super) fn spawn(spawner: Spawner) {
     spawner.spawn(coast_obstacle_avoid_task().unwrap());
 }
 
-/// Activate the coast-and-avoid autonomous mode.
+/// Acquire the `LiDAR` and activate the coast-and-avoid autonomous mode.
 ///
-/// Requests mode start through the autonomous mode controller.
-pub async fn start() -> bool {
+/// The sensor is acquired *before* the mode is spawned, so the mode never drives
+/// while the sensor is still warming or unavailable. On any later failure the
+/// acquisition is released again.
+///
+/// # Errors
+///
+/// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought up,
+/// or [`StartError::Busy`] if another autonomous mode or `LiDAR` lifecycle is
+/// already active.
+pub async fn start() -> Result<(), StartError> {
+    match lidar::acquire().await {
+        Ok(()) => {}
+        Err(AcquireError::Busy) => return Err(StartError::Busy),
+        Err(AcquireError::Failed) => return Err(StartError::LidarUnavailable),
+    }
+
     if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
-        return false;
+        lidar::release().await;
+        return Err(StartError::Busy);
     }
 
     ACTIVE.store(true, Ordering::Relaxed);
-    true
+    Ok(())
 }
 
 /// Request a graceful stop of the coast-and-avoid mode.
@@ -165,6 +208,9 @@ pub async fn coast_obstacle_avoid_task() {
     motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
     Timer::after(Duration::from_millis(200)).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+    // Leaving the mode releases the sensor: stop it, drop its power, and clear
+    // the stale cloud and obstacle flag in the same step.
+    lidar::release().await;
     autonomous_mode::release_autonomous_mode();
     info!("coast-avoid: deactivated");
 }

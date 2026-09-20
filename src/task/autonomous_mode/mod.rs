@@ -2,8 +2,8 @@
 //!
 //! Provides on-demand autonomous mode tasks spawned via a controller task.
 //!
-//! Gap analysis uses `LiDAR` point cloud and obstacle detection uses
-//! `LiDAR` `is_obstacle_ahead()`.
+//! Gap analysis uses the `lidar-cloud` cloud and obstacle detection reads the
+//! lock-free flag the `LiDAR` task drives through that crate's Front Sector test.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

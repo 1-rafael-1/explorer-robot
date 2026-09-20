@@ -20,8 +20,9 @@ use crate::{
         save_button_rect, slider_touch_rect, slider_value,
     },
     hit::{HeaderAction, Hit},
-    palette,
+    palette, radar,
     screens::{PlaceholderKind, Screen, StatusView, ValueFlow},
+    sensor::SensorState,
     system_info::SystemInfo,
     widgets,
 };
@@ -92,6 +93,14 @@ pub struct Ui {
     system_info: SystemInfo,
     /// The content shown by [`Screen::Status`].
     status: StatusView,
+    /// The radar frame shown by [`Screen::RoomScan`], or `None` when no snapshot
+    /// has been supplied yet.
+    radar: Option<radar::Slots>,
+    /// The sensor-state caption shown by [`Screen::RoomScan`].
+    sensor_state: SensorState,
+    /// The region the most recent completed tap activated, or `None` when the
+    /// last gesture was a drag, a release, or a slider drag.
+    activated: Option<Hit>,
 }
 
 impl Ui {
@@ -105,6 +114,9 @@ impl Ui {
             value: 0,
             system_info: SystemInfo::new(),
             status: StatusView::new("Running", "", Screen::MainMenu),
+            radar: None,
+            sensor_state: SensorState::Off,
+            activated: None,
         }
     }
 
@@ -150,6 +162,21 @@ impl Ui {
         &self.system_info
     }
 
+    /// The radar frame the Room Scan screen renders, if one was supplied.
+    ///
+    /// `None` means no snapshot is available, which the screen draws as "No
+    /// data" rather than as an empty room.
+    #[must_use]
+    pub const fn radar(&self) -> Option<&radar::Slots> {
+        self.radar.as_ref()
+    }
+
+    /// The sensor-state caption the Room Scan screen renders.
+    #[must_use]
+    pub const fn sensor_state(&self) -> SensorState {
+        self.sensor_state
+    }
+
     /// The active running screen's content, or `None` on any other screen.
     #[must_use]
     pub const fn status_view(&self) -> Option<StatusView> {
@@ -159,12 +186,46 @@ impl Ui {
         }
     }
 
+    /// The region activated by the most recent completed tap, if any.
+    ///
+    /// The firmware reads this after a gesture to decide what to start, stop, or
+    /// save: the model owns the tap-versus-drag decision, so the host has one
+    /// authority for what counts as an activation. A drag, a drag that began on
+    /// the slider, and a release that did not activate all clear it.
+    #[must_use]
+    pub const fn last_activation(&self) -> Option<Hit> {
+        self.activated
+    }
+
     /// Replace the System Info snapshot, reporting whether it changed.
     pub fn set_system_info(&mut self, info: SystemInfo) -> bool {
         if info == self.system_info {
             return false;
         }
         self.system_info = info;
+        true
+    }
+
+    /// Replace the Room Scan radar frame, reporting whether it changed.
+    ///
+    /// A no-op on any screen other than [`Screen::RoomScan`]. `None` means no
+    /// snapshot is available and the screen draws "No data".
+    pub fn set_radar(&mut self, slots: Option<radar::Slots>) -> bool {
+        if self.screen != Screen::RoomScan || self.radar == slots {
+            return false;
+        }
+        self.radar = slots;
+        true
+    }
+
+    /// Replace the Room Scan sensor-state caption, reporting whether it changed.
+    ///
+    /// A no-op on any screen other than [`Screen::RoomScan`].
+    pub fn set_sensor_state(&mut self, state: SensorState) -> bool {
+        if self.screen != Screen::RoomScan || self.sensor_state == state {
+            return false;
+        }
+        self.sensor_state = state;
         true
     }
 
@@ -177,6 +238,37 @@ impl Ui {
         self.scroll = 0;
         self.value = 0;
         true
+    }
+
+    /// Replace the running screen's content, reporting whether it changed.
+    ///
+    /// Unlike [`Ui::show_status`] this neither changes the screen nor resets the
+    /// scroll and value, so it is the update call for a producer reporting
+    /// progress. A no-op on any screen other than [`Screen::Status`], and when
+    /// the view is already what was supplied.
+    pub fn set_status(&mut self, view: StatusView) -> bool {
+        if self.screen != Screen::Status || self.status == view {
+            return false;
+        }
+        self.status = view;
+        true
+    }
+
+    /// Open the value-entry screen for `flow`, resetting the value to its preset.
+    ///
+    /// Always reports a redraw. Used by the firmware when a flow that ran before
+    /// the entry step (distance calibration's drive) finishes.
+    pub const fn show_value_entry(&mut self, flow: ValueFlow) -> bool {
+        self.navigate_to(Screen::ValueEntry(flow))
+    }
+
+    /// Leave the current screen for its parent, as the header Back button does.
+    ///
+    /// Reports whether the screen changed; the Main Menu has no parent, so this
+    /// is a no-op there. Used by the firmware to abandon a screen whose entry it
+    /// refuses.
+    pub fn back(&mut self) -> bool {
+        self.go_back()
     }
 
     /// Replace the running screen's body line, reporting whether it changed.
@@ -222,6 +314,7 @@ impl Ui {
     pub fn pointer_down(&mut self, p: Point, now_ms: u64) -> bool {
         let hit = self.hit_test(p);
         let on_slider = hit == Some(Hit::Slider);
+        self.activated = None;
         self.press = Some(Press {
             start: p,
             last: p,
@@ -307,6 +400,7 @@ impl Ui {
             tap_candidate && same_region && moved_sq <= max_move * max_move && elapsed_ms >= TAP_MIN_DURATION_MS;
 
         let released = if is_tap { released } else { None };
+        self.activated = released;
         let activated = released.is_some_and(|hit| self.activate(hit));
 
         activated || press.target.is_some() || press.dragging
@@ -341,6 +435,7 @@ impl Ui {
             Screen::SystemInfo => widgets::draw_system_info(d, &self.system_info)?,
             Screen::ValueEntry(flow) => widgets::draw_value_entry(d, flow, self.value, pressed)?,
             Screen::Status => widgets::draw_status(d, &self.status)?,
+            Screen::RoomScan => widgets::draw_room_scan(d, self.radar.as_ref(), self.sensor_state)?,
             Screen::MainMenu | Screen::Calibrate | Screen::DriveMode | Screen::TestMode => {
                 self.render_list(d, pressed)?;
             }
@@ -444,6 +539,7 @@ impl Ui {
             (Screen::TestMode, 3) => Screen::Placeholder(PlaceholderKind::ArcDrive),
             (Screen::TestMode, 4) => Screen::Placeholder(PlaceholderKind::Imu6Axis),
             (Screen::TestMode, 5) => Screen::Placeholder(PlaceholderKind::Imu9Axis),
+            (Screen::TestMode, 6) => Screen::RoomScan,
             _ => return false,
         };
         self.navigate_to(target)
@@ -453,7 +549,8 @@ impl Ui {
     /// report a needed redraw.
     ///
     /// Entering a value screen sets the value to that flow's preset; leaving one
-    /// clears it.
+    /// clears it. Entering Room Scan clears any radar frame and caption from a
+    /// previous visit, so a fresh entry starts at "No data".
     const fn navigate_to(&mut self, screen: Screen) -> bool {
         self.screen = screen;
         self.scroll = 0;
@@ -461,6 +558,10 @@ impl Ui {
             Screen::ValueEntry(flow) => flow.preset(),
             _ => 0,
         };
+        if matches!(screen, Screen::RoomScan) {
+            self.radar = None;
+            self.sensor_state = SensorState::Off;
+        }
         true
     }
 

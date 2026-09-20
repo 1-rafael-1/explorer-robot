@@ -81,6 +81,7 @@ coin-d6 = { path = "coin-d6" }
 lidar-cloud = { path = "lidar-cloud" }
 moving_median = "0.4.0"
 touch-async = { path = "touch-async" }
+touch-ui = { path = "touch-ui" }
 embedded-graphics = "0.8.1"
 static_cell = { version = "2.1.1", features = [] }
 heapless = "0.9.2"

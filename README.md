@@ -23,7 +23,7 @@ The big to-dos, in no particular order:
 - [x] Make a D6 lidar driver
 - [x] Make an async tft driver
 - [x] Integrate the D6 lidar driver into the firmware
-- [ ] Integrate the tft driver into the firmware
+- [x] Integrate the tft driver into the firmware
 - [ ] Make an async-capable VL53L0X driver and integrate that
 - [ ] Make a new schematic adapting from simple-robot
 - [ ] Full breadboard demonstrator to see if the firmware is botched
@@ -40,8 +40,8 @@ The big to-dos, in no particular order:
 - **AI Cam:** Grove Vision AI V2 (core0, UART1 [] power MOSFET reserved, not yet integrated)
 - **Rangefinder:** 1× VL53L0X ToF, front-down (stair/drop detection), on shared I2C0 bus (currently stubbed)
 - **IMU:** ICM-20948 9-axis over dedicated SPI bus
-- **Display:** ST7789 240×240 TFT over SPI
-- **Input:** EC11 rotary encoder with push button
+- **Display:** ST7789 240×240 TFT in landscape, on the shared SPI1 bus
+- **Input:** Resistive touch panel (XPT2046-class) sharing the display's SPI1 bus
 - **Power:** 2S LiPo (8.4V max)
 
 ## Assembly

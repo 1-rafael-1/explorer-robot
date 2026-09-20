@@ -59,8 +59,16 @@ pub const BACK_MARGIN: u32 = 12;
 /// pixels.
 pub const HEADER_ACTION_GAP: u32 = 8;
 
-/// Inset of the placeholder and status panels from the screen edges, in pixels.
+/// Horizontal inset of the placeholder and status panels from the screen edges,
+/// in pixels.
 pub const PANEL_MARGIN: u32 = 24;
+
+/// Height of the status panel's progress bar, in pixels.
+pub const PROGRESS_H: u32 = 14;
+
+/// Inset of the status panel's progress bar from the panel's side and bottom
+/// edges, in pixels.
+pub const PROGRESS_INSET: u32 = 24;
 
 /// Stroke width of the placeholder panel's border, in pixels.
 pub const PANEL_BORDER: u32 = 2;
@@ -117,6 +125,11 @@ pub const FOOTER_PAD: u32 = 6;
 
 /// Width of the footer Save button, in pixels.
 pub const SAVE_W: u32 = 96;
+
+/// Height of the Room Scan screen's sensor-state caption band, in pixels.
+///
+/// The band sits along the screen's bottom edge, over the radar's lowest ring.
+pub const CAPTION_H: u32 = 20;
 
 /// Vertical offset of the first list item below the header, in pixels.
 #[must_use]
@@ -200,6 +213,20 @@ pub const fn panel_rect() -> Rectangle {
     )
 }
 
+/// The on-screen rectangle of the status panel's progress bar, inset from the
+/// panel's side and bottom edges.
+#[must_use]
+pub const fn progress_bar_rect() -> Rectangle {
+    let panel = panel_rect();
+    Rectangle::new(
+        Point::new(
+            panel.top_left.x + PROGRESS_INSET as i32,
+            panel.top_left.y + panel.size.height as i32 - PROGRESS_INSET as i32 - PROGRESS_H as i32,
+        ),
+        Size::new(panel.size.width - 2 * PROGRESS_INSET, PROGRESS_H),
+    )
+}
+
 /// The on-screen rectangle of the value-entry readout area.
 #[must_use]
 pub const fn readout_rect() -> Rectangle {
@@ -265,6 +292,18 @@ pub const fn save_button_rect() -> Rectangle {
             (FB_H as u32 - FOOTER_H + FOOTER_PAD) as i32,
         ),
         Size::new(SAVE_W, FOOTER_H - 2 * FOOTER_PAD),
+    )
+}
+
+/// The on-screen rectangle of the Room Scan screen's sensor-state caption.
+///
+/// A full-width band along the bottom edge: the radar's outer ring reaches the
+/// screen edge, so the caption carries its own background to stay legible.
+#[must_use]
+pub const fn room_scan_caption_rect() -> Rectangle {
+    Rectangle::new(
+        Point::new(0, (FB_H as u32 - CAPTION_H) as i32),
+        Size::new(FB_W as u32, CAPTION_H),
     )
 }
 

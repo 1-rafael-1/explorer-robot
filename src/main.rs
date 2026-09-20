@@ -1,8 +1,8 @@
 //! explorer-robot v3 firmware entry point
 //!
 //! Core0 hosts orchestrator, motor driver, encoders, battery monitor,
-//! RGB LED, rotary encoder, panel (TFT + touch), VL53L0X stub, flash storage,
-//! UI, testmode, autonomous mode controller, and startup.
+//! RGB LED, panel (TFT + touch), VL53L0X stub, flash storage, UI, testmode,
+//! autonomous mode controller, and startup.
 //!
 //! Core1 hosts the real COIN-D6 `LiDAR` driver task, powered on demand.
 
@@ -19,21 +19,17 @@ use embassy_rp::{
     config::Config,
     dma::InterruptHandler as DmaInterruptHandler,
     flash::{Async, Flash},
-    gpio::{Input, Level, Output, Pull},
+    gpio::{Level, Output, Pull},
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
     multicore::{Stack, spawn_core1},
     peripherals::{
         ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, DMA_CH7, FLASH, I2C0, PIN_0, PIN_1, PIN_2,
         PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16,
-        PIN_17, PIN_18, PIN_19, PIN_20, PIN_21, PIN_22, PIN_23, PIN_24, PIN_26, PIN_27, PIN_38, PIN_39, PIN_40, PIN_41,
-        PIN_42, PIN_43, PIN_44, PIN_45, PIN_46, PIN_47, PIO1, PWM_SLICE0, PWM_SLICE1, PWM_SLICE3, PWM_SLICE4, SPI0,
-        SPI1, UART0, UART1,
+        PIN_17, PIN_18, PIN_19, PIN_20, PIN_21, PIN_26, PIN_27, PIN_40, PIO1, PWM_SLICE0, PWM_SLICE1, PWM_SLICE3,
+        PWM_SLICE4, SPI0, UART0, UART1,
     },
     pio::{Common, InterruptHandler as PioInterruptHandler, Pio, StateMachine},
-    pio_programs::{
-        pwm::{PioPwm, PioPwmProgram},
-        rotary_encoder::{PioEncoder, PioEncoderProgram},
-    },
+    pio_programs::pwm::{PioPwm, PioPwmProgram},
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
     uart::{self, BufferedUart, InterruptHandler as UartInterruptHandler, Uart},
@@ -41,6 +37,8 @@ use embassy_rp::{
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
 use static_cell::StaticCell;
+
+use crate::task::io::panel::PanelPins;
 
 mod system;
 mod task;
@@ -130,20 +128,7 @@ pub struct RgbLedPins {
     pub blue: embassy_rp::Peri<'static, PIN_15>,
 }
 
-/// Pins for the EC11 rotary encoder (quadrature A/B + push button).
-///
-/// Button pin is supplied as a bare `Peri`; `Input<Pull::Up>` is created
-/// inside `init_rotary_encoder`.
-pub struct Ec11Pins {
-    /// Encoder A signal (GPIO 22).
-    pub a: embassy_rp::Peri<'static, PIN_22>,
-    /// Encoder B signal (GPIO 23).
-    pub b: embassy_rp::Peri<'static, PIN_23>,
-    /// Push button (GPIO 24, configured as Input with `Pull::Up`).
-    pub btn: embassy_rp::Peri<'static, PIN_24>,
-}
-
-/// Resources for the COIN-D6 360° spinning dTOF `LiDAR`.
+/// Pins for the COIN-D6 360° spinning dTOF `LiDAR`.
 ///
 /// Runs on **core1** over a dedicated UART0 peripheral. The sensor is off at
 /// boot; the driver task powers it on demand and streams scan data at 10 Hz
@@ -193,39 +178,6 @@ pub struct AiCamPins {
     pub dma_tx: embassy_rp::Peri<'static, DMA_CH5>,
     /// DMA channel for UART1 RX streaming.
     pub dma_rx: embassy_rp::Peri<'static, DMA_CH4>,
-}
-
-/// Resources for the shared `SPI1` panel bus (ST7789 display + touch layer).
-///
-/// One full-duplex bus carries both devices, each arbitrated by its own chip
-/// select through `SpiDeviceWithConfig`; see `docs/adr/0008`. The panel occupies
-/// the contiguous high GPIO block 41–47, with the touch controller on 38/39 and
-/// the battery ADC keeping GPIO 40.
-pub struct PanelPins {
-    /// `SPI1` peripheral instance.
-    pub spi: embassy_rp::Peri<'static, SPI1>,
-    /// SPI clock (GPIO 42).
-    pub sck: embassy_rp::Peri<'static, PIN_42>,
-    /// SPI data out / MOSI (GPIO 43).
-    pub mosi: embassy_rp::Peri<'static, PIN_43>,
-    /// SPI data in / MISO (GPIO 44).
-    pub miso: embassy_rp::Peri<'static, PIN_44>,
-    /// DMA channel for the bus's transmit direction.
-    pub tx_dma: embassy_rp::Peri<'static, DMA_CH6>,
-    /// DMA channel for the bus's receive direction.
-    pub rx_dma: embassy_rp::Peri<'static, DMA_CH7>,
-    /// Display chip select (GPIO 41).
-    pub display_cs: embassy_rp::Peri<'static, PIN_41>,
-    /// Display data/command (GPIO 45).
-    pub dc: embassy_rp::Peri<'static, PIN_45>,
-    /// Display reset (GPIO 46).
-    pub rst: embassy_rp::Peri<'static, PIN_46>,
-    /// Display backlight (GPIO 47).
-    pub blk: embassy_rp::Peri<'static, PIN_47>,
-    /// Touch chip select (GPIO 38).
-    pub touch_cs: embassy_rp::Peri<'static, PIN_38>,
-    /// Touch pen-down interrupt (GPIO 39, active-low with a pull-up).
-    pub penirq: embassy_rp::Peri<'static, PIN_39>,
 }
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
@@ -310,24 +262,6 @@ fn init_rgb_led(
     spawner.spawn(task::indicators::rgb_led_indicate::rgb_led_indicate(pwm_red, pwm_green, pwm_blue).unwrap());
 }
 
-/// Set up PIO-driven EC11 rotary encoder (quadrature on SM 3 + button).
-///
-/// Spawns both the turns reader task and the button handler task.
-#[allow(clippy::unwrap_used)]
-fn init_rotary_encoder(
-    spawner: Spawner,
-    pio_common: &mut Common<'static, PIO1>,
-    sm3: StateMachine<'static, PIO1, 3>,
-    ec11_pins: Ec11Pins,
-) {
-    let encoder_program = PioEncoderProgram::new(pio_common);
-    let encoder = PioEncoder::new(pio_common, sm3, ec11_pins.a, ec11_pins.b, &encoder_program);
-    spawner.spawn(task::control::rotary_encoder::rotary_encoder_turns(encoder).unwrap());
-
-    let button = Input::new(ec11_pins.btn, Pull::Up);
-    spawner.spawn(task::control::rotary_encoder::rotary_encoder_button(button).unwrap());
-}
-
 /// Set up the TB6612FNG motor driver and encoder reader.
 ///
 /// Spawns the motor driver task and the encoder reader task so that both
@@ -374,42 +308,6 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverPins) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Initialise the shared full-duplex SPI1 panel bus and spawn the panel task.
-///
-/// The bus carries both the ST7789 display and the touch controller, each with
-/// its own chip select and per-device configuration (ADR-0008).
-#[allow(clippy::unwrap_used)]
-fn init_panel(spawner: Spawner, pins: PanelPins) {
-    static PANEL_SPI_BUS: StaticCell<task::io::panel::PanelBus> = StaticCell::new();
-    let bus = PANEL_SPI_BUS.init(task::io::panel::new_shared_bus(
-        pins.spi,
-        pins.sck,
-        pins.mosi,
-        pins.miso,
-        pins.tx_dma,
-        pins.rx_dma,
-        Irqs,
-    ));
-    spawner.spawn(
-        task::io::panel::panel(
-            bus,
-            Output::new(pins.display_cs, Level::High),
-            Output::new(pins.dc, Level::Low),
-            Output::new(pins.rst, Level::Low),
-            Output::new(pins.blk, Level::Low),
-            Output::new(pins.touch_cs, Level::High),
-            Input::new(pins.penirq, Pull::Up),
-        )
-        .unwrap(),
-    );
-}
-
-/// Spawn the legacy text-display drain shim (deleted by ticket 10).
-#[allow(clippy::unwrap_used)]
-fn init_legacy_display(spawner: Spawner) {
-    spawner.spawn(task::io::display::legacy_display_drain().unwrap());
-}
-
 /// Spawn the VL53L0X rangefinder stub task on core0.
 #[allow(clippy::unwrap_used)]
 fn init_vl53l0x_stub(spawner: Spawner) {
@@ -432,9 +330,12 @@ fn init_testing(spawner: Spawner) {
     task::testmode::init_testing(spawner);
 }
 
-/// Initialise the UI subsystem (controller + render task).
-fn init_ui(spawner: Spawner) {
-    task::ui::init_ui(spawner);
+/// Initialise the touch UI controller, which owns the panel.
+///
+/// The bus carries both the ST7789 display and the touch controller, each with
+/// its own chip select and per-device configuration (ADR-0008).
+fn init_ui(spawner: Spawner, panel_pins: PanelPins) {
+    task::ui::init_ui(spawner, panel_pins);
 }
 
 /// Initialise the autonomous mode controller (coast-and-avoid etc.).
@@ -561,13 +462,12 @@ fn main() -> ! {
 
     info!("explorer-robot v3 booting...");
 
-    // ── PIO1: RGB LED (SM 0–2) + rotary encoder quadrature (SM 3) ──────────
+    // ── PIO1: RGB LED (SM 0–2) ─────────────────────────────────────────────
     let Pio {
         common: mut pio1_common,
         sm0: pio1_sm0,
         sm1: pio1_sm1,
         sm2: pio1_sm2,
-        sm3: pio1_sm3,
         ..
     } = Pio::new(p.PIO1, Irqs);
 
@@ -576,12 +476,6 @@ fn main() -> ! {
         red: p.PIN_13,
         green: p.PIN_14,
         blue: p.PIN_15,
-    };
-
-    let ec11_pins = Ec11Pins {
-        a: p.PIN_22,
-        b: p.PIN_23,
-        btn: p.PIN_24,
     };
 
     let motor_pins = MotorDriverPins {
@@ -663,15 +557,12 @@ fn main() -> ! {
         init_orchestrate(spawner);
         init_battery_monitoring(spawner, p.ADC, p.PIN_40);
         init_rgb_led(spawner, &mut pio1_common, pio1_sm0, pio1_sm1, pio1_sm2, rgb_pins);
-        init_rotary_encoder(spawner, &mut pio1_common, pio1_sm3, ec11_pins);
         init_motor_driver(spawner, motor_pins);
-        init_panel(spawner, panel_pins);
-        init_legacy_display(spawner);
+        init_ui(spawner, panel_pins);
         init_vl53l0x_stub(spawner);
         init_imu(spawner, imu_spi, imu_cs);
         init_flash_storage(spawner, p.FLASH, p.DMA_CH0);
         init_testing(spawner);
-        init_ui(spawner);
         init_autonomous_mode(spawner);
         init_startup(spawner);
     });

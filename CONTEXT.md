@@ -109,11 +109,12 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 
 ## State Modules
 
-Lock order (documented in each module): **power → calibration → perception → motion**
+Lock order (documented in each module): **power → calibration → perception → motion → activity**
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* `LIDAR_OBSTACLE`, `RANGEFINDER_OBSTACLE`, and `COMBINED_OBSTACLE` atomic booleans for hot-path reads. *Detailed path:* mutex-protected `LidarPointCloud` (360 distances, one per degree, with `sequence` counter for change detection) and `RangefinderReadings` (VL53L0X front-down distance).
+- **Activity State** — What long-running procedure is running (a test mode, a calibration, or the boot flow) with a small progress snapshot: phase, percent, and whether it ends only on an explicit stop. Written by the producers, read by the touch UI, which is the only thing that draws.
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter) and the `RangefinderReadings` (VL53L0X front-down distance). The old zero-distance sentinel is retired: a slot is `None` for no return.
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR reports obstacles: the rangefinder is a stair/drop sensor, and a rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.

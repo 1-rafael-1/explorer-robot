@@ -13,6 +13,7 @@
 //! 2) `CALIBRATION_STATE`
 //! 3) perception mutex (private — use accessor functions)
 //! 4) `MOTION_STATE`
+//! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

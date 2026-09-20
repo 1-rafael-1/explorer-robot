@@ -19,13 +19,16 @@ use crate::{
     geometry::{
         BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_ACTION_GAP, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H,
         SCROLL_W, footer_rect, info_row_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        readout_rect, save_button_rect, scroll_track_rect, slider_thumb_rect, slider_track_rect,
+        progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
+        slider_thumb_rect, slider_track_rect,
     },
     hit::{HeaderAction, Hit},
     palette::{
         ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT, WARN,
     },
+    radar,
     screens::{PlaceholderKind, StatusView, ValueFlow},
+    sensor::SensorState,
     system_info::SystemInfo,
 };
 
@@ -196,7 +199,10 @@ where
 }
 
 /// Draw a running/status screen: an accent-bordered panel carrying the body
-/// line. The header carries the dynamic title and the Stop button.
+/// line.
+///
+/// When the view reports progress the body sits above a bar across the panel's
+/// lower edge. The header carries the dynamic title and the Stop button.
 ///
 /// # Errors
 ///
@@ -210,7 +216,29 @@ where
     panel
         .into_styled(PrimitiveStyle::with_stroke(ACCENT, PANEL_BORDER))
         .draw(d)?;
-    draw_centered_text(d, panel, view.body, MonoTextStyle::new(SMALL_FONT, TEXT))
+
+    let track = progress_bar_rect();
+    // With a bar, the body sits in the space above it so the two cannot overlap.
+    let body_area = if view.progress.is_some() {
+        Rectangle::new(
+            panel.top_left,
+            Size::new(panel.size.width, (track.top_left.y - panel.top_left.y) as u32),
+        )
+    } else {
+        panel
+    };
+    draw_centered_text(d, body_area, view.body, MonoTextStyle::new(SMALL_FONT, TEXT))?;
+
+    if let Some(percent) = view.progress {
+        track.into_styled(PrimitiveStyle::with_fill(BUTTON_BORDER)).draw(d)?;
+        let filled = track.size.width * u32::from(percent.min(100)) / 100;
+        if filled > 0 {
+            Rectangle::new(track.top_left, Size::new(filled, track.size.height))
+                .into_styled(PrimitiveStyle::with_fill(ACCENT))
+                .draw(d)?;
+        }
+    }
+    Ok(())
 }
 
 /// Draw the System Info rows, one per line in [`SMALL_FONT`].
@@ -257,6 +285,27 @@ where
     let thumb = Rectangle::new(Point::new(track.top_left.x, thumb_y), Size::new(SCROLL_W, thumb_height));
     thumb.into_styled(PrimitiveStyle::with_fill(ACCENT)).draw(d)?;
     Ok(())
+}
+
+/// Draw the Room Scan screen: the sensor's live spins as a radar, with a caption
+/// naming the sensor's lifecycle state.
+///
+/// The radar is fed the neutral 360-slot frame; an absent frame (`None`) draws
+/// as "No data" rather than as an empty room. The caption band carries its own
+/// background because the radar's outer ring reaches the screen edge.
+///
+/// # Errors
+///
+/// Returns the draw target's error if a primitive or text fails to draw.
+pub fn draw_room_scan<D>(d: &mut D, slots: Option<&radar::Slots>, state: SensorState) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    radar::draw(d, slots)?;
+
+    let caption = room_scan_caption_rect();
+    caption.into_styled(PrimitiveStyle::with_fill(BG)).draw(d)?;
+    draw_centered_text(d, caption, state.label(), MonoTextStyle::new(SMALL_FONT, TEXT))
 }
 
 /// Draw the value-entry screen: the live readout, the slider, the fine-adjust

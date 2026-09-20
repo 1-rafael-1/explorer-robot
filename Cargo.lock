@@ -809,6 +809,7 @@ dependencies = [
  "st7789-async",
  "static_cell",
  "touch-async",
+ "touch-ui",
 ]
 
 [[package]]

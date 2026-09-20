@@ -10,12 +10,6 @@ use crate::{
     },
 };
 
-/// Reset obstacle detection state and clear all perception data.
-pub async fn reset_obstacle_state() {
-    perception::set_lidar_obstacle(false).await;
-    update_obstacle_indicator(false);
-}
-
 /// Handle obstacle detection status changes.
 ///
 /// Updates perception atomics and unconditionally sends an `EmergencyBrake`

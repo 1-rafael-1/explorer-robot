@@ -5,11 +5,10 @@
 //! - `orchestrate` — central event loop dispatching to behavior handlers
 //! - `battery_charge_read` — ADC battery voltage monitoring
 //! - `indicators` — RGB LED status indication
-//! - `io` — graphics panel (TFT + touch), legacy display shim, flash storage
+//! - `io` — graphics panel (TFT + touch), flash storage
 //! - `sensors` — encoder reader, IMU, `LiDAR` driver, VL53L0X stub
-//! - `ui` — OLED menu system with rotary encoder
+//! - `ui` — touch-driven menu controller (panel owner)
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
-//! - `control` — rotary encoder input
 //! - `behavior` — event-driven behavior handlers (battery, obstacle, input)
 //! - `initialization` — boot-time calibration loading coordination
 //! - `testmode` — on-demand test mode tasks (motor, turns, IMU, drive)
@@ -19,8 +18,6 @@ pub mod autonomous_mode;
 pub mod battery_charge_read;
 /// Behavior handlers for system events.
 pub mod behavior;
-/// Hardware control modules (e.g., rotary encoder).
-pub mod control;
 pub mod drive;
 /// LED and other visual indicators.
 pub mod indicators;
