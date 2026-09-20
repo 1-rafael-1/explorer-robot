@@ -227,23 +227,41 @@ async fn coast_avoid_task() {
     }
 }
 
-/// Run the Room Scan screen's `LiDAR` lifecycle, off the UI task.
+/// Run the Room Scan screen's `LiDAR` lease, off the UI task.
 ///
 /// Acquiring can take several seconds, so the UI task dispatches a request and
 /// polls the sensor's lock-free status and the perception snapshot while this
-/// task owns the lifecycle. Requests are handled in order: a release queued
-/// while an acquire is still running waits for it, so leaving the screen always
-/// powers the sensor back down.
+/// task owns the lifecycle. The lease is held across iterations and handed back
+/// only on release, so leaving the screen after a failed acquisition releases
+/// nothing and cannot power down a sensor another mode owns. Requests are
+/// handled in order: a release queued while an acquire is still running waits
+/// for it.
 #[embassy_executor::task]
 async fn room_scan_task() {
+    let mut lease: Option<lidar::Lease> = None;
     loop {
         match ROOM_SCAN_REQUEST.receive().await {
             RoomScanRequest::Acquire => {
-                if lidar::acquire().await.is_err() {
-                    warn!("[ui] room scan: LiDAR acquire failed");
+                if lease.is_none() {
+                    match lidar::acquire().await {
+                        Ok(acquired) => lease = Some(acquired),
+                        Err(lidar::AcquireError::Busy) => {
+                            warn!("[ui] room scan: LiDAR acquisition already in flight");
+                        }
+                        Err(lidar::AcquireError::Failed) => {
+                            warn!("[ui] room scan: LiDAR acquisition failed");
+                        }
+                    }
                 }
             }
-            RoomScanRequest::Release => lidar::release().await,
+            RoomScanRequest::Release => {
+                // A no-op when no lease is held — the whole point of the lease:
+                // leaving after a failed acquisition releases nothing.
+                let held = lease.take();
+                if let Some(lease) = held {
+                    lidar::release(lease).await;
+                }
+            }
         }
     }
 }
@@ -448,12 +466,14 @@ fn enter_room_scan(ui: &mut Ui) {
     ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Acquire).ok();
 }
 
-/// Leave the Room Scan screen: release the single-active slot and the sensor.
+/// Leave the Room Scan screen: release the single-active slot and the `LiDAR`
+/// lease it holds.
 ///
 /// The release is dispatched rather than awaited, so the panel never blocks; the
 /// lifecycle task handles it after any in-flight acquisition finishes. Called on
-/// every exit path, including a failed acquisition, so the sensor is never left
-/// powered on behind the menu.
+/// every exit path, including a failed acquisition, it hands back only the lease
+/// this screen actually holds, so a failed acquisition releases nothing and
+/// cannot power down a sensor another mode owns.
 fn leave_room_scan() {
     testmode::release_room_scan();
     ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Release).ok();

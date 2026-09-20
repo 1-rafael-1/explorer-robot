@@ -2,8 +2,10 @@
 //!
 //! The widget takes a **neutral** 360-slot input of optional distances in
 //! centimetres, not a firmware or driver type, so the UI never depends on
-//! firmware state. Slot `0` is dead ahead and increasing slots run
-//! counter-clockwise, matching the robot's world-frame yaw convention.
+//! firmware state. The mounting rotation is already applied by the `LiDAR` cloud
+//! crate, so slot `0` is dead ahead; the widget draws slot `0` at the top of the
+//! radar and the following slots clockwise on the glass, matching the bench
+//! radar example (ADR-0012). It carries no mounting correction of its own.
 //!
 //! It draws range rings at one-metre intervals out to five metres, a crosshair,
 //! and one mark per valid return at its angle and range. The plotting reuses
@@ -108,17 +110,16 @@ where
 /// The screen point for a return in `slot` at `distance_cm`, clamped to the
 /// outer ring.
 ///
-/// The sensor's mounting reverses both axes relative to the panel, so the
-/// plotted offsets are negated — equivalent to rotating the returns 180° while
-/// `0°` still points forward and increasing angles stay clockwise. The angle
-/// comes from the slot index at one degree per slot.
+/// Slot `0` plots at the top of the radar and increasing slots advance
+/// clockwise on the glass (ADR-0012); the widget applies no mounting correction.
+/// The angle comes from the slot index at one degree per slot.
 #[must_use]
 pub fn mark_point(slot: usize, distance_cm: f32) -> Point {
     let metres = distance_cm / 100.0;
     let radius = (metres * PX_PER_M).min(MAX_RADIUS_PX as f32);
     let angle_rad = (slot as f32).to_radians();
-    let x = CENTER_X - (radius * libm::sinf(angle_rad)) as i32;
-    let y = CENTER_Y + (radius * libm::cosf(angle_rad)) as i32;
+    let x = CENTER_X + (radius * libm::sinf(angle_rad)) as i32;
+    let y = CENTER_Y - (radius * libm::cosf(angle_rad)) as i32;
     Point::new(x, y)
 }
 

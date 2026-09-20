@@ -156,14 +156,20 @@ pub async fn run_drive_step() -> DriveOutcome {
 
     activity::set_running("Driving 150 cm", None).await;
 
-    let Ok(queue) = build_drive_queue() else {
-        activity::fail("Queue full").await;
-        return DriveOutcome::Failed;
+    let queue = match build_drive_queue() {
+        Ok(queue) => queue,
+        Err(error) => {
+            activity::fail(error.label()).await;
+            return DriveOutcome::Failed;
+        }
     };
 
-    let Ok(completion) = queue.submit().await else {
-        activity::fail("Drive busy").await;
-        return DriveOutcome::Failed;
+    let completion = match queue.submit().await {
+        Ok(completion) => completion,
+        Err(error) => {
+            activity::fail(error.label()).await;
+            return DriveOutcome::Failed;
+        }
     };
 
     match completion.status {

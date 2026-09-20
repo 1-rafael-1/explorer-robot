@@ -714,12 +714,28 @@ fn a_missing_snapshot_is_no_data() {
 #[test]
 fn radar_marks_plot_at_their_angle_and_range() {
     // Dead ahead at 4.8 m: 115 px up the screen from the centre.
-    assert_eq!(radar::mark_point(0, 480.0), Point::new(160, 235));
-    // A quarter turn counter-clockwise: to the left (the mount reverses both
-    // axes).
-    assert_eq!(radar::mark_point(90, 480.0), Point::new(45, 120));
+    assert_eq!(radar::mark_point(0, 480.0), Point::new(160, 5));
+    // A quarter turn clockwise: to the right, because slot zero is drawn at the
+    // top and the slots advance clockwise on the glass (ADR-0012).
+    assert_eq!(radar::mark_point(90, 480.0), Point::new(275, 120));
     // Beyond the outer ring, the mark clamps onto it.
-    assert_eq!(radar::mark_point(0, 1_000.0), Point::new(160, 240));
+    assert_eq!(radar::mark_point(0, 1_000.0), Point::new(160, 0));
+}
+
+/// Test that pins the radar's direction convention (ADR-0012): slot zero is
+/// drawn at the top of the radar and the following slots advance clockwise on
+/// the glass, so a future reordering cannot rotate the radar unnoticed.
+#[test]
+fn radar_slots_advance_clockwise_from_the_top() {
+    // Slot zero is dead ahead: straight up from the centre, at the same X.
+    let top = radar::mark_point(0, 480.0);
+    assert_eq!(top.x, 160);
+    assert!(top.y < 120, "slot 0 must plot above the centre, got {top:?}");
+
+    // Slot 90 is a quarter turn clockwise of it: to the right, at the same Y.
+    let right = radar::mark_point(90, 480.0);
+    assert!(right.x > 160, "slot 90 must plot right of the centre, got {right:?}");
+    assert_eq!(right.y, 120);
 }
 
 /// Test that the radar's neutral input has the documented slot count.

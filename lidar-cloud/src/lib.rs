@@ -8,8 +8,8 @@
 //! # The cloud
 //!
 //! A [`Cloud`] is [`SLOTS`] one-degree bins of an optional distance in
-//! centimetres. Slot `0` is dead ahead and increasing slots run
-//! counter-clockwise, matching the robot's world-frame yaw convention. A bin
+//! centimetres. Slot `0` is dead ahead and increasing slots run clockwise,
+//! matching the bench radar example (ADR-0012). A bin
 //! with no valid return is `None` — never a distance.
 //!
 //! The angular reduction itself is **not new code**: [`Cloud::from_spin`] runs
@@ -34,11 +34,9 @@ pub const SLOTS: usize = 360;
 /// The COIN-D6's mounting rotation, in degrees.
 ///
 /// The sensor's native bearings are rotated by this to bring slot `0` to dead
-/// ahead. The bench radar example (`hardware-tests/examples/lidar_tft_radar.rs`)
-/// negates both plotting offsets, which is the same 180° correction; that value
-/// is carried here as the single named constant so the "dead ahead" alignment is
-/// not scattered through consumers. Confirm on the robot when the `LiDAR` is
-/// mounted.
+/// ahead. This is the single place the mounting rotation is applied: the radar
+/// widget plots the neutral slot order and carries no correction of its own
+/// (ADR-0012). Confirm on the robot when the `LiDAR` is mounted.
 pub const MOUNTING_OFFSET_DEG: f32 = 180.0;
 
 /// Centre of the Front Sector, in degrees relative to dead ahead.
@@ -57,7 +55,7 @@ const MM_PER_CM: f32 = 10.0;
 
 /// A 360-slot, one-degree `LiDAR` point cloud in centimetres.
 ///
-/// Slot `0` is dead ahead; increasing slots run counter-clockwise. A slot is
+/// Slot `0` is dead ahead; increasing slots run clockwise. A slot is
 /// `None` when the sensor measured no valid return at that bearing.
 #[derive(Debug, Clone)]
 pub struct Cloud {

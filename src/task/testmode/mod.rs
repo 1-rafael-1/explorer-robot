@@ -19,7 +19,8 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use crate::{
     system::state::activity::{self, StopRequest, TestKind},
     task::drive::{
-        self, CompletionStatus, DriveQueueBuilder, DriveQueueCompletion, InterruptKind, types::DriveQueueBuildError,
+        self, CompletionStatus, DriveQueueBuilder, DriveQueueCompletion, DriveQueueSubmitError, InterruptKind,
+        types::DriveQueueBuildError,
     },
 };
 
@@ -152,8 +153,8 @@ pub(super) async fn wait_or_stop(duration_ms: u64) -> bool {
 pub(super) async fn submit(
     queue: Result<DriveQueueBuilder, DriveQueueBuildError>,
 ) -> Result<DriveQueueCompletion, &'static str> {
-    let queue = queue.map_err(|_| "Queue full")?;
-    queue.submit().await.map_err(|_| "Drive busy")
+    let queue = queue.map_err(DriveQueueBuildError::label)?;
+    queue.submit().await.map_err(DriveQueueSubmitError::label)
 }
 
 /// A short label for a drive completion status.
