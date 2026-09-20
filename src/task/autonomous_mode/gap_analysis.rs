@@ -4,8 +4,8 @@
 //! returns the best gap to drive through within the forward cone.
 //!
 //! Operates on a [`lidar_cloud::Cloud`] — 360 one-degree slots of an optional
-//! distance in cm, slot 0 dead ahead and increasing slots counter-clockwise.
-//! Uses widest-gap selection within the forward cone (±60°).
+//! distance in cm, slot 0 dead ahead and increasing slots clockwise on the glass
+//! (ADR-0012). Uses widest-gap selection within the forward cone (±60°).
 
 use lidar_cloud::{Cloud, is_clear};
 
@@ -32,7 +32,7 @@ const SAFETY_MARGIN_CM: f32 = 10.0;
 /// Result of gap analysis: a chosen gap to navigate through.
 #[derive(Debug, Clone, Copy)]
 pub struct GapDecision {
-    /// Center angle of the chosen gap (degrees, 0 = forward, positive = left/CCW).
+    /// Center angle of the chosen gap (degrees, 0 = forward, positive = clockwise/right).
     pub gap_center_deg: f32,
     /// Absolute rotation needed to face the gap center (degrees).
     pub rotation_degrees: f32,
@@ -181,9 +181,15 @@ pub fn analyze_gaps(cloud: &Cloud, remaining_target_cm: f32) -> Option<GapDecisi
     // ── Build decision ─────────────────────────────────────────────────
     let center = gap.center_deg();
 
-    // Determine rotation: center in [0, 360] with 0 = forward.
-    // - center 0–180: gap is on the left side → turn CCW (clockwise = false)
-    // - center 180–360: gap is on the right side → turn CW (clockwise = true)
+    // Rotation to face the gap centre, in degrees (0–180), with the turn
+    // direction in `clockwise`.
+    //
+    // Slot convention (ADR-0012): slot 0 is dead ahead and increasing slots run
+    // clockwise on the glass, so a centre in 0–180 lies to the robot's right.
+    // The derivation below predates that convention and its direction is
+    // suspected inverted under it. It is left unchanged because the deferred
+    // attempt-straight-line mode is out of scope for this follow-up, and is
+    // reported for a human decision instead.
     let (rotation_degrees, clockwise) = if center <= 180.0 {
         (center, false) // Turn CCW (left)
     } else {

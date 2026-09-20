@@ -15,7 +15,8 @@ SPI, a ST7789 TFT display, and a Grove Vision AI V2 camera module — as much as
 ## Status
 
 Active development. Core subsystems (drive, perception, UI, calibration) are
-implemented with synthetic sensor stubs. Real sensor drivers are planned.
+implemented: the LiDAR driver and the Panel and Touch Panel geometry are real,
+while the rangefinder and the AI camera remain stubbed or planned.
 
 The big to-dos, in no particular order:
 

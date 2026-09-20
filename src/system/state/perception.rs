@@ -24,7 +24,8 @@ use lidar_cloud::Cloud;
 //
 // The cloud type is the `lidar-cloud` crate's [`Cloud`]: 360 one-degree slots of
 // an optional distance in centimetres, slot 0 dead ahead, increasing slots
-// counter-clockwise. A missing return is `None`, never a zero distance.
+// clockwise on the glass (ADR-0012). A missing return is `None`, never a zero
+// distance.
 
 // ── Rangefinder readings ─────────────────────────────────────────────────────
 

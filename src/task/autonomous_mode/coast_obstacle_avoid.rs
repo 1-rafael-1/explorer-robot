@@ -58,6 +58,9 @@ use crate::{
 // ── Active flag ───────────────────────────────────────────────────────────────
 
 /// Set while the coast-and-avoid loop is running.
+///
+/// Raised only after [`LIDAR_LEASE`] holds the lease and cleared again if the
+/// start is refused, so a running loop always has a lease to hand back.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ── LiDAR lease ───────────────────────────────────────────────────────────────
@@ -67,7 +70,10 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// [`start`] stores the lease here and [`coast_obstacle_avoid_task`] takes and
 /// releases it on exit. The task is spawned by the autonomous-mode controller
 /// rather than by [`start`], so the token cannot travel as a task argument and
-/// crosses the two through this cell instead.
+/// crosses the two through this cell instead. Because the cell is published
+/// before the controller can spawn the task, a lease placed here is always
+/// consumed: the task takes it on exit, or [`start`] takes it back when the
+/// start request is refused.
 static LIDAR_LEASE: Mutex<CriticalSectionRawMutex, Option<lidar::Lease>> = Mutex::new(None);
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
@@ -114,7 +120,8 @@ enum State {
 /// Why coast-and-avoid could not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum StartError {
-    /// Another autonomous mode, or another `LiDAR` lifecycle, is already active.
+    /// Another autonomous mode is already active, or a `LiDAR` acquisition is
+    /// already in flight and not yet streaming.
     Busy,
     /// The `LiDAR` could not be acquired. The mode refuses to run, because the
     /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
@@ -126,7 +133,7 @@ impl StartError {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Busy => "Already running",
+            Self::Busy => "LiDAR busy",
             Self::LidarUnavailable => "LiDAR unavailable",
         }
     }
@@ -143,15 +150,24 @@ pub(super) fn spawn(spawner: Spawner) {
 /// Acquire the `LiDAR` and activate the coast-and-avoid autonomous mode.
 ///
 /// The sensor is acquired *before* the mode is spawned, so the mode never drives
-/// while the sensor is still warming or unavailable. On success the lease is
-/// stashed in [`LIDAR_LEASE`] for the task to hand back when it exits; if the
-/// start request is refused the lease is released again immediately.
+/// while the sensor is still warming or unavailable.
+///
+/// # Hand-off ordering
+///
+/// `request_start` is the call that makes the autonomous-mode controller spawn
+/// [`coast_obstacle_avoid_task`], so the lease is published in [`LIDAR_LEASE`] and
+/// [`ACTIVE`] is raised *before* it. A spawned task therefore can never observe
+/// `ACTIVE == true` with no lease to consume, and can never exit holding a lease
+/// it was not handed. If the request is refused, both are rolled back — nothing
+/// is left active and the lease is released. The mode active at that point is
+/// another autonomous mode, or a coast run already past its loop, so briefly
+/// toggling this module's `ACTIVE` cannot be observed by a running coast task.
 ///
 /// # Errors
 ///
 /// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought up,
-/// or [`StartError::Busy`] if another autonomous mode or `LiDAR` lifecycle is
-/// already active.
+/// or [`StartError::Busy`] if another autonomous mode is already active or a
+/// previous coast run still holds its lease.
 pub async fn start() -> Result<(), StartError> {
     let lease = match lidar::acquire().await {
         Ok(lease) => lease,
@@ -159,13 +175,32 @@ pub async fn start() -> Result<(), StartError> {
         Err(AcquireError::Failed) => return Err(StartError::LidarUnavailable),
     };
 
+    // Publish the lease before the task can be spawned. If a previous run still
+    // holds one, refuse rather than overwrite it: dropping that lease unreleased
+    // would leak its ref count and keep the sensor powered.
+    {
+        let mut slot = LIDAR_LEASE.lock().await;
+        if slot.is_some() {
+            drop(slot);
+            lidar::release(lease).await;
+            return Err(StartError::Busy);
+        }
+        *slot = Some(lease);
+    }
+    ACTIVE.store(true, Ordering::Relaxed);
+
     if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
-        lidar::release(lease).await;
+        // No task was spawned, so roll the hand-off back: lower the flag and
+        // take the lease back to release it. No running coast task can observe
+        // this, because the mode active now is another autonomous mode.
+        ACTIVE.store(false, Ordering::Relaxed);
+        let lease = LIDAR_LEASE.lock().await.take();
+        if let Some(lease) = lease {
+            lidar::release(lease).await;
+        }
         return Err(StartError::Busy);
     }
 
-    *LIDAR_LEASE.lock().await = Some(lease);
-    ACTIVE.store(true, Ordering::Relaxed);
     Ok(())
 }
 

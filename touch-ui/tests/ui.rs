@@ -3,7 +3,9 @@
 //! These exercise the model's external behaviour: navigation into and back out
 //! of every branch, hit-testing each named region, slider and nudge clamping and
 //! stepping, the tap-versus-drag decision at its thresholds, and the radar's
-//! plotting transform. Drawing is not asserted; it is validated on glass.
+//! plotting transform. The radar transform is pinned by a host test (ADR-0012)
+//! so a reordering cannot rotate the radar unnoticed; other drawing is not
+//! asserted and is validated on glass.
 
 use embedded_graphics::{prelude::*, primitives::Rectangle};
 use touch_ui::{
