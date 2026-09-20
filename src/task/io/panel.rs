@@ -199,7 +199,9 @@ pub struct Panel {
     display: Display,
     /// The touch controller driver.
     touch: Touch,
-    /// The pen-down interrupt line, the gesture's authority for pen-up.
+    /// The pen-down interrupt line: the gesture's primary pen-up signal, read
+    /// through [`Panel::pen_up`]. It is not the sole authority, because the touch
+    /// UI bounds how long a stuck-low line may hold a gesture open.
     irq: Input<'static>,
     /// The display's reset line, pulsed once at first bring-up.
     rst: Output<'static>,
@@ -303,9 +305,15 @@ impl Panel {
     ///
     /// Returns `Ok(Some(point))` for a calibrated pixel, `Ok(None)` when the
     /// controller reports no contact, and `Err(())` on a transient bus error.
-    /// `PENIRQ` remains the pen-up authority: a finger still down can produce
-    /// `Ok(None)` on noise or `Err(())` on a bad read, so the gesture ends only
-    /// once [`Panel::pen_up`] reports high.
+    /// `PENIRQ` is the primary pen-up signal: a finger still down can produce
+    /// `Ok(None)` on noise or `Err(())` on a bad read, so a gesture does not end
+    /// the moment this reports no contact.
+    ///
+    /// It is not an unbounded authority, however. Sustained disagreement between
+    /// this sample stream and the line — no contact reported while `PENIRQ` stays
+    /// low, or contact reported that never releases — ends the gesture after the
+    /// touch UI's bounded window. Without that bound a stuck-low line would hold
+    /// the gesture open forever and hide every running screen's Touch Stop.
     pub async fn read_touch(&mut self) -> Result<Option<Point>, ()> {
         match self.touch.read().await {
             Ok(Some(raw)) => Ok(Some(self.filters.point(raw))),
@@ -315,6 +323,10 @@ impl Panel {
     }
 
     /// Whether the pen has been lifted (`PENIRQ` is high).
+    ///
+    /// This is the primary pen-up signal, but not the only way a gesture ends:
+    /// the touch UI also ends one whose line stays low while the controller
+    /// reports no contact, or one whose contact never releases.
     #[must_use]
     // `Input::is_high` is not `const`, so clippy's `missing_const_for_fn`
     // suggestion does not compile here.

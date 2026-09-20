@@ -121,6 +121,26 @@ const BOOT_POLL_MS: u64 = 100;
 /// change.
 const TICK_INTERVAL_MS: u64 = 250;
 
+/// Continuous no-contact window, in milliseconds, that ends a gesture whose
+/// interrupt line is stuck low.
+///
+/// A healthy controller reports no contact only while the pen lifts, and
+/// `PENIRQ` goes high at the same moment, so the line ends the gesture first. A
+/// stuck-low line instead reports no contact indefinitely while never lifting.
+/// 500 ms — 25 gesture ticks at [`TICK_MS`] — is long enough that no deliberate
+/// hold on a running screen reads as a fault, and short enough that the screen's
+/// Touch Stop stays reachable.
+const NO_CONTACT_LIMIT_MS: u64 = 500;
+
+/// Last-resort deadline, in milliseconds, on a single gesture.
+///
+/// The complement of [`NO_CONTACT_LIMIT_MS`]: the line is stuck low *and* the
+/// controller keeps reporting contact, so neither the line nor the sample stream
+/// ever signals a release. No operator holds a tap or a drag for 30 s, so the
+/// deadline cannot cut a deliberate press short, but it bounds the gesture when
+/// no other signal will.
+const GESTURE_DEADLINE_MS: u64 = 30_000;
+
 /// Backoff before retrying an offline panel, in milliseconds.
 const REINIT_BACKOFF_MS: u64 = 2_000;
 
@@ -344,6 +364,17 @@ async fn run_ui(panel: &mut Panel, ui: &mut Ui, ticker: &mut Ticker) -> Result<(
 /// Drag redraws are throttled to one per [`DRAG_RENDER_MS`]; the release always
 /// renders once the activation has been applied, because starting or stopping a
 /// procedure changes the screen.
+///
+/// `PENIRQ` is the primary pen-up signal, but it is not trusted without bound: a
+/// line stuck low would otherwise pin this loop to the Panel forever and hide
+/// every running screen's Touch Stop. Two bounds end the gesture exactly as a
+/// real release does. [`NO_CONTACT_LIMIT_MS`] ends it when the controller keeps
+/// reporting no contact while the line stays low — a sustained disagreement
+/// between the sample stream and the line. [`GESTURE_DEADLINE_MS`] ends it when
+/// contact reads nonzero for the whole gesture. A transient `Err(())` is a bus
+/// error, not a no-contact report, so it neither advances the no-contact window
+/// nor clears it. Each bound logs one warning naming which one fired, so a
+/// genuine line fault is visible on the bench.
 async fn run_gesture(
     panel: &mut Panel,
     ui: &mut Ui,
@@ -352,26 +383,56 @@ async fn run_gesture(
     value_before: i32,
 ) -> Result<(), ()> {
     let mut last_drag_render = started_ms;
+    // Start of the current run of ticks that reported no contact while the line
+    // stayed low; `None` when the last valid sample reported contact.
+    let mut no_contact_since_ms: Option<u64> = None;
     loop {
         Timer::after(Duration::from_millis(TICK_MS)).await;
         let now_ms = Instant::now().as_millis();
-        match panel.read_touch().await {
+        // The failure bound, if any, that ends this gesture; `None` keeps it
+        // running. A real pen-up never sets it, because it is an ordinary end.
+        let mut bound: Option<(&str, u64)> = None;
+
+        let sample = panel.read_touch().await;
+        let pen_up = panel.pen_up();
+        match sample {
             Ok(Some(point)) => {
+                no_contact_since_ms = None;
                 if ui.pointer_move(point, now_ms) && now_ms.saturating_sub(last_drag_render) >= DRAG_RENDER_MS {
                     render_and_flush(panel, ui).await?;
                     last_drag_render = now_ms;
                 }
             }
-            Ok(None) | Err(()) => {
-                if panel.pen_up() {
-                    let _ = ui.pointer_up(now_ms);
-                    let activated = ui.last_activation();
-                    handle_activation(ui, screen_before, value_before, activated).await;
-                    refresh_system_info_on_entry(ui).await;
-                    render_and_flush(panel, ui).await?;
-                    return Ok(());
+            Ok(None) => {
+                if !pen_up {
+                    let since_ms = *no_contact_since_ms.get_or_insert(now_ms);
+                    if now_ms.saturating_sub(since_ms) >= NO_CONTACT_LIMIT_MS {
+                        bound = Some(("no-contact window with PENIRQ stuck low", NO_CONTACT_LIMIT_MS));
+                    }
                 }
             }
+            // A transient bus error: retry, without counting it as reported
+            // no-contact or clearing the window.
+            Err(()) => {}
+        }
+
+        // The last-resort deadline, reached only when reads keep reporting
+        // contact, so a genuine release is never attributed to it.
+        if bound.is_none() && !pen_up && now_ms.saturating_sub(started_ms) >= GESTURE_DEADLINE_MS {
+            bound = Some(("gesture deadline", GESTURE_DEADLINE_MS));
+        }
+
+        if let Some((reason, limit_ms)) = bound {
+            warn!("touch gesture ended by {} ({} ms)", reason, limit_ms);
+        }
+
+        if pen_up || bound.is_some() {
+            let _ = ui.pointer_up(now_ms);
+            let activated = ui.last_activation();
+            handle_activation(ui, screen_before, value_before, activated).await;
+            refresh_system_info_on_entry(ui).await;
+            render_and_flush(panel, ui).await?;
+            return Ok(());
         }
     }
 }

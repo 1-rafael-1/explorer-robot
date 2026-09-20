@@ -21,7 +21,7 @@ use crate::{
     },
     hit::{HeaderAction, Hit},
     palette, radar,
-    screens::{PlaceholderKind, Screen, StatusView, ValueFlow},
+    screens::{Screen, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     widgets,
@@ -479,12 +479,12 @@ impl Ui {
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        for (index, label) in self.screen.items().iter().enumerate() {
+        for (index, item) in self.screen.items().iter().enumerate() {
             let is_pressed = pressed == Some(Hit::MenuItem(index));
             widgets::draw_button(
                 d,
                 menu_item_rect(index, self.scroll),
-                label,
+                item.label(),
                 palette::LABEL_FONT,
                 is_pressed,
                 false,
@@ -519,30 +519,16 @@ impl Ui {
 
     /// Open the item at `index` on the current screen.
     ///
-    /// Most items open a submenu, a placeholder, System Info, or the value-entry
-    /// screen for a distance flow. An index with no destination reports no
-    /// change.
-    const fn open_item(&mut self, index: usize) -> bool {
-        let target = match (self.screen, index) {
-            (Screen::MainMenu, 0) => Screen::SystemInfo,
-            (Screen::MainMenu, 1) => Screen::Calibrate,
-            (Screen::MainMenu, 2) => Screen::DriveMode,
-            (Screen::MainMenu, 3) => Screen::TestMode,
-            (Screen::Calibrate, 0) => Screen::Placeholder(PlaceholderKind::Motor),
-            (Screen::Calibrate, 1) => Screen::Placeholder(PlaceholderKind::Mag),
-            (Screen::Calibrate, 2) => Screen::ValueEntry(ValueFlow::DistanceCalibration),
-            (Screen::DriveMode, 0) => Screen::Placeholder(PlaceholderKind::CoastAndAvoid),
-            (Screen::DriveMode, 1) => Screen::ValueEntry(ValueFlow::AttemptStraight),
-            (Screen::TestMode, 0) => Screen::Placeholder(PlaceholderKind::BasicMotor),
-            (Screen::TestMode, 1) => Screen::Placeholder(PlaceholderKind::Turns),
-            (Screen::TestMode, 2) => Screen::Placeholder(PlaceholderKind::StraightDrive),
-            (Screen::TestMode, 3) => Screen::Placeholder(PlaceholderKind::ArcDrive),
-            (Screen::TestMode, 4) => Screen::Placeholder(PlaceholderKind::Imu6Axis),
-            (Screen::TestMode, 5) => Screen::Placeholder(PlaceholderKind::Imu9Axis),
-            (Screen::TestMode, 6) => Screen::RoomScan,
-            _ => return false,
-        };
-        self.navigate_to(target)
+    /// The entry supplies its destination through
+    /// [`crate::screens::Item::destination`], so the order the screen draws and the
+    /// screen a tap resolves to come from the same enumeration. An index past the
+    /// end of the list reports no change, as does any index on a screen with no
+    /// entries.
+    fn open_item(&mut self, index: usize) -> bool {
+        self.screen
+            .items()
+            .get(index)
+            .is_some_and(|item| self.navigate_to(item.destination()))
     }
 
     /// Switch to `screen`, reset the list scroll and the value-entry value, and

@@ -1,31 +1,126 @@
-//! The robot's menu tree: the screens, their labels, and where Back returns.
+//! The robot's menu tree: the screens, their entries, and where Back returns.
 //!
-//! The labels are transcribed from the firmware's `src/task/ui/screens.rs` (a
-//! snapshot that the firmware remains the source of truth for). The firmware's
-//! in-list Back entries are dropped: the header Back button is the only way
+//! [`Item`] names every entry of the Main Menu and its Calibrate, Drive Mode and
+//! Test Mode submenus, in one enumeration; [`Screen::items`] returns each list
+//! screen's entries in display order and [`Item::label`] is the text the button
+//! draws. This crate is the source of truth for the labels it ships: the entries a
+//! caller sees and the labels it acts on are the same data, so there is no second
+//! ordering to keep in step.
+//!
+//! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
-/// The Main Menu labels.
-pub const MAIN_MENU: [&str; 4] = ["System Info", "Calibrate", "Drive Mode", "Test Mode"];
+/// One entry in a list screen.
+///
+/// This is the single enumeration of every menu entry the crate ships, across the
+/// Main Menu and its Calibrate, Drive Mode and Test Mode submenus. Each variant
+/// supplies its [`Item::label`] and the [`Item::destination`] it opens, so the
+/// label a caller acts on and the entry it sees are the same data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Item {
+    /// Main Menu: the System Info status screen.
+    SystemInfo,
+    /// Main Menu: the Calibrate submenu.
+    Calibrate,
+    /// Main Menu: the Drive Mode submenu.
+    DriveMode,
+    /// Main Menu: the Test Mode submenu.
+    TestMode,
+    /// Calibrate: motor calibration, a placeholder leaf.
+    Motor,
+    /// Calibrate: magnetometer calibration, a placeholder leaf.
+    Mag,
+    /// Calibrate: the distance-calibration value screen.
+    Distance,
+    /// Drive Mode: coast-and-avoid, a placeholder leaf.
+    CoastAndAvoid,
+    /// Drive Mode: the attempt-straight value screen.
+    AttemptStraight,
+    /// Test Mode: the basic motor test, a placeholder leaf.
+    BasicMotor,
+    /// Test Mode: the turns test, a placeholder leaf.
+    Turns,
+    /// Test Mode: the straight drive test, a placeholder leaf.
+    StraightDrive,
+    /// Test Mode: the arc drive test, a placeholder leaf.
+    ArcDrive,
+    /// Test Mode: the six-axis IMU test, a placeholder leaf.
+    Imu6Axis,
+    /// Test Mode: the nine-axis IMU test, a placeholder leaf.
+    Imu9Axis,
+    /// Test Mode: the Room Scan radar screen.
+    RoomScan,
+}
 
-/// The Calibrate submenu labels (no in-list Back).
-pub const CALIBRATE_MENU: [&str; 3] = ["Motor", "Mag", "Distance"];
+impl Item {
+    /// The label the list button draws for this entry.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SystemInfo => "System Info",
+            Self::Calibrate => "Calibrate",
+            Self::DriveMode => "Drive Mode",
+            Self::TestMode => "Test Mode",
+            Self::Motor => "Motor",
+            Self::Mag => "Mag",
+            Self::Distance => "Distance",
+            Self::CoastAndAvoid => "Coast & Avoid",
+            Self::AttemptStraight => "Attempt Straight",
+            Self::BasicMotor => "Basic Motor Test",
+            Self::Turns => "Turns Test",
+            Self::StraightDrive => "Straight Drive",
+            Self::ArcDrive => "Arc Drive",
+            Self::Imu6Axis => "IMU Test (6-axis)",
+            Self::Imu9Axis => "IMU Test (9-axis)",
+            Self::RoomScan => "Room Scan",
+        }
+    }
 
-/// The Drive Mode submenu labels (no in-list Back).
-pub const DRIVE_MODE_MENU: [&str; 2] = ["Coast & Avoid", "Attempt Straight"];
+    /// The screen this entry opens.
+    #[must_use]
+    pub const fn destination(self) -> Screen {
+        match self {
+            Self::SystemInfo => Screen::SystemInfo,
+            Self::Calibrate => Screen::Calibrate,
+            Self::DriveMode => Screen::DriveMode,
+            Self::TestMode => Screen::TestMode,
+            Self::Motor => Screen::Placeholder(PlaceholderKind::Motor),
+            Self::Mag => Screen::Placeholder(PlaceholderKind::Mag),
+            Self::Distance => Screen::ValueEntry(ValueFlow::DistanceCalibration),
+            Self::CoastAndAvoid => Screen::Placeholder(PlaceholderKind::CoastAndAvoid),
+            Self::AttemptStraight => Screen::ValueEntry(ValueFlow::AttemptStraight),
+            Self::BasicMotor => Screen::Placeholder(PlaceholderKind::BasicMotor),
+            Self::Turns => Screen::Placeholder(PlaceholderKind::Turns),
+            Self::StraightDrive => Screen::Placeholder(PlaceholderKind::StraightDrive),
+            Self::ArcDrive => Screen::Placeholder(PlaceholderKind::ArcDrive),
+            Self::Imu6Axis => Screen::Placeholder(PlaceholderKind::Imu6Axis),
+            Self::Imu9Axis => Screen::Placeholder(PlaceholderKind::Imu9Axis),
+            Self::RoomScan => Screen::RoomScan,
+        }
+    }
+}
 
-/// The Test Mode submenu labels (no in-list Back).
+/// The Main Menu's entries, in display order.
+const MAIN_MENU_ITEMS: [Item; 4] = [Item::SystemInfo, Item::Calibrate, Item::DriveMode, Item::TestMode];
+
+/// The Calibrate submenu's entries, in display order.
+const CALIBRATE_ITEMS: [Item; 3] = [Item::Motor, Item::Mag, Item::Distance];
+
+/// The Drive Mode submenu's entries, in display order.
+const DRIVE_MODE_ITEMS: [Item; 2] = [Item::CoastAndAvoid, Item::AttemptStraight];
+
+/// The Test Mode submenu's entries, in display order.
 ///
 /// Room Scan is the last entry: it opens the sensor's live radar rather than
 /// running a test-mode task, but it shares the menu and its single-active guard.
-pub const TEST_MENU: [&str; 7] = [
-    "Basic Motor Test",
-    "Turns Test",
-    "Straight Drive",
-    "Arc Drive",
-    "IMU Test (6-axis)",
-    "IMU Test (9-axis)",
-    "Room Scan",
+const TEST_MODE_ITEMS: [Item; 7] = [
+    Item::BasicMotor,
+    Item::Turns,
+    Item::StraightDrive,
+    Item::ArcDrive,
+    Item::Imu6Axis,
+    Item::Imu9Axis,
+    Item::RoomScan,
 ];
 
 /// Which menu screen the UI is showing.
@@ -78,17 +173,21 @@ impl Screen {
         }
     }
 
-    /// The labels shown as list buttons on this screen, in order.
+    /// The entries shown as list buttons on this screen, in order.
+    ///
+    /// Each entry supplies its own [`Item::label`], so this ordered slice is both
+    /// what the screen draws and what a caller resolves through
+    /// [`Item::destination`].
     ///
     /// Placeholder, System Info, status, and value-entry screens are not lists,
     /// so they have none.
     #[must_use]
-    pub const fn items(self) -> &'static [&'static str] {
+    pub const fn items(self) -> &'static [Item] {
         match self {
-            Self::MainMenu => &MAIN_MENU,
-            Self::Calibrate => &CALIBRATE_MENU,
-            Self::DriveMode => &DRIVE_MODE_MENU,
-            Self::TestMode => &TEST_MENU,
+            Self::MainMenu => &MAIN_MENU_ITEMS,
+            Self::Calibrate => &CALIBRATE_ITEMS,
+            Self::DriveMode => &DRIVE_MODE_ITEMS,
+            Self::TestMode => &TEST_MODE_ITEMS,
             Self::Placeholder(_) | Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan => &[],
         }
     }

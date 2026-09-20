@@ -68,8 +68,9 @@ pub struct Cloud {
 impl Cloud {
     /// Build a cloud directly from per-slot distances, in centimetres.
     ///
-    /// This is the constructor for synthetic producers (e.g. the development
-    /// stub); real scans go through [`Cloud::from_spin`].
+    /// This is for known-geometry clouds: the crate's host tests build fixed
+    /// scenes with it, since [`Cloud::from_spin`] only accepts a real driver
+    /// revolution. Real scans go through [`Cloud::from_spin`].
     #[must_use]
     pub const fn from_slots(distances_cm: [Option<f32>; SLOTS], sequence: u64) -> Self {
         Self { distances_cm, sequence }

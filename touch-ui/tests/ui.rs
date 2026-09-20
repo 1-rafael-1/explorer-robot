@@ -7,14 +7,14 @@
 
 use embedded_graphics::{prelude::*, primitives::Rectangle};
 use touch_ui::{
-    Hit, SensorState, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    Hit, Item, SensorState, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     geometry::{
         back_button_rect, cancel_button_rect, info_row_rect, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
         panel_rect, progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
         slider_touch_rect,
     },
     radar,
-    screens::{CALIBRATE_MENU, DRIVE_MODE_MENU, MAIN_MENU, PlaceholderKind, Screen, StatusView, TEST_MENU, ValueFlow},
+    screens::{PlaceholderKind, Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
 };
 
@@ -109,16 +109,142 @@ fn starts_on_the_main_menu() {
     assert_eq!(ui.max_scroll(), 0);
 }
 
-/// Test that the menu tree matches the robot's labels.
+/// The labels of a screen's entries, in display order.
+fn labels(screen: Screen) -> Vec<&'static str> {
+    screen.items().iter().map(|item| item.label()).collect()
+}
+
+/// Test that the menu tree matches the robot's labels: each list screen exposes
+/// its entries in order, and every entry supplies its label.
 #[test]
 fn the_menu_tree_matches_the_robot() {
-    assert_eq!(Screen::MainMenu.items(), MAIN_MENU.as_slice());
-    assert_eq!(Screen::Calibrate.items(), CALIBRATE_MENU.as_slice());
-    assert_eq!(Screen::DriveMode.items(), DRIVE_MODE_MENU.as_slice());
-    assert_eq!(Screen::TestMode.items(), TEST_MENU.as_slice());
+    assert_eq!(
+        Screen::MainMenu.items(),
+        [Item::SystemInfo, Item::Calibrate, Item::DriveMode, Item::TestMode].as_slice()
+    );
+    assert_eq!(
+        Screen::Calibrate.items(),
+        [Item::Motor, Item::Mag, Item::Distance].as_slice()
+    );
+    assert_eq!(
+        Screen::DriveMode.items(),
+        [Item::CoastAndAvoid, Item::AttemptStraight].as_slice()
+    );
+    assert_eq!(
+        Screen::TestMode.items(),
+        [
+            Item::BasicMotor,
+            Item::Turns,
+            Item::StraightDrive,
+            Item::ArcDrive,
+            Item::Imu6Axis,
+            Item::Imu9Axis,
+            Item::RoomScan,
+        ]
+        .as_slice()
+    );
+
+    // The labels are byte-identical to the strings the screens shipped.
+    assert_eq!(
+        labels(Screen::MainMenu),
+        ["System Info", "Calibrate", "Drive Mode", "Test Mode"]
+    );
+    assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "Distance"]);
+    assert_eq!(labels(Screen::DriveMode), ["Coast & Avoid", "Attempt Straight"]);
+    assert_eq!(
+        labels(Screen::TestMode),
+        [
+            "Basic Motor Test",
+            "Turns Test",
+            "Straight Drive",
+            "Arc Drive",
+            "IMU Test (6-axis)",
+            "IMU Test (9-axis)",
+            "Room Scan",
+        ]
+    );
+
     assert!(Screen::SystemInfo.items().is_empty());
     assert!(Screen::Placeholder(PlaceholderKind::Motor).items().is_empty());
     assert!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items().is_empty());
+}
+
+/// Test that every list screen's entries are distinct and each one is labelled.
+#[test]
+fn every_screens_items_are_distinct_and_labelled() {
+    for screen in [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode] {
+        let items = screen.items();
+        assert!(!items.is_empty(), "{screen:?} has entries");
+        for (index, item) in items.iter().enumerate() {
+            assert!(!item.label().is_empty(), "{screen:?} entry {index} is labelled");
+            assert!(
+                !items[..index].contains(item),
+                "{screen:?} entry {item:?} is duplicated"
+            );
+        }
+    }
+}
+
+/// Test that one enumeration names every menu entry exactly once, so Room Scan
+/// and every placeholder leaf are real, labelled entries of a screen.
+#[test]
+fn every_menu_entry_is_a_listed_item() {
+    let listed: Vec<Item> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
+        .into_iter()
+        .flat_map(|screen| screen.items().iter().copied())
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            Item::SystemInfo,
+            Item::Calibrate,
+            Item::DriveMode,
+            Item::TestMode,
+            Item::Motor,
+            Item::Mag,
+            Item::Distance,
+            Item::CoastAndAvoid,
+            Item::AttemptStraight,
+            Item::BasicMotor,
+            Item::Turns,
+            Item::StraightDrive,
+            Item::ArcDrive,
+            Item::Imu6Axis,
+            Item::Imu9Axis,
+            Item::RoomScan,
+        ]
+    );
+
+    // Room Scan and the placeholder leaves are present and labelled, and each
+    // placeholder's label is the title its screen shows.
+    assert!(listed.contains(&Item::RoomScan));
+    assert_eq!(Item::RoomScan.label(), "Room Scan");
+    for (item, kind) in [
+        (Item::Motor, PlaceholderKind::Motor),
+        (Item::Mag, PlaceholderKind::Mag),
+        (Item::CoastAndAvoid, PlaceholderKind::CoastAndAvoid),
+        (Item::BasicMotor, PlaceholderKind::BasicMotor),
+        (Item::Turns, PlaceholderKind::Turns),
+        (Item::StraightDrive, PlaceholderKind::StraightDrive),
+        (Item::ArcDrive, PlaceholderKind::ArcDrive),
+        (Item::Imu6Axis, PlaceholderKind::Imu6Axis),
+        (Item::Imu9Axis, PlaceholderKind::Imu9Axis),
+    ] {
+        assert!(listed.contains(&item), "{item:?} is a listed entry");
+        assert_eq!(item.label(), kind.title(), "{item:?} label matches its placeholder");
+    }
+}
+
+/// Test that Back returns from every submenu to the Main Menu.
+#[test]
+fn back_returns_from_every_submenu() {
+    for (index, submenu) in [(1, Screen::Calibrate), (2, Screen::DriveMode), (3, Screen::TestMode)] {
+        let mut ui = Ui::new();
+        tap_item(&mut ui, index);
+        assert_eq!(ui.screen(), submenu);
+        tap(&mut ui, back_button_rect().center());
+        assert_eq!(ui.screen(), Screen::MainMenu);
+    }
 }
 
 /// Test that the Main Menu's branches open and Back returns.
@@ -613,7 +739,8 @@ const ROOM_SCAN_INDEX: usize = 6;
 /// Test that the Room Scan entry opens from the Test Mode menu and Back returns.
 #[test]
 fn room_scan_opens_from_test_mode_and_back_returns() {
-    assert_eq!(TEST_MENU[ROOM_SCAN_INDEX], "Room Scan");
+    assert_eq!(Screen::TestMode.items()[ROOM_SCAN_INDEX], Item::RoomScan);
+    assert_eq!(Item::RoomScan.label(), "Room Scan");
     assert_eq!(Screen::RoomScan.parent(), Some(Screen::TestMode));
     assert!(Screen::RoomScan.items().is_empty());
 
