@@ -38,45 +38,23 @@ async fn handle_event(event: Events) {
         Events::CalibrationDataLoaded(kind, data) => {
             initialization::handle_calibration_data_loaded(kind, data).await;
         }
-        Events::CalibrationStatus {
-            header,
-            line1,
-            line2,
-            line3,
-        } => initialization::handle_calibration_status(header, line1, line2, line3).await,
         Events::CalibrationCompleted => {
             ui::send_ui_event(UiEvent::CalibrationCompleted).await;
         }
         Events::BatteryMeasured { level, voltage } => {
             behavior::battery::handle_battery_measured(level, voltage).await;
         }
-        Events::ObstacleDetected { source, detected } => {
-            behavior::obstacle::handle_obstacle_detected(source, detected).await;
+        Events::ObstacleDetected { source } => {
+            behavior::obstacle::handle_obstacle_detected(source);
         }
         Events::ObstacleAvoidanceAttempted => {
             behavior::obstacle::handle_obstacle_avoidance_attempted();
         }
-        Events::RotaryTurned(direction) => {
-            ui::send_ui_event(UiEvent::RotaryTurned(direction)).await;
-        }
-        Events::RotaryButtonPressed => {
-            ui::send_ui_event(UiEvent::RotaryButtonPressed).await;
-        }
-        Events::RotaryButtonHoldStart => {
-            ui::send_ui_event(UiEvent::RotaryButtonHoldStart).await;
-        }
-        Events::RotaryButtonHoldEnd => {
-            ui::send_ui_event(UiEvent::RotaryButtonHoldEnd).await;
-        }
         Events::TestingCompleted => {
             ui::send_ui_event(UiEvent::TestingCompleted).await;
         }
-        Events::LidarScanCompleted => {
-            // Placeholder: log LiDAR scan completion for now.
-            info!("Lidar scan completed");
-        }
         Events::FloorDropDetected { detected } => {
-            behavior::floor_drop::handle_floor_drop_detected(detected).await;
+            behavior::floor_drop::handle_floor_drop_detected(detected);
         }
     }
 }

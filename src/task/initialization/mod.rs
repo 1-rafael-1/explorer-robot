@@ -1,33 +1,39 @@
 //! System initialization and calibration coordination.
 //!
-//! Orchestrates boot-time setup, calibration loading, and related UI updates.
-
-use core::fmt::Write;
+//! Orchestrates boot-time setup, calibration loading, and the UI's handover to
+//! the main menu.
+//!
+//! Progress is reported through [`crate::system::state::activity`] — the boot
+//! flow claims the panel while it loads and records what it found — and this
+//! module formats no display text.
 
 use defmt::info;
-use heapless::String;
 
 use crate::{
-    system::state::{CalibrationStatus, calibration},
+    system::state::{
+        CalibrationStatus,
+        activity::{self, Activity},
+        calibration,
+    },
     task::{
-        io::{
-            display::{self, MAX_LINE_LEN},
-            flash_storage::{self, CalibrationDataKind, CalibrationKind},
-        },
+        io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
         motor_driver::{self, MotorCommand},
-        ui::{self, UiEvent},
+        ui,
     },
 };
+
+/// The boot flow's activity, claimed for the duration of the load.
+const BOOT: Activity = Activity::Booting;
 
 /// Handle system initialization.
 pub async fn handle_initialize() {
     info!("System initializing");
 
-    // Display initialization message.
-    display::display_update(display::DisplayAction::Clear).await;
-    let mut txt: String<MAX_LINE_LEN> = String::new();
-    let _ = write!(txt, "Initializing...");
-    display::display_update(display::DisplayAction::ShowText(txt, 0)).await;
+    // Report the load through the activity state. A test or calibration that
+    // already owns the panel keeps it: the boot flow only claims an idle screen.
+    if !activity::begin_if_idle(BOOT, "Initializing").await {
+        info!("Boot flow: panel busy, reporting progress only to the log");
+    }
 
     // Request motor calibration from flash.
     info!("Requesting motor calibration from flash");
@@ -56,56 +62,8 @@ pub async fn handle_initialize() {
 /// Handle calibration data loaded from flash storage.
 pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<CalibrationDataKind>) {
     match kind {
-        CalibrationKind::Motor => {
-            if let Some(CalibrationDataKind::Motor(motor_cal)) = data {
-                info!(
-                    "Motor calibration loaded: left_factor={} right_factor={}",
-                    motor_cal.left_factor, motor_cal.right_factor
-                );
-
-                {
-                    let mut state = calibration::CALIBRATION_STATE.lock().await;
-                    state.motor_cal_status = CalibrationStatus::Loaded;
-                }
-
-                motor_driver::send_motor_command(MotorCommand::LoadCalibration(motor_driver::MotorCalibration::new(
-                    motor_cal.left_factor,
-                    motor_cal.right_factor,
-                )))
-                .await;
-
-                let mut txt: String<MAX_LINE_LEN> = String::new();
-                let _ = write!(txt, "Calibration loaded");
-                display::display_update(display::DisplayAction::ShowText(txt, 1)).await;
-            } else {
-                info!("No motor calibration found - using defaults");
-
-                {
-                    let mut state = calibration::CALIBRATION_STATE.lock().await;
-                    state.motor_cal_status = CalibrationStatus::NotAvailable;
-                }
-
-                let mut txt: String<MAX_LINE_LEN> = String::new();
-                let _ = write!(txt, "Need motor calib");
-                display::display_update(display::DisplayAction::ShowText(txt, 1)).await;
-            }
-        }
-        CalibrationKind::Distance => {
-            if let Some(CalibrationDataKind::Distance(factor)) = data {
-                info!("Distance calibration loaded: factor={}", factor);
-                {
-                    let mut state = calibration::CALIBRATION_STATE.lock().await;
-                    state.distance_cal_status = CalibrationStatus::Loaded;
-                    state.distance_factor = factor;
-                }
-            } else {
-                info!("No distance calibration found - using default 1.0");
-                {
-                    let mut state = calibration::CALIBRATION_STATE.lock().await;
-                    state.distance_cal_status = CalibrationStatus::NotAvailable;
-                }
-            }
-        }
+        CalibrationKind::Motor => load_motor_calibration(data).await,
+        CalibrationKind::Distance => load_distance_calibration(data).await,
         CalibrationKind::ImuFlags => {
             let mag = data.as_ref().is_some_and(|d| {
                 if let CalibrationDataKind::ImuFlags(flags) = d {
@@ -121,6 +79,57 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
     check_initialization_complete().await;
 }
 
+/// Apply the motor calibration, or record that none was found.
+async fn load_motor_calibration(data: Option<CalibrationDataKind>) {
+    if let Some(CalibrationDataKind::Motor(motor_cal)) = data {
+        info!(
+            "Motor calibration loaded: left_factor={} right_factor={}",
+            motor_cal.left_factor, motor_cal.right_factor
+        );
+
+        {
+            let mut state = calibration::CALIBRATION_STATE.lock().await;
+            state.motor_cal_status = CalibrationStatus::Loaded;
+        }
+
+        motor_driver::send_motor_command(MotorCommand::LoadCalibration(motor_driver::MotorCalibration::new(
+            motor_cal.left_factor,
+            motor_cal.right_factor,
+        )))
+        .await;
+
+        activity::set_running_for(BOOT, "Calibration loaded", None).await;
+    } else {
+        info!("No motor calibration found - using defaults");
+
+        {
+            let mut state = calibration::CALIBRATION_STATE.lock().await;
+            state.motor_cal_status = CalibrationStatus::NotAvailable;
+        }
+
+        activity::set_running_for(BOOT, "Need calibration", None).await;
+    }
+}
+
+/// Apply the distance calibration factor, or record that none was found.
+async fn load_distance_calibration(data: Option<CalibrationDataKind>) {
+    if let Some(CalibrationDataKind::Distance(factor)) = data {
+        info!("Distance calibration loaded: factor={}", factor);
+        {
+            let mut state = calibration::CALIBRATION_STATE.lock().await;
+            state.distance_cal_status = CalibrationStatus::Loaded;
+            state.distance_factor = factor;
+        }
+    } else {
+        info!("No distance calibration found - using default 1.0");
+        {
+            let mut state = calibration::CALIBRATION_STATE.lock().await;
+            state.distance_cal_status = CalibrationStatus::NotAvailable;
+        }
+        activity::set_running_for(BOOT, "Need calibration", None).await;
+    }
+}
+
 /// Handle IMU calibration flags loaded from flash.
 async fn handle_imu_calibration_flags_loaded(mag: bool) {
     {
@@ -130,18 +139,18 @@ async fn handle_imu_calibration_flags_loaded(mag: bool) {
         } else {
             CalibrationStatus::NotAvailable
         };
-        // imu_status is managed by handle_calibration_data_loaded
+        // imu_status is managed by the IMU flags handler
         // to avoid overriding the data-load result.
     }
 
     if ui::ui_initialized().await {
-        ui::send_ui_event(UiEvent::ShowMainMenu).await;
+        ui::show_main_menu().await;
     }
 
     check_initialization_complete().await;
 }
 
-/// Check if initialization is complete and update display if so.
+/// Check if initialization is complete and hand the panel to the main menu.
 async fn check_initialization_complete() {
     let should_show_menu = {
         let state = calibration::CALIBRATION_STATE.lock().await;
@@ -157,28 +166,10 @@ async fn check_initialization_complete() {
         }
     };
 
-    if should_show_menu && !ui::ui_is_calibrating().await {
-        ui::send_ui_event(UiEvent::ShowMainMenu).await;
-    }
-}
-
-/// Handle calibration status updates.
-pub async fn handle_calibration_status(
-    header: Option<heapless::String<MAX_LINE_LEN>>,
-    line1: Option<heapless::String<MAX_LINE_LEN>>,
-    line2: Option<heapless::String<MAX_LINE_LEN>>,
-    line3: Option<heapless::String<MAX_LINE_LEN>>,
-) {
-    if let Some(text) = header {
-        display::display_update(display::DisplayAction::ShowText(text, 0)).await;
-    }
-    if let Some(text) = line1 {
-        display::display_update(display::DisplayAction::ShowText(text, 1)).await;
-    }
-    if let Some(text) = line2 {
-        display::display_update(display::DisplayAction::ShowText(text, 2)).await;
-    }
-    if let Some(text) = line3 {
-        display::display_update(display::DisplayAction::ShowText(text, 3)).await;
+    if should_show_menu {
+        activity::clear_for(BOOT).await;
+        if !ui::ui_is_calibrating().await {
+            ui::show_main_menu().await;
+        }
     }
 }

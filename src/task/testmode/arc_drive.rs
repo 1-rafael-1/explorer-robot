@@ -5,44 +5,45 @@
 //! # Test Sequence
 //!
 //! 1. Load calibration from flash (if available)
-//! 2. Wait 10 seconds
+//! 2. Count down ten seconds
 //! 3. Drive a 360° left arc at radius 100 cm, speed 60, forward direction
 //!
-//! Completion telemetry (achieved left/right revs and status) is logged
-//! after the queue drains.
+//! The running screen reads the phase and percent from the activity state, and
+//! the operator's Stop cancels the arc in flight. Completion telemetry (achieved
+//! left/right revs and status) is logged when the arc ends.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
+use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use heapless::String;
+use touch_ui::Procedure;
 
-use super::{TestCommand, release_testmode, request_start};
+use super::{status_label, submit, test_lifecycle};
 use crate::{
-    system::event::{Events, raise_event},
+    system::{
+        event::{Events, raise_event},
+        state::calibration,
+    },
     task::{
         drive::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-            DriveQueueBuilder, TurnDirection, types::DriveQueueBuildError,
+            DriveQueueBuilder, DriveQueueCompletion, TurnDirection, types::DriveQueueBuildError,
         },
-        io::display::{DisplayAction, MAX_LINE_LEN, display_update},
+        procedure::Lifecycle,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
 
-/// Tracks whether the arc drive test is currently active.
-static ARC_DRIVE_TEST_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Radius of the test circle, in centimetres.
+const ARC_RADIUS_CM: f32 = 100.0;
 
-/// Request the arc drive test to start.
-pub async fn start_arc_drive_test() {
-    if ARC_DRIVE_TEST_ACTIVE.swap(true, Ordering::Relaxed) {
-        return;
-    }
+/// Speed the arc drives at (0-100).
+const ARC_SPEED: u8 = 60;
 
-    if !request_start(TestCommand::ArcDrive).await {
-        ARC_DRIVE_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    }
-}
+/// Countdown before the arc, in milliseconds.
+const COUNTDOWN_MS: u64 = 10_000;
+
+/// The arc drive test's lifecycle: the test family's stop latch and slot, raising
+/// `TestingCompleted` when the arc ran.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::ArcDrive);
 
 /// Spawn the arc drive test task via the controller.
 #[allow(clippy::unwrap_used)]
@@ -50,107 +51,83 @@ pub(super) fn spawn(spawner: Spawner) {
     spawner.spawn(arc_drive_test_task().unwrap());
 }
 
+/// Arc drive test task: drives the circle, then reports completion.
 #[embassy_executor::task]
 async fn arc_drive_test_task() {
-    run_arc_drive_test().await;
-    release_testmode();
-    ARC_DRIVE_TEST_ACTIVE.store(false, Ordering::Relaxed);
-    raise_event(Events::TestingCompleted).await;
+    if run_arc_drive_test().await {
+        LIFECYCLE.complete("Arc drive complete").await;
+    } else {
+        LIFECYCLE.release();
+    }
 }
 
-/// Run the arc drive test.
-#[allow(clippy::too_many_lines)]
-async fn run_arc_drive_test() {
-    async fn show_line(line: u8, msg: &str) {
-        let mut s: String<MAX_LINE_LEN> = String::new();
-        let _ = s.push_str(msg);
-        display_update(DisplayAction::ShowText(s, line)).await;
-    }
-
-    fn build_arc_queue() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
-        let mut queue = DriveQueueBuilder::new();
-
-        // 360° circle: arc length = 2π × radius.
-        let circle_arc_cm = 2.0 * core::f32::consts::PI * 100.0;
-
-        queue.push(DriveCommand::Drive(DriveAction::DriveDistance {
-            kind: DriveDistanceKind::CurveArc {
-                radius_cm: 100.0,
-                arc_length_cm: circle_arc_cm,
-                direction: TurnDirection::Left,
-            },
-            direction: DriveDirection::Forward,
-            speed: 60,
-        }))?;
-
-        Ok(queue)
-    }
-
-    // Clear display at start of test.
-    display_update(DisplayAction::Clear).await;
-    show_line(0, "ARC TEST").await;
-    show_line(1, "Initializing...").await;
-    show_line(2, "").await;
-    show_line(3, "").await;
-
-    // Send initialization event to orchestrator (only if not already initialized).
-    Timer::after(Duration::from_millis(100)).await;
-    if !crate::system::state::calibration::is_initialized().await {
+/// Run the arc drive test, reporting whether the arc ran.
+async fn run_arc_drive_test() -> bool {
+    if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }
 
-    // Wait for system to stabilize and calibration to load.
-    defmt::info!("🧪 ARC: Waiting for system initialization and calibration loading...");
-    Timer::after(Duration::from_secs(3)).await;
-
     // Force 6-axis fusion (gyro + accel).
-    defmt::info!("🧪 ARC: Setting IMU DMP fusion mode to Axis6");
+    info!("arc: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
-    show_line(1, "Fusion: Axis6").await;
-    Timer::after(Duration::from_millis(250)).await;
 
-    // Countdown before driving.
-    defmt::info!("🧪 ARC: Waiting 10 seconds before driving...");
-    show_line(1, "Starting in 10s").await;
-    Timer::after(Duration::from_secs(10)).await;
+    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
+        return false;
+    }
 
-    // Queue the 360° arc.
-    show_line(0, "ARC TEST").await;
-    show_line(1, "360 deg, r=100cm").await;
-    show_line(2, "Queueing...").await;
-    show_line(3, "").await;
+    LIFECYCLE.phase("360 deg, r=100 cm", Some(0)).await;
+    info!("arc: curve circle 360° at radius 1 m");
 
-    defmt::info!("🧪 ARC: Curve circle 360° at radius 1m");
+    match submit(build_arc_queue()).await {
+        Ok(completion) => report_arc(&completion),
+        Err(reason) => {
+            LIFECYCLE.fail(reason).await;
+            return false;
+        }
+    }
+    true
+}
 
-    let Ok(queue) = build_arc_queue() else {
-        defmt::warn!("🧪 ARC: queue full");
+/// Build the queue: one 360° arc, so its telemetry is the queue's last step.
+fn build_arc_queue() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+
+    // 360° circle: arc length = 2π × radius.
+    let circle_arc_cm = 2.0 * core::f32::consts::PI * ARC_RADIUS_CM;
+
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::DriveDistance {
+        kind: DriveDistanceKind::CurveArc {
+            radius_cm: ARC_RADIUS_CM,
+            arc_length_cm: circle_arc_cm,
+            direction: TurnDirection::Left,
+        },
+        direction: DriveDirection::Forward,
+        speed: ARC_SPEED,
+    }))?;
+
+    Ok(queue)
+}
+
+/// Log the arc's achieved telemetry, and its failure reason when it failed.
+fn report_arc(completion: &DriveQueueCompletion) {
+    let Some(step) = completion.last_step_completion.as_ref() else {
         return;
     };
 
-    let Ok(completion) = queue.submit().await else {
-        defmt::warn!("🧪 ARC: queue busy");
-        return;
-    };
-
-    if let Some(step) = completion.last_step_completion
-        && let CompletionTelemetry::DriveDistance {
-            achieved_left_revs,
-            achieved_right_revs,
-            ..
-        } = step.telemetry
+    if let CompletionTelemetry::DriveDistance {
+        achieved_left_revs,
+        achieved_right_revs,
+        ..
+    } = step.telemetry
     {
-        let status_str = match step.status {
-            CompletionStatus::Success => "Success",
-            CompletionStatus::Cancelled => "Cancelled",
-            CompletionStatus::Failed(_) => "Failed",
-        };
-        defmt::info!(
-            "🧪 ARC: complete: status={=str} left={=f32} right={=f32}",
-            status_str,
+        info!(
+            "arc: status={=str} left={=f32} right={=f32}",
+            status_label(&step.status),
             achieved_left_revs,
             achieved_right_revs
         );
     }
-
-    defmt::info!("🧪 ARC: Arc drive test complete");
+    if let CompletionStatus::Failed(reason) = step.status {
+        warn!("arc: arc failed: {=str}", reason);
+    }
 }

@@ -16,15 +16,26 @@
 //! 7. Disable motor drivers.
 //!
 //! Any residual mismatch is corrected at runtime by the IMU-based heading correction.
+//!
+//! The running screen reads the current step and its percent from the activity
+//! state; the measured pulse counts and the computed factors go to the log. A
+//! procedure that cannot proceed — both tracks silent — records the reason in the
+//! activity state instead of drawing it. The operator's Stop is honoured at every
+//! step boundary.
 
 use defmt::info;
 use embassy_time::{Duration, Timer};
+use touch_ui::Procedure;
 
+use super::calibration_lifecycle;
 use crate::{
-    system::helper::string_helper::status_text,
+    system::state::activity,
     task::{
         drive::sensors::data::{clear_encoder_measurement, wait_for_encoder_event_timeout},
+        io::flash_storage,
         motor_driver::{self, MotorCalibration, MotorCommand},
+        procedure::Lifecycle,
+        sensors::encoders as encoder_read,
     },
 };
 
@@ -34,34 +45,32 @@ const CALIBRATION_COAST_DURATION_MS: u64 = 500;
 const CALIBRATION_SAMPLE_DURATION_MS: u64 = 1000;
 /// Motor speed for calibration (0-100).
 const CALIBRATION_SPEED: i8 = 60;
+/// Steps the progress percent divides the procedure into.
+const STEPS: usize = 4;
+
+/// The motor calibration's lifecycle: the calibration family's stop latch, no
+/// slot, raising `CalibrationCompleted` on both outcomes.
+const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::MotorCalibration);
+
+/// The track under calibration.
+#[derive(Clone, Copy)]
+enum Side {
+    /// The left track.
+    Left,
+    /// The right track.
+    Right,
+}
 
 /// Run the 2-motor calibration procedure.
 ///
 /// Coordinates encoder measurements with motor commands to calculate
 /// per-track calibration factors. The faster track is the reference;
-/// the slower track is attenuated to match.
+/// the slower track is attenuated.
 #[allow(clippy::too_many_lines)]
 pub async fn run_motor_calibration() {
-    use heapless::String;
-
-    use crate::{
-        system::event,
-        task::{
-            io::{display::MAX_LINE_LEN, flash_storage},
-            sensors::encoders as encoder_read,
-        },
-    };
-
     info!("=== Starting Motor Calibration (2-motor) ===");
 
-    // Display calibration header
-    event::raise_event(event::Events::CalibrationStatus {
-        header: status_text("Motor Calibration"),
-        line1: status_text("Enabling drivers"),
-        line2: None,
-        line3: None,
-    })
-    .await;
+    let _ = LIFECYCLE.start("Enabling drivers").await;
 
     // Enable motor drivers (take out of standby).
     info!("Enabling motor driver");
@@ -76,119 +85,24 @@ pub async fn run_motor_calibration() {
     let mut calibration = MotorCalibration::default();
     info!("Starting calibration with default factors: {:?}", calibration);
 
-    // ── Step 1: Test left track ─────────────────────────────────────────────
-    info!("Step 1: Testing left track");
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Step 1/4"),
-        line2: status_text("Test left track"),
-        line3: None,
-    })
-    .await;
-
-    // Stop, reset, clear, then restart for clean measurement.
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
-    Timer::after(Duration::from_millis(200)).await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Reset).await;
-    Timer::after(Duration::from_millis(100)).await;
-    clear_encoder_measurement().await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
-    Timer::after(Duration::from_millis(200)).await;
-
-    // Run left track only at calibration speed.
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed: CALIBRATION_SPEED,
-        right_speed: 0,
-    })
-    .await;
-
-    Timer::after(Duration::from_millis(CALIBRATION_SAMPLE_DURATION_MS)).await;
-
-    let left_pulses = wait_for_encoder_event_timeout(500).await.map_or_else(
-        || {
-            info!("    Warning: No encoder event received for left track");
-            0u16
-        },
-        |measurement| {
-            info!("    ENCODER READINGS: {:?}", measurement);
-            info!("    -> left encoder: {}", measurement.left);
-            let pulses = measurement.left;
-            info!("    ✓ Left track encoder count: {}", pulses);
-            pulses
-        },
-    );
-
-    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    Timer::after(Duration::from_millis(CALIBRATION_COAST_DURATION_MS)).await;
-
-    // ── Step 2: Test right track ────────────────────────────────────────────
-    info!("Step 2: Testing right track");
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Step 2/4"),
-        line2: status_text("Test right track"),
-        line3: None,
-    })
-    .await;
-
-    // Stop, reset, clear, then restart for clean measurement.
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
-    Timer::after(Duration::from_millis(200)).await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Reset).await;
-    Timer::after(Duration::from_millis(100)).await;
-    clear_encoder_measurement().await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
-    Timer::after(Duration::from_millis(200)).await;
-
-    // Run right track only at calibration speed.
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed: 0,
-        right_speed: CALIBRATION_SPEED,
-    })
-    .await;
-
-    Timer::after(Duration::from_millis(CALIBRATION_SAMPLE_DURATION_MS)).await;
-
-    let right_pulses = wait_for_encoder_event_timeout(500).await.map_or_else(
-        || {
-            info!("    Warning: No encoder event received for right track");
-            0u16
-        },
-        |measurement| {
-            info!("    ENCODER READINGS: {:?}", measurement);
-            info!("    -> right encoder: {}", measurement.right);
-            let pulses = measurement.right;
-            info!("    ✓ Right track encoder count: {}", pulses);
-            pulses
-        },
-    );
-
-    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    Timer::after(Duration::from_millis(CALIBRATION_COAST_DURATION_MS)).await;
+    let Some(left_pulses) = measure_track(Side::Left, 1).await else {
+        finish_stopped().await;
+        return;
+    };
+    let Some(right_pulses) = measure_track(Side::Right, 2).await else {
+        finish_stopped().await;
+        return;
+    };
 
     // ── Step 3: Compute calibration factors ──────────────────────────────────
     info!("Step 3: Computing calibration factors");
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Step 3/4"),
-        line2: status_text("Compute factors"),
-        line3: None,
-    })
-    .await;
+    LIFECYCLE
+        .phase("Compute factors", Some(activity::percent_done(3, STEPS)))
+        .await;
 
     if left_pulses == 0 && right_pulses == 0 {
         info!("  ERROR: Both tracks show zero counts — calibration cannot proceed");
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("CALIB FAILED"),
-            line2: status_text("Zero encoder"),
-            line3: status_text("Check wiring"),
-        })
-        .await;
-        Timer::after(Duration::from_millis(3000)).await;
-        // Stop and disable.
-        encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
-        motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+        fail_and_stop("Zero encoder — check wiring").await;
         return;
     }
 
@@ -223,43 +137,24 @@ pub async fn run_motor_calibration() {
 
     // ── Step 4: Save calibration ────────────────────────────────────────────
     info!("Step 4: Saving calibration");
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Step 4/4"),
-        line2: status_text("Save to flash"),
-        line3: None,
-    })
-    .await;
+    LIFECYCLE
+        .phase("Save to flash", Some(activity::percent_done(4, STEPS)))
+        .await;
 
     // Validate factors.
     let all_valid = left_factor > 0.0 && left_factor <= 1.0 && right_factor > 0.0 && right_factor <= 1.0;
 
     if all_valid {
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("Saving..."),
-            line2: status_text("To flash storage"),
-            line3: status_text("Please wait..."),
-        })
-        .await;
-
         flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
             flash_storage::CalibrationDataKind::Motor(calibration),
         ))
         .await;
-
         info!("✓ Calibration saved successfully");
     } else {
         info!("✗ ERROR: Calibration factors invalid - NOT saving to flash");
         info!("  Check encoder wiring and ensure motors are running during calibration");
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("CALIB FAILED"),
-            line2: status_text("Invalid factors"),
-            line3: status_text("Check encoders"),
-        })
-        .await;
-        Timer::after(Duration::from_millis(3000)).await;
+        fail_and_stop("Invalid factors — check encoders").await;
+        return;
     }
 
     // Stop encoder readings.
@@ -270,19 +165,88 @@ pub async fn run_motor_calibration() {
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
 
     info!("=== Calibration Complete ===");
+    info!(
+        "motor calibration factors: left={=f32} right={=f32}",
+        calibration.left_factor, calibration.right_factor
+    );
+    LIFECYCLE.complete("Calibration saved").await;
+}
 
-    // Show final results.
-    let mut line2 = String::<MAX_LINE_LEN>::new();
-    let _ = core::fmt::write(&mut line2, format_args!("Left: {:.2}", calibration.left_factor));
-    let mut line3 = String::<MAX_LINE_LEN>::new();
-    let _ = core::fmt::write(&mut line3, format_args!("Right: {:.2}", calibration.right_factor));
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Complete!"),
-        line2: Some(line2),
-        line3: Some(line3),
+/// Measure one track alone, returning its pulse count, or `None` if the operator
+/// stopped the procedure.
+async fn measure_track(side: Side, step: usize) -> Option<u16> {
+    let (phase, left_speed, right_speed) = match side {
+        Side::Left => ("Test left track", CALIBRATION_SPEED, 0),
+        Side::Right => ("Test right track", 0, CALIBRATION_SPEED),
+    };
+
+    info!("{}", phase);
+    LIFECYCLE
+        .phase(phase, Some(activity::percent_done(step - 1, STEPS)))
+        .await;
+
+    // Stop, reset, clear, then restart for clean measurement.
+    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
+    Timer::after(Duration::from_millis(200)).await;
+    encoder_read::send_command(encoder_read::EncoderCommand::Reset).await;
+    Timer::after(Duration::from_millis(100)).await;
+    clear_encoder_measurement().await;
+    encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
+    Timer::after(Duration::from_millis(200)).await;
+
+    if LIFECYCLE.is_stop_requested() {
+        return None;
+    }
+
+    // Run the track under test only, at calibration speed.
+    motor_driver::send_motor_command(MotorCommand::SetTracks {
+        left_speed,
+        right_speed,
     })
     .await;
 
-    event::raise_event(event::Events::CalibrationCompleted).await;
+    if LIFECYCLE.wait_or_stop(CALIBRATION_SAMPLE_DURATION_MS).await {
+        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+        return None;
+    }
+
+    let pulses = wait_for_encoder_event_timeout(500).await.map_or_else(
+        || {
+            info!("    Warning: No encoder event received for {=str}", phase);
+            0u16
+        },
+        |measurement| {
+            let pulses = match side {
+                Side::Left => measurement.left,
+                Side::Right => measurement.right,
+            };
+            info!("    ✓ {=str} encoder count: {=u16}", phase, pulses);
+            pulses
+        },
+    );
+
+    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+    if LIFECYCLE.wait_or_stop(CALIBRATION_COAST_DURATION_MS).await {
+        return None;
+    }
+
+    Some(pulses)
+}
+
+/// Stop the procedure cleanly after the operator's Stop: release the motors and
+/// the encoder sampler, and forget the activity the UI is already leaving.
+async fn finish_stopped() {
+    info!("Motor calibration stopped by the operator");
+    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
+    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+    LIFECYCLE.abandon().await;
+}
+
+/// Release the hardware and record why the procedure could not continue.
+async fn fail_and_stop(reason: &'static str) {
+    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
+    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+    LIFECYCLE.fail(reason).await;
 }

@@ -223,11 +223,31 @@ pub enum DriveQueueBuildError {
     Full,
 }
 
+impl DriveQueueBuildError {
+    /// A short, operator-facing description for the running screen.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Queue full",
+        }
+    }
+}
+
 /// Error returned when submitting a queue for execution.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DriveQueueSubmitError {
     /// Another queue is already active.
     QueueBusy,
+}
+
+impl DriveQueueSubmitError {
+    /// A short, operator-facing description for the running screen.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::QueueBusy => "Drive busy",
+        }
+    }
 }
 
 /// Rotation direction for precise turning

@@ -3,16 +3,16 @@
 //! Pure, stateless algorithm that analyzes a 360-point `LiDAR` scan and
 //! returns the best gap to drive through within the forward cone.
 //!
-//! Operates on a full 360° point cloud (`distances: [f32; 360]`) with
-//! world-relative angles (0° = forward). Uses widest-gap selection within
-//! the forward cone (±60°).
+//! Operates on a [`lidar_cloud::Cloud`] — 360 one-degree slots of an optional
+//! distance in cm, slot 0 dead ahead and increasing slots clockwise on the glass
+//! (ADR-0012). Uses widest-gap selection within the forward cone (±60°).
 
-use crate::system::state::perception::LidarPointCloud;
+use lidar_cloud::{Cloud, is_clear};
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
 /// Distance threshold (cm). Points closer than this are obstacles;
-/// points farther or zero (no return) are "clear".
+/// points farther are "clear".
 const OBSTACLE_THRESHOLD_CM: f32 = 40.0;
 
 /// Half-angle of the forward cone (± degrees from heading 0°).
@@ -32,7 +32,7 @@ const SAFETY_MARGIN_CM: f32 = 10.0;
 /// Result of gap analysis: a chosen gap to navigate through.
 #[derive(Debug, Clone, Copy)]
 pub struct GapDecision {
-    /// Center angle of the chosen gap (degrees, 0 = forward, positive = left/CCW).
+    /// Center angle of the chosen gap (degrees, 0 = forward, positive = clockwise/right).
     pub gap_center_deg: f32,
     /// Absolute rotation needed to face the gap center (degrees).
     pub rotation_degrees: f32,
@@ -89,21 +89,25 @@ impl Gap {
 /// cone, or `None` if no viable gap exists.
 ///
 /// # Arguments
-/// * `cloud` — The `LiDAR` point cloud (360 distances, index = angle in degrees).
+/// * `cloud` — The `LiDAR` cloud (360 slots, index = angle in degrees).
 /// * `remaining_target_cm` — Remaining distance to the target in cm.
 ///
 /// # Returns
 /// * `Some(GapDecision)` if a viable gap exists within the forward cone.
 /// * `None` if no gap is wide enough or within the forward cone.
 #[must_use]
-pub fn analyze_gaps(cloud: &LidarPointCloud, remaining_target_cm: f32) -> Option<GapDecision> {
+pub fn analyze_gaps(cloud: &Cloud, remaining_target_cm: f32) -> Option<GapDecision> {
     // ── Extract contiguous clear gaps ───────────────────────────────────
-    // A point is "clear" when distance > threshold or distance == 0 (no return).
+    // A point is "clear" when the crate's rule says so: a measured return
+    // farther than the threshold. A missing return is deliberately **not** clear,
+    // so a blind spot can never extend a gap. The obstacle test in
+    // `lidar-cloud` gives the opposite answer to the same input, on purpose.
     let mut gaps: heapless::Vec<Gap, 64> = heapless::Vec::new();
+    let slots = cloud.slots();
 
     let mut i: usize = 0;
     while i < 360 {
-        if !is_clear(cloud.distances[i]) {
+        if !is_clear(slots[i], OBSTACLE_THRESHOLD_CM) {
             i += 1;
             continue;
         }
@@ -113,9 +117,8 @@ pub fn analyze_gaps(cloud: &LidarPointCloud, remaining_target_cm: f32) -> Option
         let mut min_distance = f32::MAX;
 
         // Walk the clear run.
-        while i < 360 && is_clear(cloud.distances[i]) {
-            let d = cloud.distances[i];
-            if d > 0.0 {
+        while i < 360 && is_clear(slots[i], OBSTACLE_THRESHOLD_CM) {
+            if let Some(d) = slots[i] {
                 min_distance = min_distance.min(d);
             }
             i += 1;
@@ -178,9 +181,15 @@ pub fn analyze_gaps(cloud: &LidarPointCloud, remaining_target_cm: f32) -> Option
     // ── Build decision ─────────────────────────────────────────────────
     let center = gap.center_deg();
 
-    // Determine rotation: center in [0, 360] with 0 = forward.
-    // - center 0–180: gap is on the left side → turn CCW (clockwise = false)
-    // - center 180–360: gap is on the right side → turn CW (clockwise = true)
+    // Rotation to face the gap centre, in degrees (0–180), with the turn
+    // direction in `clockwise`.
+    //
+    // Slot convention (ADR-0012): slot 0 is dead ahead and increasing slots run
+    // clockwise on the glass, so a centre in 0–180 lies to the robot's right.
+    // The derivation below predates that convention and its direction is
+    // suspected inverted under it. It is left unchanged because the deferred
+    // attempt-straight-line mode is out of scope for this follow-up, and is
+    // reported for a human decision instead.
     let (rotation_degrees, clockwise) = if center <= 180.0 {
         (center, false) // Turn CCW (left)
     } else {
@@ -201,12 +210,4 @@ pub fn analyze_gaps(cloud: &LidarPointCloud, remaining_target_cm: f32) -> Option
         clockwise,
         drive_distance_cm,
     })
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// A point is "clear" when no obstacle is within the threshold distance,
-/// or when no return was measured (distance == 0.0).
-fn is_clear(distance_cm: f32) -> bool {
-    distance_cm == 0.0 || distance_cm > OBSTACLE_THRESHOLD_CM
 }

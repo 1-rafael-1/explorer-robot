@@ -1,4 +1,4 @@
-//! I/O subsystem — display and flash storage.
+//! I/O subsystem — graphics panel and flash storage.
 
-pub mod display;
 pub mod flash_storage;
+pub mod panel;

@@ -29,7 +29,11 @@
     clippy::large_futures
 )]
 
-use coin_d6::{AggregationConfig, CoinD6, Config as LidarConfig, Scan, WarmupConfig, WarmupOutcome};
+// Aliased: `embedded_graphics::prelude::*` also names a `Point` (a screen
+// coordinate), so the LiDAR's polar `Point` needs a distinct name here.
+use coin_d6::{
+    AggregationConfig, CoinD6, Config as LidarConfig, Point as LidarPoint, Reduction, Scan, WarmupConfig, WarmupOutcome,
+};
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -65,6 +69,8 @@ const BAUD_RATE: u32 = 230_400;
 const INGEST_BUF_LEN: usize = 1024;
 /// Number of revolutions aggregated into one radar frame.
 const SPINS: usize = 3;
+/// Buckets in an aggregated radar frame: the default 0.9° grid's 400 angles.
+const FRAME_BUCKETS: usize = 400;
 
 /// Read mode: `true` aggregates `SPINS` revolutions per frame (smoother but
 /// slower); `false` draws each raw revolution as it arrives (fastest update
@@ -121,9 +127,9 @@ where
     Ok(())
 }
 
-/// Draw the static range rings, the orientation crosshair, and one aggregated
-/// scan's returns into `display`.
-fn draw_radar<D>(display: &mut D, scan: &Scan) -> Result<(), D::Error>
+/// Draw the static range rings, the orientation crosshair, and one frame's
+/// returns into `display`.
+fn draw_radar<D>(display: &mut D, points: &[LidarPoint]) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
@@ -159,7 +165,7 @@ where
     // relative to the panel, so the plotted offsets are negated — equivalent to
     // rotating the returns 180° while 0° still points forward and increasing
     // angles stay clockwise.
-    for point in &scan.points[..scan.len] {
+    for point in points {
         let Some(distance) = point.distance_mm else {
             continue;
         };
@@ -248,12 +254,13 @@ async fn main(_spawner: Spawner) {
     lidar.start().await.unwrap();
     info!("lidar started");
 
-    // Aggregation buffers: `spins` holds the raw revolutions, `frame` is reused
-    // first as the warm-up scratch scan, then as the aggregated output.
+    // Buffers: `spins` holds the raw revolutions, `scan` is the raw-revolution
+    // path (and the warm-up scratch), and `reduced` is the aggregated frame.
     let mut spins: [Scan; SPINS] = core::array::from_fn(|_| Scan::new());
-    let mut frame = Scan::new();
+    let mut scan = Scan::new();
+    let mut reduced = Reduction::<FRAME_BUCKETS>::new();
 
-    match lidar.warm_up(&mut frame, &WarmupConfig::default()).await.unwrap() {
+    match lidar.warm_up(&mut scan, &WarmupConfig::default()).await.unwrap() {
         WarmupOutcome::Settled { spins, points } => {
             info!("warm-up settled: {} spins, {} points", spins, points);
         }
@@ -270,15 +277,19 @@ async fn main(_spawner: Spawner) {
 
         if AGGREGATE {
             lidar
-                .read_aggregated(&mut spins, &mut frame, &AggregationConfig::default())
+                .read_aggregated(&mut spins, &mut reduced, &AggregationConfig::default())
                 .await
                 .unwrap();
         } else {
-            lidar.read_scan(&mut frame).await.unwrap();
+            lidar.read_scan(&mut scan).await.unwrap();
         }
 
         display.clear(Rgb565::BLACK).unwrap();
-        draw_radar(&mut display, &frame).unwrap();
+        if AGGREGATE {
+            draw_radar(&mut display, &reduced.points[..reduced.len]).unwrap();
+        } else {
+            draw_radar(&mut display, &scan.points[..scan.len]).unwrap();
+        }
         display.flush().await.unwrap();
 
         let elapsed = started.elapsed();

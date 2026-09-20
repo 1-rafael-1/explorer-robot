@@ -10,27 +10,21 @@ use crate::{
     },
 };
 
-/// Reset obstacle detection state and clear all perception data.
-pub async fn reset_obstacle_state() {
-    perception::set_lidar_obstacle(false).await;
-    update_obstacle_indicator(false);
-}
-
-/// Handle obstacle detection status changes.
+/// Handle a change of the obstacle flag.
 ///
-/// Updates perception atomics and unconditionally sends an `EmergencyBrake`
-/// interrupt to the drive task. This is a system-wide safety invariant — sensors
-/// are armed in all modes (autonomous, testing). The interrupt brakes motors,
-/// bumps the command epoch, and drains queued commands.
-pub async fn handle_obstacle_detected(source: crate::system::event::ObstacleSource, detected: bool) {
+/// The event is an edge, so the handler reads the flag from the perception
+/// state module rather than a copy in the payload. When the flag is set it
+/// unconditionally sends an `EmergencyBrake` interrupt to the drive task. This
+/// is a system-wide safety invariant — sensors are armed in all modes
+/// (autonomous, testing). The interrupt brakes motors, bumps the command epoch,
+/// and drains queued commands.
+pub fn handle_obstacle_detected(source: crate::system::event::ObstacleSource) {
+    let obstacle = perception::is_obstacle_detected();
     info!(
         "Obstacle detection status changed: source={:?} detected={}",
-        source, detected
+        source, obstacle
     );
 
-    perception::set_lidar_obstacle(detected).await;
-
-    let obstacle = perception::lidar_obstacle().await;
     update_obstacle_indicator(obstacle);
     if obstacle {
         send_drive_interrupt(InterruptKind::EmergencyBrake);

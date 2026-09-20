@@ -13,7 +13,6 @@
 //!   cannot.
 //! - Edge-triggered floor-drop detection: tracks `last_drop_detected` and
 //!   only raises `FloorDropDetected { detected }` on state change.
-//! - Writes readings to `perception::update_rangefinder_readings()` each cycle.
 //! - Floor-drop state written to `perception::set_floor_drop()` on
 //!   any state change.
 //!
@@ -29,7 +28,7 @@ use embassy_time::{Duration, Timer};
 
 use crate::system::{
     event::{Events, raise_event},
-    state::perception::{self, RangefinderReadings},
+    state::perception,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -64,16 +63,10 @@ pub async fn vl53l0x_stub_task() {
 
         let detected = reading_cm > FLOOR_DROP_THRESHOLD_CM;
 
-        // Publish rangefinder reading to perception.
-        let readings = RangefinderReadings {
-            front_down: Some(reading_cm),
-        };
-        perception::update_rangefinder_readings(readings).await;
-
         // Edge-triggered floor-drop detection.
         if last_detected != Some(detected) {
             raise_event(Events::FloorDropDetected { detected }).await;
-            perception::set_floor_drop(detected).await;
+            perception::set_floor_drop(detected);
             last_detected = Some(detected);
         }
 

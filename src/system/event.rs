@@ -9,6 +9,10 @@
 //! 3. The orchestrator task processes events and updates system state
 //! 4. State changes trigger corresponding actions in other tasks
 //!
+//! Progress text does not travel on this bus: producers publish their phase,
+//! percent and result through [`crate::system::state::activity`] and the UI
+//! renders it. The bus carries transitions only.
+//!
 //! # Channel Design
 //! - Multi-producer: Any task can send events
 //! - Single-consumer: Orchestrator task processes all events
@@ -18,7 +22,7 @@
 //! # Usage Example
 //! ```rust
 //! // Sending an event
-//! raise_event(Events::RotaryButtonPressed).await;
+//! raise_event(Events::TestingCompleted).await;
 //!
 //! // Receiving an event (in orchestrator)
 //! let event = wait().await;
@@ -26,8 +30,6 @@
 
 use defmt::Format;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-
-use crate::task::io::display::MAX_LINE_LEN;
 
 /// Multi-producer, single-consumer event channel.
 ///
@@ -62,15 +64,6 @@ pub enum ObstacleSource {
     Lidar,
 }
 
-/// Rotary encoder direction.
-#[derive(Debug, Clone, Copy, Format, Eq, PartialEq)]
-pub enum RotaryDirection {
-    /// Encoder turned clockwise.
-    Clockwise,
-    /// Encoder turned counter-clockwise.
-    CounterClockwise,
-}
-
 // ── System events ───────────────────────────────────────────────────────────────
 
 /// System-wide events that can occur during robot operation.
@@ -90,15 +83,15 @@ pub enum Events {
         Option<crate::task::io::flash_storage::CalibrationDataKind>,
     ),
 
-    /// Obstacle detection status changed.
-    /// - source: which sensor reported the change.
-    /// - detected: true if obstacle within threshold, false if clear.
+    /// The obstacle flag changed.
+    ///
+    /// This is an edge, not a state copy: the payload names which sensor
+    /// changed the flag, and a handler reads the flag for the current state
+    /// rather than trusting a value carried here. Raised by the `LiDAR` task
+    /// when its Front Sector test flips the flag.
     ObstacleDetected {
         /// Sensor source reporting the change.
         source: ObstacleSource,
-        /// true: Obstacle detected within threshold.
-        /// false: Path is clear.
-        detected: bool,
     },
 
     /// Floor-drop detection status changed (stairs, ledges).
@@ -122,10 +115,6 @@ pub enum Events {
     /// - Used to coordinate next movement decision.
     ObstacleAvoidanceAttempted,
 
-    /// `LiDAR` buffered scan completed (360° point-cloud pass).
-    /// The point cloud in perception state is now fully populated.
-    LidarScanCompleted,
-
     /// Battery measurement (level percentage and raw voltage).
     /// - level: 0-100 percent, triggers LED color updates.
     /// - voltage: raw voltage in volts, used for motor driver voltage compensation.
@@ -137,37 +126,13 @@ pub enum Events {
         voltage: f32,
     },
 
-    /// Rotary encoder turn.
-    /// - Clockwise = increment, `CounterClockwise` = decrement.
-    RotaryTurned(RotaryDirection),
-
-    /// Rotary encoder button press.
-    /// - Short press.
-    RotaryButtonPressed,
-
-    /// Rotary encoder button hold initiated.
-    RotaryButtonHoldStart,
-
-    /// Rotary encoder button hold released.
-    RotaryButtonHoldEnd,
-
     /// Testing sequence finished.
     TestingCompleted,
 
-    /// Calibration status update.
-    /// - Triggered during calibration procedures to update display.
-    /// - Contains optional header (line 0) and up to 3 status lines (lines 1-3).
-    CalibrationStatus {
-        /// Optional header text (line 0).
-        header: Option<heapless::String<MAX_LINE_LEN>>,
-        /// Optional status line 1.
-        line1: Option<heapless::String<MAX_LINE_LEN>>,
-        /// Optional status line 2.
-        line2: Option<heapless::String<MAX_LINE_LEN>>,
-        /// Optional status line 3.
-        line3: Option<heapless::String<MAX_LINE_LEN>>,
-    },
-
     /// Calibration procedure finished (success or failure).
+    ///
+    /// The result itself is not carried here: the procedure records its phase,
+    /// percent and outcome in [`crate::system::state::activity`], and the UI
+    /// reads that to decide what to show.
     CalibrationCompleted,
 }

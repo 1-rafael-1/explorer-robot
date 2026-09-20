@@ -24,8 +24,8 @@
 //! drag stays responsive.
 //!
 //! The menu labels and System Info rows are a **transcribed snapshot** of the
-//! robot firmware's menus (`src/task/ui/screens.rs`) and may drift from it; the
-//! firmware remains the source of truth.
+//! `touch-ui` crate's `screens` module — the source of truth for the labels the
+//! UI ships — and may drift from it.
 //!
 //! Run from the repository root with:
 //!
@@ -342,12 +342,12 @@ const DRAG_RENDER_MS: u64 = 50;
 
 // ── Menu data ─────────────────────────────────────────────────────────────────
 
-/// The robot's Main Menu labels, transcribed from the firmware's
-/// `src/task/ui/screens.rs`.
+/// The robot's Main Menu labels, transcribed from the `touch-ui` crate's
+/// `screens` module.
 ///
-/// This is a snapshot and may drift from the firmware, which remains the source
-/// of truth. The firmware's in-list Back entries are dropped: the header Back
-/// button is the only way back.
+/// This is a snapshot and may drift from that crate, which is the source of
+/// truth for the labels the UI ships. Its in-list Back entries are dropped: the
+/// header Back button is the only way back.
 const MAIN_MENU: [&str; 4] = ["System Info", "Calibrate", "Drive Mode", "Test Mode"];
 
 /// The Calibrate submenu labels, transcribed from the firmware (no in-list Back).

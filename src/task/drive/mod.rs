@@ -106,7 +106,7 @@ mod rotation;
 mod sensors;
 
 // ── Calibration ───────────────────────────────────────────────────────────────
-mod calibration;
+pub mod calibration;
 
 // ── Public API surface ────────────────────────────────────────────────────────
 mod api;
@@ -128,7 +128,7 @@ pub use sensors::data::{
 use state::DriveLoop;
 pub use types::{
     CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-    DriveQueueSubmitError, ImuCalibrationKind, InterruptKind, TurnDirection,
+    DriveQueueCompletion, DriveQueueSubmitError, ImuCalibrationKind, InterruptKind, TurnDirection,
 };
 
 /// Drive control task - coordinates motion and sensor feedback.

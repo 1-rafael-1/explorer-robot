@@ -29,7 +29,7 @@ use embedded_io_async::{Read, ReadExactError, Write};
 use crate::{
     decoder::{Decode, Decoder},
     post_processing::{aggregate, angle_correction_deg, normalise_angle},
-    types::{AggregationConfig, Config, Error, Scan, WarmupConfig, WarmupOutcome},
+    types::{AggregationConfig, Config, Error, Reduction, Scan, WarmupConfig, WarmupOutcome},
     warmup::Warmup,
 };
 
@@ -262,17 +262,18 @@ where
 
     /// Capture one revolution per entry in `spins`, then reduce them into `out`.
     ///
-    /// The number of revolutions to aggregate is `spins.len()`.
+    /// The number of revolutions to aggregate is `spins.len()`; the reduction's
+    /// bucket count is `out`'s own `BUCKETS`.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Timeout`] if any spin fails to assemble a revolution
     /// within the watchdog. As with [`Self::read_scan`], UART read errors are
     /// recovered by resync and never surface as [`Error::Uart`].
-    pub async fn read_aggregated(
+    pub async fn read_aggregated<const BUCKETS: usize>(
         &mut self,
         spins: &mut [Scan],
-        out: &mut Scan,
+        out: &mut Reduction<BUCKETS>,
         config: &AggregationConfig,
     ) -> Result<(), Error<UART::Error, POWER::Error>> {
         for scan in spins.iter_mut() {

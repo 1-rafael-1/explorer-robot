@@ -1,0 +1,21 @@
+[package]
+name = "lidar-cloud"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Firmware-side LiDAR cloud: 360 one-degree bins with explicit no-return, the mounting offset, and the Front Sector obstacle rule"
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+coin-d6 = { path = "../coin-d6" }
+
+[features]
+std = ["coin-d6/std"]
+
+[[test]]
+name = "cloud"
+required-features = ["std"]

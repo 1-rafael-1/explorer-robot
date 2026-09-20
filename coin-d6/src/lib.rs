@@ -7,7 +7,7 @@
 //! - [`decoder`] reassembles raw UART bytes into individual [`Point`]s, resynchronising
 //!   on the sensor's per-frame checksum.
 //! - [`post_processing`] aggregates several revolutions into a single stable
-//!   [`Scan`] according to an [`AggregationConfig`].
+//!   [`Reduction`] according to an [`AggregationConfig`].
 //! - [`driver`] owns the async UART and the power-enable pin, and wires the other two
 //!   stages together into a ready-to-consume scan stream.
 //!
@@ -27,6 +27,7 @@ pub use decoder::{Decode, Decoder};
 pub use driver::CoinD6;
 pub use post_processing::{ANGLE_CORRECTION_COEFF, ANGLE_CORRECTION_ZERO_MM, aggregate, angle_correction_deg};
 pub use types::{
-    AggregationConfig, AggregationMethod, Config, Error, NATIVE_POINTS, Point, Scan, WarmupConfig, WarmupOutcome,
+    AggregationConfig, AggregationMethod, Config, Error, NATIVE_POINTS, Point, Reduction, Scan, WarmupConfig,
+    WarmupOutcome,
 };
 pub use warmup::Warmup;

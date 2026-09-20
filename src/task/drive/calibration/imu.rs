@@ -5,22 +5,29 @@
 //!
 //! The ICM-20948 is connected via a **dedicated SPI bus**. Driver
 //! initialization uses `Interface::Spi(spi_device, cs_pin)`.
-
-use core::fmt::Write;
+//!
+//! The running screen reads the current phase and its percent from the activity
+//! state; a phase that cannot be completed records why in the activity state
+//! rather than drawing it. The operator's Stop is honoured at every phase
+//! boundary and inside the guided rotation loop.
 
 use defmt::info;
 use embassy_time::{Duration, Instant, Timer};
-use heapless::String;
 use nalgebra::Vector3;
+use touch_ui::Procedure;
 
+use super::calibration_lifecycle;
 use crate::{
-    system::helper::string_helper::status_text,
+    system::state::activity,
     task::{
         drive::{
             sensors::data::{clear_mag_measurement, measure_mag_average, subtract_mag, wait_for_mag_event_timeout},
             types::ImuCalibrationKind,
         },
+        io::flash_storage,
         motor_driver::{self, MotorCommand},
+        procedure::Lifecycle,
+        sensors::imu as imu_read,
     },
 };
 
@@ -57,6 +64,17 @@ const MAG_CALIBRATION_CONFIG: MagCalibrationConfig = MagCalibrationConfig {
     verify_max_delta_ut: 20.0,
 };
 
+/// Number of guided rotation phases, and the denominator of their percent.
+const MANUAL_PHASES: usize = 3;
+
+/// Countdown before the motor interference phase, in seconds.
+const SETTLE_SECONDS: u64 = 20;
+
+/// The magnetometer calibration's lifecycle: the calibration family's stop latch,
+/// no slot, raising `CalibrationCompleted` on both outcomes. The phase machine,
+/// settle and interference passes stay this module's own body.
+const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::MagCalibration);
+
 /// Ensures IMU readings are stopped (and fusion mode restored) after calibration completes.
 struct ImuReadingsGuard {
     /// Fusion mode to restore after calibration (if any).
@@ -89,7 +107,7 @@ impl Drop for ImuReadingsGuard {
 #[derive(Copy, Clone)]
 /// Motor command step used to measure or verify mag interference.
 struct InterferenceStep {
-    /// UI label for the step.
+    /// Operator-facing label for the step.
     label: &'static str,
     /// Left track command percentage.
     left: i8,
@@ -210,8 +228,6 @@ impl MagCoverage {
 
 /// Rotation guidance step for magnetometer coverage.
 struct MagRotationStep {
-    /// Label to show on the OLED for this step.
-    label: &'static str,
     /// Require X-axis coverage for this step.
     require_x: bool,
     /// Require Y-axis coverage for this step.
@@ -241,8 +257,6 @@ enum MagCalibrationPhase {
     MotorVerify,
     /// Save calibration results.
     Save,
-    /// Calibration failed.
-    Failed,
 }
 
 impl MagCalibrationPhase {
@@ -257,7 +271,6 @@ impl MagCalibrationPhase {
             Self::MotorMeasure => "P6 MOTOR",
             Self::MotorVerify => "P7 VERIFY",
             Self::Save => "P8 SAVE",
-            Self::Failed => "FAIL",
         }
     }
 
@@ -271,29 +284,37 @@ impl MagCalibrationPhase {
             Self::MotorBaseline => Some((5, 7)),
             Self::MotorMeasure => Some((6, 7)),
             Self::MotorVerify => Some((7, 7)),
-            Self::Save | Self::Failed => None,
+            Self::Save => None,
+        }
+    }
+
+    /// The instruction the running screen shows while this phase needs the
+    /// operator to do something.
+    const fn prompt(self) -> &'static str {
+        match self {
+            Self::ManualYaw => "Keep flat, spin on table",
+            Self::ManualPitch => "Tilt nose up and down",
+            Self::ManualRoll => "Tilt left and right",
+            _ => "Move slowly, follow the prompt",
         }
     }
 }
 
 /// Sequence of user-guided rotations for magnetometer coverage.
-const MAG_ROTATION_STEPS: [MagRotationStep; 3] = [
+const MAG_ROTATION_STEPS: [MagRotationStep; MANUAL_PHASES] = [
     MagRotationStep {
-        label: "Yaw flat",
         require_x: false,
         require_y: false,
         require_z: false,
         min_heading_span_deg: Some(50.0),
     },
     MagRotationStep {
-        label: "Pitch",
         require_x: true,
         require_y: false,
         require_z: true,
         min_heading_span_deg: None,
     },
     MagRotationStep {
-        label: "Roll",
         require_x: false,
         require_y: true,
         require_z: true,
@@ -363,31 +384,46 @@ struct MagCalibrationResult {
     interference: InterferenceData,
 }
 
-/// Emit a phase transition log and update OLED with phase progress.
-async fn enter_mag_phase(phase: MagCalibrationPhase, detail: Option<&'static str>) {
-    use crate::system::event;
+/// How a guided phase ended.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum PhaseResult {
+    /// The phase collected what it needed.
+    Complete,
+    /// The phase ran out of time or samples first.
+    Incomplete,
+    /// The operator stopped the calibration.
+    Stopped,
+}
 
-    if let Some((index, total)) = phase.progress() {
-        info!("Mag phase transition -> {} ({}/{})", phase.label(), index, total);
-        let mut line1 = String::new();
-        let _ = write!(line1, "Phase {index}/{total}");
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: Some(line1),
-            line2: status_text(phase.label()),
-            line3: detail.and_then(status_text),
-        })
-        .await;
-    } else {
-        info!("Mag phase transition -> {}", phase.label());
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text(phase.label()),
-            line2: detail.and_then(status_text),
-            line3: None,
-        })
-        .await;
-    }
+/// How the manual rotation coverage attempt ended.
+enum CoverageOutcome {
+    /// Enough coverage on all three axes.
+    Collected(MagCoverage),
+    /// The attempt ended without usable coverage, and why.
+    Incomplete(&'static str),
+    /// The operator stopped the calibration.
+    Stopped,
+}
+
+/// How the whole magnetometer calibration ended.
+enum Outcome {
+    /// A result ready to save.
+    Success(MagCalibrationResult),
+    /// The procedure could not produce a result, and why.
+    Incomplete(&'static str),
+    /// The operator stopped the calibration.
+    Stopped,
+}
+
+/// Publish a phase transition: the percent from the phase's place in the
+/// sequence, and `detail` if given, else the phase's own label.
+async fn enter_mag_phase(phase: MagCalibrationPhase, detail: Option<&'static str>) {
+    let percent = phase
+        .progress()
+        .map(|(index, total)| activity::percent_done(usize::from(index).saturating_sub(1), usize::from(total)));
+    let line = detail.unwrap_or_else(|| phase.label());
+    info!("Mag phase transition -> {} ({})", phase.label(), line);
+    LIFECYCLE.phase(line, percent).await;
 }
 
 /// Guide one explicit manual rotation phase and collect coverage.
@@ -397,10 +433,8 @@ async fn measure_mag_rotation_phase(
     step: &MagRotationStep,
     config: MagCalibrationConfig,
     coverage: &mut MagCoverage,
-) -> bool {
-    use crate::system::event;
-
-    enter_mag_phase(phase, Some("Rotate as shown")).await;
+) -> PhaseResult {
+    enter_mag_phase(phase, Some(phase.prompt())).await;
 
     let step_timeout = (config.max_seconds / MAG_ROTATION_STEPS.len() as u64).max(10);
     let min_step_samples = (config.min_samples / MAG_ROTATION_STEPS.len()).max(1);
@@ -415,10 +449,14 @@ async fn measure_mag_rotation_phase(
     let mut last_log_ms: u32 = 0;
 
     loop {
+        if LIFECYCLE.is_stop_requested() {
+            return PhaseResult::Stopped;
+        }
+
         let elapsed_secs = Instant::now().duration_since(start_time).as_secs();
         if elapsed_secs >= step_timeout {
             info!("Mag phase timeout at {}", phase.label());
-            return false;
+            return PhaseResult::Incomplete;
         }
 
         clear_mag_measurement().await;
@@ -479,115 +517,36 @@ async fn measure_mag_rotation_phase(
                 phase.label(),
                 step_coverage.samples
             );
-            event::raise_event(event::Events::CalibrationStatus {
-                header: None,
-                line1: status_text("Phase OK"),
-                line2: status_text(step.label),
-                line3: status_text("Continue"),
-            })
-            .await;
-            Timer::after(Duration::from_millis(500)).await;
-            return true;
+            LIFECYCLE.phase("Phase OK", None).await;
+            if LIFECYCLE.wait_or_stop(500).await {
+                return PhaseResult::Stopped;
+            }
+            return PhaseResult::Complete;
         }
-
-        let (line1, line2, line3) = match phase {
-            MagCalibrationPhase::ManualYaw => (
-                status_text("P1 YAW"),
-                status_text("Keep flat"),
-                status_text("Spin on table"),
-            ),
-            MagCalibrationPhase::ManualPitch => (
-                status_text("P2 PITCH"),
-                status_text("Tilt nose"),
-                status_text("Up / down"),
-            ),
-            MagCalibrationPhase::ManualRoll => (status_text("P3 ROLL"), status_text("Tilt left"), status_text("Right")),
-            _ => (
-                status_text(phase.label()),
-                status_text("Move slowly"),
-                status_text("Follow prompt"),
-            ),
-        };
-
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1,
-            line2,
-            line3,
-        })
-        .await;
 
         if mag_timeout_streak >= config.timeout_limit {
             info!("Mag phase timeout streak exceeded at {}", phase.label());
-            return false;
+            return PhaseResult::Incomplete;
         }
     }
 }
 
 /// Guide the user through explicit axis-specific phases and collect coverage.
-async fn measure_mag_coverage(config: MagCalibrationConfig) -> Option<MagCoverage> {
-    use crate::system::event;
-
+async fn measure_mag_coverage(config: MagCalibrationConfig) -> CoverageOutcome {
     let mut coverage = MagCoverage::new();
 
-    if !measure_mag_rotation_phase(
-        MagCalibrationPhase::ManualYaw,
-        &MAG_ROTATION_STEPS[0],
-        config,
-        &mut coverage,
-    )
-    .await
-    {
-        enter_mag_phase(MagCalibrationPhase::Failed, Some("Yaw incomplete")).await;
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("MAG FAILED"),
-            line2: status_text("Yaw incomplete"),
-            line3: status_text("Retry"),
-        })
-        .await;
-        Timer::after(Duration::from_secs(2)).await;
-        return None;
-    }
+    let phases = [
+        (MagCalibrationPhase::ManualYaw, "Yaw incomplete"),
+        (MagCalibrationPhase::ManualPitch, "Pitch incomplete"),
+        (MagCalibrationPhase::ManualRoll, "Roll incomplete"),
+    ];
 
-    if !measure_mag_rotation_phase(
-        MagCalibrationPhase::ManualPitch,
-        &MAG_ROTATION_STEPS[1],
-        config,
-        &mut coverage,
-    )
-    .await
-    {
-        enter_mag_phase(MagCalibrationPhase::Failed, Some("Pitch incomplete")).await;
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("MAG FAILED"),
-            line2: status_text("Pitch incomplete"),
-            line3: status_text("Retry"),
-        })
-        .await;
-        Timer::after(Duration::from_secs(2)).await;
-        return None;
-    }
-
-    if !measure_mag_rotation_phase(
-        MagCalibrationPhase::ManualRoll,
-        &MAG_ROTATION_STEPS[2],
-        config,
-        &mut coverage,
-    )
-    .await
-    {
-        enter_mag_phase(MagCalibrationPhase::Failed, Some("Roll incomplete")).await;
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("MAG FAILED"),
-            line2: status_text("Roll incomplete"),
-            line3: status_text("Retry"),
-        })
-        .await;
-        Timer::after(Duration::from_secs(2)).await;
-        return None;
+    for (index, (phase, reason)) in phases.iter().enumerate() {
+        match measure_mag_rotation_phase(*phase, &MAG_ROTATION_STEPS[index], config, &mut coverage).await {
+            PhaseResult::Complete => {}
+            PhaseResult::Incomplete => return CoverageOutcome::Incomplete(reason),
+            PhaseResult::Stopped => return CoverageOutcome::Stopped,
+        }
     }
 
     let axes_ok = coverage.axes_ok(config);
@@ -596,19 +555,10 @@ async fn measure_mag_coverage(config: MagCalibrationConfig) -> Option<MagCoverag
             "Mag calibration failed after manual phases (samples={}, axes_ok={})",
             coverage.samples, axes_ok
         );
-        enter_mag_phase(MagCalibrationPhase::Failed, Some("Coverage insufficient")).await;
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("MAG FAILED"),
-            line2: status_text("Rotate more"),
-            line3: status_text("All axes"),
-        })
-        .await;
-        Timer::after(Duration::from_secs(2)).await;
-        return None;
+        return CoverageOutcome::Incomplete("Rotate more — all axes");
     }
 
-    Some(coverage)
+    CoverageOutcome::Collected(coverage)
 }
 
 /// Enable or disable motor drivers during mag calibration.
@@ -617,27 +567,32 @@ async fn set_motor_drivers_enabled(enabled: bool) {
 }
 
 /// Measure motor-induced magnetometer interference across predefined steps.
-async fn measure_mag_interference(config: MagCalibrationConfig, baseline_mag: Vector3<f32>) -> InterferenceData {
-    use crate::system::event;
-
+///
+/// Returns `None` when the operator stopped the calibration.
+async fn measure_mag_interference(
+    config: MagCalibrationConfig,
+    baseline_mag: Vector3<f32>,
+) -> Option<InterferenceData> {
     let mut data = InterferenceData::new();
+    let total = INTERFERENCE_STEPS.len();
 
-    for step in &INTERFERENCE_STEPS {
+    for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
+        if LIFECYCLE.is_stop_requested() {
+            return None;
+        }
         info!("Motor interference step start: {=str}", step.label);
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("Mag interference"),
-            line2: status_text(step.label),
-            line3: status_text("Measuring 5s"),
-        })
-        .await;
+        LIFECYCLE
+            .phase(step.label, Some(activity::percent_done(index, total)))
+            .await;
 
         motor_driver::send_motor_command(MotorCommand::SetTracks {
             left_speed: step.left,
             right_speed: step.right,
         })
         .await;
-        Timer::after(Duration::from_millis(1000)).await;
+        if LIFECYCLE.wait_or_stop(1_000).await {
+            return None;
+        }
         clear_mag_measurement().await;
         let mag_avg = measure_mag_average(config.avg_samples).await;
         let interference = subtract_mag(mag_avg, baseline_mag);
@@ -646,52 +601,49 @@ async fn measure_mag_interference(config: MagCalibrationConfig, baseline_mag: Ve
         info!("Motor interference step done: {=str}", step.label);
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        Timer::after(Duration::from_millis(500)).await;
+        if LIFECYCLE.wait_or_stop(500).await {
+            return None;
+        }
     }
 
-    data
+    Some(data)
 }
 
 /// Verify interference compensation keeps the field within expected limits.
+///
+/// Returns `None` when the operator stopped the calibration.
 async fn verify_mag_interference(
     config: MagCalibrationConfig,
     bias: Vector3<f32>,
     scale: Vector3<f32>,
     baseline_mag: Vector3<f32>,
     interference: &InterferenceData,
-) -> bool {
-    use crate::system::event;
-
+) -> Option<bool> {
     let baseline_corrected = Vector3::new(
         (baseline_mag.x - bias.x) * scale.x,
         (baseline_mag.y - bias.y) * scale.y,
         (baseline_mag.z - bias.z) * scale.z,
     );
     let baseline_norm = baseline_corrected.norm();
+    let total = INTERFERENCE_STEPS.len();
 
     for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
-        info!(
-            "Motor verify step {}/{}: {=str}",
-            index + 1,
-            INTERFERENCE_STEPS.len(),
-            step.label
-        );
-        let mut line = String::new();
-        let _ = write!(line, "Step {}/{}", index + 1, INTERFERENCE_STEPS.len());
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("Mag verify"),
-            line2: status_text(step.label),
-            line3: Some(line),
-        })
-        .await;
+        if LIFECYCLE.is_stop_requested() {
+            return None;
+        }
+        info!("Motor verify step {}/{}: {=str}", index + 1, total, step.label);
+        LIFECYCLE
+            .phase(step.label, Some(activity::percent_done(index, total)))
+            .await;
 
         motor_driver::send_motor_command(MotorCommand::SetTracks {
             left_speed: step.left,
             right_speed: step.right,
         })
         .await;
-        Timer::after(Duration::from_millis(1000)).await;
+        if LIFECYCLE.wait_or_stop(1_000).await {
+            return None;
+        }
         clear_mag_measurement().await;
         let mag_avg = measure_mag_average(config.avg_samples).await;
 
@@ -706,49 +658,58 @@ async fn verify_mag_interference(
             || mag_norm > config.verify_max_ut
             || (mag_norm - baseline_norm).abs() > config.verify_max_delta_ut
         {
-            return false;
+            return Some(false);
         }
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        Timer::after(Duration::from_millis(500)).await;
+        if LIFECYCLE.wait_or_stop(500).await {
+            return None;
+        }
     }
 
-    true
+    Some(true)
 }
 
-/// Run the magnetometer calibration flow and return results on success.
+/// Wait out the settle countdown, publishing the progress toward the motor
+/// phase.
+///
+/// Returns `true` when the operator stopped the calibration.
+async fn run_settle_countdown() -> bool {
+    LIFECYCLE.phase("Hold still, motors soon", Some(0)).await;
+    let total = usize::try_from(SETTLE_SECONDS).unwrap_or(1);
+
+    for second in 0..SETTLE_SECONDS {
+        let elapsed = usize::try_from(second).unwrap_or(0);
+        LIFECYCLE
+            .phase("Hold still, motors soon", Some(activity::percent_done(elapsed, total)))
+            .await;
+        if LIFECYCLE.wait_or_stop(1_000).await {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Run the magnetometer calibration flow.
 #[allow(clippy::too_many_lines)]
-async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Option<MagCalibrationResult> {
-    use crate::system::event;
-
+async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
     info!("Step 2: Magnetometer Calibration (strict phase machine)");
-    let (line1, line2, line3) = (status_text("Mag calibration"), status_text("Prepare to move"), None);
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1,
-        line2,
-        line3,
-    })
-    .await;
-    Timer::after(Duration::from_secs(3)).await;
 
-    let (line1, line2, line3) = (
-        status_text("Mag calibration"),
-        status_text("Rotate slowly"),
-        status_text("Pitch/Roll/Yaw"),
-    );
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1,
-        line2,
-        line3,
-    })
-    .await;
+    LIFECYCLE.phase("Prepare to move", None).await;
+    if LIFECYCLE.wait_or_stop(3_000).await {
+        return Outcome::Stopped;
+    }
 
-    let Some(coverage) = measure_mag_coverage(config).await else {
-        info!("MAG CAL RESULT: reached_motor_phase=false, reason=manual coverage failed");
-        return None;
+    let coverage = match measure_mag_coverage(config).await {
+        CoverageOutcome::Collected(coverage) => coverage,
+        CoverageOutcome::Incomplete(reason) => {
+            info!("MAG CAL RESULT: reached_motor_phase=false, reason={}", reason);
+            return Outcome::Incomplete(reason);
+        }
+        CoverageOutcome::Stopped => return Outcome::Stopped,
     };
+
     let (x_range, y_range, z_range) = coverage.ranges();
 
     let mag_bias = Vector3::new(
@@ -775,49 +736,33 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Option<MagCa
     );
 
     enter_mag_phase(MagCalibrationPhase::SettleDelay, Some("Set robot down")).await;
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Set down"),
-        line2: status_text("Hold still"),
-        line3: status_text("Motors in 20s"),
-    })
-    .await;
-
-    for remaining in (1..=20).rev() {
-        let mut line = String::new();
-        let _ = write!(line, "Motors in {remaining}s");
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("Set down"),
-            line2: status_text("Hold still"),
-            line3: Some(line),
-        })
-        .await;
-        Timer::after(Duration::from_secs(1)).await;
+    if run_settle_countdown().await {
+        return Outcome::Stopped;
     }
 
     info!("Mag calibration entering motor phase");
     set_motor_drivers_enabled(true).await;
     Timer::after(Duration::from_millis(100)).await;
 
-    enter_mag_phase(MagCalibrationPhase::MotorBaseline, Some("Motors off baseline")).await;
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Mag interference"),
-        line2: status_text("Baseline (OFF)"),
-        line3: status_text("Measuring 5s"),
-    })
-    .await;
-
+    enter_mag_phase(MagCalibrationPhase::MotorBaseline, Some("Baseline, motors off")).await;
     clear_mag_measurement().await;
     Timer::after(Duration::from_millis(500)).await;
     let baseline_mag = measure_mag_average(config.avg_samples).await;
 
-    enter_mag_phase(MagCalibrationPhase::MotorMeasure, Some("Run motor sequence")).await;
-    let interference = measure_mag_interference(config, baseline_mag).await;
+    enter_mag_phase(MagCalibrationPhase::MotorMeasure, Some("Motor interference")).await;
+    let Some(interference) = measure_mag_interference(config, baseline_mag).await else {
+        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+        set_motor_drivers_enabled(false).await;
+        return Outcome::Stopped;
+    };
 
     enter_mag_phase(MagCalibrationPhase::MotorVerify, Some("Verify compensation")).await;
-    let verify_ok = verify_mag_interference(config, mag_bias, mag_scale, baseline_mag, &interference).await;
+    let Some(verify_ok) = verify_mag_interference(config, mag_bias, mag_scale, baseline_mag, &interference).await
+    else {
+        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+        set_motor_drivers_enabled(false).await;
+        return Outcome::Stopped;
+    };
 
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     Timer::after(Duration::from_millis(500)).await;
@@ -826,21 +771,13 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Option<MagCa
     if !verify_ok {
         info!("Mag calibration failed in motor verify phase");
         info!("MAG CAL RESULT: reached_motor_phase=true, reason=motor verify failed");
-        enter_mag_phase(MagCalibrationPhase::Failed, Some("Motor verify failed")).await;
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("VERIFY FAIL"),
-            line2: status_text("Recalibrate"),
-            line3: status_text("Motors/mag"),
-        })
-        .await;
-        return None;
+        return Outcome::Incomplete("Motor verify failed");
     }
 
-    enter_mag_phase(MagCalibrationPhase::Save, Some("Ready to save")).await;
+    enter_mag_phase(MagCalibrationPhase::Save, Some("Saving")).await;
     info!("MAG CAL RESULT: reached_motor_phase=true, reason=success");
 
-    Some(MagCalibrationResult {
+    Outcome::Success(MagCalibrationResult {
         bias: mag_bias,
         scale: mag_scale,
         interference,
@@ -854,47 +791,31 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Option<MagCa
 ///
 /// The ICM-20948 is connected via a dedicated SPI bus. The `sensors::imu` module
 /// (ticket 04) handles SPI initialization; this function drives the calibration
-/// algorithm.
+/// algorithm and records the outcome in the activity state.
 async fn run_mag_calibration() {
-    use crate::{
-        system::event,
-        task::{
-            io::flash_storage,
-            sensors::{imu as imu_read, imu::MagCalibration},
-        },
-    };
-
     info!("=== Starting IMU Mag Calibration ===");
 
-    event::raise_event(event::Events::CalibrationStatus {
-        header: status_text("IMU Calibration"),
-        line1: status_text("Initializing"),
-        line2: None,
-        line3: None,
-    })
-    .await;
+    let _ = LIFECYCLE.start("Initializing").await;
 
     let _imu_guard =
         ImuReadingsGuard::start_with_fusion_mode(imu_read::DmpFusionMode::Axis9, imu_read::DEFAULT_FUSION_MODE);
     Timer::after(Duration::from_millis(500)).await;
 
-    let mut mag_cal = MagCalibration::default();
+    let mut mag_cal = imu_read::MagCalibration::default();
     let mut imu_flags = flash_storage::get_cached_imu_flags().await.unwrap_or_default();
 
-    let Some(mag_result) = run_mag_calibration_steps(MAG_CALIBRATION_CONFIG).await else {
-        info!("Mag calibration failed; keeping previous values");
-        event::raise_event(event::Events::CalibrationStatus {
-            header: None,
-            line1: status_text("MAG FAILED"),
-            line2: status_text("Not saved"),
-            line3: None,
-        })
-        .await;
-        event::raise_event(event::Events::CalibrationCompleted).await;
-        Timer::after(Duration::from_secs(2)).await;
-
-        info!("=== IMU Mag Calibration Complete ===");
-        return;
+    let mag_result = match run_mag_calibration_steps(MAG_CALIBRATION_CONFIG).await {
+        Outcome::Success(result) => result,
+        Outcome::Incomplete(reason) => {
+            info!("Mag calibration failed; keeping previous values");
+            LIFECYCLE.fail(reason).await;
+            return;
+        }
+        Outcome::Stopped => {
+            info!("Mag calibration stopped by the operator");
+            LIFECYCLE.abandon().await;
+            return;
+        }
     };
 
     mag_cal.x_bias = mag_result.bias.x;
@@ -912,26 +833,17 @@ async fn run_mag_calibration() {
     imu_flags.mag = true;
 
     info!("Saving mag calibration to flash");
-    info!("╔═══════════════════════════════════════════════════╗");
-    info!("║     FINAL CALIBRATION SUMMARY (MAG)              ║");
-    info!("╠═══════════════════════════════════════════════════╣");
-    info!("║  Magnetometer hard iron bias (μT):               ║");
-    info!("║    X: {} Y: {} Z: {}", mag_cal.x_bias, mag_cal.y_bias, mag_cal.z_bias);
-    info!("║  Magnetometer soft iron scale:                   ║");
     info!(
-        "║    X: {} Y: {} Z: {}",
+        "  Magnetometer hard iron bias (μT): X={} Y={} Z={}",
+        mag_cal.x_bias, mag_cal.y_bias, mag_cal.z_bias
+    );
+    info!(
+        "  Magnetometer soft iron scale: X={} Y={} Z={}",
         mag_cal.x_scale, mag_cal.y_scale, mag_cal.z_scale
     );
-    info!("║  Motor interference patterns captured ✓          ║");
-    info!("╚═══════════════════════════════════════════════════╝");
+    info!("  Motor interference patterns captured");
 
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Complete!"),
-        line2: status_text("Saving to flash"),
-        line3: status_text("Please wait"),
-    })
-    .await;
+    LIFECYCLE.phase("Saving to flash", None).await;
 
     flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
         flash_storage::CalibrationDataKind::ImuFlags(imu_flags),
@@ -943,15 +855,7 @@ async fn run_mag_calibration() {
     info!("Applying mag calibration to IMU task");
     imu_read::load_mag_calibration(mag_cal);
 
-    event::raise_event(event::Events::CalibrationStatus {
-        header: None,
-        line1: status_text("Complete!"),
-        line2: status_text("Calibration saved"),
-        line3: None,
-    })
-    .await;
-
-    event::raise_event(event::Events::CalibrationCompleted).await;
+    LIFECYCLE.complete("Calibration saved").await;
     Timer::after(Duration::from_secs(2)).await;
 
     info!("=== IMU Mag Calibration Complete ===");

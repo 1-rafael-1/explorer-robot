@@ -67,14 +67,14 @@ fn display_distance(point: &Point) -> Option<u16> {
     point.distance_mm.map(NonZeroU16::get)
 }
 
-/// Log summary statistics for a scan without dumping every point.
+/// Log summary statistics for a set of points without dumping every point.
 ///
 /// `spins` is the number of revolutions `elapsed` covers, so the reported
 /// frequency is revolutions per second rather than per elapsed interval.
-fn summarize(label: &str, scan: &Scan, elapsed: Duration, spins: usize) {
+fn summarize(label: &str, points: &[Point], elapsed: Duration, spins: usize) {
     let mut min = u16::MAX;
     let mut max = 0u16;
-    for point in &scan.points[..scan.len] {
+    for point in points {
         if let Some(distance) = point.distance_mm {
             min = min.min(distance.get());
             max = max.max(distance.get());
@@ -94,13 +94,17 @@ fn summarize(label: &str, scan: &Scan, elapsed: Duration, spins: usize) {
 
     info!(
         "[{}] points={} frequency={} Hz min={} mm max={} mm",
-        label, scan.len, frequency_hz, min, max
+        label,
+        points.len(),
+        frequency_hz,
+        min,
+        max
     );
 
-    if scan.len > 0 {
-        let first = scan.points[0];
-        let middle = scan.points[scan.len / 2];
-        let last = scan.points[scan.len - 1];
+    if !points.is_empty() {
+        let first = points[0];
+        let middle = points[points.len() / 2];
+        let last = points[points.len() - 1];
         info!(
             "[{}] samples first=({},{},{}) middle=({},{},{}) last=({},{},{})",
             label,
@@ -117,11 +121,11 @@ fn summarize(label: &str, scan: &Scan, elapsed: Duration, spins: usize) {
     }
 }
 
-/// Dump every point of a scan so the physical layout can be eyeballed
+/// Dump every point so the physical layout can be eyeballed
 /// against the room.
-fn dump_scan(label: &str, scan: &Scan) {
-    info!("[{}] full point list ({} points):", label, scan.len);
-    for point in &scan.points[..scan.len] {
+fn dump_scan(label: &str, points: &[Point]) {
+    info!("[{}] full point list ({} points):", label, points.len());
+    for point in points {
         info!(
             "    angle={} dist_mm={} intensity={}",
             point.angle_deg,
@@ -200,15 +204,17 @@ async fn main(_spawner: Spawner) {
         driver.read_scan(scan).await.unwrap();
         log_spin("spin", index, scan);
     }
-    let out = aggregate(&spins, &AggregationConfig::default());
+    // `Scan`'s default capacity is 512; the default 0.9° grid emits 400 buckets,
+    // so a 400-bucket reduction preserves the previous shape exactly.
+    let out = aggregate::<512, 400>(&spins, &AggregationConfig::default());
 
     // Stop the stream before the (slow) RTT logging below, so the sensor
     // isn't still streaming while the task logs the scan.
     driver.stop().await.unwrap();
     info!("stopped");
 
-    summarize("aggregated", &out, start.elapsed(), SPINS);
-    dump_scan("aggregated", &out);
+    summarize("aggregated", &out.points[..out.len], start.elapsed(), SPINS);
+    dump_scan("aggregated", &out.points[..out.len]);
 
     driver.power_off().unwrap();
     info!("powered off");
