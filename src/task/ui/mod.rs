@@ -29,10 +29,12 @@
 //! The UI is the only thing that draws: producers publish state (the activity
 //! state module), and the retired text display contract no longer exists.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use defmt::{debug, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use touch_ui::{
     CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
@@ -91,17 +93,20 @@ static DISTANCE_DRIVE_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel
 /// Requests that the coast-and-avoid drive mode start.
 static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
 
-/// What the UI asks of the Room Scan sensor lifecycle task.
-#[derive(Clone, Copy)]
-enum RoomScanRequest {
-    /// Power on the sensor and wait until it is streaming.
-    Acquire,
-    /// Stop the sensor, drop its power, and clear its stale state.
-    Release,
-}
+/// Latched intent of the Room Scan screen: `true` while the radar screen wants
+/// the sensor, `false` once it has left.
+///
+/// The screen records its latest intent here and signals, so the lifecycle task
+/// converges on the current state instead of replaying queued requests and can
+/// never lose the final release to a full queue.
+static ROOM_SCAN_WANTED: AtomicBool = AtomicBool::new(false);
 
-/// Requests that the Room Scan screen's sensor lifecycle runs.
-static ROOM_SCAN_REQUEST: Channel<CriticalSectionRawMutex, RoomScanRequest, 4> = Channel::new();
+/// Wakes [`room_scan_task`] whenever [`ROOM_SCAN_WANTED`] changes.
+///
+/// [`Signal`] coalesces — a signal stays set until the task consumes it — so a
+/// store-and-signal that lands just before a `wait()` makes that `wait()` return
+/// immediately and no state change can be lost.
+static ROOM_SCAN_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 
@@ -210,38 +215,46 @@ async fn coast_avoid_task() {
 
 /// Run the Room Scan screen's `LiDAR` lease, off the UI task.
 ///
-/// Acquiring can take several seconds, so the UI task dispatches a request and
-/// polls the sensor's lock-free status and the perception snapshot while this
-/// task owns the lifecycle. The lease is held across iterations and handed back
-/// only on release, so leaving the screen after a failed acquisition releases
-/// nothing and cannot power down a sensor another mode owns. Requests are
-/// handled in order: a release queued while an acquire is still running waits
-/// for it.
+/// The task converges on the screen's latest intent, latched in
+/// [`ROOM_SCAN_WANTED`], rather than consuming queued requests, so a rapid
+/// leave/re-enter cannot drop the final release. Acquisition can take several
+/// seconds, so the intent may flip while `lidar::acquire()` is running; the
+/// latch is re-read after every acquisition wait and the lease handed straight
+/// back when the screen is already gone. The lease is held across iterations and
+/// released only by its holder, so leaving after a failed acquisition releases
+/// nothing and cannot power down a sensor another mode owns.
 #[embassy_executor::task]
 async fn room_scan_task() {
     let mut lease: Option<lidar::Lease> = None;
     loop {
-        match ROOM_SCAN_REQUEST.receive().await {
-            RoomScanRequest::Acquire => {
-                if lease.is_none() {
-                    match lidar::acquire().await {
-                        Ok(acquired) => lease = Some(acquired),
-                        Err(lidar::AcquireError::Busy) => {
-                            warn!("[ui] room scan: LiDAR acquisition already in flight");
-                        }
-                        Err(lidar::AcquireError::Failed) => {
-                            warn!("[ui] room scan: LiDAR acquisition failed");
-                        }
+        ROOM_SCAN_SIGNAL.wait().await;
+        if ROOM_SCAN_WANTED.load(Ordering::Acquire) {
+            if lease.is_none() {
+                match lidar::acquire().await {
+                    Ok(acquired) => lease = Some(acquired),
+                    Err(lidar::AcquireError::Busy) => {
+                        warn!("[ui] room scan: LiDAR acquisition already in flight");
+                    }
+                    Err(lidar::AcquireError::Failed) => {
+                        warn!("[ui] room scan: LiDAR acquisition failed");
+                    }
+                }
+                // The screen may have left while the sensor was warming, so the
+                // latch — not the intent that began this acquisition — decides
+                // whether the lease is kept. A failed acquisition holds nothing.
+                if !ROOM_SCAN_WANTED.load(Ordering::Acquire) {
+                    let held = lease.take();
+                    if let Some(held) = held {
+                        lidar::release(held).await;
                     }
                 }
             }
-            RoomScanRequest::Release => {
-                // A no-op when no lease is held — the whole point of the lease:
-                // leaving after a failed acquisition releases nothing.
-                let held = lease.take();
-                if let Some(lease) = held {
-                    lidar::release(lease).await;
-                }
+        } else {
+            // A no-op when no lease is held — the whole point of the lease:
+            // leaving after a failed acquisition releases nothing.
+            let held = lease.take();
+            if let Some(held) = held {
+                lidar::release(held).await;
             }
         }
     }
@@ -492,9 +505,17 @@ async fn handle_menu_item(ui: &mut Ui, item: Item) {
 /// Start the test-mode `procedure`.
 ///
 /// The producer records the identity in the activity state, so the running screen
-/// names it from the entry rather than from a parallel kind enumeration.
+/// names it from the entry rather than from a parallel kind enumeration. A refused
+/// start — the family's slot still busy — goes back to the entry's landing screen:
+/// the model navigated to the running screen when the entry was tapped, so leaving
+/// it there would draw a running screen with no test behind it. The landing screen
+/// comes from the entry's identity, not from the stale status view the model still
+/// holds from whatever ran last.
 async fn start_test(ui: &mut Ui, procedure: Procedure) {
-    testmode::start(procedure).await;
+    if !testmode::start(procedure).await {
+        ui.show_screen(procedure.landing_screen());
+        return;
+    }
 
     let snapshot = activity::snapshot().await;
     ui.show_status(status_view(&snapshot));
@@ -505,28 +526,31 @@ async fn start_test(ui: &mut Ui, procedure: Procedure) {
 ///
 /// The model has already navigated to the radar screen. If another test owns the
 /// slot the entry is refused and the screen leaves again, so the radar never
-/// opens alongside a running test. Acquisition runs on [`room_scan_task`], so
-/// this returns immediately and the screen shows the sensor warming.
+/// opens alongside a running test. The intent is latched for [`room_scan_task`]
+/// to pick up, so this returns immediately and the screen shows the sensor
+/// warming.
 fn enter_room_scan(ui: &mut Ui) {
     if !testmode::claim_room_scan() {
         warn!("[ui] room scan refused — another test is active");
         let _ = ui.back();
         return;
     }
-    ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Acquire).ok();
+    ROOM_SCAN_WANTED.store(true, Ordering::Release);
+    ROOM_SCAN_SIGNAL.signal(());
 }
 
 /// Leave the Room Scan screen: release the single-active slot and the `LiDAR`
 /// lease it holds.
 ///
-/// The release is dispatched rather than awaited, so the panel never blocks; the
-/// lifecycle task handles it after any in-flight acquisition finishes. Called on
-/// every exit path, including a failed acquisition, it hands back only the lease
-/// this screen actually holds, so a failed acquisition releases nothing and
-/// cannot power down a sensor another mode owns.
+/// The intent is latched rather than awaited, so the panel never blocks; the
+/// lifecycle task acts on it even if the leave lands while an acquisition is
+/// still warming. Called on every exit path, including a failed acquisition, it
+/// hands back only the lease this screen actually holds, so a failed acquisition
+/// releases nothing and cannot power down a sensor another mode owns.
 fn leave_room_scan() {
     testmode::release_room_scan();
-    ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Release).ok();
+    ROOM_SCAN_WANTED.store(false, Ordering::Release);
+    ROOM_SCAN_SIGNAL.signal(());
 }
 
 /// Start the calibration `procedure`.

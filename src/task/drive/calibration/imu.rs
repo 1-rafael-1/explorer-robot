@@ -795,7 +795,6 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
 async fn run_mag_calibration() {
     info!("=== Starting IMU Mag Calibration ===");
 
-    LIFECYCLE.arm().await;
     let _ = LIFECYCLE.start("Initializing").await;
 
     let _imu_guard =

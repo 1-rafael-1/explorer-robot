@@ -39,8 +39,6 @@ pub(super) fn spawn(spawner: Spawner) {
 /// IMU 9-axis test task: streams readings until stopped.
 #[embassy_executor::task]
 async fn imu_test_task() {
-    LIFECYCLE.arm().await;
-
     start_imu_readings();
     Timer::after(Duration::from_millis(30)).await;
     set_dmp_fusion_mode(DmpFusionMode::Axis9);

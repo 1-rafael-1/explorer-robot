@@ -70,7 +70,6 @@ enum Side {
 pub async fn run_motor_calibration() {
     info!("=== Starting Motor Calibration (2-motor) ===");
 
-    LIFECYCLE.arm().await;
     let _ = LIFECYCLE.start("Enabling drivers").await;
 
     // Enable motor drivers (take out of standby).

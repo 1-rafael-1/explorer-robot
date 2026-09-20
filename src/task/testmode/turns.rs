@@ -93,8 +93,6 @@ async fn turns_test_task() {
 
 /// Run the in-place turns test, reporting whether every stage ran.
 async fn run_turns_test() -> bool {
-    LIFECYCLE.arm().await;
-
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }

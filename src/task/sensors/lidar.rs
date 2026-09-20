@@ -26,12 +26,16 @@
 //!
 //! # Streaming
 //!
-//! One raw revolution is read per iteration ([`CoinD6::read_scan`]) — no
-//! multi-spin aggregation on the live path, because avoidance latency matters
-//! more than smoothing. Each revolution becomes a [`Cloud`] through the
-//! `lidar_cloud` crate, the Front Sector test drives the lock-free obstacle flag,
-//! and a change raises [`Events::ObstacleDetected`]. A read error restarts the
-//! device; a persistently dead sensor ends in [`LidarStatus::Failed`] rather than
+//! One raw revolution is read per iteration ([`CoinD6::read_scan`]) behind a
+//! wall-clock bound ([`STREAM_READ_TIMEOUT`]) — no multi-spin aggregation on the
+//! live path, because avoidance latency matters more than smoothing. Each
+//! revolution becomes a [`Cloud`] through the `lidar_cloud` crate, the Front
+//! Sector test drives the lock-free obstacle flag, and a change raises
+//! [`Events::ObstacleDetected`]. The driver's own watchdogs count bytes, not
+//! time, so a powered sensor that goes silent would otherwise stall the read
+//! forever; expiring the bound power-cycles and re-acquires the device, exactly
+//! as a read error does. A persistently dead sensor therefore still ends in
+//! [`LidarStatus::Failed`] and a queued release is still honoured, rather than
 //! silent spin.
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
@@ -106,6 +110,18 @@ const INGEST_LEN: usize = 1024;
 /// The driver has no wall clock — its watchdogs count bytes — so the call site
 /// supplies the hard bound. On expiry the device is power-cycled.
 const WARMUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Wall-clock bound on one streaming revolution.
+///
+/// [`CoinD6::read_scan`] is bounded only by the driver's byte-count ring-start
+/// watchdog (128 KiB, ≈5.7 s of continuous bytes at the 230 400 baud link), and
+/// that watchdog counts bytes actually received: a fully silent link delivers
+/// none, so it never fires and the read stalls forever. The driver is
+/// executor-agnostic and has no wall clock, so only the call site can supply a
+/// real bound. A healthy revolution takes ~90 ms at nominal rotor speed, so two
+/// seconds gives roughly a 20× margin while still keeping a queued
+/// [`LidarCommand::Release`] reachable. Expiry is handled exactly like a read
+/// error: the device is power-cycled and re-acquired.
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long the power rail is held low between power-cycle attempts.
 const POWER_CYCLE_OFF: Duration = Duration::from_millis(200);
 /// Bounded number of power-cycle attempts per acquire.
@@ -379,9 +395,13 @@ async fn attempt_acquire(driver: &mut LidarDriver, scratch: &mut Scan) -> bool {
 /// generation is a ref-count increment and yields another [`Lease`]; a stale tag
 /// is refused as [`AcquireError::Busy`] rather than served as a lease. A release
 /// decrements the count and tears the device down only as it reaches zero, so a
-/// mode handing back its lease cannot stop a sensor another mode still holds. A
-/// read error power-cycles and re-runs the acquire lifecycle once; if that fails
-/// the status becomes `Failed` and the task returns to idle.
+/// mode handing back its lease cannot stop a sensor another mode still holds.
+///
+/// Each revolution is read behind [`STREAM_READ_TIMEOUT`], so the read cannot
+/// block indefinitely on a silent link: a driver read error and a wall-clock
+/// expiry restart identically ([`restart_stream`]), and both keep honouring a
+/// release queued meanwhile. If the restart fails the status becomes `Failed`,
+/// the power rail is dropped, and the task returns to idle.
 async fn stream_scans(
     driver: &mut LidarDriver,
     scratch: &mut Scan,
@@ -420,12 +440,12 @@ async fn stream_scans(
             }
         }
 
-        match driver.read_scan(scratch).await {
-            Ok(()) => {
+        match with_timeout(STREAM_READ_TIMEOUT, driver.read_scan(scratch)).await {
+            Ok(Ok(())) => {
                 *sequence = sequence.wrapping_add(1);
                 publish_scan(scratch, *sequence, last_obstacle).await;
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 // `read_scan` recovers UART glitches and resyncs in place; a
                 // returned error means no revolution assembled within the byte
                 // watchdog, so restart the device from a clean power cycle.
@@ -433,24 +453,47 @@ async fn stream_scans(
                     "[lidar] scan read failed, restarting device: {:?}",
                     Debug2Format(&error)
                 );
-                let _ = driver.power_off();
-                Timer::after(POWER_CYCLE_OFF).await;
-                if run_acquire(driver, scratch).await {
-                    // A restart reaches streaming as a new generation too, so
-                    // tags read before the failure are stale.
-                    advance_generation();
-                    set_status(LidarStatus::Streaming);
-                    info!("[lidar] device restarted");
-                } else {
-                    let _ = driver.power_off();
-                    set_status(LidarStatus::Failed);
-                    clear_stale_state(last_obstacle).await;
-                    warn!("[lidar] device failed permanently");
+                if !restart_stream(driver, scratch, last_obstacle).await {
+                    return;
+                }
+            }
+            Err(_) => {
+                // The driver's byte watchdog only counts bytes that arrive, so
+                // it never fires on a silent link. Expiry means no revolution
+                // arrived within the wall-clock bound; restart like any error.
+                warn!("[lidar] scan read timed out (sensor silent), restarting device");
+                if !restart_stream(driver, scratch, last_obstacle).await {
                     return;
                 }
             }
         }
     }
+}
+
+/// Power-cycle and re-acquire after a streaming read ends badly, returning
+/// whether the device is streaming again.
+///
+/// Shared by the two ways a streaming read can end badly — a driver read error
+/// and a wall-clock silence expiry — so both restart identically. On success the
+/// device streams again under a new generation; on failure the power rail is
+/// dropped, the status becomes [`LidarStatus::Failed`], stale state is cleared,
+/// and the caller must return to idle.
+async fn restart_stream(driver: &mut LidarDriver, scratch: &mut Scan, last_obstacle: &mut Option<bool>) -> bool {
+    let _ = driver.power_off();
+    Timer::after(POWER_CYCLE_OFF).await;
+    if run_acquire(driver, scratch).await {
+        // A restart reaches streaming as a new generation too, so tags read
+        // before the failure are stale.
+        advance_generation();
+        set_status(LidarStatus::Streaming);
+        info!("[lidar] device restarted");
+        return true;
+    }
+    let _ = driver.power_off();
+    set_status(LidarStatus::Failed);
+    clear_stale_state(last_obstacle).await;
+    warn!("[lidar] device failed permanently");
+    false
 }
 
 /// Map one revolution into a cloud, publish it, and drive the obstacle edge.

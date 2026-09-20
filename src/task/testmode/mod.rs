@@ -69,12 +69,15 @@ pub fn init_testing(spawner: Spawner) {
     spawner.spawn(testmode_controller(spawner).unwrap());
 }
 
-/// Start the test-mode `procedure`.
+/// Start the test-mode `procedure`, reporting whether a test was started.
 ///
-/// Refused while another test is live, which the panel's modal menus should make
-/// impossible; a refusal is logged and nothing runs. A Procedure that is not a
-/// test-mode entry starts nothing.
-pub async fn start(procedure: Procedure) {
+/// `false` for a Procedure that is not a test-mode entry, and `false` while
+/// another test is live: the panel's modal menus should make contention
+/// impossible, but a refusal is logged and nothing runs, so the caller can leave
+/// the panel where it is instead of opening a running screen over nothing. `true`
+/// once the spawned test has been queued.
+#[must_use]
+pub async fn start(procedure: Procedure) -> bool {
     let command = match procedure {
         Procedure::BasicMotor => TestCommand::BasicMotor,
         Procedure::Turns => TestCommand::Turns,
@@ -86,13 +89,15 @@ pub async fn start(procedure: Procedure) {
         | Procedure::MagCalibration
         | Procedure::DistanceCalibration
         | Procedure::CoastAndAvoid
-        | Procedure::AttemptStraight => return,
+        | Procedure::AttemptStraight => return false,
     };
 
     if test_lifecycle(procedure).start("Starting").await {
         request_start(command).await;
+        true
     } else {
         defmt::warn!("testmode: {} refused — another test is active", procedure.label());
+        false
     }
 }
 

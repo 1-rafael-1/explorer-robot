@@ -68,8 +68,6 @@ async fn straight_drive_test_task() {
 
 /// Run the straight-line distance test, reporting whether both legs ran.
 async fn run_straight_drive_test() -> bool {
-    LIFECYCLE.arm().await;
-
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }

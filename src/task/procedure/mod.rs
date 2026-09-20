@@ -1,10 +1,11 @@
 //! The Procedure lifecycle every producer family calls.
 //!
 //! A Procedure — a test mode or a calibration — repeats the same steps around its
-//! own body: arm its family's stop latch, publish the starting activity, publish
-//! each phase and percent, publish the terminal outcome, release the family's
-//! single-active slot, and raise the family's completion event. This module owns
-//! those steps once, so a new Procedure is its body and its phase words.
+//! own body: claim its family's slot, arm its family's stop latch, publish the
+//! starting activity, publish each phase and percent, publish the terminal
+//! outcome, release the family's single-active slot, and raise the family's
+//! completion event. This module owns those steps once, so a new Procedure is its
+//! body and its phase words.
 //!
 //! It is deliberately not a runner. A producer keeps its own body and calls a
 //! [`Lifecycle`] around it; handing the body to a generic executor was rejected
@@ -28,8 +29,9 @@ use crate::{
 ///
 /// The latch is sticky for a run: once the operator asks a Procedure to stop,
 /// every later check in that Procedure sees the request, so a `select` that drops
-/// the waiting future cannot lose it. A Procedure re-arms the latch when its run
-/// starts, which is what makes a stale request from the previous run harmless.
+/// the waiting future cannot lose it. [`Lifecycle::start`] arms the latch — after
+/// claiming the family's slot and just before publishing the starting activity —
+/// which is what makes a stale request from the previous run harmless.
 ///
 /// Each family holds exactly one instance, so a stop aimed at a test mode cannot
 /// leak into a calibration and vice versa.
@@ -159,11 +161,6 @@ impl Lifecycle {
         }
     }
 
-    /// Re-arm the family's stop latch for a fresh run.
-    pub async fn arm(&self) {
-        self.latch.arm().await;
-    }
-
     /// Whether the operator has asked this Procedure to stop.
     #[must_use]
     pub fn is_stop_requested(&self) -> bool {
@@ -180,15 +177,21 @@ impl Lifecycle {
         activity::set_running(detail, percent).await;
     }
 
-    /// Claim the family's slot and publish the starting activity.
+    /// Claim the family's slot, arm the family's stop latch, and publish the
+    /// starting activity.
     ///
     /// Reports whether it started. A guarded slot refuses while another Procedure
-    /// of the family is live, and then nothing is recorded.
+    /// of the family is live, and then nothing is recorded and the latch is left
+    /// alone, so a refused start cannot disturb a sibling Procedure's latch.
     #[must_use]
     pub async fn start(&self, detail: &'static str) -> bool {
         if self.slot.is_some_and(|slot| !(slot.claim)()) {
             return false;
         }
+        // Arm before the starting activity is published — the moment the running
+        // screen and its Stop become reachable — and never after, so a Stop that
+        // lands once the Procedure is exposed is preserved.
+        self.latch.arm().await;
         activity::begin(Activity::Procedure(self.procedure), detail).await;
         true
     }

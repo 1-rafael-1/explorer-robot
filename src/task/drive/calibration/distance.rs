@@ -29,6 +29,7 @@ use crate::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
         },
+        io::flash_storage,
         procedure::Lifecycle,
     },
 };
@@ -91,8 +92,9 @@ pub async fn begin() {
 
 /// Commit the factor computed from the measured distance.
 ///
-/// Returns the stored factor. A measured distance of zero is legitimate: the
-/// ratio saturates and clamps to [`MAX_FACTOR`].
+/// Persists the factor to flash before clearing the backup slot, so the save the
+/// log reports survives a reboot. Returns the stored factor. A measured distance
+/// of zero is legitimate: the ratio saturates and clamps to [`MAX_FACTOR`].
 #[allow(clippy::cast_precision_loss)]
 pub async fn commit(measured_cm: i32) -> f32 {
     let factor = (DRIVE_DISTANCE_CM / measured_cm as f32).clamp(MIN_FACTOR, MAX_FACTOR);
@@ -102,6 +104,11 @@ pub async fn commit(measured_cm: i32) -> f32 {
         state.distance_factor = factor;
         state.distance_cal_status = CalibrationStatus::Loaded;
     }
+
+    flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
+        flash_storage::CalibrationDataKind::Distance(factor),
+    ))
+    .await;
 
     PREVIOUS_FACTOR.store(NO_BACKUP, Ordering::Release);
     info!(
@@ -142,7 +149,6 @@ fn take_previous_factor() -> Option<f32> {
 /// Stop latches the calibration stop and interrupts the drive, and a stopped step
 /// restores the previous factor and clears the activity.
 pub async fn run_drive_step() -> DriveOutcome {
-    LIFECYCLE.arm().await;
     let _ = LIFECYCLE.start("Driving 150 cm").await;
 
     for second in 0..COUNTDOWN_SECONDS {

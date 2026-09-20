@@ -26,9 +26,11 @@
 //! # Starting and stopping
 //!
 //! Call [`start`] to acquire the `LiDAR` and begin the mode, and [`stop`] to
-//! request a graceful exit. If the `LiDAR` cannot be acquired, [`start`] fails and
-//! the mode never drives: the downward rangefinder is a floor-drop sensor, not an
-//! obstacle sensor.
+//! request a graceful exit. Acquisition can take seconds, so [`stop`] latches its
+//! intent in [`STOP_REQUESTED`]: a stop that lands while [`start`] is still warming
+//! the sensor makes the start hand its lease straight back instead of driving. If
+//! the `LiDAR` cannot be acquired, [`start`] fails and the mode never drives: the
+//! downward rangefinder is a floor-drop sensor, not an obstacle sensor.
 //!
 //! The obstacle decision reads perception's lock-free flag, which the `LiDAR`
 //! task drives through the Front Sector test in the `lidar-cloud` crate (half-angle
@@ -60,8 +62,23 @@ use crate::{
 /// Set while the coast-and-avoid loop is running.
 ///
 /// Raised only after [`LIDAR_LEASE`] holds the lease and cleared again if the
-/// start is refused, so a running loop always has a lease to hand back.
+/// start is refused, so a running loop always has a lease to hand back. Also
+/// cleared by [`stop`], which latches the request in [`STOP_REQUESTED`] at the
+/// same time so a start still in flight can notice it.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Records a [`stop`] that lands while [`start`] is still warming the `LiDAR`.
+///
+/// Acquisition can take seconds, and the running screen is up the whole time, so
+/// the operator can tap Stop before [`start`] has raised [`ACTIVE`] — a stop that
+/// would otherwise have nothing to clear and would be lost. [`stop`] latches the
+/// intent here, and [`start`] checks it immediately before raising [`ACTIVE`]: a
+/// latched stop makes the start hand its lease straight back and refuse to drive.
+/// [`start`] arms the latch at its top, so a stop from a finished run is inert
+/// while a fresh one during the warm-up is honoured. The store uses `Release` and
+/// the check `Acquire`, making the hand-off explicit even though every access
+/// happens on core0.
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 // ── LiDAR lease ───────────────────────────────────────────────────────────────
 
@@ -126,6 +143,13 @@ pub enum StartError {
     /// The `LiDAR` could not be acquired. The mode refuses to run, because the
     /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
     LidarUnavailable,
+    /// A stop arrived while the `LiDAR` was still warming, so the mode was
+    /// abandoned instead of started.
+    ///
+    /// The UI records the [`label`](Self::label) through its `activity::fail`,
+    /// but that is a no-op while the activity is already Idle — which it is after
+    /// a Stop — so a cancelled start cannot resurrect a failure screen.
+    Cancelled,
 }
 
 impl StartError {
@@ -135,6 +159,7 @@ impl StartError {
         match self {
             Self::Busy => "LiDAR busy",
             Self::LidarUnavailable => "LiDAR unavailable",
+            Self::Cancelled => "Stopped",
         }
     }
 }
@@ -163,12 +188,25 @@ pub(super) fn spawn(spawner: Spawner) {
 /// another autonomous mode, or a coast run already past its loop, so briefly
 /// toggling this module's `ACTIVE` cannot be observed by a running coast task.
 ///
+/// A stop during the warm-up is preserved rather than lost. [`STOP_REQUESTED`] is
+/// armed before the acquisition, so only a stop from this run counts, and it is
+/// checked immediately before [`ACTIVE`] is raised, with no await between the
+/// check and the store. Raising `ACTIVE` first and checking after would leave the
+/// [`LIDAR_LEASE`] lock await between the check and the flag, letting a stop be
+/// overwritten; and a stop after the check clears `ACTIVE`, which the spawned
+/// loop's `while ACTIVE` test observes before it drives.
+///
 /// # Errors
 ///
 /// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought up,
-/// or [`StartError::Busy`] if another autonomous mode is already active or a
-/// previous coast run still holds its lease.
+/// [`StartError::Busy`] if another autonomous mode is already active or a
+/// previous coast run still holds its lease, or [`StartError::Cancelled`] if a
+/// stop arrived while the sensor was warming.
 pub async fn start() -> Result<(), StartError> {
+    // Arm the cancel latch before the acquisition: a stop from an earlier run
+    // must not count, but one that arrives during the warm-up must.
+    STOP_REQUESTED.store(false, Ordering::Release);
+
     let lease = match lidar::acquire().await {
         Ok(lease) => lease,
         Err(AcquireError::Busy) => return Err(StartError::Busy),
@@ -187,6 +225,18 @@ pub async fn start() -> Result<(), StartError> {
         }
         *slot = Some(lease);
     }
+
+    // Check the latch with no await before raising ACTIVE: on this cooperative
+    // executor a stop cannot land between the check and the store, and a stop
+    // after the store clears ACTIVE, which the spawned loop sees before driving.
+    if STOP_REQUESTED.load(Ordering::Acquire) {
+        let lease = LIDAR_LEASE.lock().await.take();
+        if let Some(lease) = lease {
+            lidar::release(lease).await;
+        }
+        return Err(StartError::Cancelled);
+    }
+
     ACTIVE.store(true, Ordering::Relaxed);
 
     if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
@@ -207,9 +257,11 @@ pub async fn start() -> Result<(), StartError> {
 /// Request a graceful stop of the coast-and-avoid mode.
 ///
 /// Clears the active flag so the loop exits after the current drive command
-/// resolves.
+/// resolves, and latches the request in [`STOP_REQUESTED`] so a start still
+/// warming the `LiDAR` refuses to drive when it reaches the hand-off.
 pub fn stop() {
     ACTIVE.store(false, Ordering::Relaxed);
+    STOP_REQUESTED.store(true, Ordering::Release);
 }
 
 // ── Task ──────────────────────────────────────────────────────────────────────

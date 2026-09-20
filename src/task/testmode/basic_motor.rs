@@ -90,8 +90,6 @@ pub(super) fn spawn(spawner: Spawner) {
 /// Basic motor test mode runner.
 #[embassy_executor::task]
 async fn basic_motor_test_task() {
-    LIFECYCLE.arm().await;
-
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
     Timer::after(Duration::from_millis(10)).await;

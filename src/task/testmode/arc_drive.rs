@@ -63,8 +63,6 @@ async fn arc_drive_test_task() {
 
 /// Run the arc drive test, reporting whether the arc ran.
 async fn run_arc_drive_test() -> bool {
-    LIFECYCLE.arm().await;
-
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }
