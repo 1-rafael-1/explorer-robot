@@ -46,6 +46,42 @@ impl<const N: usize> Default for Scan<N> {
     }
 }
 
+/// The result of a by-angle reduction over several [`Scan`]s.
+///
+/// A reduction is a fixed grid of up to `BUCKETS` angular buckets, one [`Point`]
+/// per bucket, in increasing bearing order. Unlike [`Scan`], the bucket count is
+/// the reduction's own constant, independent of the capacity of the scans it
+/// consumes: a caller that needs `BUCKETS` output slots can name them directly
+/// instead of borrowing a native scan's capacity, so a bucket count smaller than
+/// the caller's slot count cannot be expressed.
+///
+/// `len` records how many buckets were actually emitted (`<= BUCKETS`); the
+/// points beyond `len` are left at their default value.
+#[derive(Debug, Clone)]
+pub struct Reduction<const BUCKETS: usize> {
+    /// The fused points, one per emitted bucket, in increasing bearing order.
+    pub points: [Point; BUCKETS],
+    /// The number of buckets in `points` that are valid (`<= BUCKETS`).
+    pub len: usize,
+}
+
+impl<const BUCKETS: usize> Reduction<BUCKETS> {
+    /// Create a new, empty reduction with `len = 0`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            points: [Point::default(); BUCKETS],
+            len: 0,
+        }
+    }
+}
+
+impl<const BUCKETS: usize> Default for Reduction<BUCKETS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Driver configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
@@ -59,7 +95,7 @@ impl Default for Config {
     }
 }
 
-/// How several revolutions are combined into a single [`Scan`].
+/// How several revolutions are combined into a single [`Reduction`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AggregationMethod {
     /// Use the median distance across revolutions.

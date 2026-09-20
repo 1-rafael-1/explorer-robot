@@ -16,8 +16,9 @@
 
 use defmt::{info, warn};
 use embassy_executor::Spawner;
+use touch_ui::Procedure;
 
-use super::{arm_stop, is_stop_requested, release_testmode, status_label, submit, wait_or_stop};
+use super::{status_label, submit, test_lifecycle};
 use crate::{
     system::{
         event::{Events, raise_event},
@@ -28,6 +29,7 @@ use crate::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
         },
+        procedure::Lifecycle,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -44,6 +46,10 @@ const COUNTDOWN_MS: u64 = 5_000;
 /// Settle time after a brake, in milliseconds.
 const SETTLE_MS: u64 = 500;
 
+/// The straight drive test's lifecycle: the test family's stop latch and slot,
+/// raising `TestingCompleted` when both legs ran.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::StraightDrive);
+
 /// Spawn the straight drive test task via the controller.
 #[allow(clippy::unwrap_used)]
 pub(super) fn spawn(spawner: Spawner) {
@@ -54,17 +60,15 @@ pub(super) fn spawn(spawner: Spawner) {
 #[embassy_executor::task]
 async fn straight_drive_test_task() {
     if run_straight_drive_test().await {
-        activity::complete("Straight drive complete").await;
-        release_testmode();
-        raise_event(Events::TestingCompleted).await;
+        LIFECYCLE.complete("Straight drive complete").await;
     } else {
-        release_testmode();
+        LIFECYCLE.release();
     }
 }
 
 /// Run the straight-line distance test, reporting whether both legs ran.
 async fn run_straight_drive_test() -> bool {
-    arm_stop().await;
+    LIFECYCLE.arm().await;
 
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
@@ -74,7 +78,7 @@ async fn run_straight_drive_test() -> bool {
     info!("straight: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
 
-    if wait_or_stop(COUNTDOWN_MS).await {
+    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
         return false;
     }
 
@@ -84,15 +88,17 @@ async fn run_straight_drive_test() -> bool {
     ];
 
     for (index, (phase, direction)) in legs.iter().enumerate() {
-        if is_stop_requested() {
+        if LIFECYCLE.is_stop_requested() {
             return false;
         }
-        activity::set_running(phase, Some(activity::percent_done(index, legs.len()))).await;
+        LIFECYCLE
+            .phase(phase, Some(activity::percent_done(index, legs.len())))
+            .await;
 
         match submit(build_leg(*direction)).await {
             Ok(completion) => report_leg(&completion),
             Err(reason) => {
-                activity::fail(reason).await;
+                LIFECYCLE.fail(reason).await;
                 return false;
             }
         }
@@ -102,7 +108,7 @@ async fn run_straight_drive_test() -> bool {
         match submit(build_settle()).await {
             Ok(_) => {}
             Err(reason) => {
-                activity::fail(reason).await;
+                LIFECYCLE.fail(reason).await;
                 return false;
             }
         }

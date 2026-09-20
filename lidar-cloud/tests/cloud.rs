@@ -1,15 +1,16 @@
 //! Host-side integration tests for the `lidar-cloud` crate.
 //!
-//! These exercise the driver-scan-to-cloud mapping (millimetre conversion and
-//! mounting offset), the no-return representation, the Front Sector stop test at
-//! its boundary angles and threshold, and the deliberately opposite readings the
-//! two consumers give to a missing return.
+//! These exercise the driver-reduction-to-cloud mapping (millimetre conversion
+//! and mounting offset), the no-return representation, the Front Sector stop test
+//! at its boundary angles and threshold, and the deliberately opposite readings
+//! the two consumers give to a missing return.
 
 use core::num::NonZeroU16;
 
-use coin_d6::{Point, Scan};
+use coin_d6::{AggregationConfig, Point, Scan, aggregate};
 use lidar_cloud::{
-    Cloud, FRONT_SECTOR_HALF_ANGLE_DEG, FRONT_SECTOR_THRESHOLD_CM, SLOTS, front_sector_obstacle, is_clear,
+    Cloud, FRONT_SECTOR_HALF_ANGLE_DEG, FRONT_SECTOR_THRESHOLD_CM, SLOT_WIDTH_DEG, SLOTS, front_sector_obstacle,
+    is_clear,
 };
 
 /// Build a [`Scan`] from `(angle_deg, distance_mm)` pairs; a distance of `0`
@@ -25,6 +26,17 @@ fn build_scan(points: &[(f32, u16)]) -> Scan<400> {
         };
     }
     scan
+}
+
+/// Reduce a synthetic scan the way the firmware publish path does — one-degree
+/// buckets covering the [`SLOTS`] grid — and map it into a cloud.
+fn cloud_from_scan(scan: &Scan<400>, sequence: u64) -> Cloud {
+    let config = AggregationConfig {
+        resolution_deg: SLOT_WIDTH_DEG,
+        ..AggregationConfig::default()
+    };
+    let reduction = aggregate::<400, SLOTS>(core::slice::from_ref(scan), &config);
+    Cloud::from_reduction(&reduction, sequence)
 }
 
 /// A cloud with every slot a no-return.
@@ -44,7 +56,7 @@ fn cloud_with(slots: &[(usize, f32)]) -> Cloud {
 #[test]
 fn mapping_from_a_synthetic_scan_places_returns_in_their_slots() {
     // Native bearing 180 is dead ahead after the 180° mounting offset.
-    let cloud = Cloud::from_spin(&build_scan(&[(180.0, 1000)]), 7);
+    let cloud = cloud_from_scan(&build_scan(&[(180.0, 1000)]), 7);
 
     assert_eq!(cloud.sequence(), 7);
     assert_eq!(cloud.distance_cm(0), Some(100.0));
@@ -55,7 +67,7 @@ fn mapping_from_a_synthetic_scan_places_returns_in_their_slots() {
 
 #[test]
 fn millimetres_become_centimetres_at_the_one_boundary() {
-    let cloud = Cloud::from_spin(&build_scan(&[(180.0, 1234)]), 0);
+    let cloud = cloud_from_scan(&build_scan(&[(180.0, 1234)]), 0);
 
     assert_eq!(cloud.distance_cm(0), Some(123.4));
 }
@@ -63,7 +75,7 @@ fn millimetres_become_centimetres_at_the_one_boundary() {
 #[test]
 fn mounting_offset_rotates_native_bearings() {
     // Slot = native bearing - 180°, modulo 360.
-    let cloud = Cloud::from_spin(&build_scan(&[(0.0, 500), (225.0, 800), (270.0, 900)]), 0);
+    let cloud = cloud_from_scan(&build_scan(&[(0.0, 500), (225.0, 800), (270.0, 900)]), 0);
 
     assert_eq!(cloud.distance_cm(180), Some(50.0));
     assert_eq!(cloud.distance_cm(45), Some(80.0));
@@ -73,7 +85,7 @@ fn mounting_offset_rotates_native_bearings() {
 #[test]
 fn a_bucket_with_no_valid_return_is_none_not_zero() {
     // The scan has no point near dead ahead, so slot 0 must be `None`.
-    let cloud = Cloud::from_spin(&build_scan(&[(45.0, 1000)]), 0);
+    let cloud = cloud_from_scan(&build_scan(&[(45.0, 1000)]), 0);
 
     assert_eq!(cloud.distance_cm(0), None);
     assert_eq!(cloud.distance_cm(225), Some(100.0));

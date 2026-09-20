@@ -16,11 +16,11 @@ use crate::{
 /// is detected (e.g. top of stairs, ledge), sends an `EmergencyBrake`
 /// interrupt to the drive task — this is the same safety response as an
 /// obstacle, stopping the robot before it can drive off the edge.
-pub async fn handle_floor_drop_detected(detected: bool) {
+pub fn handle_floor_drop_detected(detected: bool) {
     let state_label = if detected { "DETECTED" } else { "CLEAR" };
     info!("Floor drop status: {}", state_label);
 
-    perception::set_floor_drop(detected).await;
+    perception::set_floor_drop(detected);
     update_floor_drop_indicator(detected);
 
     if detected {

@@ -1,11 +1,12 @@
 //! Activity state module.
 //!
-//! Records what long-running procedure the robot is currently performing and a
-//! small progress snapshot for the panel: which procedure, how far it has got, a
-//! short phase line, an optional percent, and whether it only ends on an explicit
-//! stop. The test-mode tasks, the boot/initialisation flow and the calibration
-//! flows write it; the touch UI reads it on its tick and is the only thing that
-//! draws.
+//! Records which Procedure the robot is currently performing and a small
+//! progress snapshot for the panel: which one, how far it has got, a short phase
+//! line, and an optional percent. The Procedure is recorded by identity, so a
+//! running screen's title and where its Stop returns come from the same Menu
+//! Entry that started it. The test-mode tasks, the boot/initialisation flow and
+//! the calibration flows write it; the touch UI reads it on its tick and is the
+//! only thing that draws.
 //!
 //! # Lifecycle
 //!
@@ -32,125 +33,44 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Timer};
-
-/// Which test-mode procedure is running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
-pub enum TestKind {
-    /// The basic motor test.
-    BasicMotor,
-    /// The in-place turns test.
-    Turns,
-    /// The straight-drive test.
-    StraightDrive,
-    /// The arc-drive test.
-    ArcDrive,
-    /// The six-axis IMU telemetry test.
-    Imu6Axis,
-    /// The nine-axis IMU telemetry test.
-    Imu9Axis,
-}
-
-impl TestKind {
-    /// The title the running screen shows for this test.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::BasicMotor => "Basic Motor Test",
-            Self::Turns => "Turns Test",
-            Self::StraightDrive => "Straight Drive",
-            Self::ArcDrive => "Arc Drive",
-            Self::Imu6Axis => "IMU Test (6-axis)",
-            Self::Imu9Axis => "IMU Test (9-axis)",
-        }
-    }
-
-    /// Whether the test runs until the operator stops it.
-    ///
-    /// An interactive test streams sensor telemetry and never ends by itself, so
-    /// leaving it returns to the test menu; a run-to-completion test drives a
-    /// fixed sequence, raises [`crate::system::event::Events::TestingCompleted`],
-    /// and returns to the main menu.
-    #[must_use]
-    pub const fn is_interactive(self) -> bool {
-        matches!(self, Self::BasicMotor | Self::Imu6Axis | Self::Imu9Axis)
-    }
-}
-
-/// Which autonomous drive mode is running.
-///
-/// Coast-and-avoid is the only mode the panel can start today; the attempt-straight
-/// entry only records its value, so it has no running state yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
-pub enum DriveModeKind {
-    /// Coast-and-avoid obstacle avoidance, driven from the panel.
-    CoastAndAvoid,
-}
-
-impl DriveModeKind {
-    /// The title the running screen shows for this drive mode.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::CoastAndAvoid => "Coast & Avoid",
-        }
-    }
-}
-
-/// Which calibration procedure is running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
-pub enum CalibrationKind {
-    /// The motor (track balance) calibration.
-    Motor,
-    /// The magnetometer calibration.
-    Mag,
-    /// The distance calibration.
-    Distance,
-}
-
-impl CalibrationKind {
-    /// The title the running screen shows for this calibration.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::Motor => "Motor",
-            Self::Mag => "Mag",
-            Self::Distance => "Distance",
-        }
-    }
-}
+use touch_ui::Procedure;
 
 /// What the robot is currently doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
+///
+/// The boot flow is its own case because no Menu Entry names boot; every other
+/// long-running procedure is recorded by identity, so its title and where its
+/// Stop returns come from the Menu Entry that started it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activity {
     /// Nothing long-running is in progress.
     Idle,
     /// The boot/initialisation flow is loading calibration data.
     Booting,
-    /// A test-mode procedure is running.
-    Test(TestKind),
-    /// A calibration procedure is running.
-    Calibration(CalibrationKind),
-    /// An autonomous drive mode is running.
-    DriveMode(DriveModeKind),
+    /// A Procedure started from the Panel is running.
+    Procedure(Procedure),
 }
 
 impl Activity {
     /// The title the running screen shows for this activity.
+    ///
+    /// A Procedure names itself; only the boot flow and the idle state fall back
+    /// to a line of their own.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Idle => "Running",
             Self::Booting => "Boot",
-            Self::Test(kind) => kind.title(),
-            Self::Calibration(kind) => kind.title(),
-            Self::DriveMode(kind) => kind.title(),
+            Self::Procedure(procedure) => procedure.label(),
         }
     }
 
     /// Whether this activity is a calibration.
     #[must_use]
     pub const fn is_calibration(self) -> bool {
-        matches!(self, Self::Calibration(_))
+        match self {
+            Self::Procedure(procedure) => procedure.is_calibration(),
+            Self::Idle | Self::Booting => false,
+        }
     }
 }
 
@@ -177,8 +97,6 @@ pub struct Snapshot {
     pub detail: &'static str,
     /// Percent progress (0–100), when the procedure can report one.
     pub percent: Option<u8>,
-    /// Whether the procedure only ends on an explicit stop.
-    pub interactive: bool,
 }
 
 impl Snapshot {
@@ -186,6 +104,18 @@ impl Snapshot {
     #[must_use]
     pub const fn title(&self) -> &'static str {
         self.activity.title()
+    }
+
+    /// The Procedure this snapshot names, or `None` for boot and idle.
+    ///
+    /// The running screen reads the Procedure's own identity — its title and
+    /// where its Stop returns — through this rather than restating either.
+    #[must_use]
+    pub const fn procedure(&self) -> Option<Procedure> {
+        match self.activity {
+            Activity::Procedure(procedure) => Some(procedure),
+            Activity::Idle | Activity::Booting => None,
+        }
     }
 
     /// Whether a calibration is under way — the panel's
@@ -205,21 +135,18 @@ static ACTIVITY_STATE: Mutex<CriticalSectionRawMutex, Snapshot> = Mutex::new(Sna
     stage: Stage::Running,
     detail: "",
     percent: None,
-    interactive: false,
 });
 
 /// Start `activity`, replacing whatever was recorded before.
 ///
-/// The stage resets to [`Stage::Running`], any stale percent is dropped, and
-/// `interactive` records whether the procedure ends only on an explicit stop.
-pub async fn begin(activity: Activity, detail: &'static str, interactive: bool) {
+/// The stage resets to [`Stage::Running`] and any stale percent is dropped.
+pub async fn begin(activity: Activity, detail: &'static str) {
     let mut state = ACTIVITY_STATE.lock().await;
     *state = Snapshot {
         activity,
         stage: Stage::Running,
         detail,
         percent: None,
-        interactive,
     };
 }
 
@@ -227,7 +154,7 @@ pub async fn begin(activity: Activity, detail: &'static str, interactive: bool) 
 ///
 /// The boot flow uses this so a test or calibration already on screen keeps it:
 /// a background load has no business replacing what the operator is watching.
-pub async fn begin_if_idle(activity: Activity, detail: &'static str, interactive: bool) -> bool {
+pub async fn begin_if_idle(activity: Activity, detail: &'static str) -> bool {
     let mut state = ACTIVITY_STATE.lock().await;
     if state.activity != Activity::Idle {
         return false;
@@ -237,7 +164,6 @@ pub async fn begin_if_idle(activity: Activity, detail: &'static str, interactive
         stage: Stage::Running,
         detail,
         percent: None,
-        interactive,
     };
     true
 }
@@ -311,7 +237,6 @@ pub async fn clear() {
         stage: Stage::Running,
         detail: "",
         percent: None,
-        interactive: false,
     };
 }
 
@@ -329,7 +254,6 @@ pub async fn clear_for(activity: Activity) -> bool {
         stage: Stage::Running,
         detail: "",
         percent: None,
-        interactive: false,
     };
     true
 }

@@ -31,7 +31,7 @@ pub async fn handle_initialize() {
 
     // Report the load through the activity state. A test or calibration that
     // already owns the panel keeps it: the boot flow only claims an idle screen.
-    if !activity::begin_if_idle(BOOT, "Initializing", false).await {
+    if !activity::begin_if_idle(BOOT, "Initializing").await {
         info!("Boot flow: panel busy, reporting progress only to the log");
     }
 

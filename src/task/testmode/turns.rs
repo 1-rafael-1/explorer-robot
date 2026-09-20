@@ -15,8 +15,9 @@
 
 use defmt::{info, warn};
 use embassy_executor::Spawner;
+use touch_ui::Procedure;
 
-use super::{arm_stop, is_stop_requested, release_testmode, submit, wait_or_stop};
+use super::{submit, test_lifecycle};
 use crate::{
     system::{
         event::{Events, raise_event},
@@ -28,6 +29,7 @@ use crate::{
             send_drive_command,
             types::{DriveQueueBuildError, RotationDirection, RotationMotion},
         },
+        procedure::Lifecycle,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -69,6 +71,10 @@ const STAGES: [TurnStage; 4] = [
     },
 ];
 
+/// The runs test's lifecycle: the test family's stop latch and slot, raising
+/// `TestingCompleted` when every stage ran.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::Turns);
+
 /// Spawn the turns test task via the controller.
 #[allow(clippy::unwrap_used)]
 pub(super) fn spawn(spawner: Spawner) {
@@ -79,17 +85,15 @@ pub(super) fn spawn(spawner: Spawner) {
 #[embassy_executor::task]
 async fn turns_test_task() {
     if run_turns_test().await {
-        activity::complete("Turns complete").await;
-        release_testmode();
-        raise_event(Events::TestingCompleted).await;
+        LIFECYCLE.complete("Turns complete").await;
     } else {
-        release_testmode();
+        LIFECYCLE.release();
     }
 }
 
 /// Run the in-place turns test, reporting whether every stage ran.
 async fn run_turns_test() -> bool {
-    arm_stop().await;
+    LIFECYCLE.arm().await;
 
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
@@ -99,20 +103,22 @@ async fn run_turns_test() -> bool {
     info!("turns: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
 
-    if wait_or_stop(COUNTDOWN_MS).await {
+    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
         return false;
     }
 
     for (index, stage) in STAGES.iter().enumerate() {
-        if is_stop_requested() {
+        if LIFECYCLE.is_stop_requested() {
             return false;
         }
-        activity::set_running(stage.phase, Some(activity::percent_done(index, STAGES.len()))).await;
+        LIFECYCLE
+            .phase(stage.phase, Some(activity::percent_done(index, STAGES.len())))
+            .await;
 
         match submit(build_turn_queue(stage.speed)).await {
             Ok(completion) => report_turn(&completion),
             Err(reason) => {
-                activity::fail(reason).await;
+                LIFECYCLE.fail(reason).await;
                 return false;
             }
         }
@@ -123,7 +129,7 @@ async fn run_turns_test() -> bool {
     }
 
     // Leave the robot settled with the last telemetry in the log.
-    let _ = wait_or_stop(SETTLE_MS).await;
+    let _ = LIFECYCLE.wait_or_stop(SETTLE_MS).await;
     true
 }
 

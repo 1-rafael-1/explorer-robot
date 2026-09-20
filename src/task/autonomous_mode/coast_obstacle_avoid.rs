@@ -290,12 +290,6 @@ async fn run_forward() -> State {
             motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
             Timer::after(Duration::from_millis(200)).await;
 
-            raise_event(Events::ObstacleDetected {
-                source: crate::system::event::ObstacleSource::Lidar,
-                detected: true,
-            })
-            .await;
-
             return State::BackingUp;
         }
 

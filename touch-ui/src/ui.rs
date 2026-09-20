@@ -96,6 +96,15 @@ pub struct Ui {
     /// The radar frame shown by [`Screen::RoomScan`], or `None` when no snapshot
     /// has been supplied yet.
     radar: Option<radar::Slots>,
+    /// The sequence number of the cloud [`Ui::radar`] was taken from, or `None`
+    /// when no frame is retained.
+    ///
+    /// The cloud's monotonically increasing sequence is the frame's change
+    /// token: a frame offered with the sequence already held is the frame this
+    /// model drew last time, so it reports no change without copying the slots
+    /// (ADR-0016). It is set and cleared with [`Ui::radar`], so the two always
+    /// agree about whether a frame is present.
+    radar_sequence: Option<u64>,
     /// The sensor-state caption shown by [`Screen::RoomScan`].
     sensor_state: SensorState,
     /// The region the most recent completed tap activated, or `None` when the
@@ -115,6 +124,7 @@ impl Ui {
             system_info: SystemInfo::new(),
             status: StatusView::new("Running", "", Screen::MainMenu),
             radar: None,
+            radar_sequence: None,
             sensor_state: SensorState::Off,
             activated: None,
         }
@@ -165,7 +175,8 @@ impl Ui {
     /// The radar frame the Room Scan screen renders, if one was supplied.
     ///
     /// `None` means no snapshot is available, which the screen draws as "No
-    /// data" rather than as an empty room.
+    /// data" rather than as an empty room. A frame that was supplied is held
+    /// here, so the model owns the content it draws (ADR-0016).
     #[must_use]
     pub const fn radar(&self) -> Option<&radar::Slots> {
         self.radar.as_ref()
@@ -208,13 +219,34 @@ impl Ui {
 
     /// Replace the Room Scan radar frame, reporting whether it changed.
     ///
-    /// A no-op on any screen other than [`Screen::RoomScan`]. `None` means no
-    /// snapshot is available and the screen draws "No data".
-    pub fn set_radar(&mut self, slots: Option<radar::Slots>) -> bool {
-        if self.screen != Screen::RoomScan || self.radar == slots {
+    /// A no-op on any screen other than [`Screen::RoomScan`]. The frame crosses
+    /// owned, with the cloud's sequence as its change token: a frame whose
+    /// sequence this model already holds is the frame it drew last time, so it
+    /// reports no change and the slots are not copied (ADR-0016). Any other
+    /// sequence stores the frame — one copy, moved in — and reports a change.
+    ///
+    /// `None` is an absent frame: no snapshot is available, so the screen draws
+    /// "No data" rather than an empty room. It clears the frame and its
+    /// sequence, reporting a change only when one was present. An absent frame
+    /// stays distinguishable from a measured frame of all-`None` slots, which
+    /// is a real measurement and is stored like any other.
+    pub fn set_radar(&mut self, frame: Option<(&radar::Slots, u64)>) -> bool {
+        if self.screen != Screen::RoomScan {
             return false;
         }
-        self.radar = slots;
+
+        let Some((slots, sequence)) = frame else {
+            let was_present = self.radar.is_some() || self.radar_sequence.is_some();
+            self.radar = None;
+            self.radar_sequence = None;
+            return was_present;
+        };
+
+        if self.radar_sequence == Some(sequence) {
+            return false;
+        }
+        self.radar = Some(*slots);
+        self.radar_sequence = Some(sequence);
         true
     }
 
@@ -252,6 +284,17 @@ impl Ui {
         }
         self.status = view;
         true
+    }
+
+    /// Show `screen`, resetting the list scroll and the value-entry value.
+    ///
+    /// This is the command-level entry point: a caller declares the screen it
+    /// wants rather than computing a button's rectangle and replaying a pointer
+    /// tap. It takes no pointer sample, no rectangle and no duration. Always
+    /// reports a redraw. Used by the firmware when a Menu Entry names its
+    /// destination and when a Procedure lands after it finishes.
+    pub const fn show_screen(&mut self, screen: Screen) -> bool {
+        self.navigate_to(screen)
     }
 
     /// Open the value-entry screen for `flow`, resetting the value to its preset.
@@ -433,7 +476,6 @@ impl Ui {
         // The body is drawn before the header so items scrolled above the list
         // top are painted over by the header background.
         match self.screen {
-            Screen::Placeholder(kind) => widgets::draw_placeholder(d, kind)?,
             Screen::SystemInfo => widgets::draw_system_info(d, &self.system_info)?,
             Screen::ValueEntry(flow) => widgets::draw_value_entry(d, flow, self.value, pressed)?,
             Screen::Status => widgets::draw_status(d, &self.status)?,
@@ -538,8 +580,8 @@ impl Ui {
     /// report a needed redraw.
     ///
     /// Entering a value screen sets the value to that flow's preset; leaving one
-    /// clears it. Entering Room Scan clears any radar frame and caption from a
-    /// previous visit, so a fresh entry starts at "No data".
+    /// clears it. Entering Room Scan clears any radar frame, its sequence and the
+    /// caption from a previous visit, so a fresh entry starts at "No data".
     const fn navigate_to(&mut self, screen: Screen) -> bool {
         self.screen = screen;
         self.scroll = 0;
@@ -549,6 +591,7 @@ impl Ui {
         };
         if matches!(screen, Screen::RoomScan) {
             self.radar = None;
+            self.radar_sequence = None;
             self.sensor_state = SensorState::Off;
         }
         true

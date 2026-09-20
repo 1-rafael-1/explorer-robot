@@ -48,7 +48,7 @@ fn post_processing_validity_gate_emits_no_return_below_ratio() {
         build_scan(&[(0.0, 0, 0)]),
     ];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     // 2/5 valid = 0.4 < 0.5, so the 0° bucket is dropped.
     assert_eq!(out.len, BINS);
@@ -66,7 +66,7 @@ fn post_processing_validity_gate_keeps_point_at_or_above_ratio() {
         build_scan(&[(0.0, 0, 0)]),
     ];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     // 3/5 valid = 0.6 >= 0.5, so the 0° bucket survives with the median.
     assert_eq!(out.len, BINS);
@@ -84,11 +84,11 @@ fn post_processing_median_and_mean_differ() {
         .map(|(&d, int)| build_scan(&[(0.0, d, int)]))
         .collect::<Vec<_>>();
 
-    let median_out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let median_out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
     assert_eq!(median_out.points[0].distance_mm, NonZeroU16::new(10));
     assert_eq!(median_out.points[0].intensity, 1);
 
-    let mean_out = aggregate(&scans, &config(0.5, AggregationMethod::Mean));
+    let mean_out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Mean));
     // (10 + 10 + 40) / 3 == 20; (1 + 1 + 7) / 3 == 3.
     assert_eq!(mean_out.points[0].distance_mm, NonZeroU16::new(20));
     assert_eq!(mean_out.points[0].intensity, 3);
@@ -102,7 +102,7 @@ fn post_processing_all_no_return_yields_no_return() {
         build_scan(&[(0.0, 0, 0)]),
     ];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     assert_eq!(out.len, BINS);
     assert_eq!(out.points[0].distance_mm, None);
@@ -119,7 +119,7 @@ fn post_processing_aggregate_bins_by_angle_not_index() {
         build_scan(&[(20.0, 250, 25)]),
     ];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     // 10° bucket: only the first scan contributes (1/2 = 0.5, kept) → 100.
     assert_eq!(out.points[10].distance_mm, NonZeroU16::new(100));
@@ -133,7 +133,7 @@ fn post_processing_aggregate_bins_by_angle_not_index() {
 fn post_processing_aggregate_sets_bucket_start_angle() {
     let scans = [build_scan(&[(10.2, 100, 10)])];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     // A point at 10.2° falls in the [10°, 11°) bucket, labelled 10° (the
     // bucket's lower edge, matching the device's native angle grid).
@@ -145,7 +145,9 @@ fn post_processing_aggregate_sets_bucket_start_angle() {
 fn post_processing_default_resolution_is_native_0_9_degrees() {
     let scans = [build_scan(&[(0.9, 100, 10)])];
 
-    let out = aggregate(&scans, &AggregationConfig::default());
+    // BUCKETS is 400 so the 0.9° grid (400 buckets) fits without coarsening,
+    // preserving the previous capacity-bound behaviour.
+    let out = aggregate::<400, 400>(&scans, &AggregationConfig::default());
 
     // 0.9° is the native resolution → 360 / 0.9 = 400 buckets.
     assert_eq!(out.len, 400);
@@ -181,7 +183,7 @@ fn post_processing_bucket_count_ceils_to_cover_full_range() {
     // even though the bucket width (1.9°) does not divide 360° evenly.
     let scans = [build_scan(&[(359.5, 100, 10)])];
 
-    let out = aggregate(
+    let out = aggregate::<400, BINS>(
         &scans,
         &AggregationConfig {
             validity_ratio: 1.0,
@@ -198,11 +200,11 @@ fn post_processing_bucket_count_ceils_to_cover_full_range() {
 
 #[test]
 fn post_processing_coarsens_when_resolution_exceeds_capacity() {
-    // 0.5° would need 720 buckets, more than `Scan<400>` can hold. The grid is
-    // coarsened to 400 × 0.9° so the full circle is still represented.
+    // 0.5° would need 720 buckets, more than the 400-slot output can hold. The
+    // grid is coarsened to 400 × 0.9° so the full circle is still represented.
     let scans = [build_scan(&[(300.0, 100, 10)])];
 
-    let out = aggregate(
+    let out = aggregate::<400, 400>(
         &scans,
         &AggregationConfig {
             validity_ratio: 1.0,
@@ -222,7 +224,7 @@ fn post_processing_bucket_reduces_to_nearest_valid_return() {
     // nearest return (90mm) is the representative, not the first sample.
     let scans = [build_scan(&[(10.1, 150, 50), (10.9, 90, 10)])];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     assert_eq!(out.points[10].distance_mm, NonZeroU16::new(90));
     assert_eq!(out.points[10].intensity, 10);
@@ -234,7 +236,7 @@ fn post_processing_valid_return_not_shadowed_by_no_return() {
     // bucket. The valid return must surface, not the no-return.
     let scans = [build_scan(&[(10.1, 0, 0), (10.9, 90, 10)])];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     assert_eq!(out.points[10].distance_mm, NonZeroU16::new(90));
     assert_eq!(out.points[10].intensity, 10);
@@ -247,7 +249,7 @@ fn post_processing_counts_validity_once_per_revolution() {
     // and the bucket must drop — even though there are two valid *samples*.
     let scans = [build_scan(&[(10.1, 90, 10), (10.9, 150, 50)]), build_scan(&[])];
 
-    let out = aggregate(&scans, &config(0.75, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.75, AggregationMethod::Median));
 
     assert_eq!(out.points[10].distance_mm, None);
 }
@@ -258,7 +260,7 @@ fn post_processing_tie_break_prefers_higher_intensity() {
     // 5 and 90. The tie is broken by higher intensity.
     let scans = [build_scan(&[(10.1, 100, 5), (10.9, 100, 90)])];
 
-    let out = aggregate(&scans, &config(0.5, AggregationMethod::Median));
+    let out = aggregate::<400, BINS>(&scans, &config(0.5, AggregationMethod::Median));
 
     assert_eq!(out.points[10].distance_mm, NonZeroU16::new(100));
     assert_eq!(out.points[10].intensity, 90);

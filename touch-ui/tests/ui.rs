@@ -9,39 +9,16 @@
 
 use embedded_graphics::{prelude::*, primitives::Rectangle};
 use touch_ui::{
-    Hit, Item, SensorState, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    Hit, Item, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     geometry::{
         back_button_rect, cancel_button_rect, info_row_rect, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
         panel_rect, progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
         slider_touch_rect,
     },
     radar,
-    screens::{PlaceholderKind, Screen, StatusView, ValueFlow},
+    screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
 };
-
-/// The placeholder each Test Mode index opens, in menu order.
-const TEST_LEAVES: [PlaceholderKind; 6] = [
-    PlaceholderKind::BasicMotor,
-    PlaceholderKind::Turns,
-    PlaceholderKind::StraightDrive,
-    PlaceholderKind::ArcDrive,
-    PlaceholderKind::Imu6Axis,
-    PlaceholderKind::Imu9Axis,
-];
-
-/// Every placeholder and the submenu it belongs to.
-const ALL_PLACEHOLDERS: [(PlaceholderKind, Screen); 9] = [
-    (PlaceholderKind::Motor, Screen::Calibrate),
-    (PlaceholderKind::Mag, Screen::Calibrate),
-    (PlaceholderKind::CoastAndAvoid, Screen::DriveMode),
-    (PlaceholderKind::BasicMotor, Screen::TestMode),
-    (PlaceholderKind::Turns, Screen::TestMode),
-    (PlaceholderKind::StraightDrive, Screen::TestMode),
-    (PlaceholderKind::ArcDrive, Screen::TestMode),
-    (PlaceholderKind::Imu6Axis, Screen::TestMode),
-    (PlaceholderKind::Imu9Axis, Screen::TestMode),
-];
 
 /// [`TAP_MAX_MOVE`] as the pixels the pointer moves by.
 fn tap_max_move_px() -> i32 {
@@ -122,26 +99,41 @@ fn labels(screen: Screen) -> Vec<&'static str> {
 fn the_menu_tree_matches_the_robot() {
     assert_eq!(
         Screen::MainMenu.items(),
-        [Item::SystemInfo, Item::Calibrate, Item::DriveMode, Item::TestMode].as_slice()
+        [
+            Item::ScreenEntry(ScreenEntry::SystemInfo),
+            Item::Submenu(Submenu::Calibrate),
+            Item::Submenu(Submenu::DriveMode),
+            Item::Submenu(Submenu::TestMode),
+        ]
+        .as_slice()
     );
     assert_eq!(
         Screen::Calibrate.items(),
-        [Item::Motor, Item::Mag, Item::Distance].as_slice()
+        [
+            Item::Procedure(Procedure::MotorCalibration),
+            Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DistanceCalibration),
+        ]
+        .as_slice()
     );
     assert_eq!(
         Screen::DriveMode.items(),
-        [Item::CoastAndAvoid, Item::AttemptStraight].as_slice()
+        [
+            Item::Procedure(Procedure::CoastAndAvoid),
+            Item::Procedure(Procedure::AttemptStraight),
+        ]
+        .as_slice()
     );
     assert_eq!(
         Screen::TestMode.items(),
         [
-            Item::BasicMotor,
-            Item::Turns,
-            Item::StraightDrive,
-            Item::ArcDrive,
-            Item::Imu6Axis,
-            Item::Imu9Axis,
-            Item::RoomScan,
+            Item::Procedure(Procedure::BasicMotor),
+            Item::Procedure(Procedure::Turns),
+            Item::Procedure(Procedure::StraightDrive),
+            Item::Procedure(Procedure::ArcDrive),
+            Item::Procedure(Procedure::Imu6Axis),
+            Item::Procedure(Procedure::Imu9Axis),
+            Item::ScreenEntry(ScreenEntry::RoomScan),
         ]
         .as_slice()
     );
@@ -167,7 +159,6 @@ fn the_menu_tree_matches_the_robot() {
     );
 
     assert!(Screen::SystemInfo.items().is_empty());
-    assert!(Screen::Placeholder(PlaceholderKind::Motor).items().is_empty());
     assert!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items().is_empty());
 }
 
@@ -188,7 +179,7 @@ fn every_screens_items_are_distinct_and_labelled() {
 }
 
 /// Test that one enumeration names every menu entry exactly once, so Room Scan
-/// and every placeholder leaf are real, labelled entries of a screen.
+/// and every leaf is a real, labelled entry of a screen.
 #[test]
 fn every_menu_entry_is_a_listed_item() {
     let listed: Vec<Item> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
@@ -198,55 +189,194 @@ fn every_menu_entry_is_a_listed_item() {
     assert_eq!(
         listed,
         [
-            Item::SystemInfo,
-            Item::Calibrate,
-            Item::DriveMode,
-            Item::TestMode,
-            Item::Motor,
-            Item::Mag,
-            Item::Distance,
-            Item::CoastAndAvoid,
-            Item::AttemptStraight,
-            Item::BasicMotor,
-            Item::Turns,
-            Item::StraightDrive,
-            Item::ArcDrive,
-            Item::Imu6Axis,
-            Item::Imu9Axis,
-            Item::RoomScan,
+            Item::ScreenEntry(ScreenEntry::SystemInfo),
+            Item::Submenu(Submenu::Calibrate),
+            Item::Submenu(Submenu::DriveMode),
+            Item::Submenu(Submenu::TestMode),
+            Item::Procedure(Procedure::MotorCalibration),
+            Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DistanceCalibration),
+            Item::Procedure(Procedure::CoastAndAvoid),
+            Item::Procedure(Procedure::AttemptStraight),
+            Item::Procedure(Procedure::BasicMotor),
+            Item::Procedure(Procedure::Turns),
+            Item::Procedure(Procedure::StraightDrive),
+            Item::Procedure(Procedure::ArcDrive),
+            Item::Procedure(Procedure::Imu6Axis),
+            Item::Procedure(Procedure::Imu9Axis),
+            Item::ScreenEntry(ScreenEntry::RoomScan),
         ]
     );
 
-    // Room Scan and the placeholder leaves are present and labelled, and each
-    // placeholder's label is the title its screen shows.
-    assert!(listed.contains(&Item::RoomScan));
-    assert_eq!(Item::RoomScan.label(), "Room Scan");
-    for (item, kind) in [
-        (Item::Motor, PlaceholderKind::Motor),
-        (Item::Mag, PlaceholderKind::Mag),
-        (Item::CoastAndAvoid, PlaceholderKind::CoastAndAvoid),
-        (Item::BasicMotor, PlaceholderKind::BasicMotor),
-        (Item::Turns, PlaceholderKind::Turns),
-        (Item::StraightDrive, PlaceholderKind::StraightDrive),
-        (Item::ArcDrive, PlaceholderKind::ArcDrive),
-        (Item::Imu6Axis, PlaceholderKind::Imu6Axis),
-        (Item::Imu9Axis, PlaceholderKind::Imu9Axis),
+    // Room Scan is present and labelled.
+    assert!(listed.contains(&Item::ScreenEntry(ScreenEntry::RoomScan)));
+    assert_eq!(Item::ScreenEntry(ScreenEntry::RoomScan).label(), "Room Scan");
+}
+
+/// Test that the menus list eleven Procedures: the ten the firmware runs today
+/// plus the deferred attempt-straight, and no Procedure twice.
+#[test]
+fn the_menus_list_every_procedure_once() {
+    let procedures: Vec<Procedure> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
+        .into_iter()
+        .flat_map(|screen| screen.items().iter().copied())
+        .filter_map(Item::as_procedure)
+        .collect();
+    assert_eq!(procedures.len(), 11);
+    for (index, procedure) in procedures.iter().enumerate() {
+        assert!(!procedure.label().is_empty(), "{procedure:?} is labelled");
+        assert!(!procedures[..index].contains(procedure), "{procedure:?} is listed once");
+    }
+    // Attempt-straight is modelled, but it is the one the firmware does not start.
+    assert!(procedures.contains(&Procedure::AttemptStraight));
+}
+
+/// Test that an entry tells a submenu, a Procedure and a screen apart, so a
+/// caller reaches the Procedure by identity rather than by position.
+#[test]
+fn each_entry_knows_whether_it_is_a_procedure() {
+    assert_eq!(Item::Submenu(Submenu::DriveMode).as_procedure(), None);
+    assert_eq!(Item::ScreenEntry(ScreenEntry::SystemInfo).as_procedure(), None);
+    for procedure in [
+        Procedure::MotorCalibration,
+        Procedure::CoastAndAvoid,
+        Procedure::AttemptStraight,
+        Procedure::Imu9Axis,
     ] {
-        assert!(listed.contains(&item), "{item:?} is a listed entry");
-        assert_eq!(item.label(), kind.title(), "{item:?} label matches its placeholder");
+        assert_eq!(Item::Procedure(procedure).as_procedure(), Some(procedure));
     }
 }
 
-/// Test that Back returns from every submenu to the Main Menu.
+/// Test that Back returns from every submenu the Main Menu lists to the Main
+/// Menu.
 #[test]
 fn back_returns_from_every_submenu() {
-    for (index, submenu) in [(1, Screen::Calibrate), (2, Screen::DriveMode), (3, Screen::TestMode)] {
+    let mut submenus = 0;
+    for (index, item) in Screen::MainMenu.items().iter().enumerate() {
+        let Item::Submenu(submenu) = item else {
+            continue;
+        };
+        submenus += 1;
+
         let mut ui = Ui::new();
         tap_item(&mut ui, index);
-        assert_eq!(ui.screen(), submenu);
+        assert_eq!(ui.screen(), submenu.destination());
         tap(&mut ui, back_button_rect().center());
         assert_eq!(ui.screen(), Screen::MainMenu);
     }
+    assert_eq!(submenus, 3);
+}
+
+/// Test that each entry carries its own header title and the screen Back
+/// returns to, rather than either being restated by the screen that lists it.
+///
+/// The parent comes from the entry itself: a test mode is listed on Test Mode and
+/// lands back there whether the operator stops it or a run-to-completion test
+/// finishes on its own, a calibration lands on Calibrate, and a drive mode on
+/// Drive Mode.
+#[test]
+fn every_entry_names_its_own_title_and_parent() {
+    // Every entry the crate ships, with the parent it states for itself.
+    let expected: [(Item, Screen); 16] = [
+        (Item::ScreenEntry(ScreenEntry::SystemInfo), Screen::MainMenu),
+        (Item::Submenu(Submenu::Calibrate), Screen::MainMenu),
+        (Item::Submenu(Submenu::DriveMode), Screen::MainMenu),
+        (Item::Submenu(Submenu::TestMode), Screen::MainMenu),
+        (Item::Procedure(Procedure::MotorCalibration), Screen::Calibrate),
+        (Item::Procedure(Procedure::MagCalibration), Screen::Calibrate),
+        (Item::Procedure(Procedure::DistanceCalibration), Screen::Calibrate),
+        (Item::Procedure(Procedure::CoastAndAvoid), Screen::DriveMode),
+        (Item::Procedure(Procedure::AttemptStraight), Screen::DriveMode),
+        (Item::Procedure(Procedure::BasicMotor), Screen::TestMode),
+        (Item::Procedure(Procedure::Turns), Screen::TestMode),
+        (Item::Procedure(Procedure::StraightDrive), Screen::TestMode),
+        (Item::Procedure(Procedure::ArcDrive), Screen::TestMode),
+        (Item::Procedure(Procedure::Imu6Axis), Screen::TestMode),
+        (Item::Procedure(Procedure::Imu9Axis), Screen::TestMode),
+        (Item::ScreenEntry(ScreenEntry::RoomScan), Screen::TestMode),
+    ];
+
+    // The known table covers exactly the entries the list screens show.
+    let listed: Vec<Item> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
+        .into_iter()
+        .flat_map(|screen| screen.items().iter().copied())
+        .collect();
+    assert_eq!(
+        listed.len(),
+        expected.len(),
+        "the known table covers every listed entry"
+    );
+
+    for (entry, parent) in expected {
+        assert!(listed.contains(&entry), "{entry:?} is listed on a list screen");
+        assert_eq!(entry.parent(), Some(parent), "{entry:?} names its own parent");
+        assert!(!entry.title().is_empty(), "{entry:?} carries a header title");
+
+        // Every destination but the shared running screen is a screen the UI can
+        // be sent to. The header vocabulary is pinned against literals by
+        // `the_menu_tree_matches_the_robot`, so it is not compared to itself
+        // here. The running screen is opened with `show_status`, not this call.
+        if entry.destination() != Screen::Status {
+            let mut ui = Ui::new();
+            assert!(
+                ui.show_screen(entry.destination()),
+                "{entry:?} opens a screen the UI can show"
+            );
+        }
+    }
+}
+
+/// Test that a caller moves the panel to a screen by naming it, with no pointer
+/// sample, rectangle or duration.
+#[test]
+fn a_caller_shows_a_screen_by_naming_it() {
+    let mut ui = Ui::new();
+    assert!(ui.show_screen(Screen::SystemInfo));
+    assert_eq!(ui.screen(), Screen::SystemInfo);
+    assert_eq!(ui.title(), "System Info");
+
+    // Entering a value screen adopts its preset and clears the scroll.
+    assert!(ui.show_screen(Screen::ValueEntry(ValueFlow::DistanceCalibration)));
+    assert_eq!(ui.value(), 150);
+    assert_eq!(ui.scroll(), 0);
+
+    // Entering Room Scan starts from no frame rather than a stale one.
+    assert!(ui.show_screen(Screen::RoomScan));
+    assert!(ui.radar().is_none());
+    assert_eq!(ui.sensor_state(), SensorState::Off);
+
+    assert!(ui.show_screen(Screen::MainMenu));
+    assert_eq!(ui.screen(), Screen::MainMenu);
+}
+
+/// Test that the interactive flag matches the producers: the Procedures that end
+/// only on an explicit stop are interactive, the calibrations and the deferred
+/// attempt-straight are not, and a non-Procedure entry never is.
+#[test]
+fn interactive_procedures_match_their_producers() {
+    for procedure in [
+        Procedure::CoastAndAvoid,
+        Procedure::BasicMotor,
+        Procedure::Imu6Axis,
+        Procedure::Imu9Axis,
+    ] {
+        assert!(procedure.interactive(), "{procedure:?} ends only on a stop");
+        assert!(Item::Procedure(procedure).interactive());
+    }
+    for procedure in [
+        Procedure::MotorCalibration,
+        Procedure::MagCalibration,
+        Procedure::DistanceCalibration,
+        Procedure::AttemptStraight,
+        Procedure::Turns,
+        Procedure::StraightDrive,
+        Procedure::ArcDrive,
+    ] {
+        assert!(!procedure.interactive(), "{procedure:?} ends on its own");
+    }
+
+    assert!(!Item::Submenu(Submenu::Calibrate).interactive());
+    assert!(!Item::ScreenEntry(ScreenEntry::RoomScan).interactive());
 }
 
 /// Test that the Main Menu's branches open and Back returns.
@@ -285,97 +415,17 @@ fn system_info_opens_and_back_returns() {
     assert_eq!(ui.screen(), Screen::MainMenu);
 }
 
-/// Test that every Calibrate leaf opens and Back returns.
-#[test]
-fn calibrate_leaves_open_and_back_returns() {
-    let mut ui = Ui::new();
-    tap_item(&mut ui, 1);
-    assert_eq!(ui.screen(), Screen::Calibrate);
-
-    tap_item(&mut ui, 0);
-    assert_eq!(ui.screen(), Screen::Placeholder(PlaceholderKind::Motor));
-    tap(&mut ui, back_button_rect().center());
-    assert_eq!(ui.screen(), Screen::Calibrate);
-
-    tap_item(&mut ui, 1);
-    assert_eq!(ui.screen(), Screen::Placeholder(PlaceholderKind::Mag));
-    tap(&mut ui, back_button_rect().center());
-    assert_eq!(ui.screen(), Screen::Calibrate);
-
-    tap_item(&mut ui, 2);
-    assert_eq!(ui.screen(), Screen::ValueEntry(ValueFlow::DistanceCalibration));
-    tap(&mut ui, cancel_button_rect().center());
-    assert_eq!(ui.screen(), Screen::Calibrate);
-
-    tap(&mut ui, back_button_rect().center());
-    assert_eq!(ui.screen(), Screen::MainMenu);
-}
-
-/// Test that every Drive Mode leaf opens and Back returns.
-#[test]
-fn drive_mode_leaves_open_and_back_returns() {
-    let mut ui = Ui::new();
-    tap_item(&mut ui, 2);
-    assert_eq!(ui.screen(), Screen::DriveMode);
-
-    tap_item(&mut ui, 0);
-    assert_eq!(ui.screen(), Screen::Placeholder(PlaceholderKind::CoastAndAvoid));
-    tap(&mut ui, back_button_rect().center());
-    assert_eq!(ui.screen(), Screen::DriveMode);
-
-    tap_item(&mut ui, 1);
-    assert_eq!(ui.screen(), Screen::ValueEntry(ValueFlow::AttemptStraight));
-    tap(&mut ui, save_button_rect().center());
-    assert_eq!(ui.screen(), Screen::DriveMode);
-
-    tap(&mut ui, back_button_rect().center());
-    assert_eq!(ui.screen(), Screen::MainMenu);
-}
-
-/// Test that every Test Mode leaf opens and Back returns, scrolling the later
-/// leaves into reach.
-#[test]
-fn test_mode_leaves_open_and_back_returns() {
-    for (index, kind) in TEST_LEAVES.iter().enumerate() {
-        let mut ui = Ui::new();
-        tap_item(&mut ui, 3);
-        assert_eq!(ui.screen(), Screen::TestMode);
-
-        if index >= 3 {
-            drag_scroll_to_bottom(&mut ui);
-        }
-        tap_item(&mut ui, index);
-        assert_eq!(ui.screen(), Screen::Placeholder(*kind));
-
-        tap(&mut ui, back_button_rect().center());
-        assert_eq!(ui.screen(), Screen::TestMode);
-        tap(&mut ui, back_button_rect().center());
-        assert_eq!(ui.screen(), Screen::MainMenu);
-    }
-}
-
-/// Test that every placeholder names the action it would run and knows its
-/// parent.
-#[test]
-fn placeholders_name_the_action_they_would_run() {
-    for (kind, parent) in ALL_PLACEHOLDERS {
-        assert!(kind.body().starts_with("Would run:"));
-        assert!(!kind.title().is_empty());
-        assert_eq!(kind.parent(), parent);
-    }
-}
-
 /// Test hit-testing on a list screen: items, Back, and the empty gap between.
 #[test]
 fn list_screens_report_their_regions() {
     let mut ui = Ui::new();
     assert_eq!(
         ui.hit_test(menu_item_rect(0, 0).center()),
-        Some(Hit::MenuItem(Item::SystemInfo))
+        Some(Hit::MenuItem(Item::ScreenEntry(ScreenEntry::SystemInfo)))
     );
     assert_eq!(
         ui.hit_test(menu_item_rect(3, 0).center()),
-        Some(Hit::MenuItem(Item::TestMode))
+        Some(Hit::MenuItem(Item::Submenu(Submenu::TestMode)))
     );
     // Below the last item, and in the gap between two items, is no region.
     assert_eq!(ui.hit_test(Point::new(160, 98)), None);
@@ -409,6 +459,50 @@ fn a_running_screen_reports_stop() {
     assert_eq!(ui.title(), "Basic Motor Test");
     assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
     assert_eq!(ui.hit_test(info_row_rect(0).center()), None);
+}
+
+/// Test that a running Procedure's view takes its title and parent from the
+/// entry itself, so a test mode stops back to the Test Mode menu, a calibration
+/// to Calibrate and a drive mode to Drive Mode.
+#[test]
+fn a_procedure_supplies_its_running_views_title_and_parent() {
+    for (procedure, parent) in [
+        (Procedure::MotorCalibration, Screen::Calibrate),
+        (Procedure::MagCalibration, Screen::Calibrate),
+        (Procedure::DistanceCalibration, Screen::Calibrate),
+        (Procedure::CoastAndAvoid, Screen::DriveMode),
+        (Procedure::AttemptStraight, Screen::DriveMode),
+        (Procedure::BasicMotor, Screen::TestMode),
+        (Procedure::Turns, Screen::TestMode),
+        (Procedure::StraightDrive, Screen::TestMode),
+        (Procedure::ArcDrive, Screen::TestMode),
+        (Procedure::Imu6Axis, Screen::TestMode),
+        (Procedure::Imu9Axis, Screen::TestMode),
+    ] {
+        let view = StatusView::for_procedure(procedure, "Running");
+        assert_eq!(view.parent, parent, "{procedure:?} states where Stop returns");
+    }
+
+    // The three calibrations are the ones a calibration lifecycle belongs to.
+    for procedure in [
+        Procedure::MotorCalibration,
+        Procedure::MagCalibration,
+        Procedure::DistanceCalibration,
+    ] {
+        assert!(procedure.is_calibration(), "{procedure:?} is a calibration");
+    }
+    for procedure in [
+        Procedure::CoastAndAvoid,
+        Procedure::AttemptStraight,
+        Procedure::BasicMotor,
+        Procedure::Turns,
+        Procedure::StraightDrive,
+        Procedure::ArcDrive,
+        Procedure::Imu6Axis,
+        Procedure::Imu9Axis,
+    ] {
+        assert!(!procedure.is_calibration(), "{procedure:?} is not a calibration");
+    }
 }
 
 /// Test hit-testing on a finished Result Report: the header offers Back, while a
@@ -480,7 +574,10 @@ fn the_ui_reports_the_region_a_tap_activated() {
     assert_eq!(ui.last_activation(), None);
 
     tap_item(&mut ui, 1);
-    assert_eq!(ui.last_activation(), Some(Hit::MenuItem(Item::Calibrate)));
+    assert_eq!(
+        ui.last_activation(),
+        Some(Hit::MenuItem(Item::Submenu(Submenu::Calibrate)))
+    );
     tap(&mut ui, back_button_rect().center());
     assert_eq!(ui.last_activation(), Some(Hit::Back));
 
@@ -670,7 +767,10 @@ fn a_release_off_the_press_region_does_not_activate() {
     let released_at = Point::new(start.x, start.y + 9);
     let _ = ui.pointer_down(start, 0);
     let _ = ui.pointer_move(released_at, 0);
-    assert_eq!(ui.hit_test(released_at), Some(Hit::MenuItem(Item::Calibrate)));
+    assert_eq!(
+        ui.hit_test(released_at),
+        Some(Hit::MenuItem(Item::Submenu(Submenu::Calibrate)))
+    );
     let _ = ui.pointer_up(TAP_MIN_DURATION_MS);
     assert_eq!(ui.screen(), Screen::MainMenu);
 }
@@ -762,8 +862,11 @@ const ROOM_SCAN_INDEX: usize = 6;
 /// Test that the Room Scan entry opens from the Test Mode menu and Back returns.
 #[test]
 fn room_scan_opens_from_test_mode_and_back_returns() {
-    assert_eq!(Screen::TestMode.items()[ROOM_SCAN_INDEX], Item::RoomScan);
-    assert_eq!(Item::RoomScan.label(), "Room Scan");
+    assert_eq!(
+        Screen::TestMode.items()[ROOM_SCAN_INDEX],
+        Item::ScreenEntry(ScreenEntry::RoomScan)
+    );
+    assert_eq!(Item::ScreenEntry(ScreenEntry::RoomScan).label(), "Room Scan");
     assert_eq!(Screen::RoomScan.parent(), Some(Screen::TestMode));
     assert!(Screen::RoomScan.items().is_empty());
 
@@ -787,22 +890,73 @@ fn room_scan_holds_the_radar_frame_and_sensor_state() {
     slots[0] = Some(120.0);
     assert!(ui.set_sensor_state(SensorState::Warming));
     assert!(!ui.set_sensor_state(SensorState::Warming));
-    assert!(ui.set_radar(Some(slots)));
-    assert!(!ui.set_radar(Some(slots)));
+    assert!(ui.set_radar(Some((&slots, 1))));
     assert_eq!(ui.radar(), Some(&slots));
     assert_eq!(ui.sensor_state(), SensorState::Warming);
 
-    // Leaving the screen makes both updates no-ops, and re-entering clears them.
+    // Leaving the screen makes both updates no-ops.
     tap(&mut ui, back_button_rect().center());
     assert_eq!(ui.screen(), Screen::TestMode);
-    assert!(!ui.set_radar(None));
+    assert!(!ui.set_radar(Some((&slots, 1))));
     assert!(!ui.set_sensor_state(SensorState::Failed));
 
+    // Re-entering clears the frame, its sequence and the caption, so a fresh entry
+    // starts at "No data" and the first frame reports a change even when it carries
+    // a sequence the model saw on the previous visit.
     drag_scroll_to_bottom(&mut ui);
     tap_item(&mut ui, ROOM_SCAN_INDEX);
     assert_eq!(ui.screen(), Screen::RoomScan);
     assert!(ui.radar().is_none());
     assert_eq!(ui.sensor_state(), SensorState::Off);
+    assert!(ui.set_radar(Some((&slots, 1))));
+    assert_eq!(ui.radar(), Some(&slots));
+}
+
+/// Test that the cloud's sequence is the frame's change token: the frame the model
+/// already holds reports no change, and a new sequence always reports one.
+#[test]
+fn the_radar_sequence_is_the_change_token() {
+    let mut ui = open_room_scan();
+    let mut slots: radar::Slots = [None; radar::SLOTS];
+    slots[0] = Some(120.0);
+
+    assert!(ui.set_radar(Some((&slots, 7))));
+    // The same frame at the same sequence is the frame already drawn: no change,
+    // and the slots are not copied again.
+    assert!(!ui.set_radar(Some((&slots, 7))));
+
+    // A new sequence reports a change and the model takes the frame that came
+    // with it.
+    let mut next: radar::Slots = [None; radar::SLOTS];
+    next[0] = Some(90.0);
+    assert!(ui.set_radar(Some((&next, 8))));
+    assert_eq!(ui.radar().map(|frame| frame[0]), Some(Some(90.0)));
+
+    // A sequence the model already holds is that frame, whatever slots accompany
+    // it: the counter, not the array, decides.
+    let mut other: radar::Slots = [None; radar::SLOTS];
+    other[0] = Some(30.0);
+    assert!(!ui.set_radar(Some((&other, 8))));
+    assert_eq!(ui.radar().map(|frame| frame[0]), Some(Some(90.0)));
+}
+
+/// Test that the model owns the frame it draws: the caller's array is copied in,
+/// so reusing that array afterwards cannot change what the model shows.
+#[test]
+fn the_model_owns_the_radar_frame_it_draws() {
+    let mut ui = open_room_scan();
+    let mut source: radar::Slots = [None; radar::SLOTS];
+    source[0] = Some(120.0);
+
+    assert!(ui.set_radar(Some((&source, 3))));
+    // The caller reuses its buffer for the next scene.
+    source[0] = Some(1.0);
+    source[90] = Some(250.0);
+    assert_eq!(source[0], Some(1.0));
+    assert_eq!(source[90], Some(250.0));
+
+    assert_eq!(ui.radar().map(|frame| frame[0]), Some(Some(120.0)));
+    assert_eq!(ui.radar().map(|frame| frame[90]), Some(None));
 }
 
 /// Test that the four sensor states are distinguishable and the caption sits at
@@ -843,21 +997,31 @@ fn back_leaves_for_the_parent() {
     assert_eq!(ui.screen(), Screen::MainMenu);
 }
 
-/// Test that a missing snapshot is reported as no frame, not as an empty room.
+/// Test that a missing snapshot is reported as no frame, not as an empty room, and
+/// that an absent frame stays distinguishable from a measured frame with no
+/// returns.
 #[test]
 fn a_missing_snapshot_is_no_data() {
     let mut ui = open_room_scan();
-    let empty: radar::Slots = [None; radar::SLOTS];
+
+    // An absent snapshot is the state a fresh entry starts in, and offering it
+    // again reports no change.
+    assert!(ui.radar().is_none());
+    assert!(!ui.set_radar(None));
 
     // An all-`None` frame is a real measurement of no returns, distinct from an
-    // absent snapshot.
-    assert!(ui.set_radar(Some(empty)));
+    // absent snapshot: it is stored and kept, not mistaken for one.
+    let empty: radar::Slots = [None; radar::SLOTS];
+    assert!(ui.set_radar(Some((&empty, 1))));
     assert_eq!(ui.radar(), Some(&empty));
 
     // Dropping back to an absent snapshot clears the frame rather than showing
-    // the previous measurement.
+    // the previous measurement, so the screen draws "No data" instead of the
+    // empty room the old frame drew.
     assert!(ui.set_radar(None));
     assert!(ui.radar().is_none());
+    // Already absent: there is nothing to clear, so nothing reported a change.
+    assert!(!ui.set_radar(None));
 }
 
 /// Test the radar's plotting transform: angle, range, and the outer-ring clamp.

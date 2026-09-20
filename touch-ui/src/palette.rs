@@ -24,16 +24,12 @@ pub const BUTTON_BORDER: Rgb565 = Rgb565::new(18, 24, 30);
 /// Primary text (titles and labels): near-white.
 pub const TEXT: Rgb565 = Rgb565::new(30, 60, 30);
 
-/// Muted chrome (the header divider and placeholder body): a mid grey, dimmer
+/// Muted chrome (the header divider and the scroll track): a mid grey, dimmer
 /// than [`TEXT`].
 pub const MUTED: Rgb565 = Rgb565::new(14, 28, 14);
 
 /// Accent used for the pressed/selected state: a saturated teal.
 pub const ACCENT: Rgb565 = Rgb565::new(3, 40, 31);
-
-/// Warning/amber accent, reserved for non-navigable or error states (the
-/// placeholder panel border).
-pub const WARN: Rgb565 = Rgb565::new(31, 44, 0);
 
 /// Radar range-ring and crosshair colour.
 pub const RADAR_RING: Rgb565 = Rgb565::WHITE;
@@ -47,7 +43,8 @@ pub const TITLE_FONT: &MonoFont<'static> = &FONT_9X15_BOLD;
 /// Regular font used for button labels.
 pub const LABEL_FONT: &MonoFont<'static> = &FONT_9X15;
 
-/// Small font used for the System Info rows and placeholder body text.
+/// Small font used for the System Info rows, the status body text, and the
+/// Room Scan caption.
 pub const SMALL_FONT: &MonoFont<'static> = &FONT_6X10;
 
 /// Large font used for the value-entry readout.

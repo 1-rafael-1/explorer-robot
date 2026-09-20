@@ -83,15 +83,15 @@ pub enum Events {
         Option<crate::task::io::flash_storage::CalibrationDataKind>,
     ),
 
-    /// Obstacle detection status changed.
-    /// - source: which sensor reported the change.
-    /// - detected: true if obstacle within threshold, false if clear.
+    /// The obstacle flag changed.
+    ///
+    /// This is an edge, not a state copy: the payload names which sensor
+    /// changed the flag, and a handler reads the flag for the current state
+    /// rather than trusting a value carried here. Raised by the `LiDAR` task
+    /// when its Front Sector test flips the flag.
     ObstacleDetected {
         /// Sensor source reporting the change.
         source: ObstacleSource,
-        /// true: Obstacle detected within threshold.
-        /// false: Path is clear.
-        detected: bool,
     },
 
     /// Floor-drop detection status changed (stairs, ledges).

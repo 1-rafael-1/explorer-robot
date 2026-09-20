@@ -3,9 +3,12 @@
 //! [`Item`] names every entry of the Main Menu and its Calibrate, Drive Mode and
 //! Test Mode submenus, in one enumeration; [`Screen::items`] returns each list
 //! screen's entries in display order and [`Item::label`] is the text the button
-//! draws. This crate is the source of truth for the labels it ships: the entries a
-//! caller sees and the labels it acts on are the same data, so there is no second
-//! ordering to keep in step.
+//! draws. Each entry carries its own label, the screen it opens, the screen Back
+//! returns to, and whether it ends only on an explicit stop, so no other table in
+//! the crate states a label or a parent relation.
+//!
+//! An entry is a [`Submenu`], a [`Procedure`] or a [`ScreenEntry`], so the domain
+//! distinction is in the type rather than in a guard.
 //!
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
@@ -14,56 +17,195 @@
 ///
 /// This is the single enumeration of every menu entry the crate ships, across the
 /// Main Menu and its Calibrate, Drive Mode and Test Mode submenus. Each variant
-/// supplies its [`Item::label`] and the [`Item::destination`] it opens, so the
-/// label a caller acts on and the entry it sees are the same data.
+/// supplies its [`Item::label`], its [`Item::destination`], the [`Item::parent`]
+/// Back returns to, and its [`Item::interactive`] flag, so the label a caller
+/// acts on and the entry it sees are the same data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
-    /// Main Menu: the System Info status screen.
-    SystemInfo,
-    /// Main Menu: the Calibrate submenu.
-    Calibrate,
-    /// Main Menu: the Drive Mode submenu.
-    DriveMode,
-    /// Main Menu: the Test Mode submenu.
-    TestMode,
-    /// Calibrate: motor calibration, a placeholder leaf.
-    Motor,
-    /// Calibrate: magnetometer calibration, a placeholder leaf.
-    Mag,
-    /// Calibrate: the distance-calibration value screen.
-    Distance,
-    /// Drive Mode: coast-and-avoid, a placeholder leaf.
-    CoastAndAvoid,
-    /// Drive Mode: the attempt-straight value screen.
-    AttemptStraight,
-    /// Test Mode: the basic motor test, a placeholder leaf.
-    BasicMotor,
-    /// Test Mode: the turns test, a placeholder leaf.
-    Turns,
-    /// Test Mode: the straight drive test, a placeholder leaf.
-    StraightDrive,
-    /// Test Mode: the arc drive test, a placeholder leaf.
-    ArcDrive,
-    /// Test Mode: the six-axis IMU test, a placeholder leaf.
-    Imu6Axis,
-    /// Test Mode: the nine-axis IMU test, a placeholder leaf.
-    Imu9Axis,
-    /// Test Mode: the Room Scan radar screen.
-    RoomScan,
+    /// A submenu: Calibrate, Drive Mode, or Test Mode.
+    Submenu(Submenu),
+    /// A unit of work the Panel can start.
+    Procedure(Procedure),
+    /// A screen that is not a unit of work.
+    ScreenEntry(ScreenEntry),
+}
+
+/// The facts every Menu Entry supplies, resolved from its variant.
+///
+/// [`Item::entry`] is the enumeration's one dispatch: it matches the variant once
+/// and projects it into these fields, so each accessor below reads a field
+/// instead of repeating the same three-way match.
+#[derive(Clone, Copy)]
+struct EntryFacts {
+    /// The entry's one name: the list button's text and the header it opens.
+    label: &'static str,
+    /// The screen the entry opens.
+    destination: Screen,
+    /// The screen Back returns to from `destination`.
+    parent: Option<Screen>,
+    /// Whether the entry's Procedure ends only on an explicit stop.
+    interactive: bool,
+    /// The Procedure the entry starts, or `None` for a submenu or a screen.
+    procedure: Option<Procedure>,
 }
 
 impl Item {
+    /// Project this entry's variant into its facts.
+    ///
+    /// This is the only place [`Item`] matches its three variants; the accessors
+    /// below all read this one value.
+    const fn entry(self) -> EntryFacts {
+        match self {
+            Self::Submenu(submenu) => EntryFacts {
+                label: submenu.label(),
+                destination: submenu.destination(),
+                parent: submenu.parent(),
+                interactive: false,
+                procedure: None,
+            },
+            Self::Procedure(procedure) => EntryFacts {
+                label: procedure.label(),
+                destination: procedure.destination(),
+                parent: procedure.parent(),
+                interactive: procedure.interactive(),
+                procedure: Some(procedure),
+            },
+            Self::ScreenEntry(entry) => EntryFacts {
+                label: entry.label(),
+                destination: entry.destination(),
+                parent: entry.parent(),
+                interactive: false,
+                procedure: None,
+            },
+        }
+    }
+
     /// The label the list button draws for this entry.
     #[must_use]
     pub const fn label(self) -> &'static str {
+        self.entry().label
+    }
+
+    /// The header title of the screen this entry opens.
+    ///
+    /// An entry has one name (ADR-0013), so this is its [`Item::label`]; it is
+    /// kept as a distinct accessor for the running screen, whose header reads the
+    /// entry rather than restating it.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        self.entry().label
+    }
+
+    /// The screen this entry opens.
+    #[must_use]
+    pub const fn destination(self) -> Screen {
+        self.entry().destination
+    }
+
+    /// The screen Back returns to from this entry's destination.
+    #[must_use]
+    pub const fn parent(self) -> Option<Screen> {
+        self.entry().parent
+    }
+
+    /// Whether the Procedure this entry starts ends only on an explicit stop.
+    ///
+    /// A submenu and a screen are not Procedures, so they are never interactive.
+    #[must_use]
+    pub const fn interactive(self) -> bool {
+        self.entry().interactive
+    }
+
+    /// The Procedure this entry starts, or `None` for a submenu or a screen.
+    ///
+    /// A caller obtains the Procedure's identity through this rather than
+    /// inferring it from the label or the position.
+    #[must_use]
+    pub const fn as_procedure(self) -> Option<Procedure> {
+        self.entry().procedure
+    }
+}
+
+/// A submenu of the Main Menu, whose entry opens further entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Submenu {
+    /// The Calibrate submenu.
+    Calibrate,
+    /// The Drive Mode submenu.
+    DriveMode,
+    /// The Test Mode submenu.
+    TestMode,
+}
+
+impl Submenu {
+    /// The label the Main Menu button draws for this submenu.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::SystemInfo => "System Info",
             Self::Calibrate => "Calibrate",
             Self::DriveMode => "Drive Mode",
             Self::TestMode => "Test Mode",
-            Self::Motor => "Motor",
-            Self::Mag => "Mag",
-            Self::Distance => "Distance",
+        }
+    }
+
+    /// The submenu screen this entry opens.
+    #[must_use]
+    pub const fn destination(self) -> Screen {
+        match self {
+            Self::Calibrate => Screen::Calibrate,
+            Self::DriveMode => Screen::DriveMode,
+            Self::TestMode => Screen::TestMode,
+        }
+    }
+
+    /// The screen Back returns to, which is the Main Menu for every submenu.
+    #[must_use]
+    pub const fn parent(self) -> Option<Screen> {
+        match self {
+            Self::Calibrate | Self::DriveMode | Self::TestMode => Some(Screen::MainMenu),
+        }
+    }
+}
+
+/// A unit of work the Panel can start.
+///
+/// Ten run today: motor, magnetometer and distance calibration; coast-and-avoid;
+/// and the six test modes. Attempt-straight is modelled the same way but the
+/// firmware does not start it yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Procedure {
+    /// Calibrate: motor calibration, opening the running screen.
+    MotorCalibration,
+    /// Calibrate: magnetometer calibration, opening the running screen.
+    MagCalibration,
+    /// Calibrate: the distance-calibration value screen, after its drive step.
+    DistanceCalibration,
+    /// Drive Mode: coast-and-avoid, opening the running screen.
+    CoastAndAvoid,
+    /// Drive Mode: the attempt-straight value screen, not started yet.
+    AttemptStraight,
+    /// Test Mode: the basic motor test, opening the running screen.
+    BasicMotor,
+    /// Test Mode: the turns test, opening the running screen.
+    Turns,
+    /// Test Mode: the straight drive test, opening the running screen.
+    StraightDrive,
+    /// Test Mode: the arc drive test, opening the running screen.
+    ArcDrive,
+    /// Test Mode: the six-axis IMU test, opening the running screen.
+    Imu6Axis,
+    /// Test Mode: the nine-axis IMU test, opening the running screen.
+    Imu9Axis,
+}
+
+impl Procedure {
+    /// The label the list button draws for this Procedure.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MotorCalibration => "Motor",
+            Self::MagCalibration => "Mag",
+            Self::DistanceCalibration => "Distance",
             Self::CoastAndAvoid => "Coast & Avoid",
             Self::AttemptStraight => "Attempt Straight",
             Self::BasicMotor => "Basic Motor Test",
@@ -72,6 +214,102 @@ impl Item {
             Self::ArcDrive => "Arc Drive",
             Self::Imu6Axis => "IMU Test (6-axis)",
             Self::Imu9Axis => "IMU Test (9-axis)",
+        }
+    }
+
+    /// The screen this Procedure opens.
+    ///
+    /// Distance calibration finishes its drive step before its value-entry screen
+    /// opens, and the deferred attempt-straight is only a value screen; every
+    /// other Procedure opens the running [`Screen::Status`].
+    #[must_use]
+    pub const fn destination(self) -> Screen {
+        match self {
+            Self::DistanceCalibration => Screen::ValueEntry(ValueFlow::DistanceCalibration),
+            Self::AttemptStraight => Screen::ValueEntry(ValueFlow::AttemptStraight),
+            Self::MotorCalibration
+            | Self::MagCalibration
+            | Self::CoastAndAvoid
+            | Self::BasicMotor
+            | Self::Turns
+            | Self::StraightDrive
+            | Self::ArcDrive
+            | Self::Imu6Axis
+            | Self::Imu9Axis => Screen::Status,
+        }
+    }
+
+    /// The screen Back returns to when this Procedure finishes.
+    ///
+    /// A test mode returns to the Test Mode menu it was opened from, both when
+    /// the operator stops it and when a run-to-completion test finishes on its
+    /// own. A calibration returns to the Calibrate submenu and a drive mode to
+    /// the Drive Mode submenu.
+    #[must_use]
+    pub const fn parent(self) -> Option<Screen> {
+        match self {
+            Self::MotorCalibration | Self::MagCalibration | Self::DistanceCalibration => Some(Screen::Calibrate),
+            Self::CoastAndAvoid | Self::AttemptStraight => Some(Screen::DriveMode),
+            Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
+                Some(Screen::TestMode)
+            }
+        }
+    }
+
+    /// The screen this Procedure lands on when it finishes.
+    ///
+    /// This is its parent, or the Main Menu for a Procedure that names none. The
+    /// firmware resolves a finished Procedure's landing screen through this
+    /// rather than naming a screen, so where a finished Procedure lands stays a
+    /// fact of its identity (ADR-0013).
+    #[must_use]
+    pub const fn landing_screen(self) -> Screen {
+        match self.parent() {
+            Some(screen) => screen,
+            None => Screen::MainMenu,
+        }
+    }
+
+    /// Whether this Procedure is one of the three calibrations.
+    #[must_use]
+    pub const fn is_calibration(self) -> bool {
+        matches!(
+            self,
+            Self::MotorCalibration | Self::MagCalibration | Self::DistanceCalibration
+        )
+    }
+
+    /// Whether this Procedure ends only on an explicit stop.
+    ///
+    /// The flag is entry data: a run-to-completion test finishes on its own, while
+    /// an interactive one and coast-and-avoid run until the operator stops them.
+    /// The basic-motor, six-axis and nine-axis tests and coast-and-avoid are
+    /// interactive; the calibrations, the remaining tests and the deferred
+    /// attempt-straight are not.
+    #[must_use]
+    pub const fn interactive(self) -> bool {
+        matches!(
+            self,
+            Self::CoastAndAvoid | Self::BasicMotor | Self::Imu6Axis | Self::Imu9Axis
+        )
+    }
+}
+
+/// A screen that is a Menu Entry but not a unit of work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenEntry {
+    /// Main Menu: the System Info status screen.
+    SystemInfo,
+    /// Test Mode: the Room Scan radar screen.
+    RoomScan,
+}
+
+impl ScreenEntry {
+    /// The label the list button draws for this entry.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SystemInfo => "System Info",
             Self::RoomScan => "Room Scan",
         }
     }
@@ -81,46 +319,53 @@ impl Item {
     pub const fn destination(self) -> Screen {
         match self {
             Self::SystemInfo => Screen::SystemInfo,
-            Self::Calibrate => Screen::Calibrate,
-            Self::DriveMode => Screen::DriveMode,
-            Self::TestMode => Screen::TestMode,
-            Self::Motor => Screen::Placeholder(PlaceholderKind::Motor),
-            Self::Mag => Screen::Placeholder(PlaceholderKind::Mag),
-            Self::Distance => Screen::ValueEntry(ValueFlow::DistanceCalibration),
-            Self::CoastAndAvoid => Screen::Placeholder(PlaceholderKind::CoastAndAvoid),
-            Self::AttemptStraight => Screen::ValueEntry(ValueFlow::AttemptStraight),
-            Self::BasicMotor => Screen::Placeholder(PlaceholderKind::BasicMotor),
-            Self::Turns => Screen::Placeholder(PlaceholderKind::Turns),
-            Self::StraightDrive => Screen::Placeholder(PlaceholderKind::StraightDrive),
-            Self::ArcDrive => Screen::Placeholder(PlaceholderKind::ArcDrive),
-            Self::Imu6Axis => Screen::Placeholder(PlaceholderKind::Imu6Axis),
-            Self::Imu9Axis => Screen::Placeholder(PlaceholderKind::Imu9Axis),
             Self::RoomScan => Screen::RoomScan,
+        }
+    }
+
+    /// The screen Back returns to.
+    #[must_use]
+    pub const fn parent(self) -> Option<Screen> {
+        match self {
+            Self::SystemInfo => Some(Screen::MainMenu),
+            Self::RoomScan => Some(Screen::TestMode),
         }
     }
 }
 
 /// The Main Menu's entries, in display order.
-const MAIN_MENU_ITEMS: [Item; 4] = [Item::SystemInfo, Item::Calibrate, Item::DriveMode, Item::TestMode];
+const MAIN_MENU_ITEMS: [Item; 4] = [
+    Item::ScreenEntry(ScreenEntry::SystemInfo),
+    Item::Submenu(Submenu::Calibrate),
+    Item::Submenu(Submenu::DriveMode),
+    Item::Submenu(Submenu::TestMode),
+];
 
 /// The Calibrate submenu's entries, in display order.
-const CALIBRATE_ITEMS: [Item; 3] = [Item::Motor, Item::Mag, Item::Distance];
+const CALIBRATE_ITEMS: [Item; 3] = [
+    Item::Procedure(Procedure::MotorCalibration),
+    Item::Procedure(Procedure::MagCalibration),
+    Item::Procedure(Procedure::DistanceCalibration),
+];
 
 /// The Drive Mode submenu's entries, in display order.
-const DRIVE_MODE_ITEMS: [Item; 2] = [Item::CoastAndAvoid, Item::AttemptStraight];
+const DRIVE_MODE_ITEMS: [Item; 2] = [
+    Item::Procedure(Procedure::CoastAndAvoid),
+    Item::Procedure(Procedure::AttemptStraight),
+];
 
 /// The Test Mode submenu's entries, in display order.
 ///
 /// Room Scan is the last entry: it opens the sensor's live radar rather than
 /// running a test-mode task, but it shares the menu and its single-active guard.
 const TEST_MODE_ITEMS: [Item; 7] = [
-    Item::BasicMotor,
-    Item::Turns,
-    Item::StraightDrive,
-    Item::ArcDrive,
-    Item::Imu6Axis,
-    Item::Imu9Axis,
-    Item::RoomScan,
+    Item::Procedure(Procedure::BasicMotor),
+    Item::Procedure(Procedure::Turns),
+    Item::Procedure(Procedure::StraightDrive),
+    Item::Procedure(Procedure::ArcDrive),
+    Item::Procedure(Procedure::Imu6Axis),
+    Item::Procedure(Procedure::Imu9Axis),
+    Item::ScreenEntry(ScreenEntry::RoomScan),
 ];
 
 /// Which menu screen the UI is showing.
@@ -134,8 +379,6 @@ pub enum Screen {
     DriveMode,
     /// The Test Mode submenu.
     TestMode,
-    /// A non-navigable placeholder for a leaf, naming the action it would run.
-    Placeholder(PlaceholderKind),
     /// The System Info status screen, rendered from the neutral snapshot.
     SystemInfo,
     /// A draggable value-entry screen for a distance flow.
@@ -154,23 +397,45 @@ pub enum Screen {
 }
 
 impl Screen {
+    /// The Menu Entry whose destination this screen is, if any.
+    ///
+    /// Every screen but the Main Menu and the running screen is a Menu Entry's
+    /// destination. The Main Menu is the root, and the running screen is shared by
+    /// many Procedures, so its parent is held in the active [`StatusView`] and
+    /// resolved by [`crate::Ui`].
+    #[must_use]
+    pub const fn entry(self) -> Option<Item> {
+        match self {
+            Self::MainMenu | Self::Status => None,
+            Self::Calibrate => Some(Item::Submenu(Submenu::Calibrate)),
+            Self::DriveMode => Some(Item::Submenu(Submenu::DriveMode)),
+            Self::TestMode => Some(Item::Submenu(Submenu::TestMode)),
+            Self::SystemInfo => Some(Item::ScreenEntry(ScreenEntry::SystemInfo)),
+            Self::RoomScan => Some(Item::ScreenEntry(ScreenEntry::RoomScan)),
+            Self::ValueEntry(ValueFlow::DistanceCalibration) => Some(Item::Procedure(Procedure::DistanceCalibration)),
+            Self::ValueEntry(ValueFlow::AttemptStraight) => Some(Item::Procedure(Procedure::AttemptStraight)),
+        }
+    }
+
     /// The title shown in the header for this screen.
     ///
-    /// [`Screen::Status`] has no title of its own — [`crate::Ui::title`]
-    /// returns the dynamic title from the active [`StatusView`] instead; this
-    /// fallback is only used if the enum is matched on directly.
+    /// Every screen that is a Menu Entry's destination takes its title from that
+    /// entry, so the header and the button that opened it are one string.
+    /// [`Screen::MainMenu`] is the root, so it names itself; [`Screen::Status`]
+    /// has no title of its own — [`crate::Ui::title`] returns the dynamic title
+    /// from the active [`StatusView`] instead, and this fallback is only used if
+    /// the enum is matched on directly.
     #[must_use]
     pub const fn title(self) -> &'static str {
-        match self {
-            Self::MainMenu => "Main Menu",
-            Self::Calibrate => "Calibrate",
-            Self::DriveMode => "Drive Mode",
-            Self::TestMode => "Test Mode",
-            Self::Placeholder(kind) => kind.title(),
-            Self::SystemInfo => "System Info",
-            Self::ValueEntry(flow) => flow.title(),
-            Self::Status => "Running",
-            Self::RoomScan => "Room Scan",
+        match self.entry() {
+            Some(entry) => entry.title(),
+            // The two screens that are not a Menu Entry's destination name
+            // themselves: the root menu, and the running screen, whose title
+            // comes from its own content instead.
+            None => match self {
+                Self::MainMenu => "Main Menu",
+                _ => "Running",
+            },
         }
     }
 
@@ -180,8 +445,8 @@ impl Screen {
     /// what the screen draws and what a caller resolves through
     /// [`Item::destination`].
     ///
-    /// Placeholder, System Info, status, and value-entry screens are not lists,
-    /// so they have none.
+    /// System Info, status, and value-entry screens are not lists, so they have
+    /// none.
     #[must_use]
     pub const fn items(self) -> &'static [Item] {
         match self {
@@ -189,95 +454,22 @@ impl Screen {
             Self::Calibrate => &CALIBRATE_ITEMS,
             Self::DriveMode => &DRIVE_MODE_ITEMS,
             Self::TestMode => &TEST_MODE_ITEMS,
-            Self::Placeholder(_) | Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan => &[],
+            Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan => &[],
         }
     }
 
     /// The screen Back returns to, or `None` on the Main Menu.
     ///
-    /// [`Screen::Status`]'s parent is held in the active [`StatusView`] and is
-    /// resolved by [`crate::Ui`] rather than here, so this returns `None` for
-    /// it. Room Scan returns to the Test Mode menu it is opened from.
+    /// Every screen that is an entry's destination takes its parent from that
+    /// entry, so the tree has one parent relation rather than a second table.
+    /// [`Screen::Status`] is shared by many Procedures, so its parent is held in
+    /// the active [`StatusView`] and resolved by [`crate::Ui`]; this returns
+    /// `None` for it.
     #[must_use]
     pub const fn parent(self) -> Option<Self> {
-        match self {
-            Self::MainMenu | Self::Status => None,
-            Self::Calibrate | Self::DriveMode | Self::TestMode | Self::SystemInfo => Some(Self::MainMenu),
-            Self::Placeholder(kind) => Some(kind.parent()),
-            Self::ValueEntry(flow) => Some(flow.parent()),
-            Self::RoomScan => Some(Self::TestMode),
-        }
-    }
-}
-
-/// A non-navigable leaf: a placeholder screen naming the action it would run.
-///
-/// These exist so tapping a leaf is visibly acknowledged without performing any
-/// motor, turn, arc, or IMU action.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlaceholderKind {
-    /// Motor calibration.
-    Motor,
-    /// Magnetometer calibration.
-    Mag,
-    /// Coast-and-avoid drive mode.
-    CoastAndAvoid,
-    /// Basic motor test.
-    BasicMotor,
-    /// Turns test.
-    Turns,
-    /// Straight drive test.
-    StraightDrive,
-    /// Arc drive test.
-    ArcDrive,
-    /// Six-axis IMU test.
-    Imu6Axis,
-    /// Nine-axis IMU test.
-    Imu9Axis,
-}
-
-impl PlaceholderKind {
-    /// The header title, reusing the menu label that opened this placeholder.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::Motor => "Motor",
-            Self::Mag => "Mag",
-            Self::CoastAndAvoid => "Coast & Avoid",
-            Self::BasicMotor => "Basic Motor Test",
-            Self::Turns => "Turns Test",
-            Self::StraightDrive => "Straight Drive",
-            Self::ArcDrive => "Arc Drive",
-            Self::Imu6Axis => "IMU Test (6-axis)",
-            Self::Imu9Axis => "IMU Test (9-axis)",
-        }
-    }
-
-    /// A short description of the action that would run.
-    #[must_use]
-    pub const fn body(self) -> &'static str {
-        match self {
-            Self::Motor => "Would run: Motor calibration",
-            Self::Mag => "Would run: Magnetometer calibration",
-            Self::CoastAndAvoid => "Would run: Coast & avoid drive",
-            Self::BasicMotor => "Would run: Basic motor test",
-            Self::Turns => "Would run: Turns test",
-            Self::StraightDrive => "Would run: Straight drive",
-            Self::ArcDrive => "Would run: Arc drive",
-            Self::Imu6Axis => "Would run: IMU test (6-axis)",
-            Self::Imu9Axis => "Would run: IMU test (9-axis)",
-        }
-    }
-
-    /// The submenu this placeholder was opened from.
-    #[must_use]
-    pub const fn parent(self) -> Screen {
-        match self {
-            Self::Motor | Self::Mag => Screen::Calibrate,
-            Self::CoastAndAvoid => Screen::DriveMode,
-            Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
-                Screen::TestMode
-            }
+        match self.entry() {
+            Some(entry) => entry.parent(),
+            None => None,
         }
     }
 }
@@ -292,15 +484,6 @@ pub enum ValueFlow {
 }
 
 impl ValueFlow {
-    /// The header title, matching the menu label that opened this flow.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::DistanceCalibration => "Distance",
-            Self::AttemptStraight => "Attempt Straight",
-        }
-    }
-
     /// The inclusive minimum value.
     #[must_use]
     pub const fn min(self) -> i32 {
@@ -344,15 +527,6 @@ impl ValueFlow {
             Self::DistanceCalibration | Self::AttemptStraight => "cm",
         }
     }
-
-    /// The submenu this flow returns to.
-    #[must_use]
-    pub const fn parent(self) -> Screen {
-        match self {
-            Self::DistanceCalibration => Screen::Calibrate,
-            Self::AttemptStraight => Screen::DriveMode,
-        }
-    }
 }
 
 /// The neutral content of a running/status screen.
@@ -389,6 +563,23 @@ impl StatusView {
             body,
             progress: None,
             parent,
+            finished: false,
+        }
+    }
+
+    /// Build a status view for `procedure`, taking its title and the screen the
+    /// header action returns to from the entry's own identity.
+    ///
+    /// This is the constructor the firmware uses while a Procedure runs, so it
+    /// never restates either a title or a parent. A Procedure with no parent is
+    /// rooted at the Main Menu.
+    #[must_use]
+    pub const fn for_procedure(procedure: Procedure, body: &'static str) -> Self {
+        Self {
+            title: procedure.label(),
+            body,
+            progress: None,
+            parent: procedure.landing_screen(),
             finished: false,
         }
     }

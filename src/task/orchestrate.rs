@@ -44,8 +44,8 @@ async fn handle_event(event: Events) {
         Events::BatteryMeasured { level, voltage } => {
             behavior::battery::handle_battery_measured(level, voltage).await;
         }
-        Events::ObstacleDetected { source, detected } => {
-            behavior::obstacle::handle_obstacle_detected(source, detected).await;
+        Events::ObstacleDetected { source } => {
+            behavior::obstacle::handle_obstacle_detected(source);
         }
         Events::ObstacleAvoidanceAttempted => {
             behavior::obstacle::handle_obstacle_avoidance_attempted();
@@ -54,7 +54,7 @@ async fn handle_event(event: Events) {
             ui::send_ui_event(UiEvent::TestingCompleted).await;
         }
         Events::FloorDropDetected { detected } => {
-            behavior::floor_drop::handle_floor_drop_detected(detected).await;
+            behavior::floor_drop::handle_floor_drop_detected(detected);
         }
     }
 }

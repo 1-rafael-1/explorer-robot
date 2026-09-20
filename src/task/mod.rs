@@ -11,6 +11,7 @@
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
 //! - `behavior` — event-driven behavior handlers (battery, obstacle, floor drop)
 //! - `initialization` — boot-time calibration loading coordination
+//! - `procedure` — the lifecycle the test modes and calibrations call
 //! - `testmode` — on-demand test mode tasks (motor, turns, IMU, drive)
 //! - `startup` — fires Initialize event at boot
 
@@ -25,6 +26,8 @@ pub mod initialization;
 pub mod io;
 pub mod motor_driver;
 pub mod orchestrate;
+/// The lifecycle the test modes and calibrations call.
+pub mod procedure;
 /// Sensor tasks (`IMU`, encoders, `LiDAR` driver, `VL53L0X` stub).
 pub mod sensors;
 pub mod startup;

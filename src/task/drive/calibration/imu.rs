@@ -14,13 +14,11 @@
 use defmt::info;
 use embassy_time::{Duration, Instant, Timer};
 use nalgebra::Vector3;
+use touch_ui::Procedure;
 
-use super::{arm_stop, is_stop_requested, wait_or_stop};
+use super::calibration_lifecycle;
 use crate::{
-    system::{
-        event::{Events, raise_event},
-        state::activity::{self, Activity, CalibrationKind},
-    },
+    system::state::activity,
     task::{
         drive::{
             sensors::data::{clear_mag_measurement, measure_mag_average, subtract_mag, wait_for_mag_event_timeout},
@@ -28,6 +26,7 @@ use crate::{
         },
         io::flash_storage,
         motor_driver::{self, MotorCommand},
+        procedure::Lifecycle,
         sensors::imu as imu_read,
     },
 };
@@ -70,6 +69,11 @@ const MANUAL_PHASES: usize = 3;
 
 /// Countdown before the motor interference phase, in seconds.
 const SETTLE_SECONDS: u64 = 20;
+
+/// The magnetometer calibration's lifecycle: the calibration family's stop latch,
+/// no slot, raising `CalibrationCompleted` on both outcomes. The phase machine,
+/// settle and interference passes stay this module's own body.
+const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::MagCalibration);
 
 /// Ensures IMU readings are stopped (and fusion mode restored) after calibration completes.
 struct ImuReadingsGuard {
@@ -419,7 +423,7 @@ async fn enter_mag_phase(phase: MagCalibrationPhase, detail: Option<&'static str
         .map(|(index, total)| activity::percent_done(usize::from(index).saturating_sub(1), usize::from(total)));
     let line = detail.unwrap_or_else(|| phase.label());
     info!("Mag phase transition -> {} ({})", phase.label(), line);
-    activity::set_running(line, percent).await;
+    LIFECYCLE.phase(line, percent).await;
 }
 
 /// Guide one explicit manual rotation phase and collect coverage.
@@ -445,7 +449,7 @@ async fn measure_mag_rotation_phase(
     let mut last_log_ms: u32 = 0;
 
     loop {
-        if is_stop_requested() {
+        if LIFECYCLE.is_stop_requested() {
             return PhaseResult::Stopped;
         }
 
@@ -513,8 +517,8 @@ async fn measure_mag_rotation_phase(
                 phase.label(),
                 step_coverage.samples
             );
-            activity::set_running("Phase OK", None).await;
-            if wait_or_stop(500).await {
+            LIFECYCLE.phase("Phase OK", None).await;
+            if LIFECYCLE.wait_or_stop(500).await {
                 return PhaseResult::Stopped;
             }
             return PhaseResult::Complete;
@@ -573,18 +577,20 @@ async fn measure_mag_interference(
     let total = INTERFERENCE_STEPS.len();
 
     for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
-        if is_stop_requested() {
+        if LIFECYCLE.is_stop_requested() {
             return None;
         }
         info!("Motor interference step start: {=str}", step.label);
-        activity::set_running(step.label, Some(activity::percent_done(index, total))).await;
+        LIFECYCLE
+            .phase(step.label, Some(activity::percent_done(index, total)))
+            .await;
 
         motor_driver::send_motor_command(MotorCommand::SetTracks {
             left_speed: step.left,
             right_speed: step.right,
         })
         .await;
-        if wait_or_stop(1_000).await {
+        if LIFECYCLE.wait_or_stop(1_000).await {
             return None;
         }
         clear_mag_measurement().await;
@@ -595,7 +601,7 @@ async fn measure_mag_interference(
         info!("Motor interference step done: {=str}", step.label);
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        if wait_or_stop(500).await {
+        if LIFECYCLE.wait_or_stop(500).await {
             return None;
         }
     }
@@ -622,18 +628,20 @@ async fn verify_mag_interference(
     let total = INTERFERENCE_STEPS.len();
 
     for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
-        if is_stop_requested() {
+        if LIFECYCLE.is_stop_requested() {
             return None;
         }
         info!("Motor verify step {}/{}: {=str}", index + 1, total, step.label);
-        activity::set_running(step.label, Some(activity::percent_done(index, total))).await;
+        LIFECYCLE
+            .phase(step.label, Some(activity::percent_done(index, total)))
+            .await;
 
         motor_driver::send_motor_command(MotorCommand::SetTracks {
             left_speed: step.left,
             right_speed: step.right,
         })
         .await;
-        if wait_or_stop(1_000).await {
+        if LIFECYCLE.wait_or_stop(1_000).await {
             return None;
         }
         clear_mag_measurement().await;
@@ -654,7 +662,7 @@ async fn verify_mag_interference(
         }
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        if wait_or_stop(500).await {
+        if LIFECYCLE.wait_or_stop(500).await {
             return None;
         }
     }
@@ -667,13 +675,15 @@ async fn verify_mag_interference(
 ///
 /// Returns `true` when the operator stopped the calibration.
 async fn run_settle_countdown() -> bool {
-    activity::set_running("Hold still, motors soon", Some(0)).await;
+    LIFECYCLE.phase("Hold still, motors soon", Some(0)).await;
     let total = usize::try_from(SETTLE_SECONDS).unwrap_or(1);
 
     for second in 0..SETTLE_SECONDS {
         let elapsed = usize::try_from(second).unwrap_or(0);
-        activity::set_running("Hold still, motors soon", Some(activity::percent_done(elapsed, total))).await;
-        if wait_or_stop(1_000).await {
+        LIFECYCLE
+            .phase("Hold still, motors soon", Some(activity::percent_done(elapsed, total)))
+            .await;
+        if LIFECYCLE.wait_or_stop(1_000).await {
             return true;
         }
     }
@@ -686,8 +696,8 @@ async fn run_settle_countdown() -> bool {
 async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
     info!("Step 2: Magnetometer Calibration (strict phase machine)");
 
-    activity::set_running("Prepare to move", None).await;
-    if wait_or_stop(3_000).await {
+    LIFECYCLE.phase("Prepare to move", None).await;
+    if LIFECYCLE.wait_or_stop(3_000).await {
         return Outcome::Stopped;
     }
 
@@ -785,8 +795,8 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
 async fn run_mag_calibration() {
     info!("=== Starting IMU Mag Calibration ===");
 
-    arm_stop().await;
-    activity::begin(Activity::Calibration(CalibrationKind::Mag), "Initializing", false).await;
+    LIFECYCLE.arm().await;
+    let _ = LIFECYCLE.start("Initializing").await;
 
     let _imu_guard =
         ImuReadingsGuard::start_with_fusion_mode(imu_read::DmpFusionMode::Axis9, imu_read::DEFAULT_FUSION_MODE);
@@ -799,13 +809,12 @@ async fn run_mag_calibration() {
         Outcome::Success(result) => result,
         Outcome::Incomplete(reason) => {
             info!("Mag calibration failed; keeping previous values");
-            activity::fail(reason).await;
-            raise_event(Events::CalibrationCompleted).await;
+            LIFECYCLE.fail(reason).await;
             return;
         }
         Outcome::Stopped => {
             info!("Mag calibration stopped by the operator");
-            activity::clear().await;
+            LIFECYCLE.abandon().await;
             return;
         }
     };
@@ -835,7 +844,7 @@ async fn run_mag_calibration() {
     );
     info!("  Motor interference patterns captured");
 
-    activity::set_running("Saving to flash", None).await;
+    LIFECYCLE.phase("Saving to flash", None).await;
 
     flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
         flash_storage::CalibrationDataKind::ImuFlags(imu_flags),
@@ -847,8 +856,7 @@ async fn run_mag_calibration() {
     info!("Applying mag calibration to IMU task");
     imu_read::load_mag_calibration(mag_cal);
 
-    activity::complete("Calibration saved").await;
-    raise_event(Events::CalibrationCompleted).await;
+    LIFECYCLE.complete("Calibration saved").await;
     Timer::after(Duration::from_secs(2)).await;
 
     info!("=== IMU Mag Calibration Complete ===");

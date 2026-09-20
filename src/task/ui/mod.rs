@@ -35,14 +35,14 @@ use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use touch_ui::{
-    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Screen, SensorState, StatusView, SystemInfo,
-    TAP_MIN_DURATION_MS, TICK_MS, Ui, ValueFlow, geometry,
+    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
+    StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
     system::state::{
         CalibrationStatus,
-        activity::{self, Activity, CalibrationKind, DriveModeKind, Snapshot, Stage, TestKind},
+        activity::{self, Activity, Snapshot, Stage},
         calibration, perception, power,
     },
     task::{
@@ -65,7 +65,8 @@ use crate::{
 pub enum UiEvent {
     /// Request to show the main menu (from initialisation or the boot gate).
     ShowMainMenu,
-    /// Testing sequence finished — show the main menu.
+    /// Testing sequence finished; the landing screen comes from the finished
+    /// Procedure's identity.
     TestingCompleted,
     /// Calibration procedure finished; the outcome is in the activity state.
     CalibrationCompleted,
@@ -403,31 +404,31 @@ async fn render_and_flush(panel: &mut Panel, ui: &Ui) -> Result<(), ()> {
     panel.flush().await
 }
 
+/// The screen a just-finished Procedure lands on, read from its identity.
+///
+/// The Activity State still names the Procedure when this is called, so the
+/// landing screen comes from the Menu Entry that started it rather than from a
+/// literal. A completion with no recorded Procedure lands on the Main Menu.
+async fn finished_landing() -> Screen {
+    activity::snapshot()
+        .await
+        .procedure()
+        .map_or(Screen::MainMenu, Procedure::landing_screen)
+}
+
 /// Apply a lifecycle event to the model.
 async fn handle_event(ui: &mut Ui, event: UiEvent) {
     match event {
         UiEvent::ShowMainMenu => *ui = Ui::new(),
         UiEvent::TestingCompleted => {
+            let landing = finished_landing().await;
             activity::clear().await;
             *ui = Ui::new();
+            ui.show_screen(landing);
         }
         UiEvent::CalibrationCompleted => hold_or_leave_calibration(ui).await,
         UiEvent::DistanceDriveFinished => enter_distance_entry(ui).await,
     }
-}
-
-/// Open a Main Menu entry by feeding the model a synthetic tap at its centre.
-///
-/// The index is resolved from [`Screen::MainMenu`]'s entries, so the synthetic
-/// tap follows the entry's identity rather than a hard-coded position.
-fn tap_main_menu_item(ui: &mut Ui, item: Item) {
-    let Some(index) = Screen::MainMenu.items().iter().position(|&entry| entry == item) else {
-        return;
-    };
-    let target = geometry::menu_item_rect(index, 0).center();
-    let now_ms = Instant::now().as_millis();
-    let _ = ui.pointer_down(target, now_ms);
-    let _ = ui.pointer_up(now_ms + TAP_MIN_DURATION_MS);
 }
 
 // ── Activation handling ─────────────────────────────────────────────────────────
@@ -437,7 +438,8 @@ fn tap_main_menu_item(ui: &mut Ui, item: Item) {
 ///
 /// The model has already performed its own navigation (opening a submenu, going
 /// back from a value screen), so this only starts, stops or saves things, and
-/// replaces the screen when a running procedure takes over from a placeholder.
+/// replaces the screen when a running procedure takes over from the leaf's own
+/// destination.
 async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32, activated: Option<Hit>) {
     match (screen_before, activated) {
         // A menu entry carries its identity, so what it starts does not depend on
@@ -466,43 +468,33 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
 /// silent change of which procedure a tap starts.
 async fn handle_menu_item(ui: &mut Ui, item: Item) {
     match item {
-        Item::RoomScan => enter_room_scan(ui),
-        Item::BasicMotor | Item::Turns | Item::StraightDrive | Item::ArcDrive | Item::Imu6Axis | Item::Imu9Axis => {
-            start_test(ui, item).await;
-        }
-        Item::Motor | Item::Mag | Item::Distance => start_calibration(ui, item).await,
-        Item::CoastAndAvoid => start_coast_and_avoid(ui).await,
-        // The entries the model opens on its own, and the attempt-straight value
-        // that only feeds the deferred mode: nothing starts here.
-        Item::SystemInfo | Item::Calibrate | Item::DriveMode | Item::TestMode | Item::AttemptStraight => {}
+        Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui),
+        Item::Procedure(procedure) => match procedure {
+            Procedure::BasicMotor
+            | Procedure::Turns
+            | Procedure::StraightDrive
+            | Procedure::ArcDrive
+            | Procedure::Imu6Axis
+            | Procedure::Imu9Axis => start_test(ui, procedure).await,
+            Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
+                start_calibration(ui, procedure).await;
+            }
+            Procedure::CoastAndAvoid => start_coast_and_avoid(ui).await,
+            // The attempt-straight value only feeds the deferred mode: nothing
+            // starts here.
+            Procedure::AttemptStraight => {}
+        },
+        // The entries the model opens on its own: nothing starts here.
+        Item::Submenu(_) | Item::ScreenEntry(ScreenEntry::SystemInfo) => {}
     }
 }
 
-/// Start the test-mode procedure behind `item`.
+/// Start the test-mode `procedure`.
 ///
-/// The identity maps to the activity's [`TestKind`]. Every other entry belongs to
-/// another screen and is not a test, so it starts nothing.
-async fn start_test(ui: &mut Ui, item: Item) {
-    let kind = match item {
-        Item::BasicMotor => TestKind::BasicMotor,
-        Item::Turns => TestKind::Turns,
-        Item::StraightDrive => TestKind::StraightDrive,
-        Item::ArcDrive => TestKind::ArcDrive,
-        Item::Imu6Axis => TestKind::Imu6Axis,
-        Item::Imu9Axis => TestKind::Imu9Axis,
-        Item::SystemInfo
-        | Item::Calibrate
-        | Item::DriveMode
-        | Item::TestMode
-        | Item::Motor
-        | Item::Mag
-        | Item::Distance
-        | Item::CoastAndAvoid
-        | Item::AttemptStraight
-        | Item::RoomScan => return,
-    };
-
-    testmode::start(kind).await;
+/// The producer records the identity in the activity state, so the running screen
+/// names it from the entry rather than from a parallel kind enumeration.
+async fn start_test(ui: &mut Ui, procedure: Procedure) {
+    testmode::start(procedure).await;
 
     let snapshot = activity::snapshot().await;
     ui.show_status(status_view(&snapshot));
@@ -537,42 +529,30 @@ fn leave_room_scan() {
     ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Release).ok();
 }
 
-/// Start the calibration procedure behind `item`.
+/// Start the calibration `procedure`.
 ///
-/// The identity maps to the concrete calibration flow. Every other entry belongs
-/// to another screen and is not a calibration, so it starts nothing.
-async fn start_calibration(ui: &mut Ui, item: Item) {
-    match item {
-        Item::Motor => {
+/// The identity maps to the concrete calibration flow, and the running view takes
+/// its title and parent from that identity. Every other Procedure belongs to
+/// another screen and is not a calibration, so it starts nothing.
+async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
+    match procedure {
+        Procedure::MotorCalibration => {
             drive::send_drive_command(DriveCommand::RunMotorCalibration).await;
-            ui.show_status(StatusView::new(
-                CalibrationKind::Motor.title(),
-                "Starting",
-                Screen::Calibrate,
-            ));
+            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
         }
-        Item::Mag => {
+        Procedure::MagCalibration => {
             drive::send_drive_command(DriveCommand::RunImuCalibration(ImuCalibrationKind::Mag)).await;
-            ui.show_status(StatusView::new(
-                CalibrationKind::Mag.title(),
-                "Starting",
-                Screen::Calibrate,
-            ));
+            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
         }
-        Item::Distance => start_distance_calibration(ui).await,
-        Item::SystemInfo
-        | Item::Calibrate
-        | Item::DriveMode
-        | Item::TestMode
-        | Item::CoastAndAvoid
-        | Item::AttemptStraight
-        | Item::BasicMotor
-        | Item::Turns
-        | Item::StraightDrive
-        | Item::ArcDrive
-        | Item::Imu6Axis
-        | Item::Imu9Axis
-        | Item::RoomScan => {}
+        Procedure::DistanceCalibration => start_distance_calibration(ui).await,
+        Procedure::CoastAndAvoid
+        | Procedure::AttemptStraight
+        | Procedure::BasicMotor
+        | Procedure::Turns
+        | Procedure::StraightDrive
+        | Procedure::ArcDrive
+        | Procedure::Imu6Axis
+        | Procedure::Imu9Axis => {}
     }
 }
 
@@ -584,12 +564,7 @@ async fn start_calibration(ui: &mut Ui, item: Item) {
 /// cannot be brought up, the helper records the failure reason and the screen
 /// holds it until the operator dismisses it back to the Drive Mode menu.
 async fn start_coast_and_avoid(ui: &mut Ui) {
-    activity::begin(
-        Activity::DriveMode(DriveModeKind::CoastAndAvoid),
-        "Acquiring LiDAR",
-        true,
-    )
-    .await;
+    activity::begin(Activity::Procedure(Procedure::CoastAndAvoid), "Acquiring LiDAR").await;
     let snapshot = activity::snapshot().await;
     ui.show_status(status_view(&snapshot));
     COAST_AVOID_REQUEST.try_send(()).ok();
@@ -610,11 +585,7 @@ async fn record_attempt_straight(value_cm: i32) {
 /// The step runs on its own task and reports back through the activity state and
 /// a [`UiEvent`], so the panel stays live while the robot drives.
 async fn start_distance_calibration(ui: &mut Ui) {
-    ui.show_status(StatusView::new(
-        CalibrationKind::Distance.title(),
-        "Starting",
-        Screen::Calibrate,
-    ));
+    ui.show_status(StatusView::for_procedure(Procedure::DistanceCalibration, "Starting"));
 
     drive_calibration::distance::begin().await;
     DISTANCE_DRIVE_REQUEST.send(()).await;
@@ -656,15 +627,17 @@ async fn hold_or_leave_calibration(ui: &mut Ui) {
     let snapshot = activity::snapshot().await;
 
     match snapshot.activity {
-        Activity::Calibration(_) if snapshot.stage == Stage::Failed => {
-            ui.set_status(status_view(&snapshot));
+        Activity::Procedure(procedure) if procedure.is_calibration() => {
+            if snapshot.stage == Stage::Failed {
+                ui.set_status(status_view(&snapshot));
+            } else {
+                let landing = procedure.landing_screen();
+                activity::clear().await;
+                *ui = Ui::new();
+                ui.show_screen(landing);
+            }
         }
-        Activity::Calibration(_) => {
-            activity::clear().await;
-            *ui = Ui::new();
-            tap_main_menu_item(ui, Item::Calibrate);
-        }
-        Activity::Booting | Activity::Test(_) | Activity::Idle | Activity::DriveMode(_) => {
+        Activity::Procedure(_) | Activity::Booting | Activity::Idle => {
             // A stopped or already-dismissed calibration: the panel has moved on.
         }
     }
@@ -696,10 +669,13 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// runs, then streaming once it settles, without the controller formatting text
 /// of its own.
 fn status_view(snapshot: &Snapshot) -> StatusView {
-    let view = StatusView::new(
-        snapshot.title(),
-        status_body(snapshot),
-        status_parent(snapshot.activity),
+    // A running Procedure names itself: its title and where Stop returns both come
+    // from the Menu Entry that started it. The boot flow and the idle state have no
+    // entry, so they fall back to their own title and the Main Menu.
+    let body = status_body(snapshot);
+    let view = snapshot.procedure().map_or_else(
+        || StatusView::new(snapshot.title(), body, Screen::MainMenu),
+        |procedure| StatusView::for_procedure(procedure, body),
     );
     let view = snapshot.percent.map_or(view, |percent| view.with_progress(percent));
     if matches!(snapshot.stage, Stage::Complete | Stage::Failed) {
@@ -716,10 +692,10 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
 /// label) takes over the line.
 fn status_body(snapshot: &Snapshot) -> &'static str {
     match snapshot.activity {
-        Activity::DriveMode(_) if snapshot.stage != Stage::Failed => map_sensor_state(lidar::status()).label(),
-        Activity::Booting | Activity::Test(_) | Activity::Calibration(_) | Activity::Idle | Activity::DriveMode(_) => {
-            snapshot.detail
+        Activity::Procedure(Procedure::CoastAndAvoid) if snapshot.stage != Stage::Failed => {
+            map_sensor_state(lidar::status()).label()
         }
+        Activity::Idle | Activity::Booting | Activity::Procedure(_) => snapshot.detail,
     }
 }
 
@@ -730,21 +706,6 @@ const fn map_sensor_state(status: LidarStatus) -> SensorState {
         LidarStatus::Warming => SensorState::Warming,
         LidarStatus::Streaming => SensorState::Streaming,
         LidarStatus::Failed => SensorState::Failed,
-    }
-}
-
-/// The screen a running screen's Stop returns to.
-///
-/// A run-to-completion test ends on the main menu, and its Stop goes there too. An
-/// interactive test runs until stopped, so Stop returns to the test menu it was
-/// opened from; a drive mode returns to the Drive Mode menu, and every calibration
-/// to the Calibrate submenu.
-const fn status_parent(activity: Activity) -> Screen {
-    match activity {
-        Activity::Test(kind) if kind.is_interactive() => Screen::TestMode,
-        Activity::Calibration(_) => Screen::Calibrate,
-        Activity::DriveMode(_) => Screen::DriveMode,
-        Activity::Booting | Activity::Test(_) | Activity::Idle => Screen::MainMenu,
     }
 }
 
@@ -773,12 +734,13 @@ async fn refresh_screens(ui: &mut Ui) -> bool {
 ///
 /// The radar comes from the perception snapshot and is `None` while no snapshot
 /// exists — before the sensor warms or after it is released — which the screen
-/// draws as "No data", never as an empty room. The caption comes from the
-/// sensor's lock-free lifecycle status.
+/// draws as "No data", never as an empty room. The cloud crosses owned with its
+/// sequence as the change token, so an unchanged sequence costs one counter
+/// comparison and no copy of the slot array (ADR-0016). The caption comes from
+/// the sensor's lock-free lifecycle status.
 async fn refresh_room_scan(ui: &mut Ui) -> bool {
     let mut redraw = ui.set_sensor_state(map_sensor_state(lidar::status()));
-    let slots = perception::get_lidar_snapshot().await.map(|cloud| *cloud.slots());
-    redraw |= ui.set_radar(slots);
+    redraw |= perception::with_lidar(|cloud| ui.set_radar(cloud.map(|c| (c.slots(), c.sequence())))).await;
     redraw
 }
 

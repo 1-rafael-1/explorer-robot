@@ -25,17 +25,16 @@
 
 use defmt::info;
 use embassy_time::{Duration, Timer};
+use touch_ui::Procedure;
 
-use super::{arm_stop, is_stop_requested, wait_or_stop};
+use super::calibration_lifecycle;
 use crate::{
-    system::{
-        event::{Events, raise_event},
-        state::activity::{self, Activity, CalibrationKind},
-    },
+    system::state::activity,
     task::{
         drive::sensors::data::{clear_encoder_measurement, wait_for_encoder_event_timeout},
         io::flash_storage,
         motor_driver::{self, MotorCalibration, MotorCommand},
+        procedure::Lifecycle,
         sensors::encoders as encoder_read,
     },
 };
@@ -48,6 +47,10 @@ const CALIBRATION_SAMPLE_DURATION_MS: u64 = 1000;
 const CALIBRATION_SPEED: i8 = 60;
 /// Steps the progress percent divides the procedure into.
 const STEPS: usize = 4;
+
+/// The motor calibration's lifecycle: the calibration family's stop latch, no
+/// slot, raising `CalibrationCompleted` on both outcomes.
+const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::MotorCalibration);
 
 /// The track under calibration.
 #[derive(Clone, Copy)]
@@ -67,8 +70,8 @@ enum Side {
 pub async fn run_motor_calibration() {
     info!("=== Starting Motor Calibration (2-motor) ===");
 
-    arm_stop().await;
-    activity::begin(Activity::Calibration(CalibrationKind::Motor), "Enabling drivers", false).await;
+    LIFECYCLE.arm().await;
+    let _ = LIFECYCLE.start("Enabling drivers").await;
 
     // Enable motor drivers (take out of standby).
     info!("Enabling motor driver");
@@ -94,7 +97,9 @@ pub async fn run_motor_calibration() {
 
     // ── Step 3: Compute calibration factors ──────────────────────────────────
     info!("Step 3: Computing calibration factors");
-    activity::set_running("Compute factors", Some(activity::percent_done(3, STEPS))).await;
+    LIFECYCLE
+        .phase("Compute factors", Some(activity::percent_done(3, STEPS)))
+        .await;
 
     if left_pulses == 0 && right_pulses == 0 {
         info!("  ERROR: Both tracks show zero counts — calibration cannot proceed");
@@ -133,7 +138,9 @@ pub async fn run_motor_calibration() {
 
     // ── Step 4: Save calibration ────────────────────────────────────────────
     info!("Step 4: Saving calibration");
-    activity::set_running("Save to flash", Some(activity::percent_done(4, STEPS))).await;
+    LIFECYCLE
+        .phase("Save to flash", Some(activity::percent_done(4, STEPS)))
+        .await;
 
     // Validate factors.
     let all_valid = left_factor > 0.0 && left_factor <= 1.0 && right_factor > 0.0 && right_factor <= 1.0;
@@ -163,8 +170,7 @@ pub async fn run_motor_calibration() {
         "motor calibration factors: left={=f32} right={=f32}",
         calibration.left_factor, calibration.right_factor
     );
-    activity::complete("Calibration saved").await;
-    raise_event(Events::CalibrationCompleted).await;
+    LIFECYCLE.complete("Calibration saved").await;
 }
 
 /// Measure one track alone, returning its pulse count, or `None` if the operator
@@ -176,7 +182,9 @@ async fn measure_track(side: Side, step: usize) -> Option<u16> {
     };
 
     info!("{}", phase);
-    activity::set_running(phase, Some(activity::percent_done(step - 1, STEPS))).await;
+    LIFECYCLE
+        .phase(phase, Some(activity::percent_done(step - 1, STEPS)))
+        .await;
 
     // Stop, reset, clear, then restart for clean measurement.
     encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
@@ -187,7 +195,7 @@ async fn measure_track(side: Side, step: usize) -> Option<u16> {
     encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
     Timer::after(Duration::from_millis(200)).await;
 
-    if is_stop_requested() {
+    if LIFECYCLE.is_stop_requested() {
         return None;
     }
 
@@ -198,7 +206,7 @@ async fn measure_track(side: Side, step: usize) -> Option<u16> {
     })
     .await;
 
-    if wait_or_stop(CALIBRATION_SAMPLE_DURATION_MS).await {
+    if LIFECYCLE.wait_or_stop(CALIBRATION_SAMPLE_DURATION_MS).await {
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
         return None;
     }
@@ -219,7 +227,7 @@ async fn measure_track(side: Side, step: usize) -> Option<u16> {
     );
 
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    if wait_or_stop(CALIBRATION_COAST_DURATION_MS).await {
+    if LIFECYCLE.wait_or_stop(CALIBRATION_COAST_DURATION_MS).await {
         return None;
     }
 
@@ -233,7 +241,7 @@ async fn finish_stopped() {
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    activity::clear().await;
+    LIFECYCLE.abandon().await;
 }
 
 /// Release the hardware and record why the procedure could not continue.
@@ -241,6 +249,5 @@ async fn fail_and_stop(reason: &'static str) {
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    activity::fail(reason).await;
-    raise_event(Events::CalibrationCompleted).await;
+    LIFECYCLE.fail(reason).await;
 }

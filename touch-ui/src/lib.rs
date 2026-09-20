@@ -67,7 +67,7 @@ pub mod widgets;
 
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit};
-pub use screens::{Item, PlaceholderKind, Screen, StatusView, ValueFlow};
+pub use screens::{Item, Procedure, Screen, ScreenEntry, StatusView, Submenu, ValueFlow};
 pub use sensor::SensorState;
 pub use system_info::{CalibrationStatus, SystemInfo};
 pub use ui::{DRAG_RENDER_MS, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, TICK_MS, Ui};

@@ -36,12 +36,12 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-use coin_d6::{CoinD6, Config, Scan, WarmupConfig};
+use coin_d6::{AggregationConfig, CoinD6, Config, Scan, WarmupConfig, aggregate};
 use defmt::{Debug2Format, info, warn};
 use embassy_rp::{gpio::Output, uart::BufferedUart};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer, with_timeout};
-use lidar_cloud::Cloud;
+use lidar_cloud::{Cloud, SLOT_WIDTH_DEG};
 use static_cell::StaticCell;
 
 use crate::system::{
@@ -455,16 +455,20 @@ async fn stream_scans(
 
 /// Map one revolution into a cloud, publish it, and drive the obstacle edge.
 async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<bool>) {
-    let cloud = Cloud::from_spin(scan, sequence);
+    let config = AggregationConfig {
+        resolution_deg: SLOT_WIDTH_DEG,
+        ..AggregationConfig::default()
+    };
+    let reduction = aggregate::<_, { lidar_cloud::SLOTS }>(core::slice::from_ref(scan), &config);
+    let cloud = Cloud::from_reduction(&reduction, sequence);
     let detected = cloud.front_sector_obstacle();
 
     perception::update_lidar_points(cloud).await;
 
     if *last_obstacle != Some(detected) {
-        perception::set_lidar_obstacle(detected).await;
+        perception::set_lidar_obstacle(detected);
         raise_event(Events::ObstacleDetected {
             source: ObstacleSource::Lidar,
-            detected,
         })
         .await;
         *last_obstacle = Some(detected);
@@ -493,7 +497,6 @@ async fn clear_stale_state(last_obstacle: &mut Option<bool>) {
     if perception::clear_lidar_state().await == ChangeDetected::ChangedToCleared {
         raise_event(Events::ObstacleDetected {
             source: ObstacleSource::Lidar,
-            detected: false,
         })
         .await;
     }

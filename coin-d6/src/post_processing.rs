@@ -11,7 +11,7 @@
 
 use core::num::NonZeroU16;
 
-use crate::types::{AggregationConfig, AggregationMethod, Point, Scan};
+use crate::types::{AggregationConfig, AggregationMethod, Point, Reduction, Scan};
 
 /// Numerator constant of the vendor's distance-dependent angle correction.
 pub const ANGLE_CORRECTION_COEFF: f32 = 19.16;
@@ -34,7 +34,12 @@ pub fn angle_correction_deg(distance_mm: NonZeroU16) -> f32 {
     libm::atanf(ANGLE_CORRECTION_COEFF * (d - ANGLE_CORRECTION_ZERO_MM) / (ANGLE_CORRECTION_ZERO_MM * d))
 }
 
-/// Reduce multiple revolutions to a single sanitized [`Scan`].
+/// Reduce multiple revolutions to a single sanitized [`Reduction`].
+///
+/// The input capacity `N` bounds the native scans; the output bucket count is
+/// the independent constant `BUCKETS`. A caller therefore names its own bucket
+/// count rather than borrowing the scan's capacity, and a bucket count smaller
+/// than the caller's slot count cannot be requested.
 ///
 /// Each revolution is reduced **by angle**, not by index: points are assigned to
 /// fixed-width angular buckets of width [`AggregationConfig::resolution_deg`],
@@ -56,19 +61,22 @@ pub fn angle_correction_deg(distance_mm: NonZeroU16) -> f32 {
 /// (`distance_mm == None`, `intensity == 0`); otherwise the valid distances and
 /// intensities are reduced with the configured [`AggregationMethod`].
 ///
-/// The output is a fixed grid of `bucket_count` points (one per bucket), sorted
-/// by bearing, with each point's angle set to its bucket's lower edge (the
-/// device's native angle for that bucket). An empty input slice yields an empty
-/// [`Scan`].
+/// The output is a fixed grid of `min(ceil(360 / resolution), BUCKETS)` points
+/// (one per bucket), sorted by bearing, with each point's angle set to its
+/// bucket's lower edge (the device's native angle for that bucket). An empty
+/// input slice yields an empty [`Reduction`].
 #[must_use]
-pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) -> Scan<N> {
+pub fn aggregate<const N: usize, const BUCKETS: usize>(
+    scans: &[Scan<N>],
+    config: &AggregationConfig,
+) -> Reduction<BUCKETS> {
     if scans.is_empty() {
-        return Scan::new();
+        return Reduction::new();
     }
 
-    let (bins, resolution) = effective_grid::<N>(config.resolution_deg);
+    let (bins, resolution) = effective_grid::<BUCKETS>(config.resolution_deg);
 
-    let mut out = Scan::new();
+    let mut out = Reduction::<BUCKETS>::new();
     out.len = bins;
 
     for bin in 0..bins {
@@ -86,22 +94,22 @@ pub fn aggregate<const N: usize>(scans: &[Scan<N>], config: &AggregationConfig) 
 
 /// The number of angular buckets `aggregate` emits and the effective bin width.
 ///
-/// `ceil(360 / resolution)` buckets are used when they fit within `N`. If that
-/// exceeds `N`, the grid is coarsened to `N` buckets of width `360 / N` so the
-/// full `[0, 360)` range is still represented rather than silently dropping
-/// higher-angle points.
+/// `ceil(360 / resolution)` buckets are used when they fit within `BUCKETS`. If
+/// that exceeds `BUCKETS`, the grid is coarsened to `BUCKETS` buckets of width
+/// `360 / BUCKETS` so the full `[0, 360)` range is still represented rather than
+/// silently dropping higher-angle points.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-fn effective_grid<const N: usize>(resolution_deg: f32) -> (usize, f32) {
+fn effective_grid<const BUCKETS: usize>(resolution_deg: f32) -> (usize, f32) {
     let resolution = sanitise_resolution(resolution_deg);
     let exact_bins = libm::ceilf(360.0 / resolution);
-    if exact_bins <= N as f32 {
+    if exact_bins <= BUCKETS as f32 {
         (exact_bins as usize, resolution)
     } else {
-        (N, 360.0 / N as f32)
+        (BUCKETS, 360.0 / BUCKETS as f32)
     }
 }
 

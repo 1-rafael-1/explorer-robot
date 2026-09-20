@@ -12,9 +12,10 @@
 //! matching the bench radar example (ADR-0012). A bin
 //! with no valid return is `None` — never a distance.
 //!
-//! The angular reduction itself is **not new code**: [`Cloud::from_spin`] runs
-//! the driver's existing by-angle aggregation at a one-degree bucket over a
-//! single revolution, so the driver's nearest-valid-return rule *is* the grid.
+//! The angular reduction itself is **not new code**: [`Cloud::from_reduction`]
+//! maps the driver's by-angle [`Reduction`] — produced by the firmware at a
+//! one-degree bucket — into the grid, so the driver's nearest-valid-return rule
+//! *is* the grid. The native scan type never reaches this crate.
 //!
 //! # No return is not clear
 //!
@@ -26,10 +27,19 @@
 #![no_std]
 #![warn(missing_docs)]
 
-use coin_d6::{AggregationConfig, Scan, aggregate};
+use coin_d6::Reduction;
 
 /// Number of one-degree slots in a [`Cloud`].
 pub const SLOTS: usize = 360;
+
+/// Angular width of one [`Cloud`] slot, in degrees.
+///
+/// The cloud is a one-degree grid, so this is also the reduction resolution a
+/// caller must reduce scans onto before [`Cloud::from_reduction`]. Reducing onto
+/// any other grid would place returns in buckets that do not match the slot
+/// convention, so the grid has this one home rather than being restated at each
+/// call site. [`SLOTS`] slots of this width cover the full circle.
+pub const SLOT_WIDTH_DEG: f32 = 1.0;
 
 /// The COIN-D6's mounting rotation, in degrees.
 ///
@@ -69,32 +79,32 @@ impl Cloud {
     /// Build a cloud directly from per-slot distances, in centimetres.
     ///
     /// This is for known-geometry clouds: the crate's host tests build fixed
-    /// scenes with it, since [`Cloud::from_spin`] only accepts a real driver
-    /// revolution. Real scans go through [`Cloud::from_spin`].
+    /// scenes with it, since [`Cloud::from_reduction`] only accepts a real driver
+    /// reduction. Real scans go through [`Cloud::from_reduction`].
     #[must_use]
     pub const fn from_slots(distances_cm: [Option<f32>; SLOTS], sequence: u64) -> Self {
         Self { distances_cm, sequence }
     }
 
-    /// Map one raw revolution into a cloud, applying the mounting offset.
+    /// Map a by-angle reduction into a cloud, applying the mounting offset.
     ///
-    /// The revolution is reduced by angle at a one-degree bucket with the
-    /// driver's existing [`aggregate`], and each bucket's millimetres become
-    /// centimetres at this single boundary. Native bearing `b` lands in slot
-    /// `(b - MOUNTING_OFFSET_DEG)` so slot zero is dead ahead.
+    /// `reduction` is the driver's [`Reduction`] over a one-degree bucket,
+    /// produced by the firmware as the grid the robot reasons in. Each bucket's
+    /// millimetres become centimetres at this single boundary. Native bearing `b`
+    /// lands in slot `(b - MOUNTING_OFFSET_DEG)` so slot zero is dead ahead; read
+    /// the other way, slot `slot` reads native bucket
+    /// `(slot + MOUNTING_OFFSET_DEG) mod SLOTS`.
+    ///
+    /// The bucket count is [`SLOTS`] by construction, so a mismatch is a compile
+    /// error rather than a panic. A bucket past the reduction's emitted grid
+    /// (`len`) degrades to a no-return rather than being read as default data.
     #[must_use]
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub fn from_spin<const N: usize>(scan: &Scan<N>, sequence: u64) -> Self {
-        let config = AggregationConfig {
-            resolution_deg: 1.0,
-            ..AggregationConfig::default()
-        };
-        let reduced = aggregate(core::slice::from_ref(scan), &config);
-
+    pub fn from_reduction(reduction: &Reduction<SLOTS>, sequence: u64) -> Self {
         let mut distances_cm = [None; SLOTS];
         for (slot, out) in distances_cm.iter_mut().enumerate() {
             // `slot` and the offset are both within a few hundred, so the cast
@@ -102,7 +112,9 @@ impl Cloud {
             // a half and truncate; the result is in `0..360`.
             let native = normalise_angle(slot as f32 + MOUNTING_OFFSET_DEG) + 0.5;
             let native = native as usize % SLOTS;
-            if let Some(distance_mm) = reduced.points[native].distance_mm {
+            if native < reduction.len
+                && let Some(distance_mm) = reduction.points[native].distance_mm
+            {
                 *out = Some(f32::from(distance_mm.get()) / MM_PER_CM);
             }
         }

@@ -19,17 +19,17 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::info;
+use touch_ui::Procedure;
 
-use super::{arm_stop, wait_or_stop};
+use super::calibration_lifecycle;
 use crate::{
-    system::state::{
-        CalibrationStatus,
-        activity::{self, Activity, CalibrationKind},
-        calibration,
-    },
-    task::drive::{
-        CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-        DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
+    system::state::{CalibrationStatus, activity, calibration},
+    task::{
+        drive::{
+            CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
+            DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
+        },
+        procedure::Lifecycle,
     },
 };
 
@@ -56,6 +56,11 @@ const MAX_FACTOR: f32 = 10.0;
 /// `f32::from_bits` of it is a NaN, which no computed factor can be, so the
 /// sentinel is unambiguous without a second flag or a lock.
 const NO_BACKUP: u32 = u32::MAX;
+
+/// The distance calibration's lifecycle: the calibration family's stop latch, no
+/// slot, and no completion event — its flow crosses the value-entry screen, so the
+/// Panel, not the procedure, reports the finished calibration.
+const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::DistanceCalibration);
 
 /// The distance factor that was in force before the calibration started.
 static PREVIOUS_FACTOR: AtomicU32 = AtomicU32::new(NO_BACKUP);
@@ -137,29 +142,26 @@ fn take_previous_factor() -> Option<f32> {
 /// Stop latches the calibration stop and interrupts the drive, and a stopped step
 /// restores the previous factor and clears the activity.
 pub async fn run_drive_step() -> DriveOutcome {
-    arm_stop().await;
-    activity::begin(
-        Activity::Calibration(CalibrationKind::Distance),
-        "Driving 150 cm",
-        false,
-    )
-    .await;
+    LIFECYCLE.arm().await;
+    let _ = LIFECYCLE.start("Driving 150 cm").await;
 
     for second in 0..COUNTDOWN_SECONDS {
         let elapsed = usize::try_from(second).unwrap_or(0);
         let total = usize::try_from(COUNTDOWN_SECONDS).unwrap_or(1);
-        activity::set_running("Get ready", Some(activity::percent_done(elapsed, total))).await;
-        if wait_or_stop(1_000).await {
+        LIFECYCLE
+            .phase("Get ready", Some(activity::percent_done(elapsed, total)))
+            .await;
+        if LIFECYCLE.wait_or_stop(1_000).await {
             return stopped().await;
         }
     }
 
-    activity::set_running("Driving 150 cm", None).await;
+    LIFECYCLE.phase("Driving 150 cm", None).await;
 
     let queue = match build_drive_queue() {
         Ok(queue) => queue,
         Err(error) => {
-            activity::fail(error.label()).await;
+            LIFECYCLE.fail(error.label()).await;
             return DriveOutcome::Failed;
         }
     };
@@ -167,7 +169,7 @@ pub async fn run_drive_step() -> DriveOutcome {
     let completion = match queue.submit().await {
         Ok(completion) => completion,
         Err(error) => {
-            activity::fail(error.label()).await;
+            LIFECYCLE.fail(error.label()).await;
             return DriveOutcome::Failed;
         }
     };
@@ -179,19 +181,19 @@ pub async fn run_drive_step() -> DriveOutcome {
             // A leg that did not reach its target cannot calibrate anything, so
             // the reason is what the operator sees instead of the value screen.
             log_completion(&completion);
-            activity::fail(reason).await;
+            LIFECYCLE.fail(reason).await;
             return DriveOutcome::Failed;
         }
     }
 
     // Brake so the robot is still while the operator measures.
     send_drive_command(DriveCommand::Drive(DriveAction::Brake)).await;
-    if wait_or_stop(SETTLE_MS).await {
+    if LIFECYCLE.wait_or_stop(SETTLE_MS).await {
         return stopped().await;
     }
 
     log_completion(&completion);
-    activity::set_running("Enter measured distance", None).await;
+    LIFECYCLE.phase("Enter measured distance", None).await;
     DriveOutcome::Complete
 }
 
@@ -199,7 +201,7 @@ pub async fn run_drive_step() -> DriveOutcome {
 async fn stopped() -> DriveOutcome {
     info!("Distance calibration: drive step stopped");
     abort().await;
-    activity::clear().await;
+    LIFECYCLE.abandon().await;
     DriveOutcome::Stopped
 }
 

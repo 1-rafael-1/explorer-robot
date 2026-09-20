@@ -14,19 +14,25 @@
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use touch_ui::Procedure;
 
-use super::{arm_stop, is_stop_requested, release_testmode, wait_or_stop};
+use super::test_lifecycle;
 use crate::{
     system::state::activity,
     task::{
         drive::{clear_encoder_measurement, get_latest_encoder_measurement},
         motor_driver::{self, MotorCommand, Track},
+        procedure::Lifecycle,
         sensors::encoders::{self, EncoderCommand},
     },
 };
 
 /// How long one leg (one track, one direction) drives, in milliseconds.
 const LEG_DURATION_MS: u64 = 2_000;
+
+/// The basic motor test's lifecycle: the test family's stop latch and slot, with
+/// no completion event — the test runs until the operator stops it.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::BasicMotor);
 
 /// How often the encoder count is sampled during a leg, in milliseconds.
 const SAMPLE_INTERVAL_MS: u64 = 100;
@@ -84,7 +90,7 @@ pub(super) fn spawn(spawner: Spawner) {
 /// Basic motor test mode runner.
 #[embassy_executor::task]
 async fn basic_motor_test_task() {
-    arm_stop().await;
+    LIFECYCLE.arm().await;
 
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
@@ -102,13 +108,13 @@ async fn basic_motor_test_task() {
     // The test is interactive: the legs cycle until the operator stops them.
     'cycling: loop {
         for (index, leg) in LEGS.iter().enumerate() {
-            if is_stop_requested() {
+            if LIFECYCLE.is_stop_requested() {
                 break 'cycling;
             }
 
             // Progress done so far, so the bar never claims a leg that has not run.
             let percent = activity::percent_done(index, LEGS.len());
-            activity::set_running(leg.phase, Some(percent)).await;
+            LIFECYCLE.phase(leg.phase, Some(percent)).await;
 
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(100)).await;
@@ -132,14 +138,14 @@ async fn basic_motor_test_task() {
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoders::send_command(EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    release_testmode();
+    LIFECYCLE.release();
 }
 
 /// Drive one leg for its duration, logging the encoder count as it goes.
 async fn run_leg(leg: &Leg) {
     let mut elapsed_ms = 0;
     while elapsed_ms < LEG_DURATION_MS {
-        if wait_or_stop(SAMPLE_INTERVAL_MS).await {
+        if LIFECYCLE.wait_or_stop(SAMPLE_INTERVAL_MS).await {
             return;
         }
         elapsed_ms += SAMPLE_INTERVAL_MS;

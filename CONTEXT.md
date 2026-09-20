@@ -46,6 +46,11 @@
 - **Touch IRQ** — The touch controller's active-low pen-down interrupt line (`PENIRQ`).
 - **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the Display and Touch Panel share SPI1).
 
+### Menu
+
+- **Menu Entry** — One entry of the Panel's menu tree, carrying its label, the screen it opens, and the screen the header Back returns to. An entry is a submenu, a Procedure, or a screen. Entries are named, not positioned, so reordering a menu cannot change what an entry starts.
+  _Avoid_: option, row, index
+
 ## Architecture
 
 - **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), I2C bus (VL53L0X rangefinder), flash storage, and the main event loop.
@@ -61,7 +66,7 @@ Three data flow patterns coexist, chosen by latency requirements:
 
 - **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
 - **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
-- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. Written by the LiDAR task and the floor-drop stub, and by behavior handlers on `ObstacleDetected` events; read by autonomous modes and the UI without acquiring a mutex.
+- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the floor-drop stub writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex.
 
 ## Driving
 
@@ -82,7 +87,7 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 - **Dispatch** — The thin seam between the drive command queue and the control modules. Routes incoming `DriveCommand` envelopes, handles standby wake-up, and executes `IntentTeardown` descriptors on completion or interrupt. Owns no per-intent knowledge.
 - **IntentTeardown** — An enum declaring what sensor streams must be stopped when an intent completes or is interrupted. Each `ActiveIntent` returns its teardown descriptor; the dispatch executes it. Keeps the dispatch thin — it knows to stop sensors but not which specific sensors each intent required.
 - **InterruptKind** — An enum (`EmergencyBrake`, `Stop`, `CancelCurrent`) that specifies how the drive subsystem preempts the active intent. Sent via `send_drive_interrupt`.
-- **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when a combined obstacle is detected (LiDAR or rangefinder). Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on any obstacle detection.
+- **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when the `LiDAR` reports an obstacle or a floor drop is detected. Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on either the obstacle edge or the floor-drop edge.
 - **Epoch** — A monotonic counter incremented on each interrupt. Queued commands stamped with an old epoch are discarded when dequeued, preventing stale commands from executing after an interrupt.
 
 ## Odometry
@@ -115,10 +120,12 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Activity State** — What long-running procedure is running (a test mode, a calibration, or the boot flow) with a small progress snapshot: phase, percent, and whether it ends only on an explicit stop. Written by the producers, read by the touch UI, which is the only thing that draws. A finished activity is presented as a Result Report.
-- **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful procedure may return on its own; a failed one never does.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter) and the `RangefinderReadings` (VL53L0X front-down distance). The old zero-distance sentinel is retired: a slot is `None` for no return.
-- **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR reports obstacles: the rangefinder is a stair/drop sensor, and a rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
+- **Procedure** — A long-running, operator-started, stoppable unit of work: a test mode, a calibration, or a drive mode. Identified by the Menu Entry that starts it.
+  _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
+- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, or the boot flow, with a small progress snapshot — phase and percent. Written by the producers, read by the touch UI, which is the only thing that draws. A finished Procedure is presented as a Result Report.
+- **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). The old zero-distance sentinel is retired: a slot is `None` for no return.
+- **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder is a stair/drop sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.
 

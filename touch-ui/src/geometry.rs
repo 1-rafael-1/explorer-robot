@@ -59,8 +59,7 @@ pub const BACK_MARGIN: u32 = 12;
 /// pixels.
 pub const HEADER_ACTION_GAP: u32 = 8;
 
-/// Horizontal inset of the placeholder and status panels from the screen edges,
-/// in pixels.
+/// Horizontal inset of the status panel from the screen edges, in pixels.
 pub const PANEL_MARGIN: u32 = 24;
 
 /// Height of the status panel's progress bar, in pixels.
@@ -70,7 +69,7 @@ pub const PROGRESS_H: u32 = 14;
 /// edges, in pixels.
 pub const PROGRESS_INSET: u32 = 24;
 
-/// Stroke width of the placeholder panel's border, in pixels.
+/// Stroke width of the status panel's border, in pixels.
 pub const PANEL_BORDER: u32 = 2;
 
 /// Height of one System Info row, in pixels.
@@ -200,8 +199,8 @@ pub const fn scroll_track_rect() -> Rectangle {
     )
 }
 
-/// The on-screen rectangle of the placeholder/status panel, inset from the
-/// screen edges and below the header.
+/// The on-screen rectangle of the status panel, inset from the screen edges and
+/// below the header.
 #[must_use]
 pub const fn panel_rect() -> Rectangle {
     Rectangle::new(

@@ -9,18 +9,23 @@
 //!
 //! One test runs at a time. [`start`] is refused while another test's task is
 //! live; the panel is modal, so the guard is a formality rather than a contention
-//! point, and the stop path is a single shared latch any running test polls.
+//! point. The test family's stop latch and the lifecycle every test runs under
+//! live in [`crate::task::procedure`].
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use touch_ui::Procedure;
 
 use crate::{
-    system::state::activity::{self, StopRequest, TestKind},
-    task::drive::{
-        self, CompletionStatus, DriveQueueBuilder, DriveQueueCompletion, DriveQueueSubmitError, InterruptKind,
-        types::DriveQueueBuildError,
+    system::event::Events,
+    task::{
+        drive::{
+            CompletionStatus, DriveQueueBuilder, DriveQueueCompletion, DriveQueueSubmitError,
+            types::DriveQueueBuildError,
+        },
+        procedure::{Completion, Lifecycle, Slot, StopLatch},
     },
 };
 
@@ -54,8 +59,9 @@ static TESTMODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Command channel for testmode spawn requests.
 static TESTMODE_COMMAND: Channel<CriticalSectionRawMutex, TestCommand, 4> = Channel::new();
 
-/// The stop request every running test polls between steps.
-static STOP: StopRequest = StopRequest::new();
+/// The test family's stop latch. A stop aimed at a test cannot reach a
+/// calibration, which keeps its own.
+static TEST_STOP: StopLatch = StopLatch::new();
 
 /// Initialize testmode support (spawns the controller task).
 #[allow(clippy::unwrap_used)]
@@ -63,54 +69,86 @@ pub fn init_testing(spawner: Spawner) {
     spawner.spawn(testmode_controller(spawner).unwrap());
 }
 
-/// Start the test-mode procedure `kind`.
+/// Start the test-mode `procedure`.
 ///
 /// Refused while another test is live, which the panel's modal menus should make
-/// impossible; a refusal is logged and nothing runs.
-pub async fn start(kind: TestKind) {
-    let command = match kind {
-        TestKind::BasicMotor => TestCommand::BasicMotor,
-        TestKind::Turns => TestCommand::Turns,
-        TestKind::StraightDrive => TestCommand::StraightDrive,
-        TestKind::ArcDrive => TestCommand::ArcDrive,
-        TestKind::Imu6Axis => TestCommand::Imu6,
-        TestKind::Imu9Axis => TestCommand::Imu,
+/// impossible; a refusal is logged and nothing runs. A Procedure that is not a
+/// test-mode entry starts nothing.
+pub async fn start(procedure: Procedure) {
+    let command = match procedure {
+        Procedure::BasicMotor => TestCommand::BasicMotor,
+        Procedure::Turns => TestCommand::Turns,
+        Procedure::StraightDrive => TestCommand::StraightDrive,
+        Procedure::ArcDrive => TestCommand::ArcDrive,
+        Procedure::Imu6Axis => TestCommand::Imu6,
+        Procedure::Imu9Axis => TestCommand::Imu,
+        Procedure::MotorCalibration
+        | Procedure::MagCalibration
+        | Procedure::DistanceCalibration
+        | Procedure::CoastAndAvoid
+        | Procedure::AttemptStraight => return,
     };
 
-    if request_start(command).await {
-        activity::begin(activity::Activity::Test(kind), "Starting", kind.is_interactive()).await;
+    if test_lifecycle(procedure).start("Starting").await {
+        request_start(command).await;
     } else {
-        defmt::warn!("testmode: {:?} refused — another test is active", kind);
+        defmt::warn!("testmode: {} refused — another test is active", procedure.label());
     }
+}
+
+/// The lifecycle the test family runs `procedure` under.
+///
+/// Every test shares the family's stop latch and single-active slot. The
+/// run-to-completion tests raise `TestingCompleted` on success; the interactive
+/// tests raise nothing, because the operator stops them rather than them
+/// finishing.
+const fn test_lifecycle(procedure: Procedure) -> Lifecycle {
+    Lifecycle::new(
+        procedure,
+        &TEST_STOP,
+        Some(Slot::guarded(claim_testmode, release_testmode)),
+        match procedure {
+            Procedure::Turns | Procedure::StraightDrive | Procedure::ArcDrive => {
+                Completion::OnSuccess(testing_completed)
+            }
+            _ => Completion::Silent,
+        },
+    )
+}
+
+/// The completion event the run-to-completion tests raise.
+const fn testing_completed() -> Events {
+    Events::TestingCompleted
 }
 
 /// Request that the running test stop.
 ///
-/// Latches the stop every test polls, and interrupts any drive in flight — the
-/// turns, straight-drive and arc-drive tests are mid-queue when the operator taps
-/// Stop. A test that is not driving ignores the interrupt; the drive loop drains
-/// it and coasts.
+/// Latches the test family's stop, which every test polls, and interrupts any
+/// drive in flight — the turns, straight-drive and arc-drive tests are mid-queue
+/// when the operator taps Stop. A test that is not driving ignores the interrupt;
+/// the drive loop drains it and coasts.
 pub fn stop() {
-    STOP.request();
-    drive::send_drive_interrupt(InterruptKind::Stop);
+    TEST_STOP.request();
 }
 
-/// Request that a test be spawned on demand.
-/// Returns true if the request was accepted.
-pub(super) async fn request_start(command: TestCommand) -> bool {
-    if TESTMODE_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_err()
-    {
-        return false;
-    }
-
+/// Queue a spawn request for a test whose slot was claimed.
+///
+/// The claim itself is the test family's [`Slot`], and the lifecycle makes it
+/// before publishing the starting activity; this only hands the controller the
+/// command to spawn.
+async fn request_start(command: TestCommand) {
     TESTMODE_COMMAND.send(command).await;
-    true
 }
 
-/// Mark the testmode controller as idle again.
-pub(super) fn release_testmode() {
+/// Claim the test family's single-active slot, reporting whether it was free.
+fn claim_testmode() -> bool {
+    TESTMODE_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+}
+
+/// Release the test family's single-active slot.
+fn release_testmode() {
     TESTMODE_ACTIVE.store(false, Ordering::Release);
 }
 
@@ -121,9 +159,7 @@ pub(super) fn release_testmode() {
 /// while a test runs. Reports whether the slot was free.
 #[must_use]
 pub fn claim_room_scan() -> bool {
-    TESTMODE_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_ok()
+    claim_testmode()
 }
 
 /// Release the slot [`claim_room_scan`] took.
@@ -131,25 +167,10 @@ pub fn release_room_scan() {
     release_testmode();
 }
 
-/// Re-arm the shared stop latch at the start of a run.
-pub(super) async fn arm_stop() {
-    STOP.rearm().await;
-}
-
-/// Whether the operator has asked the running test to stop.
-pub(super) fn is_stop_requested() -> bool {
-    STOP.is_requested()
-}
-
-/// Wait for `duration_ms`, returning `true` early if a stop is requested.
-pub(super) async fn wait_or_stop(duration_ms: u64) -> bool {
-    STOP.wait_or(duration_ms).await
-}
-
 /// Submit a built queue, mapping a build or submit failure to a short reason.
 ///
 /// The reason is meant for the running screen, so it is short and static; the
-/// caller records it through [`crate::system::state::activity::fail`].
+/// caller records it through [`crate::task::procedure::Lifecycle::fail`].
 pub(super) async fn submit(
     queue: Result<DriveQueueBuilder, DriveQueueBuildError>,
 ) -> Result<DriveQueueCompletion, &'static str> {

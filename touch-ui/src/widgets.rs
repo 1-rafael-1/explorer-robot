@@ -23,11 +23,9 @@ use crate::{
         slider_thumb_rect, slider_track_rect,
     },
     hit::{HeaderAction, Hit},
-    palette::{
-        ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT, WARN,
-    },
+    palette::{ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT},
     radar,
-    screens::{PlaceholderKind, StatusView, ValueFlow},
+    screens::{StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
 };
@@ -170,32 +168,6 @@ where
     );
     Text::with_baseline(text, position, style, Baseline::Top).draw(d)?;
     Ok(())
-}
-
-/// Draw a non-navigable placeholder: a warning-bordered panel carrying the
-/// leaf's title and a short "would run" body, with no list buttons.
-///
-/// # Errors
-///
-/// Returns the draw target's error if a primitive fails to draw.
-pub fn draw_placeholder<D>(d: &mut D, kind: PlaceholderKind) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let panel = panel_rect();
-    panel.into_styled(PrimitiveStyle::with_fill(BUTTON_BG)).draw(d)?;
-    panel
-        .into_styled(PrimitiveStyle::with_stroke(WARN, PANEL_BORDER))
-        .draw(d)?;
-
-    let half = panel.size.height / 2;
-    let title_area = Rectangle::new(panel.top_left, Size::new(panel.size.width, half));
-    let body_area = Rectangle::new(
-        Point::new(panel.top_left.x, panel.top_left.y + half as i32),
-        Size::new(panel.size.width, panel.size.height - half),
-    );
-    draw_centered_text(d, title_area, kind.title(), MonoTextStyle::new(LABEL_FONT, TEXT))?;
-    draw_centered_text(d, body_area, kind.body(), MonoTextStyle::new(SMALL_FONT, MUTED))
 }
 
 /// Draw a running/status screen: an accent-bordered panel carrying the body

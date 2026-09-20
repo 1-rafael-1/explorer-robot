@@ -10,11 +10,12 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use micromath::F32Ext;
+use touch_ui::Procedure;
 
-use super::{arm_stop, release_testmode, wait_or_stop};
-use crate::{
-    system::state::activity,
-    task::sensors::imu::{
+use super::test_lifecycle;
+use crate::task::{
+    procedure::Lifecycle,
+    sensors::imu::{
         DmpFusionMode, Orientation, get_latest_readings, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
     },
 };
@@ -25,6 +26,10 @@ const SAMPLE_INTERVAL_MS: u64 = 20;
 /// Ticks between log reports (50 ticks ≈ 1 s).
 const LOG_EVERY_TICKS: u32 = 50;
 
+/// The IMU 9-axis test's lifecycle: the test family's stop latch and slot, with
+/// no completion event — the test streams until the operator stops it.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::Imu9Axis);
+
 /// Spawn the IMU 9-axis test task via the controller.
 #[allow(clippy::unwrap_used)]
 pub(super) fn spawn(spawner: Spawner) {
@@ -34,17 +39,17 @@ pub(super) fn spawn(spawner: Spawner) {
 /// IMU 9-axis test task: streams readings until stopped.
 #[embassy_executor::task]
 async fn imu_test_task() {
-    arm_stop().await;
+    LIFECYCLE.arm().await;
 
     start_imu_readings();
     Timer::after(Duration::from_millis(30)).await;
     set_dmp_fusion_mode(DmpFusionMode::Axis9);
-    activity::set_running("9-axis streaming", None).await;
+    LIFECYCLE.phase("9-axis streaming", None).await;
 
     let mut tick: u32 = 0;
     let mut missing: u32 = 0;
 
-    while !wait_or_stop(SAMPLE_INTERVAL_MS).await {
+    while !LIFECYCLE.wait_or_stop(SAMPLE_INTERVAL_MS).await {
         let r = get_latest_readings().await;
         let orientation = r.orientation;
         let gyro = r.calibrated_gyro;
@@ -85,7 +90,7 @@ async fn imu_test_task() {
     }
 
     stop_imu_readings();
-    release_testmode();
+    LIFECYCLE.release();
 }
 
 /// Log the fused orientation in Euler angles, when there is one.

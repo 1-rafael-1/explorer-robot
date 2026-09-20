@@ -14,18 +14,20 @@
 
 use defmt::{info, warn};
 use embassy_executor::Spawner;
+use touch_ui::Procedure;
 
-use super::{arm_stop, release_testmode, status_label, submit, wait_or_stop};
+use super::{status_label, submit, test_lifecycle};
 use crate::{
     system::{
         event::{Events, raise_event},
-        state::{activity, calibration},
+        state::calibration,
     },
     task::{
         drive::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, DriveQueueCompletion, TurnDirection, types::DriveQueueBuildError,
         },
+        procedure::Lifecycle,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -39,6 +41,10 @@ const ARC_SPEED: u8 = 60;
 /// Countdown before the arc, in milliseconds.
 const COUNTDOWN_MS: u64 = 10_000;
 
+/// The arc drive test's lifecycle: the test family's stop latch and slot, raising
+/// `TestingCompleted` when the arc ran.
+const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::ArcDrive);
+
 /// Spawn the arc drive test task via the controller.
 #[allow(clippy::unwrap_used)]
 pub(super) fn spawn(spawner: Spawner) {
@@ -49,17 +55,15 @@ pub(super) fn spawn(spawner: Spawner) {
 #[embassy_executor::task]
 async fn arc_drive_test_task() {
     if run_arc_drive_test().await {
-        activity::complete("Arc drive complete").await;
-        release_testmode();
-        raise_event(Events::TestingCompleted).await;
+        LIFECYCLE.complete("Arc drive complete").await;
     } else {
-        release_testmode();
+        LIFECYCLE.release();
     }
 }
 
 /// Run the arc drive test, reporting whether the arc ran.
 async fn run_arc_drive_test() -> bool {
-    arm_stop().await;
+    LIFECYCLE.arm().await;
 
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
@@ -69,17 +73,17 @@ async fn run_arc_drive_test() -> bool {
     info!("arc: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
 
-    if wait_or_stop(COUNTDOWN_MS).await {
+    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
         return false;
     }
 
-    activity::set_running("360 deg, r=100 cm", Some(0)).await;
+    LIFECYCLE.phase("360 deg, r=100 cm", Some(0)).await;
     info!("arc: curve circle 360° at radius 1 m");
 
     match submit(build_arc_queue()).await {
         Ok(completion) => report_arc(&completion),
         Err(reason) => {
-            activity::fail(reason).await;
+            LIFECYCLE.fail(reason).await;
             return false;
         }
     }
