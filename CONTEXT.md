@@ -13,8 +13,9 @@
 - **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate on core1, and powered only while a mode needs it.
 - **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
 - **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
-- **Display** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT panel, sharing a full-duplex SPI1 bus with the Touch Panel and rendering a graphics UI from an RGB565 framebuffer.
-  _Avoid_: OLED, screen, panel
+- **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. The robot's only input and output surface: the Display draws, the Touch Panel senses.
+- **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
+  _Avoid_: OLED, screen
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
@@ -28,6 +29,7 @@
 - **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
 - **Bin representative** — The single LiDAR return chosen to stand for all native samples that fall within one angular bucket during aggregation. It is the *nearest valid return*, so coarsening a bucket never hides a closer obstacle (not the first sample, strongest return, or a mean).
 - **Warm-up** — The post-`start` phase during which revolutions are discarded until the rotor reaches steady-state speed. Settling is proxied by the per-revolution point count stabilising near the native 400 (as opposed to plateauing below it, or exhausting a spin budget).
+- **LiDAR Lease** — The token a mode holds while it owns the powered LiDAR. The sensor powers down when its last lease is released, and a mode can only release the lease it holds.
 - **No Return** — A bin for which no valid range was measured. It is not an obstacle, and it must not be read as a clear angle: gap selection never treats it as navigable.
 - **Front Sector** — The angular window about dead ahead that the Coast-and-Avoid stop test sweeps: ±45° by default, with a 30 cm stop threshold.
 - **Room Scan** — The operator-initiated mode that renders live Spins as a radar on the Display, for verifying the LiDAR and surveying a room. It does not drive.
@@ -113,7 +115,8 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
-- **Activity State** — What long-running procedure is running (a test mode, a calibration, or the boot flow) with a small progress snapshot: phase, percent, and whether it ends only on an explicit stop. Written by the producers, read by the touch UI, which is the only thing that draws.
+- **Activity State** — What long-running procedure is running (a test mode, a calibration, or the boot flow) with a small progress snapshot: phase, percent, and whether it ends only on an explicit stop. Written by the producers, read by the touch UI, which is the only thing that draws. A finished activity is presented as a Result Report.
+- **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful procedure may return on its own; a failed one never does.
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter) and the `RangefinderReadings` (VL53L0X front-down distance). The old zero-distance sentinel is retired: a slot is `None` for no return.
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR reports obstacles: the rangefinder is a stair/drop sensor, and a rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.

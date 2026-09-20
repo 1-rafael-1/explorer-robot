@@ -6,7 +6,7 @@ write-only SPI bus plus five GPIOs, which the RP2350A pin budget could not
 provide without collisions against the IMU, I2C0, LiDAR, and AI-cam pins — so
 the firmware moved to the RP2350B variant for GPIO headroom.
 
-**Status:** partly superseded by ADR-0008. The RP2350B variant move, the panel choice, the typography and the layout constants still stand; the dedicated write-only bus, the absence of a chip select and the text-only contract are superseded, because the panel now shares a full-duplex SPI1 bus with the touch controller and renders graphics. See also ADR-0009 for the retired rotary encoder.
+**Status:** partly superseded by ADR-0008. The RP2350B variant move, the panel choice, the typography and the layout constants still stand; the dedicated write-only bus, the absence of a chip select and the text-only contract are superseded, because the panel now shares a full-duplex SPI1 bus with the touch controller and renders graphics. See also ADR-0009 for the retired rotary encoder. The panel itself is 240×320, driven landscape as a 320×240 framebuffer; the 240×240 figure in this ADR described the retired square text working area, not the glass.
 
 **Decision**
 

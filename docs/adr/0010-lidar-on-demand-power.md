@@ -6,7 +6,7 @@ wear item; keeping it running through motor tests, calibration and idle trades i
 for nothing. The cost is a warm-up wait at every mode entry and a power lifecycle to get
 right.
 
-**Status:** accepted
+**Status:** accepted. The ownership paragraph is revised in place: ownership is leased as well as ref-counted.
 
 **Considered Options**
 
@@ -19,8 +19,10 @@ right.
 **Decision**
 
 - A persistent core1 task owns the driver for the whole runtime and exposes
-  `acquire()` / `release()` / `status()`, with ref-counted ownership returning `Busy` on a
-  double acquire.
+  `acquire()` / `release()` / `status()`. Ownership is ref-counted and leased: `acquire()`
+  yields a lease that `release()` consumes, the sensor powers down when the last lease is
+  released, and a mode can only release the lease it holds. An acquire that is already in
+  flight is refused with `Busy`, so no second lifecycle starts while one is coming up.
 - `acquire()` runs `power_on()` → `start()` → `warm_up()` → streaming. A `start()` failure
   is tolerated; warm-up is the real proof that data flows.
 - Warm-up is bounded by a wall-clock timeout at the call site, because the driver has only
@@ -41,4 +43,6 @@ right.
   means the sensor is off or not yet warmed.
 - A stopped sensor can leave an obstacle flag behind, so `release()` carries the
   obligation to clear it in the same step.
+- A mode that never acquired holds no lease, so leaving a screen after a failed acquisition
+  cannot power the sensor down under the mode that does own it.
 - The power MOSFET stays wired even though it is now load-bearing rather than optional.
