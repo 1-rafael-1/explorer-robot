@@ -21,7 +21,7 @@ use crate::{
     },
     hit::{HeaderAction, Hit},
     palette, radar,
-    screens::{Screen, StatusView, ValueFlow},
+    screens::{Item, Screen, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     widgets,
@@ -300,9 +300,11 @@ impl Ui {
             return None;
         }
         let items = self.screen.items();
-        (0..items.len())
-            .find(|&index| menu_item_rect(index, self.scroll).contains(p))
-            .map(Hit::MenuItem)
+        items
+            .iter()
+            .enumerate()
+            .find(|(index, _)| menu_item_rect(*index, self.scroll).contains(p))
+            .map(|(_, item)| Hit::MenuItem(*item))
     }
 
     /// Record a pen-down at `p` and report whether the screen needs redrawing.
@@ -447,10 +449,14 @@ impl Ui {
     }
 
     /// The header action for the current screen, or `None` on the Main Menu.
+    ///
+    /// A finished Result Report offers Back, a screen with a live procedure
+    /// offers Stop.
     const fn header_action(&self) -> Option<HeaderAction> {
         match self.screen {
             Screen::MainMenu => None,
             Screen::ValueEntry(_) => Some(HeaderAction::Cancel),
+            Screen::Status if self.status.finished => Some(HeaderAction::Back),
             Screen::Status => Some(HeaderAction::Stop),
             _ => Some(HeaderAction::Back),
         }
@@ -480,7 +486,7 @@ impl Ui {
         D: DrawTarget<Color = Rgb565>,
     {
         for (index, item) in self.screen.items().iter().enumerate() {
-            let is_pressed = pressed == Some(Hit::MenuItem(index));
+            let is_pressed = pressed == Some(Hit::MenuItem(*item));
             widgets::draw_button(
                 d,
                 menu_item_rect(index, self.scroll),
@@ -505,7 +511,7 @@ impl Ui {
             // Back and Stop return to the parent, as do a value screen's Cancel
             // and Save; saving is wired in later tickets.
             Hit::Back | Hit::Stop | Hit::Cancel | Hit::Save => self.go_back(),
-            Hit::MenuItem(index) => self.open_item(index),
+            Hit::MenuItem(item) => self.open_item(item),
             Hit::NudgeMinus => self.nudge(-1),
             Hit::NudgePlus => self.nudge(1),
             Hit::Slider => false,
@@ -517,18 +523,15 @@ impl Ui {
         self.parent().is_some_and(|parent| self.navigate_to(parent))
     }
 
-    /// Open the item at `index` on the current screen.
+    /// Open `item` on the current screen.
     ///
     /// The entry supplies its destination through
     /// [`crate::screens::Item::destination`], so the order the screen draws and the
-    /// screen a tap resolves to come from the same enumeration. An index past the
-    /// end of the list reports no change, as does any index on a screen with no
-    /// entries.
-    fn open_item(&mut self, index: usize) -> bool {
-        self.screen
-            .items()
-            .get(index)
-            .is_some_and(|item| self.navigate_to(item.destination()))
+    /// screen a tap resolves to come from the same enumeration. An item the
+    /// current screen does not list reports no change, as does an item on a
+    /// screen with no entries.
+    fn open_item(&mut self, item: Item) -> bool {
+        self.screen.items().contains(&item) && self.navigate_to(item.destination())
     }
 
     /// Switch to `screen`, reset the list scroll and the value-entry value, and

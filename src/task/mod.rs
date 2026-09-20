@@ -9,7 +9,7 @@
 //! - `sensors` — encoder reader, IMU, `LiDAR` driver, VL53L0X stub
 //! - `ui` — touch-driven menu controller (panel owner)
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
-//! - `behavior` — event-driven behavior handlers (battery, obstacle, input)
+//! - `behavior` — event-driven behavior handlers (battery, obstacle, floor drop)
 //! - `initialization` — boot-time calibration loading coordination
 //! - `testmode` — on-demand test mode tasks (motor, turns, IMU, drive)
 //! - `startup` — fires Initialize event at boot

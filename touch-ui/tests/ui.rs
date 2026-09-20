@@ -367,8 +367,14 @@ fn placeholders_name_the_action_they_would_run() {
 #[test]
 fn list_screens_report_their_regions() {
     let mut ui = Ui::new();
-    assert_eq!(ui.hit_test(menu_item_rect(0, 0).center()), Some(Hit::MenuItem(0)));
-    assert_eq!(ui.hit_test(menu_item_rect(3, 0).center()), Some(Hit::MenuItem(3)));
+    assert_eq!(
+        ui.hit_test(menu_item_rect(0, 0).center()),
+        Some(Hit::MenuItem(Item::SystemInfo))
+    );
+    assert_eq!(
+        ui.hit_test(menu_item_rect(3, 0).center()),
+        Some(Hit::MenuItem(Item::TestMode))
+    );
     // Below the last item, and in the gap between two items, is no region.
     assert_eq!(ui.hit_test(Point::new(160, 98)), None);
     assert_eq!(ui.hit_test(menu_item_rect(4, 0).center()), None);
@@ -401,6 +407,21 @@ fn a_running_screen_reports_stop() {
     assert_eq!(ui.title(), "Basic Motor Test");
     assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
     assert_eq!(ui.hit_test(info_row_rect(0).center()), None);
+}
+
+/// Test hit-testing on a finished Result Report: the header offers Back, while a
+/// screen with a live procedure offers Stop.
+#[test]
+fn a_finished_report_offers_back() {
+    let mut ui = Ui::new();
+    let finished = StatusView::new("Motor", "Zero encoder — check wiring", Screen::Calibrate).finished();
+    assert!(ui.show_status(finished));
+    assert_eq!(ui.screen(), Screen::Status);
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Back));
+
+    // A live procedure still offers the Touch Stop.
+    assert!(ui.show_status(StatusView::new("Basic Motor Test", "Running", Screen::TestMode)));
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
 }
 
 /// Test that a running screen updates its body and Stop returns to its parent.
@@ -457,7 +478,7 @@ fn the_ui_reports_the_region_a_tap_activated() {
     assert_eq!(ui.last_activation(), None);
 
     tap_item(&mut ui, 1);
-    assert_eq!(ui.last_activation(), Some(Hit::MenuItem(1)));
+    assert_eq!(ui.last_activation(), Some(Hit::MenuItem(Item::Calibrate)));
     tap(&mut ui, back_button_rect().center());
     assert_eq!(ui.last_activation(), Some(Hit::Back));
 
@@ -647,7 +668,7 @@ fn a_release_off_the_press_region_does_not_activate() {
     let released_at = Point::new(start.x, start.y + 9);
     let _ = ui.pointer_down(start, 0);
     let _ = ui.pointer_move(released_at, 0);
-    assert_eq!(ui.hit_test(released_at), Some(Hit::MenuItem(1)));
+    assert_eq!(ui.hit_test(released_at), Some(Hit::MenuItem(Item::Calibrate)));
     let _ = ui.pointer_up(TAP_MIN_DURATION_MS);
     assert_eq!(ui.screen(), Screen::MainMenu);
 }

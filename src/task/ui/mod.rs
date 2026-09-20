@@ -35,7 +35,7 @@ use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use touch_ui::{
-    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Screen, SensorState, StatusView, SystemInfo,
+    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Screen, SensorState, StatusView, SystemInfo,
     TAP_MIN_DURATION_MS, TICK_MS, Ui, ValueFlow, geometry,
 };
 
@@ -65,12 +65,6 @@ use crate::{
 pub enum UiEvent {
     /// Request to show the main menu (from initialisation or the boot gate).
     ShowMainMenu,
-    /// Request to show the Test Mode submenu.
-    ///
-    /// Kept for the same reason as [`show_test_menu`]: the request path stays
-    /// compiling whether or not a caller uses it.
-    #[allow(dead_code)]
-    ShowTestMenu,
     /// Testing sequence finished — show the main menu.
     TestingCompleted,
     /// Calibration procedure finished; the outcome is in the activity state.
@@ -144,30 +138,6 @@ const GESTURE_DEADLINE_MS: u64 = 30_000;
 /// Backoff before retrying an offline panel, in milliseconds.
 const REINIT_BACKOFF_MS: u64 = 2_000;
 
-/// Index of the Calibrate entry on the Main Menu (`touch_ui::screens::MAIN_MENU`).
-const CALIBRATE_INDEX: usize = 1;
-
-/// Index of the Coast & Avoid entry on the Drive Mode menu
-/// (`touch_ui::screens::DRIVE_MODE_MENU`).
-const COAST_AVOID_INDEX: usize = 0;
-
-/// Index of the Test Mode entry on the Main Menu.
-const TEST_MODE_INDEX: usize = 3;
-
-/// Index of the Room Scan entry on the Test Mode menu
-/// (`touch_ui::screens::TEST_MENU`).
-const ROOM_SCAN_INDEX: usize = 6;
-
-/// The test-mode leaves, in `touch_ui::screens::TEST_MENU` order.
-const TEST_KINDS: [TestKind; 6] = [
-    TestKind::BasicMotor,
-    TestKind::Turns,
-    TestKind::StraightDrive,
-    TestKind::ArcDrive,
-    TestKind::Imu6Axis,
-    TestKind::Imu9Axis,
-];
-
 // ── Initialisation ──────────────────────────────────────────────────────────────
 
 /// Build the panel, spawn the UI controller task, and spawn the helper tasks it
@@ -203,16 +173,6 @@ pub async fn ui_is_calibrating() -> bool {
 /// Request that the UI show the main menu.
 pub async fn show_main_menu() {
     send_ui_event(UiEvent::ShowMainMenu).await;
-}
-
-/// Request that the UI show the Test Mode submenu.
-///
-/// Part of the controller's published surface alongside [`show_main_menu`]: the
-/// panel's own Stop paths reach the test menu through the model's navigation, so
-/// nothing in the firmware calls this yet.
-#[allow(dead_code)]
-pub async fn show_test_menu() {
-    send_ui_event(UiEvent::ShowTestMenu).await;
 }
 
 /// Run the distance calibration's fixed-distance drive step and report back.
@@ -451,19 +411,19 @@ async fn handle_event(ui: &mut Ui, event: UiEvent) {
             activity::clear().await;
             *ui = Ui::new();
         }
-        UiEvent::ShowTestMenu => {
-            *ui = Ui::new();
-            // The model has no "open this screen" call in its public surface, so
-            // reuse the tap path and the shared geometry to land on Test Mode.
-            tap_main_menu_item(ui, TEST_MODE_INDEX);
-        }
         UiEvent::CalibrationCompleted => hold_or_leave_calibration(ui).await,
         UiEvent::DistanceDriveFinished => enter_distance_entry(ui).await,
     }
 }
 
 /// Open a Main Menu entry by feeding the model a synthetic tap at its centre.
-fn tap_main_menu_item(ui: &mut Ui, index: usize) {
+///
+/// The index is resolved from [`Screen::MainMenu`]'s entries, so the synthetic
+/// tap follows the entry's identity rather than a hard-coded position.
+fn tap_main_menu_item(ui: &mut Ui, item: Item) {
+    let Some(index) = Screen::MainMenu.items().iter().position(|&entry| entry == item) else {
+        return;
+    };
     let target = geometry::menu_item_rect(index, 0).center();
     let now_ms = Instant::now().as_millis();
     let _ = ui.pointer_down(target, now_ms);
@@ -480,11 +440,10 @@ fn tap_main_menu_item(ui: &mut Ui, index: usize) {
 /// replaces the screen when a running procedure takes over from a placeholder.
 async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32, activated: Option<Hit>) {
     match (screen_before, activated) {
-        (Screen::TestMode, Some(Hit::MenuItem(ROOM_SCAN_INDEX))) => enter_room_scan(ui),
-        (Screen::TestMode, Some(Hit::MenuItem(index))) => start_test(ui, index).await,
+        // A menu entry carries its identity, so what it starts does not depend on
+        // the screen it was tapped on: the item names its own screen.
+        (_, Some(Hit::MenuItem(item))) => handle_menu_item(ui, item).await,
         (Screen::RoomScan, Some(Hit::Back)) => leave_room_scan(),
-        (Screen::Calibrate, Some(Hit::MenuItem(index))) => start_calibration(ui, index).await,
-        (Screen::DriveMode, Some(Hit::MenuItem(COAST_AVOID_INDEX))) => start_coast_and_avoid(ui).await,
         (Screen::ValueEntry(ValueFlow::DistanceCalibration), Some(Hit::Save)) => {
             save_distance_calibration(value_before).await;
         }
@@ -494,15 +453,53 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
         (Screen::ValueEntry(ValueFlow::AttemptStraight), Some(Hit::Save)) => {
             record_attempt_straight(value_before).await;
         }
-        (Screen::Status, Some(Hit::Stop | Hit::Back)) => stop_running().await,
+        (Screen::Status, Some(Hit::Back)) => activity::clear().await,
+        (Screen::Status, Some(Hit::Stop)) => stop_running().await,
         _ => {}
     }
 }
 
-/// Start the test-mode procedure behind Test Mode entry `index`.
-async fn start_test(ui: &mut Ui, index: usize) {
-    let Some(kind) = TEST_KINDS.get(index).copied() else {
-        return;
+/// Act on the menu entry the model activated.
+///
+/// The match is exhaustive over the crate's [`Item`], so adding an entry — or
+/// moving one to another screen — is a compile-time question rather than a
+/// silent change of which procedure a tap starts.
+async fn handle_menu_item(ui: &mut Ui, item: Item) {
+    match item {
+        Item::RoomScan => enter_room_scan(ui),
+        Item::BasicMotor | Item::Turns | Item::StraightDrive | Item::ArcDrive | Item::Imu6Axis | Item::Imu9Axis => {
+            start_test(ui, item).await;
+        }
+        Item::Motor | Item::Mag | Item::Distance => start_calibration(ui, item).await,
+        Item::CoastAndAvoid => start_coast_and_avoid(ui).await,
+        // The entries the model opens on its own, and the attempt-straight value
+        // that only feeds the deferred mode: nothing starts here.
+        Item::SystemInfo | Item::Calibrate | Item::DriveMode | Item::TestMode | Item::AttemptStraight => {}
+    }
+}
+
+/// Start the test-mode procedure behind `item`.
+///
+/// The identity maps to the activity's [`TestKind`]. Every other entry belongs to
+/// another screen and is not a test, so it starts nothing.
+async fn start_test(ui: &mut Ui, item: Item) {
+    let kind = match item {
+        Item::BasicMotor => TestKind::BasicMotor,
+        Item::Turns => TestKind::Turns,
+        Item::StraightDrive => TestKind::StraightDrive,
+        Item::ArcDrive => TestKind::ArcDrive,
+        Item::Imu6Axis => TestKind::Imu6Axis,
+        Item::Imu9Axis => TestKind::Imu9Axis,
+        Item::SystemInfo
+        | Item::Calibrate
+        | Item::DriveMode
+        | Item::TestMode
+        | Item::Motor
+        | Item::Mag
+        | Item::Distance
+        | Item::CoastAndAvoid
+        | Item::AttemptStraight
+        | Item::RoomScan => return,
     };
 
     testmode::start(kind).await;
@@ -540,10 +537,13 @@ fn leave_room_scan() {
     ROOM_SCAN_REQUEST.try_send(RoomScanRequest::Release).ok();
 }
 
-/// Start the calibration procedure behind Calibrate entry `index`.
-async fn start_calibration(ui: &mut Ui, index: usize) {
-    match index {
-        0 => {
+/// Start the calibration procedure behind `item`.
+///
+/// The identity maps to the concrete calibration flow. Every other entry belongs
+/// to another screen and is not a calibration, so it starts nothing.
+async fn start_calibration(ui: &mut Ui, item: Item) {
+    match item {
+        Item::Motor => {
             drive::send_drive_command(DriveCommand::RunMotorCalibration).await;
             ui.show_status(StatusView::new(
                 CalibrationKind::Motor.title(),
@@ -551,7 +551,7 @@ async fn start_calibration(ui: &mut Ui, index: usize) {
                 Screen::Calibrate,
             ));
         }
-        1 => {
+        Item::Mag => {
             drive::send_drive_command(DriveCommand::RunImuCalibration(ImuCalibrationKind::Mag)).await;
             ui.show_status(StatusView::new(
                 CalibrationKind::Mag.title(),
@@ -559,8 +559,20 @@ async fn start_calibration(ui: &mut Ui, index: usize) {
                 Screen::Calibrate,
             ));
         }
-        2 => start_distance_calibration(ui).await,
-        _ => {}
+        Item::Distance => start_distance_calibration(ui).await,
+        Item::SystemInfo
+        | Item::Calibrate
+        | Item::DriveMode
+        | Item::TestMode
+        | Item::CoastAndAvoid
+        | Item::AttemptStraight
+        | Item::BasicMotor
+        | Item::Turns
+        | Item::StraightDrive
+        | Item::ArcDrive
+        | Item::Imu6Axis
+        | Item::Imu9Axis
+        | Item::RoomScan => {}
     }
 }
 
@@ -650,7 +662,7 @@ async fn hold_or_leave_calibration(ui: &mut Ui) {
         Activity::Calibration(_) => {
             activity::clear().await;
             *ui = Ui::new();
-            tap_main_menu_item(ui, CALIBRATE_INDEX);
+            tap_main_menu_item(ui, Item::Calibrate);
         }
         Activity::Booting | Activity::Test(_) | Activity::Idle | Activity::DriveMode(_) => {
             // A stopped or already-dismissed calibration: the panel has moved on.
@@ -689,7 +701,12 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
         status_body(snapshot),
         status_parent(snapshot.activity),
     );
-    snapshot.percent.map_or(view, |percent| view.with_progress(percent))
+    let view = snapshot.percent.map_or(view, |percent| view.with_progress(percent));
+    if matches!(snapshot.stage, Stage::Complete | Stage::Failed) {
+        view.finished()
+    } else {
+        view
+    }
 }
 
 /// The body line a running screen shows for a snapshot.
@@ -699,16 +716,11 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
 /// label) takes over the line.
 fn status_body(snapshot: &Snapshot) -> &'static str {
     match snapshot.activity {
-        Activity::DriveMode(_) if snapshot.stage != Stage::Failed => sensor_label(lidar::status()),
+        Activity::DriveMode(_) if snapshot.stage != Stage::Failed => map_sensor_state(lidar::status()).label(),
         Activity::Booting | Activity::Test(_) | Activity::Calibration(_) | Activity::Idle | Activity::DriveMode(_) => {
             snapshot.detail
         }
     }
-}
-
-/// The body line naming a sensor's lifecycle state.
-const fn sensor_label(status: LidarStatus) -> &'static str {
-    map_sensor_state(status).label()
 }
 
 /// Map the firmware's `LiDAR` lifecycle onto the UI's neutral sensor state.

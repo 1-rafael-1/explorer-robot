@@ -28,7 +28,10 @@ use embassy_time::{Duration, Timer};
 
 use super::{arm_stop, is_stop_requested, wait_or_stop};
 use crate::{
-    system::state::activity::{self, Activity, CalibrationKind},
+    system::{
+        event::{Events, raise_event},
+        state::activity::{self, Activity, CalibrationKind},
+    },
     task::{
         drive::sensors::data::{clear_encoder_measurement, wait_for_encoder_event_timeout},
         io::flash_storage,
@@ -161,6 +164,7 @@ pub async fn run_motor_calibration() {
         calibration.left_factor, calibration.right_factor
     );
     activity::complete("Calibration saved").await;
+    raise_event(Events::CalibrationCompleted).await;
 }
 
 /// Measure one track alone, returning its pulse count, or `None` if the operator
@@ -238,4 +242,5 @@ async fn fail_and_stop(reason: &'static str) {
     encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
     activity::fail(reason).await;
+    raise_event(Events::CalibrationCompleted).await;
 }

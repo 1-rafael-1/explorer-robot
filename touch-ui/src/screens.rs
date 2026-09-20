@@ -142,8 +142,9 @@ pub enum Screen {
     ValueEntry(ValueFlow),
     /// A running/status screen, whose content is supplied by [`StatusView`].
     ///
-    /// Later tickets use this for a procedure's progress and sensor state; it
-    /// offers a touch Stop in the header.
+    /// Later tickets use this for a procedure's progress and sensor state. A
+    /// live procedure offers a touch Stop in the header; a finished Result
+    /// Report offers Back instead.
     Status,
     /// The Room Scan screen: the sensor's live spins drawn as a radar.
     ///
@@ -358,9 +359,12 @@ impl ValueFlow {
 ///
 /// The firmware maps its activity state onto this and calls
 /// [`crate::Ui::show_status`] on entry and [`crate::Ui::set_status`] as progress
-/// advances. `parent` is where the header Stop returns to, and `progress` is the
-/// percent the widget draws as a bar when the procedure can report one — the
-/// model never formats a number, so no dynamic text crosses this boundary.
+/// advances. `parent` is where the header action returns, `progress` is the
+/// percent the widget draws as a bar when the procedure can report one, and
+/// `finished` marks the view as a Result Report — a procedure that has already
+/// completed or failed and only waits to be dismissed, rather than one still
+/// running. The model never formats a number, so no dynamic text crosses this
+/// boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatusView {
     /// The header title.
@@ -369,8 +373,11 @@ pub struct StatusView {
     pub body: &'static str,
     /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
     pub progress: Option<u8>,
-    /// The screen Stop returns to.
+    /// The screen the header action returns to.
     pub parent: Screen,
+    /// Whether this is a finished Result Report, whose header offers Back rather
+    /// than Stop.
+    pub finished: bool,
 }
 
 impl StatusView {
@@ -382,6 +389,7 @@ impl StatusView {
             body,
             progress: None,
             parent,
+            finished: false,
         }
     }
 
@@ -392,5 +400,11 @@ impl StatusView {
             progress: Some(percent),
             ..self
         }
+    }
+
+    /// Mark the view as a finished Result Report, whose header offers Back.
+    #[must_use]
+    pub const fn finished(self) -> Self {
+        Self { finished: true, ..self }
     }
 }

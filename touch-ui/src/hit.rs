@@ -7,7 +7,10 @@
 
 use embedded_graphics::primitives::Rectangle;
 
-use crate::geometry::{back_button_rect, cancel_button_rect};
+use crate::{
+    geometry::{back_button_rect, cancel_button_rect},
+    screens::Item,
+};
 
 /// An interactive region named by hit-testing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,8 +18,8 @@ pub enum Hit {
     /// The header Back button (present on every list-like screen except the
     /// Main Menu).
     Back,
-    /// The list item at this index on the current screen.
-    MenuItem(usize),
+    /// The list item this region names on the current screen, by identity.
+    MenuItem(Item),
     /// The header Cancel button on a value-entry screen.
     Cancel,
     /// The header Stop button on a running/status screen.
