@@ -13,3 +13,16 @@ target/
 
 # FreeCAD auto-generated backup files
 **/*.FCBak
+
+# KiCAD auto-generated backup files and cache files and user local state files
+**/*.kicad_pcb-bak
+**/*.kicad_sch-bak
+**/*.kicad_pcb-cache
+**/*.kicad_sch-cache
+**/*.kicad_prl
+**/*.kicad_pro.lck
+**/*.kicad_sch.lck
+
+
+
+# KiCAD auto-generated cache files
