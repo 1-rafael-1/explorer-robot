@@ -98,7 +98,7 @@ static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::n
 ///
 /// The screen records its latest intent here and signals, so the lifecycle task
 /// converges on the current state instead of replaying queued requests and can
-/// never lose the final release to a full queue.
+/// never lose the final disable to a full queue.
 static ROOM_SCAN_WANTED: AtomicBool = AtomicBool::new(false);
 
 /// Wakes [`room_scan_task`] whenever [`ROOM_SCAN_WANTED`] changes.
@@ -153,7 +153,7 @@ const REINIT_BACKOFF_MS: u64 = 2_000;
 /// for the lifetime of the firmware. The helper tasks own the procedures that
 /// cannot run on the UI task without freezing the panel: the distance
 /// calibration's fixed-distance drive, and the coast-and-avoid mode's `LiDAR`
-/// acquisition, which may take several seconds.
+/// enable, which may take several seconds.
 #[allow(clippy::unwrap_used)]
 pub fn init_ui(spawner: Spawner, pins: PanelPins) {
     spawner.spawn(ui_task(Panel::new(pins)).unwrap());
@@ -198,10 +198,11 @@ async fn distance_calibration_drive_task() {
 
 /// Start coast-and-avoid when the panel asks, off the UI task.
 ///
-/// Acquiring the `LiDAR` can take several seconds, so the UI task must not await
+/// Enabling the `LiDAR` can take several seconds, so the UI task must not await
 /// it: it dispatches a request and polls the activity state and the sensor's
-/// lock-free status while this task runs the acquisition and start. On failure
-/// the mode records the reason, which the running screen shows, and never drives.
+/// lock-free status while this task enables the sensor and starts the mode. On
+/// failure the mode records the reason, which the running screen shows, and never
+/// drives.
 #[embassy_executor::task]
 async fn coast_avoid_task() {
     loop {
@@ -213,49 +214,24 @@ async fn coast_avoid_task() {
     }
 }
 
-/// Run the Room Scan screen's `LiDAR` lease, off the UI task.
+/// Drive the Room Scan screen's `LiDAR` need, off the UI task.
 ///
 /// The task converges on the screen's latest intent, latched in
 /// [`ROOM_SCAN_WANTED`], rather than consuming queued requests, so a rapid
-/// leave/re-enter cannot drop the final release. Acquisition can take several
-/// seconds, so the intent may flip while `lidar::acquire()` is running; the
-/// latch is re-read after every acquisition wait and the lease handed straight
-/// back when the screen is already gone. The lease is held across iterations and
-/// released only by its holder, so leaving after a failed acquisition releases
-/// nothing and cannot power down a sensor another mode owns.
+/// leave/re-enter cannot drop the final change. Entering enables the sensor and
+/// leaving disables it; the sensor's own task owns the bring-up, so this task
+/// never blocks on the multi-second warm-up. A failed bring-up leaves `Failed`
+/// for the screen to show; re-entering enables again, and [`lidar::enable`]
+/// releases the latched failure first, so the converged re-enter recovers rather
+/// than wedging.
 #[embassy_executor::task]
 async fn room_scan_task() {
-    let mut lease: Option<lidar::Lease> = None;
     loop {
         ROOM_SCAN_SIGNAL.wait().await;
         if ROOM_SCAN_WANTED.load(Ordering::Acquire) {
-            if lease.is_none() {
-                match lidar::acquire().await {
-                    Ok(acquired) => lease = Some(acquired),
-                    Err(lidar::AcquireError::Busy) => {
-                        warn!("[ui] room scan: LiDAR acquisition already in flight");
-                    }
-                    Err(lidar::AcquireError::Failed) => {
-                        warn!("[ui] room scan: LiDAR acquisition failed");
-                    }
-                }
-                // The screen may have left while the sensor was warming, so the
-                // latch — not the intent that began this acquisition — decides
-                // whether the lease is kept. A failed acquisition holds nothing.
-                if !ROOM_SCAN_WANTED.load(Ordering::Acquire) {
-                    let held = lease.take();
-                    if let Some(held) = held {
-                        lidar::release(held).await;
-                    }
-                }
-            }
+            lidar::enable().await;
         } else {
-            // A no-op when no lease is held — the whole point of the lease:
-            // leaving after a failed acquisition releases nothing.
-            let held = lease.take();
-            if let Some(held) = held {
-                lidar::release(held).await;
-            }
+            lidar::disable().await;
         }
     }
 }
@@ -521,8 +497,8 @@ async fn start_test(ui: &mut Ui, procedure: Procedure) {
     ui.show_status(status_view(&snapshot));
 }
 
-/// Enter the Room Scan screen: claim the single-active test-mode slot and start
-/// the sensor's acquisition.
+/// Enter the Room Scan screen: claim the single-active test-mode slot and enable
+/// the sensor.
 ///
 /// The model has already navigated to the radar screen. If another test owns the
 /// slot the entry is refused and the screen leaves again, so the radar never
@@ -539,14 +515,14 @@ fn enter_room_scan(ui: &mut Ui) {
     ROOM_SCAN_SIGNAL.signal(());
 }
 
-/// Leave the Room Scan screen: release the single-active slot and the `LiDAR`
-/// lease it holds.
+/// Leave the Room Scan screen: release the single-active slot and clear the
+/// `LiDAR` need it holds.
 ///
 /// The intent is latched rather than awaited, so the panel never blocks; the
-/// lifecycle task acts on it even if the leave lands while an acquisition is
-/// still warming. Called on every exit path, including a failed acquisition, it
-/// hands back only the lease this screen actually holds, so a failed acquisition
-/// releases nothing and cannot power down a sensor another mode owns.
+/// lifecycle task acts on it even if the leave lands while the sensor is still
+/// warming. Called on every exit path, including a failed bring-up, it clears
+/// only the need this screen actually holds, so a failed bring-up powers down
+/// nothing and cannot stop a sensor another mode owns.
 fn leave_room_scan() {
     testmode::release_room_scan();
     ROOM_SCAN_WANTED.store(false, Ordering::Release);
@@ -580,15 +556,15 @@ async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
     }
 }
 
-/// Start coast-and-avoid from the panel without blocking on the acquisition.
+/// Start coast-and-avoid from the panel without blocking on the `LiDAR` enable.
 ///
 /// The activity is recorded first so the running screen appears immediately and
-/// names the mode; the [`coast_avoid_task`] helper then acquires the `LiDAR`,
+/// names the mode; the [`coast_avoid_task`] helper then enables the `LiDAR`,
 /// which the running screen tracks through [`lidar::status`]. If the sensor
 /// cannot be brought up, the helper records the failure reason and the screen
 /// holds it until the operator dismisses it back to the Drive Mode menu.
 async fn start_coast_and_avoid(ui: &mut Ui) {
-    activity::begin(Activity::Procedure(Procedure::CoastAndAvoid), "Acquiring LiDAR").await;
+    activity::begin(Activity::Procedure(Procedure::CoastAndAvoid), "Enabling LiDAR").await;
     let snapshot = activity::snapshot().await;
     ui.show_status(status_view(&snapshot));
     COAST_AVOID_REQUEST.try_send(()).ok();
@@ -636,7 +612,7 @@ async fn cancel_distance_calibration() {
 /// wrong producer holds is cleared by that producer's own re-arm when its next run
 /// starts, so setting them all is safe and leaves no running procedure
 /// unstoppable. Stopping coast-and-avoid clears its active flag; its task then
-/// brakes, releases the `LiDAR`, and exits on its own. The activity state is
+/// brakes, disables the `LiDAR`, and exits on its own. The activity state is
 /// cleared here because the panel is what moved on.
 async fn stop_running() {
     testmode::stop();
@@ -689,7 +665,7 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// The running screen's content for a snapshot.
 ///
 /// A drive mode's body line is the `LiDAR`'s lifecycle state, read lock-free on
-/// each tick so the screen reports the sensor warming up while the acquisition
+/// each tick so the screen reports the sensor warming up while the bring-up
 /// runs, then streaming once it settles, without the controller formatting text
 /// of its own.
 fn status_view(snapshot: &Snapshot) -> StatusView {
@@ -757,7 +733,7 @@ async fn refresh_screens(ui: &mut Ui) -> bool {
 /// Refresh the Room Scan radar frame and sensor caption, reporting a change.
 ///
 /// The radar comes from the perception snapshot and is `None` while no snapshot
-/// exists — before the sensor warms or after it is released — which the screen
+/// exists — before the sensor warms or after it is disabled — which the screen
 /// draws as "No data", never as an empty room. The cloud crosses owned with its
 /// sequence as the change token, so an unchanged sequence costs one counter
 /// comparison and no copy of the slot array (ADR-0016). The caption comes from

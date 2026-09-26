@@ -6,7 +6,7 @@ wear item; keeping it running through motor tests, calibration and idle trades i
 for nothing. The cost is a warm-up wait at every mode entry and a power lifecycle to get
 right.
 
-**Status:** accepted. The ownership paragraph is revised in place: ownership is leased as well as ref-counted.
+**Status:** accepted. The leased ownership model originally recorded here is superseded by ADR-0017: the LiDAR task owns its power lifecycle, and a mode enables and disables the sensor rather than holding a lease. The bullets below state the enable/disable model.
 
 **Considered Options**
 
@@ -19,20 +19,19 @@ right.
 **Decision**
 
 - A persistent core1 task owns the driver for the whole runtime and exposes
-  `acquire()` / `release()` / `status()`. Ownership is ref-counted and leased: `acquire()`
-  yields a lease that `release()` consumes, the sensor powers down when the last lease is
-  released, and a mode can only release the lease it holds. An acquire that is already in
-  flight is refused with `Busy`, so no second lifecycle starts while one is coming up.
-- `acquire()` runs `power_on()` → `start()` → `warm_up()` → streaming. A `start()` failure
+  `enable()` / `disable()` / `status()`. A mode enables the sensor when it needs perception and
+  disables it when it is done; the task owns power, warm-up, retries and streaming (ADR-0017).
+  At most one mode needs perception at a time, so the enabled sensor serves every reader.
+- `enable()` runs `power_on()` → `start()` → `warm_up()` → streaming. A `start()` failure
   is tolerated; warm-up is the real proof that data flows.
 - Warm-up is bounded by a wall-clock timeout at the call site, because the driver has only
   byte-count watchdogs. On timeout the task power-cycles and retries a bounded number of
   times before reporting `Failed`.
-- `release()` stops the device, deasserts the power pin, and clears stale state: the stored
+- `disable()` stops the device, deasserts the power pin, and clears stale state: the stored
   cloud becomes `None`, the obstacle flag is cleared, and a cleared `ObstacleDetected`
   edge is raised if the flag had been set.
-- Coast-and-Avoid acquires the LiDAR on entry and **refuses to start** if the acquisition
-  fails, rather than driving with only the downward rangefinder for obstacle sense.
+- Coast-and-Avoid enables the LiDAR on entry and **refuses to start** if the sensor cannot be
+  brought up, rather than driving with only the downward rangefinder for obstacle sense.
 - The LiDAR is off at boot; motor tests, IMU tests, calibration and idle never power it.
 
 **Consequences**
@@ -41,8 +40,9 @@ right.
   steady state; the screen shows the warming state so the wait does not read as a hang.
 - Consumers must treat an absent cloud as unknown, not as an empty room: a `None` snapshot
   means the sensor is off or not yet warmed.
-- A stopped sensor can leave an obstacle flag behind, so `release()` carries the
+- A stopped sensor can leave an obstacle flag behind, so `disable()` carries the
   obligation to clear it in the same step.
-- A mode that never acquired holds no lease, so leaving a screen after a failed acquisition
-  cannot power the sensor down under the mode that does own it.
+- `disable()` is one-way and not owner-scoped, so a leave delivered after another mode has
+  enabled the sensor powers it down under that mode; the window is small and accepted rather
+  than guarded (ADR-0017).
 - The power MOSFET stays wired even though it is now load-bearing rather than optional.

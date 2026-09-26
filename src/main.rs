@@ -408,7 +408,7 @@ fn init_lidar(spawner: Spawner, d6_pins: D6LidarPins) {
         uart_config,
     );
 
-    // Powered off by default; the driver asserts this only while acquired.
+    // Powered off by default; the driver asserts this only while enabled.
     let power = Output::new(d6_pins.power_mosfet, Level::Low);
 
     spawner.spawn(task::sensors::lidar::lidar_task(uart, power).unwrap());

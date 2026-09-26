@@ -392,7 +392,7 @@ pub enum Screen {
     /// The Room Scan screen: the sensor's live spins drawn as a radar.
     ///
     /// It is not a running procedure: its header offers Back, and the firmware
-    /// acquires the `LiDAR` on entry and releases it on exit.
+    /// enables the `LiDAR` on entry and disables it on exit.
     RoomScan,
 }
 

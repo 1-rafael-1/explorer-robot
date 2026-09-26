@@ -113,9 +113,20 @@ pub struct AggregationConfig {
     pub validity_ratio: f32,
     /// How the aggregated distances are combined.
     pub method: AggregationMethod,
-    /// Angular bin width in degrees. Revolutions are reduced by angle, so this
-    /// must match the device's native angular resolution (0.9°, i.e. 400 points
-    /// per revolution).
+    /// Angular bin width in degrees. Revolutions are reduced by angle into
+    /// fixed-width buckets of this size.
+    ///
+    /// The device emits at a native 0.9° spacing (400 points per revolution).
+    /// Widths **coarser** than that are supported and are the intended use: each
+    /// bucket gathers several native samples and collapses them to the nearest
+    /// valid return, so coarsening never hides a closer obstacle. Reducing at a
+    /// width wider than the native spacing is also what keeps buckets sampled
+    /// under normal spacing, so a `None` bucket usually means a measured no-return
+    /// rather than an unsampled hole. That is not a guarantee: the driver's
+    /// per-point angle correction displaces each return by its range, so two
+    /// neighbours at very different distances can be spread past a bucket boundary
+    /// and leave the bucket between them unsampled. A non-finite or non-positive
+    /// value falls back to the default.
     pub resolution_deg: f32,
 }
 
