@@ -43,9 +43,10 @@ pub const SLOTS: usize = 360;
 /// The width is deliberately *wider* than the sensor's native 0.9° spacing
 /// (ADR-0002): a grid at or under the sample spacing leaves slots with no sample
 /// as the rotor drifts through its settle band, and an empty slot is
-/// indistinguishable from a measured no-return (ADR-0011). At 1.0° every slot
-/// receives at least one native sample, so a `None` slot always means "measured,
-/// no return". See ADR-0018.
+/// indistinguishable from a measured no-return (ADR-0011). At 1.0° a slot is
+/// normally sampled, so a `None` slot usually means "measured, no return" rather
+/// than an unsampled hole — though per-point angle correction can still spread
+/// adjacent returns past a boundary and leave a slot empty. See ADR-0018.
 pub const SLOT_WIDTH_DEG: f32 = 1.0;
 
 /// The COIN-D6's mounting rotation, in degrees.

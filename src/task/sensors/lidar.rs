@@ -18,11 +18,12 @@
 //! Readiness is observed by polling the lock-free [`status`] — `Off`, `Warming`,
 //! `Streaming` or `Failed`; the task never signals. Bring-up is edge-triggered: a
 //! duplicate [`enable`] is inert, and a failed attempt holds at `Failed` until a
-//! [`disable`], so a caller cannot spin retries by polling. The [`disable`] that
-//! clears a failure publishes `Off`, so a caller about to retry can observe the
-//! reset land and then [`enable`], rather than racing a fresh enable against the
-//! stale `Failed`. [`disable`] stops the device, drops the power gate and clears
-//! the stale cloud, obstacle flag and cleared edge (ADR-0015) in the same step.
+//! [`disable`], so a caller cannot spin retries by polling. [`enable`] releases a
+//! latched failure itself — sending the `Disable` and waiting for the task to
+//! publish the reset as `Off` — so a caller that re-enters a mode after a failure
+//! recovers rather than wedging on an ignored `Enable`. [`disable`] stops the
+//! device, drops the power gate and clears the stale cloud, obstacle flag and
+//! cleared edge (ADR-0015) in the same step.
 //!
 //! # Lifecycle
 //!
@@ -104,6 +105,8 @@ const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const POWER_CYCLE_OFF: Duration = Duration::from_millis(200);
 /// Bounded number of power-cycle attempts per enable.
 const BRINGUP_ATTEMPTS: u8 = 3;
+/// Poll interval while [`enable`] waits for a latched failure to reset (ms).
+const FAILURE_RESET_POLL_MS: u64 = 50;
 
 // ── Status cell (lock-free) ───────────────────────────────────────────────────
 
@@ -143,17 +146,27 @@ type LidarDriver = CoinD6<'static, BufferedUart, Output<'static>>;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Ask the task to enable the sensor, without waiting for a reply.
+/// Ask the task to enable the sensor, without waiting for it to stream.
 ///
-/// One-way: this raises this mode's need and returns as soon as the request is
-/// queued. The task owns the bring-up, the warm-up, the retries and streaming, so
-/// readiness is observed by polling [`status`]. A duplicate is inert — no second
-/// bring-up and no extra power — so a caller cannot spin retries by polling. A
-/// failed attempt holds at [`LidarStatus::Failed`] until a [`disable`] clears it
-/// and publishes [`LidarStatus::Off`]; a caller retrying after a failure should
-/// clear the latch first, then enable, so its enable is not raced by the stale
-/// `Failed`.
+/// One-way: this raises this mode's need and returns once the request is queued,
+/// plus at most the short failure reset below. The task owns the bring-up, the
+/// warm-up, the retries and streaming, so readiness is observed by polling
+/// [`status`]. A duplicate is inert — no second bring-up and no extra power — so a
+/// caller cannot spin retries by polling.
+///
+/// A previous run can leave the sensor latched [`LidarStatus::Failed`], and the
+/// task ignores an `Enable` while it is held, so an enable sent on its own would
+/// be swallowed. This therefore releases the latch first — a `Disable`, then a
+/// wait for the task to publish the reset as [`LidarStatus::Off`] — so the enable
+/// below always starts a fresh bring-up, whether the sensor is off, streaming or
+/// failed, and a caller that re-enters a mode after a failure recovers.
 pub async fn enable() {
+    if status() == LidarStatus::Failed {
+        COMMAND.send(LidarCommand::Disable).await;
+        while status() == LidarStatus::Failed {
+            Timer::after(Duration::from_millis(FAILURE_RESET_POLL_MS)).await;
+        }
+    }
     COMMAND.send(LidarCommand::Enable).await;
 }
 
@@ -394,8 +407,8 @@ async fn restart_stream(driver: &mut LidarDriver, scratch: &mut Scan, last_obsta
 async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<bool>) {
     // Reduce onto the cloud's own slot grid rather than the driver's native 0.9°
     // default: the 1.0° width is deliberately wider than the sensor's sample
-    // spacing, so every slot receives a sample and a `None` slot is always a
-    // measured no-return, never an unsampled hole (ADR-0018).
+    // spacing, so a slot is normally sampled and a `None` slot usually means a
+    // measured no-return rather than an unsampled hole (ADR-0018).
     let config = AggregationConfig {
         resolution_deg: SLOT_WIDTH_DEG,
         ..AggregationConfig::default()

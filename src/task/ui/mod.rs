@@ -221,8 +221,9 @@ async fn coast_avoid_task() {
 /// leave/re-enter cannot drop the final change. Entering enables the sensor and
 /// leaving disables it; the sensor's own task owns the bring-up, so this task
 /// never blocks on the multi-second warm-up. A failed bring-up leaves `Failed`
-/// for the screen to show, and a leave that follows it sends a `Disable` that
-/// powers down nothing.
+/// for the screen to show; re-entering enables again, and [`lidar::enable`]
+/// releases the latched failure first, so the converged re-enter recovers rather
+/// than wedging.
 #[embassy_executor::task]
 async fn room_scan_task() {
     loop {

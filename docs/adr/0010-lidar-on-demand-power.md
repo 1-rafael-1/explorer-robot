@@ -42,6 +42,7 @@ right.
   means the sensor is off or not yet warmed.
 - A stopped sensor can leave an obstacle flag behind, so `disable()` carries the
   obligation to clear it in the same step.
-- A mode whose enable failed holds nothing, so leaving a screen after a failed bring-up sends
-  an inert `disable()` that cannot power the sensor down under a mode that does own it.
+- `disable()` is one-way and not owner-scoped, so a leave delivered after another mode has
+  enabled the sensor powers it down under that mode; the window is small and accepted rather
+  than guarded (ADR-0017).
 - The power MOSFET stays wired even though it is now load-bearing rather than optional.

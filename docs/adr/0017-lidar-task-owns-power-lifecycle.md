@@ -30,9 +30,10 @@ and to reason about an acquisition generation. This replaces the lease with a on
 - Readiness is observed through the lock-free `status()` — `Off`, `Warming`, `Streaming`,
   `Failed`. The task does not signal; callers poll.
 - Bring-up is edge-triggered: a failed attempt holds at `Failed` until a `Disable` clears it,
-  and the clear publishes `Off` so the caller can observe the reset land. A duplicate `Enable`
-  is ignored, so a caller cannot spin retries by polling; a caller retrying a latched failure
-  clears it before enabling, so its own bring-up — not the stale `Failed` — decides the outcome.
+  and the clear publishes `Off` so a caller can observe the reset land. A duplicate `Enable`
+  is ignored, so a caller cannot spin retries by polling. `enable()` releases a latched failure
+  itself — `Disable`, wait for `Off`, then `Enable` — so a caller that re-enters a mode after a
+  failure starts a fresh bring-up instead of wedging on an ignored `Enable`.
 - The data path is unchanged: the enabled sensor publishes its cloud, its obstacle flag and
   its `ObstacleDetected` edge, and serves every reader.
 - `Lease`, `AcquireError::Busy`, the acquisition generation and both reply channels are
