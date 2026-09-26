@@ -177,6 +177,23 @@ pub async fn start() -> Result<(), StartError> {
     // not count, but one that arrives during the warm-up must.
     STOP_REQUESTED.store(false, Ordering::Release);
 
+    // A previous run can leave the sensor latched `Failed`, and only a disable
+    // releases that latch. Clear it here, before the enable, and wait for the
+    // reset to publish `Off`, so this start's own bring-up decides the outcome
+    // rather than a stale `Failed` that would refuse it before it begins.
+    if lidar::status() == LidarStatus::Failed {
+        lidar::disable().await;
+        loop {
+            if STOP_REQUESTED.load(Ordering::Acquire) {
+                return Err(StartError::Cancelled);
+            }
+            if lidar::status() != LidarStatus::Failed {
+                break;
+            }
+            Timer::after(Duration::from_millis(LIDAR_STATUS_POLL_MS)).await;
+        }
+    }
+
     lidar::enable().await;
 
     // The sensor's own task owns the bring-up, so poll its lock-free status

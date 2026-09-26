@@ -18,9 +18,11 @@
 //! Readiness is observed by polling the lock-free [`status`] — `Off`, `Warming`,
 //! `Streaming` or `Failed`; the task never signals. Bring-up is edge-triggered: a
 //! duplicate [`enable`] is inert, and a failed attempt holds at `Failed` until a
-//! [`disable`] followed by an [`enable`], so a caller cannot spin retries by
-//! polling. [`disable`] stops the device, drops the power gate and clears the
-//! stale cloud, obstacle flag and cleared edge (ADR-0015) in the same step.
+//! [`disable`], so a caller cannot spin retries by polling. The [`disable`] that
+//! clears a failure publishes `Off`, so a caller about to retry can observe the
+//! reset land and then [`enable`], rather than racing a fresh enable against the
+//! stale `Failed`. [`disable`] stops the device, drops the power gate and clears
+//! the stale cloud, obstacle flag and cleared edge (ADR-0015) in the same step.
 //!
 //! # Lifecycle
 //!
@@ -146,9 +148,11 @@ type LidarDriver = CoinD6<'static, BufferedUart, Output<'static>>;
 /// One-way: this raises this mode's need and returns as soon as the request is
 /// queued. The task owns the bring-up, the warm-up, the retries and streaming, so
 /// readiness is observed by polling [`status`]. A duplicate is inert — no second
-/// bring-up and no extra power — so a caller cannot spin retries by polling, and a
-/// failed attempt holds at [`LidarStatus::Failed`] until a [`disable`] followed by
-/// an [`enable`].
+/// bring-up and no extra power — so a caller cannot spin retries by polling. A
+/// failed attempt holds at [`LidarStatus::Failed`] until a [`disable`] clears it
+/// and publishes [`LidarStatus::Off`]; a caller retrying after a failure should
+/// clear the latch first, then enable, so its enable is not raced by the stale
+/// `Failed`.
 pub async fn enable() {
     COMMAND.send(LidarCommand::Enable).await;
 }
@@ -229,11 +233,16 @@ pub async fn lidar_task(uart: BufferedUart, power: Output<'static>) {
         }
 
         // The device failed, either bringing up or while streaming. Hold at
-        // `Failed` until a disable followed by an enable, so a duplicate enable
-        // cannot spin retries.
+        // `Failed` until a disable clears the latch: a duplicate enable cannot
+        // spin retries while it is held. The clear is published as `Off`, so a
+        // caller resetting a latched failure can observe the reset land before it
+        // enables, rather than racing its enable against the stale `Failed`.
         loop {
             match COMMAND.receive().await {
-                LidarCommand::Disable => break,
+                LidarCommand::Disable => {
+                    set_status(LidarStatus::Off);
+                    break;
+                }
                 LidarCommand::Enable => {}
             }
         }

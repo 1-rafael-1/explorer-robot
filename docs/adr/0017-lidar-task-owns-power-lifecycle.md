@@ -29,8 +29,10 @@ and to reason about an acquisition generation. This replaces the lease with a on
   owns power, warm-up, retries, streaming and power-off, and keeps the driver for the runtime.
 - Readiness is observed through the lock-free `status()` — `Off`, `Warming`, `Streaming`,
   `Failed`. The task does not signal; callers poll.
-- Bring-up is edge-triggered: a failed attempt holds at `Failed` until a `Disable` followed by
-  an `Enable`. A duplicate `Enable` is ignored, so a caller cannot spin retries by polling.
+- Bring-up is edge-triggered: a failed attempt holds at `Failed` until a `Disable` clears it,
+  and the clear publishes `Off` so the caller can observe the reset land. A duplicate `Enable`
+  is ignored, so a caller cannot spin retries by polling; a caller retrying a latched failure
+  clears it before enabling, so its own bring-up — not the stale `Failed` — decides the outcome.
 - The data path is unchanged: the enabled sensor publishes its cloud, its obstacle flag and
   its `ObstacleDetected` edge, and serves every reader.
 - `Lease`, `AcquireError::Busy`, the acquisition generation and both reply channels are
@@ -41,9 +43,12 @@ and to reason about an acquisition generation. This replaces the lease with a on
 - A departing mode's `Disable` can land after an arriving mode's `Enable`, powering the sensor
   off under a mode that has just enabled it. The window is the departing task's teardown
   (brake and driver-disable, a few hundred milliseconds) and is reached only by navigating
-  three screens inside it, so it is accepted rather than guarded: a guard is either a count or
-  an identity token, which is the lease this decision removes. Revisit if a bench or field
-  report ever shows the sensor dropping under an active mode.
+  three screens inside it. Room Scan widens the same window in miniature: its helper converges
+  on the screen's latch when it is next scheduled, so a leave just before a new mode enables
+  can be delivered as a `Disable` after that `Enable` — a scheduler delay rather than a
+  teardown. Both are accepted rather than guarded, because a guard is either a count or an
+  identity token, which is the lease this decision removes. Revisit if a bench or field report
+  ever shows the sensor dropping under an active mode.
 - There is no compile-time reminder to hand the sensor back, so a forgotten `Disable` keeps
   the sensor powered; a bench run shows that immediately.
 - This rests on *at most one mode needs perception at a time* (the glossary's **Enabled**),
