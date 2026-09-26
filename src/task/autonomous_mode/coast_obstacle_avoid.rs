@@ -25,12 +25,12 @@
 //!
 //! # Starting and stopping
 //!
-//! Call [`start`] to acquire the `LiDAR` and begin the mode, and [`stop`] to
-//! request a graceful exit. Acquisition can take seconds, so [`stop`] latches its
+//! Call [`start`] to enable the `LiDAR` and begin the mode, and [`stop`] to
+//! request a graceful exit. Enabling can take seconds, so [`stop`] latches its
 //! intent in [`STOP_REQUESTED`]: a stop that lands while [`start`] is still warming
-//! the sensor makes the start hand its lease straight back instead of driving. If
-//! the `LiDAR` cannot be acquired, [`start`] fails and the mode never drives: the
-//! downward rangefinder is a floor-drop sensor, not an obstacle sensor.
+//! the sensor makes the start disable the sensor and abandon the start instead of
+//! driving. If the `LiDAR` cannot be enabled, [`start`] fails and the mode never
+//! drives: the downward rangefinder is a floor-drop sensor, not an obstacle sensor.
 //!
 //! The obstacle decision reads perception's lock-free flag, which the `LiDAR`
 //! task drives through the Front Sector test in the `lidar-cloud` crate (half-angle
@@ -41,7 +41,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Timer};
 use nanorand::{Rng, WyRand};
 
@@ -53,7 +52,7 @@ use crate::{
     task::{
         autonomous_mode::{self, AutonomousCommand},
         motor_driver::{self, MotorCommand},
-        sensors::lidar::{self, AcquireError},
+        sensors::lidar::{self, LidarStatus},
     },
 };
 
@@ -61,37 +60,24 @@ use crate::{
 
 /// Set while the coast-and-avoid loop is running.
 ///
-/// Raised only after [`LIDAR_LEASE`] holds the lease and cleared again if the
-/// start is refused, so a running loop always has a lease to hand back. Also
-/// cleared by [`stop`], which latches the request in [`STOP_REQUESTED`] at the
-/// same time so a start still in flight can notice it.
+/// Raised by [`start`] once the sensor is streaming and the start request is
+/// accepted, and cleared again if the request is refused. Also cleared by
+/// [`stop`], which latches the request in [`STOP_REQUESTED`] at the same time so
+/// a start still waiting for the sensor can notice it.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Records a [`stop`] that lands while [`start`] is still warming the `LiDAR`.
 ///
-/// Acquisition can take seconds, and the running screen is up the whole time, so
-/// the operator can tap Stop before [`start`] has raised [`ACTIVE`] — a stop that
+/// Enabling can take seconds, and the running screen is up the whole time, so the
+/// operator can tap Stop before [`start`] has raised [`ACTIVE`] — a stop that
 /// would otherwise have nothing to clear and would be lost. [`stop`] latches the
-/// intent here, and [`start`] checks it immediately before raising [`ACTIVE`]: a
-/// latched stop makes the start hand its lease straight back and refuse to drive.
-/// [`start`] arms the latch at its top, so a stop from a finished run is inert
-/// while a fresh one during the warm-up is honoured. The store uses `Release` and
-/// the check `Acquire`, making the hand-off explicit even though every access
-/// happens on core0.
+/// intent here, and [`start`] checks it while polling the sensor status: a latched
+/// stop makes the start disable the sensor and abandon the start. [`start`] arms
+/// the latch at its top, so a stop from a finished run is inert while a fresh one
+/// during the warm-up is honoured. The store uses `Release` and the check
+/// `Acquire`, making the ordering explicit even though every access happens on
+/// core0.
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-// ── LiDAR lease ───────────────────────────────────────────────────────────────
-
-/// The `LiDAR` lease held by the running mode.
-///
-/// [`start`] stores the lease here and [`coast_obstacle_avoid_task`] takes and
-/// releases it on exit. The task is spawned by the autonomous-mode controller
-/// rather than by [`start`], so the token cannot travel as a task argument and
-/// crosses the two through this cell instead. Because the cell is published
-/// before the controller can spawn the task, a lease placed here is always
-/// consumed: the task takes it on exit, or [`start`] takes it back when the
-/// start request is refused.
-static LIDAR_LEASE: Mutex<CriticalSectionRawMutex, Option<lidar::Lease>> = Mutex::new(None);
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
 
@@ -119,6 +105,9 @@ const PERCEPTION_CHECK_INTERVAL_MS: u64 = 100;
 /// Approximate time to turn 90 degrees with differential drive at `TURN_SPEED` (ms).
 const TURN_90_DEG_MS: u64 = 500;
 
+/// Interval between `LiDAR` status polls while waiting for the sensor to warm up (milliseconds).
+const LIDAR_STATUS_POLL_MS: u64 = 50;
+
 // ── State machine ────────────────────────────────────────────────────────────────
 
 /// States of the coast-and-avoid state machine.
@@ -137,10 +126,9 @@ enum State {
 /// Why coast-and-avoid could not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum StartError {
-    /// Another autonomous mode is already active, or a `LiDAR` acquisition is
-    /// already in flight and not yet streaming.
+    /// Another autonomous mode is already active.
     Busy,
-    /// The `LiDAR` could not be acquired. The mode refuses to run, because the
+    /// The `LiDAR` could not be enabled. The mode refuses to run, because the
     /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
     LidarUnavailable,
     /// A stop arrived while the `LiDAR` was still warming, so the mode was
@@ -172,82 +160,55 @@ pub(super) fn spawn(spawner: Spawner) {
     spawner.spawn(coast_obstacle_avoid_task().unwrap());
 }
 
-/// Acquire the `LiDAR` and activate the coast-and-avoid autonomous mode.
+/// Enable the `LiDAR` and activate the coast-and-avoid autonomous mode.
 ///
-/// The sensor is acquired *before* the mode is spawned, so the mode never drives
-/// while the sensor is still warming or unavailable.
-///
-/// # Hand-off ordering
-///
-/// `request_start` is the call that makes the autonomous-mode controller spawn
-/// [`coast_obstacle_avoid_task`], so the lease is published in [`LIDAR_LEASE`] and
-/// [`ACTIVE`] is raised *before* it. A spawned task therefore can never observe
-/// `ACTIVE == true` with no lease to consume, and can never exit holding a lease
-/// it was not handed. If the request is refused, both are rolled back — nothing
-/// is left active and the lease is released. The mode active at that point is
-/// another autonomous mode, or a coast run already past its loop, so briefly
-/// toggling this module's `ACTIVE` cannot be observed by a running coast task.
-///
-/// A stop during the warm-up is preserved rather than lost. [`STOP_REQUESTED`] is
-/// armed before the acquisition, so only a stop from this run counts, and it is
-/// checked immediately before [`ACTIVE`] is raised, with no await between the
-/// check and the store. Raising `ACTIVE` first and checking after would leave the
-/// [`LIDAR_LEASE`] lock await between the check and the flag, letting a stop be
-/// overwritten; and a stop after the check clears `ACTIVE`, which the spawned
-/// loop's `while ACTIVE` test observes before it drives.
+/// The sensor is enabled and waited on *before* the mode is spawned, so the
+/// mode never drives while the sensor is still warming or unavailable. A stop
+/// that arrives during the wait disables the sensor and abandons the start,
+/// leaving nothing enabled.
 ///
 /// # Errors
 ///
-/// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought up,
-/// [`StartError::Busy`] if another autonomous mode is already active or a
-/// previous coast run still holds its lease, or [`StartError::Cancelled`] if a
-/// stop arrived while the sensor was warming.
+/// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought
+/// up, [`StartError::Busy`] if another autonomous mode is already active, or
+/// [`StartError::Cancelled`] if a stop arrived while the sensor was warming.
 pub async fn start() -> Result<(), StartError> {
-    // Arm the cancel latch before the acquisition: a stop from an earlier run
-    // must not count, but one that arrives during the warm-up must.
+    // Arm the cancel latch before enabling: a stop from an earlier run must
+    // not count, but one that arrives during the warm-up must.
     STOP_REQUESTED.store(false, Ordering::Release);
 
-    let lease = match lidar::acquire().await {
-        Ok(lease) => lease,
-        Err(AcquireError::Busy) => return Err(StartError::Busy),
-        Err(AcquireError::Failed) => return Err(StartError::LidarUnavailable),
-    };
+    lidar::enable().await;
 
-    // Publish the lease before the task can be spawned. If a previous run still
-    // holds one, refuse rather than overwrite it: dropping that lease unreleased
-    // would leak its ref count and keep the sensor powered.
-    {
-        let mut slot = LIDAR_LEASE.lock().await;
-        if slot.is_some() {
-            drop(slot);
-            lidar::release(lease).await;
-            return Err(StartError::Busy);
+    // The sensor's own task owns the bring-up, so poll its lock-free status
+    // until it is streaming, has failed, or a stop arrives. The enable is
+    // one-way, so this poll is the only wait.
+    loop {
+        if STOP_REQUESTED.load(Ordering::Acquire) {
+            lidar::disable().await;
+            return Err(StartError::Cancelled);
         }
-        *slot = Some(lease);
-    }
-
-    // Check the latch with no await before raising ACTIVE: on this cooperative
-    // executor a stop cannot land between the check and the store, and a stop
-    // after the store clears ACTIVE, which the spawned loop sees before driving.
-    if STOP_REQUESTED.load(Ordering::Acquire) {
-        let lease = LIDAR_LEASE.lock().await.take();
-        if let Some(lease) = lease {
-            lidar::release(lease).await;
+        match lidar::status() {
+            LidarStatus::Streaming => break,
+            LidarStatus::Failed => {
+                // The sensor is powered down and will not retry until a fresh
+                // disable-then-enable, so clear the need and refuse to drive.
+                lidar::disable().await;
+                return Err(StartError::LidarUnavailable);
+            }
+            LidarStatus::Off | LidarStatus::Warming => {
+                Timer::after(Duration::from_millis(LIDAR_STATUS_POLL_MS)).await;
+            }
         }
-        return Err(StartError::Cancelled);
     }
 
     ACTIVE.store(true, Ordering::Relaxed);
 
     if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
-        // No task was spawned, so roll the hand-off back: lower the flag and
-        // take the lease back to release it. No running coast task can observe
-        // this, because the mode active now is another autonomous mode.
+        // No task was spawned, so roll the enable back. No running coast task
+        // can observe this, because the mode active now is another autonomous
+        // mode.
         ACTIVE.store(false, Ordering::Relaxed);
-        let lease = LIDAR_LEASE.lock().await.take();
-        if let Some(lease) = lease {
-            lidar::release(lease).await;
-        }
+        lidar::disable().await;
         return Err(StartError::Busy);
     }
 
@@ -258,7 +219,8 @@ pub async fn start() -> Result<(), StartError> {
 ///
 /// Clears the active flag so the loop exits after the current drive command
 /// resolves, and latches the request in [`STOP_REQUESTED`] so a start still
-/// warming the `LiDAR` refuses to drive when it reaches the hand-off.
+/// waiting for the `LiDAR` disables the sensor and abandons the start instead of
+/// driving.
 pub fn stop() {
     ACTIVE.store(false, Ordering::Relaxed);
     STOP_REQUESTED.store(true, Ordering::Release);
@@ -308,13 +270,9 @@ pub async fn coast_obstacle_avoid_task() {
     motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
     Timer::after(Duration::from_millis(200)).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    // Leaving the mode hands back the lease it holds: the sensor stops, drops
-    // its power, and clears its stale cloud and obstacle flag only when no other
-    // mode still holds a lease.
-    let lease = LIDAR_LEASE.lock().await.take();
-    if let Some(lease) = lease {
-        lidar::release(lease).await;
-    }
+    // Leaving the mode disables the sensor; the sensor's task stops it, drops
+    // its power, and clears its stale cloud and obstacle flag.
+    lidar::disable().await;
     autonomous_mode::release_autonomous_mode();
     info!("coast-avoid: deactivated");
 }

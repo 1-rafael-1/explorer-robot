@@ -29,7 +29,7 @@
 - **Validity ratio** — The minimum fraction of aggregated spins that must report a valid (`distance_mm.is_some()`) sample at an angular bucket for that bucket to be kept; otherwise the bucket is emitted as a no-return.
 - **Bin representative** — The single LiDAR return chosen to stand for all native samples that fall within one angular bucket during aggregation. It is the *nearest valid return*, so coarsening a bucket never hides a closer obstacle (not the first sample, strongest return, or a mean).
 - **Warm-up** — The post-`start` phase during which revolutions are discarded until the rotor reaches steady-state speed. Settling is proxied by the per-revolution point count stabilising near the native 400 (as opposed to plateauing below it, or exhausting a spin budget).
-- **LiDAR Lease** — The token a mode holds while it owns the powered LiDAR. The sensor powers down when its last lease is released, and a mode can only release the lease it holds.
+- **Enabled** — The LiDAR's lifecycle state: `Off`, `Warming`, `Streaming` or `Failed`. A mode enables the sensor when it needs perception and disables it when it is done; at most one mode needs perception at a time, and the enabled sensor serves data to every reader.
 - **No Return** — A bin for which no valid range was measured. It is not an obstacle, and it must not be read as a clear angle: gap selection never treats it as navigable.
 - **Front Sector** — The angular window about dead ahead that the Coast-and-Avoid stop test sweeps: ±45° by default, with a 30 cm stop threshold.
 - **Room Scan** — The operator-initiated mode that renders live Spins as a radar on the Display, for verifying the LiDAR and surveying a room. It does not drive.
@@ -131,7 +131,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Autonomous Modes
 
-- **Coast-and-Avoid** — Drive forward until the obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The flag comes from the LiDAR's Front Sector test; the mode reads only the pre-computed boolean, and refuses to run if the LiDAR cannot be acquired. Simple, reliable.
+- **Coast-and-Avoid** — Drive forward until the obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The flag comes from the LiDAR's Front Sector test; the mode reads only the pre-computed boolean, and refuses to run if the LiDAR cannot be enabled. Simple, reliable.
 - **Attempt Straight Line** — User sets target distance (100–1000 cm). The LiDAR point cloud is analyzed for navigable gaps; the widest gap within the forward cone (±60°) is chosen. The robot rotates toward the gap center, drives a leg, and repeats. IMU heading used for drift correction. Completes when target distance is reached or no forward path exists. *(Deferred — UI integration pending.)*
 
 ### Gap Analysis

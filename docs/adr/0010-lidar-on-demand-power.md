@@ -6,7 +6,7 @@ wear item; keeping it running through motor tests, calibration and idle trades i
 for nothing. The cost is a warm-up wait at every mode entry and a power lifecycle to get
 right.
 
-**Status:** accepted. The ownership paragraph is revised in place: ownership is leased as well as ref-counted.
+**Status:** accepted. The ownership paragraph is superseded by ADR-0017: the LiDAR task owns its power lifecycle, and a mode enables and disables the sensor rather than holding a lease.
 
 **Considered Options**
 
