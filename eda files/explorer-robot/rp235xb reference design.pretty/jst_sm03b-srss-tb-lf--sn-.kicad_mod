@@ -1,0 +1,276 @@
+(footprint "jst_sm03b-srss-tb-lf--sn-"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at -1.65 -5.05 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "e728e97b-7570-4778-8cf4-d240629a993b")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.125)
+			)
+			(justify right)
+		)
+	)
+	(property "Value" "SM03B-SRSS-TB(LF)(SN)"
+		(at 0 1.5 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "55a4c33e-9cef-4ab5-a765-4b3ae2aca253")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.01)
+			)
+		)
+	)
+	(property "Datasheet" "file:///C:\\rpi-pdb\\parts\\Connectors\\Rectangular\\JST_SM03B-SRSS-TB-LF--SN-\\datasheets"
+		(at 0 0.7 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "07d15539-4af3-4450-be67-43a095fdba79")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.01)
+			)
+		)
+	)
+	(property "Description" "Header, JST-SH, 01x03W, Pitch=1mm, SMD, Right Angle"
+		(at 0 0.7 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e6ca8c4b-cfe7-4b17-bfc5-07ffddfa9e7c")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.01)
+			)
+		)
+	)
+	(property "part_uid" "RP-01EKJ1-8V9SV1"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "94ed8b7f-c7b7-4836-a113-b18cd93d050b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "status" "OK"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "dcdcca1a-3e4d-4a21-a996-8e39966f2087")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "manufacturer" "JST"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0a6c49b1-6dc6-4e25-891f-0a0857077c79")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "manufacturer_pn" "SM03B-SRSS-TB(LF)(SN)"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "98a6d8a9-13e2-44a7-8459-0042d04aa63b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "packaging" "380mm dia. tape & reel"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c6cca29e-ad03-4b7e-90f7-ae7fc4e598c3")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "packaging_qty" "3000"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "517fd1a0-fab4-4418-a337-21d259b63e7b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "lcsc_pn" "C160403"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0b9b0a9d-0909-45f5-9a17-514dccce6ddb")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "size" "5x4.95x2.95mm"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "b9eee181-8c0b-4e54-9822-cb1c7d7dab4c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "z_height_max" "3.25mm"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "45d00587-c320-4436-a06b-ecbb4562058c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "z_height_nom" "2.95mm"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "67f26c1b-b9f2-44d6-ae02-3c3aded8fda7")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property ki_fp_filters "RPI_COMPILED:jst_sm03b-srss-tb-lf--sn-")
+	(sheetname "/")
+	(sheetfile "RPI-RP2350B-MINIMAL_R4-S1.kicad_sch")
+	(solder_paste_margin_ratio 0)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_poly
+		(pts
+			(xy 2.5 0) (xy -2.5 0) (xy -2.5 -4.25) (xy -1.1 -4.25) (xy -1.1 -4.95) (xy -0.9 -4.95) (xy -0.9 -4.25)
+			(xy -0.1 -4.25) (xy -0.1 -4.95) (xy 0.1 -4.95) (xy 0.1 -4.25) (xy 0.9 -4.25) (xy 0.9 -4.95) (xy 1.1 -4.95)
+			(xy 1.1 -4.25) (xy 2.5 -4.25)
+		)
+		(stroke
+			(width 0.01)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "e037c79a-ddff-472e-b094-8a167bf0bbbc")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 0) (xy -2.5 0) (xy -2.5 -4.25) (xy -1.1 -4.25) (xy -1.1 -4.95) (xy -0.9 -4.95) (xy -0.9 -4.25)
+			(xy -0.1 -4.25) (xy -0.1 -4.95) (xy 0.1 -4.95) (xy 0.1 -4.25) (xy 0.9 -4.25) (xy 0.9 -4.95) (xy 1.1 -4.95)
+			(xy 1.1 -4.25) (xy 2.5 -4.25)
+		)
+		(stroke
+			(width 0.01)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "6f0b92f6-7e8d-4c0f-9859-b61e598ba3cf")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 -2.6 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "4fd7a4f0-a1ff-4695-9d09-080b5a77e914")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.01)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1 -4.575 180)
+		(size 0.6 1.55)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "601c53a6-1db1-4a76-9d9e-e01c4e980afe")
+	)
+	(pad "2" smd rect
+		(at 0 -4.575 180)
+		(size 0.6 1.55)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "8bd6c733-638c-4711-891e-7d3d2f333ebe")
+	)
+	(pad "3" smd rect
+		(at 1 -4.575 180)
+		(size 0.6 1.55)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "c50d92ca-5762-4cf9-a20c-9a51f7f931a2")
+	)
+	(pad "4" smd rect
+		(at -2.3 -0.7 180)
+		(size 1.2 1.8)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "acb5c9f8-6897-47f8-837e-b944aeb56cc3")
+	)
+	(pad "5" smd rect
+		(at 2.3 -0.7 180)
+		(size 1.2 1.8)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "e2339615-a006-4473-ad74-b8e7b602a4b9")
+	)
+	(embedded_fonts no)
+	(model "kicad-embed://jst_sm03b-srss-tb-lf--sn-.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
