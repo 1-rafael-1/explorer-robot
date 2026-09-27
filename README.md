@@ -104,4 +104,7 @@ Printed:
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+Portions are derived from the Raspberry Pi RP2350B Minimal reference design
+(MIT); see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for details.
