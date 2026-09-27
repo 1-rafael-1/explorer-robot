@@ -2507,7 +2507,7 @@
 		(uuid "15679039-ee5a-4a61-a592-26ca7411b377")
 	)
 	(junction
-		(at 40.64 90.17)
+		(at 41.91 90.17)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "4273d432-7c21-4fe1-8430-bd3b78f516b9")
@@ -2519,19 +2519,19 @@
 		(uuid "8b640b10-cf1e-4f9e-9e36-65d2b111cee8")
 	)
 	(junction
-		(at 40.64 86.36)
+		(at 41.91 87.63)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "cad68d7c-56fc-436b-a853-14f7d7836b1b")
 	)
 	(junction
-		(at 40.64 110.49)
+		(at 41.91 110.49)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "d440957d-bd81-4cdd-95e8-65c44f4499cb")
 	)
 	(junction
-		(at 80.01 86.36)
+		(at 80.01 87.63)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "ee8aad21-4c43-4f38-a3f3-cbad50a3d480")
@@ -2548,6 +2548,16 @@
 	)
 	(wire
 		(pts
+			(xy 80.01 95.25) (xy 80.01 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "156022ca-08b0-4f1e-8c84-f73cb8243c89")
+	)
+	(wire
+		(pts
 			(xy 59.69 97.79) (xy 59.69 95.25)
 		)
 		(stroke
@@ -2558,7 +2568,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 90.17) (xy 72.39 90.17)
+			(xy 41.91 90.17) (xy 72.39 90.17)
 		)
 		(stroke
 			(width 0)
@@ -2578,7 +2588,7 @@
 	)
 	(wire
 		(pts
-			(xy 72.39 86.36) (xy 80.01 86.36)
+			(xy 72.39 87.63) (xy 80.01 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2638,7 +2648,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 110.49) (xy 52.07 110.49)
+			(xy 41.91 110.49) (xy 52.07 110.49)
 		)
 		(stroke
 			(width 0)
@@ -2658,7 +2668,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 90.17) (xy 40.64 86.36)
+			(xy 41.91 90.17) (xy 41.91 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2668,7 +2678,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 90.17) (xy 40.64 102.87)
+			(xy 41.91 90.17) (xy 41.91 102.87)
 		)
 		(stroke
 			(width 0)
@@ -2678,7 +2688,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 110.49) (xy 40.64 114.3)
+			(xy 41.91 110.49) (xy 41.91 111.76)
 		)
 		(stroke
 			(width 0)
@@ -2688,7 +2698,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 86.36) (xy 64.77 86.36)
+			(xy 41.91 87.63) (xy 64.77 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2698,7 +2708,7 @@
 	)
 	(wire
 		(pts
-			(xy 40.64 83.82) (xy 40.64 86.36)
+			(xy 41.91 86.36) (xy 41.91 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2718,7 +2728,7 @@
 	)
 	(wire
 		(pts
-			(xy 85.09 100.33) (xy 85.09 86.36)
+			(xy 85.09 100.33) (xy 85.09 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2738,7 +2748,7 @@
 	)
 	(wire
 		(pts
-			(xy 80.01 86.36) (xy 85.09 86.36)
+			(xy 80.01 87.63) (xy 85.09 87.63)
 		)
 		(stroke
 			(width 0)
@@ -2846,7 +2856,7 @@
 	)
 	(symbol
 		(lib_id "power:+1V1")
-		(at 48.26 95.25 90)
+		(at 48.26 95.25 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2856,7 +2866,7 @@
 		(dnp no)
 		(uuid "3804bfdc-5db3-478e-8967-8de97935f651")
 		(property "Reference" "#PWR03"
-			(at 52.07 95.25 0)
+			(at 48.26 91.44 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2867,7 +2877,7 @@
 			)
 		)
 		(property "Value" "+1V1"
-			(at 45.72 95.25 90)
+			(at 48.26 97.79 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2953,7 +2963,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Inductor_SMD:L_0805_2012Metric"
+		(property "Footprint" "rp235xb:abracon_aota-b201610s3r3-101-t"
 			(at 59.69 101.6 0)
 			(hide yes)
 			(show_name no)
@@ -3033,10 +3043,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "55d21f65-2419-4941-b0d7-ad02fb491722")
 		(property "Reference" "C3"
-			(at 55.88 105.4099 0)
+			(at 55.372 105.41 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3047,7 +3056,7 @@
 			)
 		)
 		(property "Value" "4.7u"
-			(at 55.88 107.9499 0)
+			(at 55.372 107.95 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3129,7 +3138,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 40.64 106.68 0)
+		(at 41.91 106.68 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3137,10 +3146,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "7fc7d2d9-edec-49a7-9979-489593b32d64")
 		(property "Reference" "C2"
-			(at 44.45 105.4099 0)
+			(at 44.958 105.41 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3151,7 +3159,7 @@
 			)
 		)
 		(property "Value" "4.7u"
-			(at 44.45 107.9499 0)
+			(at 44.958 107.95 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3162,7 +3170,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 41.6052 110.49 0)
+			(at 42.8752 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3173,7 +3181,7 @@
 			)
 		)
 		(property "Datasheet" "https://jlc-prod-smt.oss-eu-central-1.aliyuncs.com/smtDataManualFile/8579707315710726144-C23733.pdf?response-content-disposition=attachment%3B%20filename%3DC23733.pdf%3B%20filename%2A%3DUTF-8%27%27C23733.pdf&x-oss-date=20260920T202756Z&x-oss-expires=1800&x-oss-security-token=CAISgAN1q6Ft5B2yfSjIr5rbD838roxR7pW%2BaR7InTFhNd5%2BhoPSkTz2IHhMdHJsAOodtv0%2FmmhT6PkclqRLcbhpcmfjV%2BZHzLB8qfZF4WQl557b16cNrbH4M4H6aXeirtuwDsz9SNTCALjPD3nPii50x5bjaDymRCbLGJaViJlhHLN1Ow6jdmhpCctxLAlvo9NgFxm3D%2Fu2NQPwiWf9FVdhvhEG6Vly8qOi2MaRmFy8yFTx0b0SvJ%2BjYMrmPctoN9JnSdC5mfdzau3a1TJ84gRD0a5wkaVA1zbDs5bfISEIuUzebreLqY03dV4mOvdqIcMe8qigz88fk%2FfIioH6xyxKOexoSCnFTOiiupCcQLPyao9jLu6iayqViY7QaIOTqQohZmkAMwVOasAsI3Ngh4zF97Qt0cVNkXO9gWfLI8DtuMleWmpmzm7zGjvyAFpORa%2Bb5wchMHn6pr9EWOXuJZUIn3b%2FstWNupKq5ldctHSeoXq108CXVnU5PXYI2gd0w6KWD5sagAFVO5kZc%2FFGtf%2BpCVwcLkEfbgLYvXpuWkzgQEh64E%2F8eF8zrHOiewoF33Fzwu1Fi1o2N%2BZg6s68a%2Bfn6ZZ1KjxSRYqvoJ8KD9h7%2FK6%2B%2Bhkg%2FydWt60KX41U2sut1gGWEt4%2Bke67bniigtgYwtT%2F%2BTCThQFmtpIk0V5PDsRgRMpQRiAA&x-oss-signature-version=OSS4-HMAC-SHA256&x-oss-credential=STS.NYnDwHCSpYWUk8yy149QRiFys%2F20260920%2Feu-central-1%2Foss%2Faliyun_v4_request&x-oss-signature=466ffd07de4be4bf13f145195ddf6404273d41e6e2db8972243a5a3d52efa65c"
-			(at 40.64 106.68 0)
+			(at 41.91 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3184,7 +3192,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 40.64 106.68 0)
+			(at 41.91 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3195,7 +3203,7 @@
 			)
 		)
 		(property "MPN" "CL05A475MP5NRNC"
-			(at 40.64 106.68 0)
+			(at 41.91 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3206,7 +3214,7 @@
 			)
 		)
 		(property "LCSC" "https://jlcpcb.com/partdetail/24469-CL05A475MP5NRNC/C23733"
-			(at 40.64 106.68 0)
+			(at 41.91 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3233,7 +3241,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 80.01 90.17 0)
+		(at 80.01 91.44 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3243,7 +3251,7 @@
 		(dnp no)
 		(uuid "a0aa15ac-c9fa-491c-853b-be59eece28df")
 		(property "Reference" "C1"
-			(at 77.47 91.1861 0)
+			(at 77.47 92.4561 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3254,7 +3262,7 @@
 			)
 		)
 		(property "Value" "4.7u"
-			(at 77.216 88.9 0)
+			(at 77.216 90.17 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3265,7 +3273,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 80.9752 93.98 0)
+			(at 80.9752 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3276,7 +3284,7 @@
 			)
 		)
 		(property "Datasheet" "https://jlc-prod-smt.oss-eu-central-1.aliyuncs.com/smtDataManualFile/8579707315710726144-C23733.pdf?response-content-disposition=attachment%3B%20filename%3DC23733.pdf%3B%20filename%2A%3DUTF-8%27%27C23733.pdf&x-oss-date=20260920T202756Z&x-oss-expires=1800&x-oss-security-token=CAISgAN1q6Ft5B2yfSjIr5rbD838roxR7pW%2BaR7InTFhNd5%2BhoPSkTz2IHhMdHJsAOodtv0%2FmmhT6PkclqRLcbhpcmfjV%2BZHzLB8qfZF4WQl557b16cNrbH4M4H6aXeirtuwDsz9SNTCALjPD3nPii50x5bjaDymRCbLGJaViJlhHLN1Ow6jdmhpCctxLAlvo9NgFxm3D%2Fu2NQPwiWf9FVdhvhEG6Vly8qOi2MaRmFy8yFTx0b0SvJ%2BjYMrmPctoN9JnSdC5mfdzau3a1TJ84gRD0a5wkaVA1zbDs5bfISEIuUzebreLqY03dV4mOvdqIcMe8qigz88fk%2FfIioH6xyxKOexoSCnFTOiiupCcQLPyao9jLu6iayqViY7QaIOTqQohZmkAMwVOasAsI3Ngh4zF97Qt0cVNkXO9gWfLI8DtuMleWmpmzm7zGjvyAFpORa%2Bb5wchMHn6pr9EWOXuJZUIn3b%2FstWNupKq5ldctHSeoXq108CXVnU5PXYI2gd0w6KWD5sagAFVO5kZc%2FFGtf%2BpCVwcLkEfbgLYvXpuWkzgQEh64E%2F8eF8zrHOiewoF33Fzwu1Fi1o2N%2BZg6s68a%2Bfn6ZZ1KjxSRYqvoJ8KD9h7%2FK6%2B%2Bhkg%2FydWt60KX41U2sut1gGWEt4%2Bke67bniigtgYwtT%2F%2BTCThQFmtpIk0V5PDsRgRMpQRiAA&x-oss-signature-version=OSS4-HMAC-SHA256&x-oss-credential=STS.NYnDwHCSpYWUk8yy149QRiFys%2F20260920%2Feu-central-1%2Foss%2Faliyun_v4_request&x-oss-signature=466ffd07de4be4bf13f145195ddf6404273d41e6e2db8972243a5a3d52efa65c"
-			(at 80.01 90.17 0)
+			(at 80.01 91.44 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3287,7 +3295,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 80.01 90.17 0)
+			(at 80.01 91.44 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3298,7 +3306,7 @@
 			)
 		)
 		(property "MPN" "CL05A475MP5NRNC"
-			(at 80.01 90.17 0)
+			(at 80.01 91.44 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3309,7 +3317,7 @@
 			)
 		)
 		(property "LCSC" "https://jlcpcb.com/partdetail/24469-CL05A475MP5NRNC/C23733"
-			(at 80.01 90.17 0)
+			(at 80.01 91.44 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3336,7 +3344,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 40.64 114.3 0)
+		(at 41.91 111.76 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3347,7 +3355,7 @@
 		(fields_autoplaced yes)
 		(uuid "a780f00c-a3ea-454c-9fff-f42bf8313bab")
 		(property "Reference" "#PWR04"
-			(at 40.64 120.65 0)
+			(at 41.91 118.11 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3358,7 +3366,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 40.64 119.38 0)
+			(at 41.91 116.84 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3368,7 +3376,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 40.64 114.3 0)
+			(at 41.91 111.76 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3379,7 +3387,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 40.64 114.3 0)
+			(at 41.91 111.76 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3390,7 +3398,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 40.64 114.3 0)
+			(at 41.91 111.76 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3443,7 +3451,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Package_DFN_QFN:QFN-80-1EP_10x10mm_P0.4mm_EP3.4x3.4mm"
+		(property "Footprint" "rp235xb:rpi_rp2350b_vias"
 			(at 158.75 91.44 0)
 			(hide yes)
 			(show_name no)
@@ -3752,7 +3760,7 @@
 	)
 	(symbol
 		(lib_id "power:+3V3")
-		(at 40.64 83.82 0)
+		(at 41.91 86.36 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3763,7 +3771,7 @@
 		(fields_autoplaced yes)
 		(uuid "dcdd7b44-b412-4e3c-9809-6d8ec56c465c")
 		(property "Reference" "#PWR02"
-			(at 40.64 87.63 0)
+			(at 41.91 90.17 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3774,7 +3782,7 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 40.64 78.74 0)
+			(at 41.91 81.28 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3784,7 +3792,7 @@
 			)
 		)
 		(property "Footprint" "Package_DFN_QFN:Diodes_UDFN3810-9_TYPE_B"
-			(at 40.64 83.82 0)
+			(at 41.91 86.36 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3795,7 +3803,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 40.64 83.82 0)
+			(at 41.91 86.36 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3806,7 +3814,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 40.64 83.82 0)
+			(at 41.91 86.36 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3830,7 +3838,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 68.58 86.36 270)
+		(at 68.58 87.63 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3840,7 +3848,7 @@
 		(dnp no)
 		(uuid "de829397-876a-4ff2-9318-615162c5968f")
 		(property "Reference" "R1"
-			(at 68.58 83.82 90)
+			(at 68.58 85.09 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3850,7 +3858,7 @@
 			)
 		)
 		(property "Value" "33"
-			(at 71.374 83.82 90)
+			(at 71.374 85.09 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3859,8 +3867,8 @@
 				)
 			)
 		)
-		(property "Footprint" "Package_QFP:PQFP-160_28x28mm_P0.65mm"
-			(at 68.58 84.582 90)
+		(property "Footprint" "Resistor_SMD:R_01005_0402Metric"
+			(at 68.58 85.852 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3871,7 +3879,7 @@
 			)
 		)
 		(property "Datasheet" "https://jlc-prod-smt.oss-eu-central-1.aliyuncs.com/smtDataManualFile/8579706024414412800-C25105.pdf?response-content-disposition=attachment%3B%20filename%3DC25105.pdf%3B%20filename%2A%3DUTF-8%27%27C25105.pdf&x-oss-date=20260920T204320Z&x-oss-expires=1800&x-oss-security-token=CAISgAN1q6Ft5B2yfSjIr5rbD838roxR7pW%2BaR7InTFhNd5%2BhoPSkTz2IHhMdHJsAOodtv0%2FmmhT6PkclqRLcbhpcmfjV%2BZHzLB8qfZF4WQl557b16cNrbH4M4H6aXeirtuwDsz9SNTCALjPD3nPii50x5bjaDymRCbLGJaViJlhHLN1Ow6jdmhpCctxLAlvo9NgFxm3D%2Fu2NQPwiWf9FVdhvhEG6Vly8qOi2MaRmFy8yFTx0b0SvJ%2BjYMrmPctoN9JnSdC5mfdzau3a1TJ84gRD0a5wkaVA1zbDs5bfISEIuUzebreLqY03dV4mOvdqIcMe8qigz88fk%2FfIioH6xyxKOexoSCnFTOiiupCcQLPyao9jLu6iayqViY7QaIOTqQohZmkAMwVOasAsI3Ngh4zF97Qt0cVNkXO9gWfLI8DtuMleWmpmzm7zGjvyAFpORa%2Bb5wchMHn6pr9EWOXuJZUIn3b%2FstWNupKq5ldctHSeoXq108CXVnU5PXYI2gd0w6KWD5sagAFVO5kZc%2FFGtf%2BpCVwcLkEfbgLYvXpuWkzgQEh64E%2F8eF8zrHOiewoF33Fzwu1Fi1o2N%2BZg6s68a%2Bfn6ZZ1KjxSRYqvoJ8KD9h7%2FK6%2B%2Bhkg%2FydWt60KX41U2sut1gGWEt4%2Bke67bniigtgYwtT%2F%2BTCThQFmtpIk0V5PDsRgRMpQRiAA&x-oss-signature-version=OSS4-HMAC-SHA256&x-oss-credential=STS.NYnDwHCSpYWUk8yy149QRiFys%2F20260920%2Feu-central-1%2Foss%2Faliyun_v4_request&x-oss-signature=6acc60e0acfe07bdd6beeb5804c37a8c57f4167b52ed34eef92eda27fdc964cb"
-			(at 68.58 86.36 0)
+			(at 68.58 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3882,7 +3890,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 68.58 86.36 0)
+			(at 68.58 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3893,7 +3901,7 @@
 			)
 		)
 		(property "MPN" "0402WGF330JTCE"
-			(at 68.58 86.36 0)
+			(at 68.58 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3904,7 +3912,7 @@
 			)
 		)
 		(property "LCSC" "https://jlcpcb.com/partdetail/25848-0402WGF330JTCE/C25105"
-			(at 68.58 86.36 0)
+			(at 68.58 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
