@@ -22,7 +22,4 @@ target/
 **/*.kicad_prl
 **/*.kicad_pro.lck
 **/*.kicad_sch.lck
-
-
-
-# KiCAD auto-generated cache files
+**/*.kicad_pcb.lck
