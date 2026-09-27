@@ -1747,7 +1747,7 @@
 		(uuid "431786b4-00cb-4b93-812e-637a08ce4560")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://samtec_tsw-126-07-l-d.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/samtec_tsw-126-07-l-d.step"
 		(offset
 			(xyz 0 0 0)
 		)

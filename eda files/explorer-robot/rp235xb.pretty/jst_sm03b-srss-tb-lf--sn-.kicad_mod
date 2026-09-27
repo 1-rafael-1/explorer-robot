@@ -262,7 +262,7 @@
 		(uuid "e2339615-a006-4473-ad74-b8e7b602a4b9")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://jst_sm03b-srss-tb-lf--sn-.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/jst_sm03b-srss-tb-lf--sn-.step"
 		(offset
 			(xyz 0 0 0)
 		)

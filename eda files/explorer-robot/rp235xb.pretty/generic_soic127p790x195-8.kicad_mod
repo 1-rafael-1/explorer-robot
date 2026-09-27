@@ -456,7 +456,7 @@
 		(uuid "9a8417d8-9c72-452d-a1e1-c2c73ac9313f")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://generic_soic127p790x195-8.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/generic_soic127p790x195-8.step"
 		(offset
 			(xyz 0 0 0)
 		)

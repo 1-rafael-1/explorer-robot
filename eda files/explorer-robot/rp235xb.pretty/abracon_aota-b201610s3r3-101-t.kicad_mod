@@ -1,54 +1,65 @@
-(footprint "generic_resc1005x35"
+(footprint "abracon_aota-b201610s3r3-101-t"
 	(version 20260206)
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
 	(property "Reference" "REF**"
-		(at 0 -1 180)
+		(at 0 -1.55 0)
 		(unlocked yes)
 		(layer "F.SilkS")
-		(uuid "e6cff72b-2866-4a40-8187-caea0245fab3")
+		(uuid "5c147814-3883-4f20-b797-efc652350809")
 		(effects
 			(font
 				(size 0.8 0.5)
 				(thickness 0.125)
-				(bold yes)
 			)
 		)
 	)
-	(property "Value" "10k"
-		(at 0 1 0)
+	(property "Value" "3.3u"
+		(at 0 0.8 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "65b0713e-db15-4f9f-b92b-4b6fc7acd1ac")
+		(uuid "a39736e0-5155-47d9-b7c4-5e3a000cc2f4")
 		(effects
 			(font
 				(size 0.8 0.5)
 				(thickness 0.01)
-				(bold yes)
 			)
 		)
 	)
-	(property "Datasheet" "file:///C:\\rpi-pdb\\parts\\Resistors\\Chip\\M1005\\YAGEO_RC0402FR-07.autogen\\datasheets"
+	(property "Datasheet" "file:///C:\\rpi-pdb\\parts\\Inductors\\Fixed\\M2016\\ABRACON_AOTA-B201610S3R3-101-T\\datasheets"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "ba778cdb-1132-4713-b560-ae37490d50f3")
+		(uuid "97e767ac-2fca-4e0c-9c38-94760307c70c")
 		(effects
 			(font
-				(size 1 1)
-				(thickness 0.15)
+				(size 0.8 0.5)
+				(thickness 0.01)
 			)
 		)
 	)
-	(property "Description" "Resistor, Chip, 10kR, M1005, 63mW, 1%"
+	(property "Description" "Inductor, SMT, 3.3uH, 20%, Irms=2.1A, Isat=2.4A, DCR=115mR typ 140mR max, Polarity Marked, M2016"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "6a270f9e-fb2b-495c-8580-6f9ec4ad67e9")
+		(uuid "e893427f-d976-4642-ab91-e3d2b9743452")
+		(effects
+			(font
+				(size 0.8 0.5)
+				(thickness 0.01)
+			)
+		)
+	)
+	(property "rms_current" "2.1A"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d30e285a-51ba-4d02-8bf0-225ade3e37b8")
 		(effects
 			(font
 				(size 1 1)
@@ -56,51 +67,12 @@
 			)
 		)
 	)
-	(property "power" "63mW"
-		(at 0 0 180)
+	(property "part_uid" "RP-01GY5D-2VC7WP"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "cf036ec1-1ec9-4dcb-a846-189d38b34b9a")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "tolerance" "1%"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "ddb3c8dd-37b5-46fc-aa56-072ecaca3526")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "package" "M1005"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "0fe8c51d-9906-4f38-b18b-0567ac334043")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "part_uid" "RP-019A1P-53DHSX"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "38780919-4366-4b75-95f7-f2891235bd18")
+		(uuid "aad22696-0925-4451-8de7-e7a9636b656b")
 		(effects
 			(font
 				(size 1 1)
@@ -109,11 +81,11 @@
 		)
 	)
 	(property "status" "OK"
-		(at 0 0 180)
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "f77c6707-8f1a-461f-a1f4-0db289d2384e")
+		(uuid "0b8ddd01-ff0d-4993-a886-1c8e882f73ac")
 		(effects
 			(font
 				(size 1 1)
@@ -121,12 +93,12 @@
 			)
 		)
 	)
-	(property "manufacturer" "Yageo"
-		(at 0 0 180)
+	(property "manufacturer" "Abracon"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "fa2a3c80-9035-40bc-9815-a84da76518ac")
+		(uuid "5bebabce-ab01-457b-be41-41e0b1020be0")
 		(effects
 			(font
 				(size 1 1)
@@ -134,12 +106,12 @@
 			)
 		)
 	)
-	(property "manufacturer_pn" "RC0402FR-0710KL"
-		(at 0 0 180)
+	(property "manufacturer_pn" "AOTA-B201610S3R3-101-T"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "14d40d06-ccae-459a-93e1-8c15e9828d11")
+		(uuid "f7b182ce-e93f-4744-ae01-10f9923e35f9")
 		(effects
 			(font
 				(size 1 1)
@@ -147,12 +119,12 @@
 			)
 		)
 	)
-	(property "packaging" "7 inch dia. paper taping reel"
-		(at 0 0 180)
+	(property "packaging" "180mm dia. tape & reel"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "e96961e4-5f12-4ea7-8dd6-0c8118d620f4")
+		(uuid "7da299b8-1b41-4b5a-909a-60710667e1ef")
 		(effects
 			(font
 				(size 1 1)
@@ -160,12 +132,12 @@
 			)
 		)
 	)
-	(property "packaging_qty" "10000"
-		(at 0 0 180)
+	(property "packaging_qty" "3000"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "57b6f1ec-c8b4-4504-b957-80de64ba68b4")
+		(uuid "8a9dc699-619d-4cc4-894c-728735a6360d")
 		(effects
 			(font
 				(size 1 1)
@@ -173,12 +145,12 @@
 			)
 		)
 	)
-	(property "lcsc_pn" "C60490"
-		(at 0 0 180)
+	(property "lcsc_pn" "C42411119"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "61a27554-5bb0-4159-b966-700feab13262")
+		(uuid "9aa0e600-98d1-43c6-bcd0-250a8db09834")
 		(effects
 			(font
 				(size 1 1)
@@ -186,12 +158,12 @@
 			)
 		)
 	)
-	(property "temp_coefficient" "100ppm/degC"
-		(at 0 0 180)
+	(property "size" "2x1.6x1mm"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "89c6955c-3c27-4a79-b06c-db939ad87b40")
+		(uuid "457717c8-dc2c-4c7c-9ee9-1df18282c5aa")
 		(effects
 			(font
 				(size 1 1)
@@ -199,12 +171,12 @@
 			)
 		)
 	)
-	(property "voltage" "50V"
-		(at 0 0 180)
+	(property "tolerance" "20%"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "314cebe6-c059-4894-a6e8-f64c70c10b04")
+		(uuid "9b4d8b64-099f-4767-a217-e4fca0d771d0")
 		(effects
 			(font
 				(size 1 1)
@@ -212,12 +184,12 @@
 			)
 		)
 	)
-	(property "size" "1x0.5x0.35mm"
-		(at 0 0 180)
+	(property "inductance" "3.3u"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5f3adf55-661d-4ffc-9415-66125f908133")
+		(uuid "19dbc0f1-9569-4ac0-877c-d9e2ce43d120")
 		(effects
 			(font
 				(size 1 1)
@@ -225,12 +197,12 @@
 			)
 		)
 	)
-	(property "resistance" "10k"
-		(at 0 0 180)
+	(property "operating_temp_max" "+125C"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "34d3175d-cdf0-40e1-8c8e-0ecfd4faba39")
+		(uuid "a7e95fde-9de7-41f9-badb-cef09c2e21cc")
 		(effects
 			(font
 				(size 1 1)
@@ -238,12 +210,12 @@
 			)
 		)
 	)
-	(property "z_height_max" "0.4mm"
-		(at 0 0 180)
+	(property "operating_temp_min" "-40C"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "62ffe3b3-f18a-4295-9eb1-c30e270e217a")
+		(uuid "8cbb0d8d-e521-4cab-a094-acc69e4dcba1")
 		(effects
 			(font
 				(size 1 1)
@@ -251,12 +223,12 @@
 			)
 		)
 	)
-	(property "operating_temp_min" "-55C"
-		(at 0 0 180)
+	(property "saturation_current" "2.4A"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "012e8e87-ecdf-45da-9f3f-b90ae4edc016")
+		(uuid "7073a902-ba32-4226-aae6-f42d0b5a8350")
 		(effects
 			(font
 				(size 1 1)
@@ -264,12 +236,12 @@
 			)
 		)
 	)
-	(property "operating_temp_max" "+155C"
-		(at 0 0 180)
+	(property "z_height_max" ""
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "6db1fdbf-b0ba-4faa-b0fb-bcb558e5a87d")
+		(uuid "b94bd602-1dab-47f4-8da6-eba455f3cd33")
 		(effects
 			(font
 				(size 1 1)
@@ -277,12 +249,12 @@
 			)
 		)
 	)
-	(property "material" "Thick Film"
-		(at 0 0 180)
+	(property "package" "M2016"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "3c7f56cf-e3bc-4c61-9280-6374723125d0")
+		(uuid "ca378e63-d1bb-46fc-8282-13a83c4b9de6")
 		(effects
 			(font
 				(size 1 1)
@@ -290,12 +262,12 @@
 			)
 		)
 	)
-	(property "current" ""
-		(at 0 0 180)
+	(property "z_height_nom" "1mm"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "a486e2c8-0f4f-4c05-9900-b07205157c3e")
+		(uuid "6372441d-3c67-4ed7-8cc3-18ce0b728283")
 		(effects
 			(font
 				(size 1 1)
@@ -303,12 +275,12 @@
 			)
 		)
 	)
-	(property "z_height_nom" "0.35mm"
-		(at 0 0 180)
+	(property "dcr" "115mR typ 140mR max"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "9208c529-b3b4-407f-bf4c-c0b188c32897")
+		(uuid "93853486-d438-4704-8933-7b608c14014d")
 		(effects
 			(font
 				(size 1 1)
@@ -316,49 +288,71 @@
 			)
 		)
 	)
-	(property ki_fp_filters "RPI_COMPILED:generic_resc1005x35")
+	(property ki_fp_filters "RPI_COMPILED:abracon_aota-b201610s3r3-101-t")
 	(sheetname "/")
 	(sheetfile "RPI-RP2350B-MINIMAL_R4-S1.kicad_sch")
-	(attr smd dnp)
+	(attr smd)
 	(duplicate_pad_numbers_are_jumpers no)
-	(fp_rect
-		(start -0.5 -0.25)
-		(end 0.5 0.25)
+	(fp_circle
+		(center -1.4 0.7)
+		(end -1.25 0.7)
 		(stroke
 			(width 0.01)
 			(type solid)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+		(uuid "367ece4e-f8bc-4876-afc9-cbf7bbaf978e")
+	)
+	(fp_rect
+		(start -1.1 0.9)
+		(end 1.1 -0.9)
+		(stroke
+			(width 0.01)
+			(type default)
 		)
 		(fill no)
 		(layer "F.CrtYd")
-		(uuid "da5e86cc-dfd7-4cfc-9d28-8f0a4ecb3009")
+		(uuid "8bd4c27f-9023-4c0a-9e79-c1b1c99ee0a9")
 	)
 	(fp_rect
-		(start -0.5 -0.25)
-		(end 0.5 0.25)
+		(start -1 0.8)
+		(end 1 -0.8)
+		(stroke
+			(width 0.01)
+			(type default)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "c6ef06b4-3f35-421f-9192-327713bc8045")
+	)
+	(fp_rect
+		(start -0.4 0.8)
+		(end 0.4 -0.8)
+		(stroke
+			(width 0.01)
+			(type default)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "d41516e9-5764-421f-bd3a-2fa938a01abd")
+	)
+	(fp_circle
+		(center -0.7 0.55)
+		(end -0.6 0.55)
 		(stroke
 			(width 0.01)
 			(type solid)
 		)
-		(fill no)
+		(fill yes)
 		(layer "F.Fab")
-		(uuid "d996aab4-6498-44d8-8074-9c97ad85526b")
-	)
-	(fp_rect
-		(start -0.25 -0.25)
-		(end 0.25 0.25)
-		(stroke
-			(width 0.01)
-			(type solid)
-		)
-		(fill no)
-		(layer "F.Fab")
-		(uuid "5f0dc562-de72-416d-b317-a8bb5c17097f")
+		(uuid "01a2d312-3748-4480-8210-afc49b95863f")
 	)
 	(fp_text user "${REFERENCE}"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
-		(uuid "93ccdec9-6b2b-4202-9d5b-9d33ae409849")
+		(uuid "f96dea13-bdf6-422b-9d57-94d197d7b2f0")
 		(effects
 			(font
 				(size 0.8 0.5)
@@ -367,19 +361,19 @@
 		)
 	)
 	(pad "1" smd rect
-		(at -0.475 0)
-		(size 0.55 0.55)
+		(at -0.7 0)
+		(size 0.7 1.7)
 		(layers "F.Cu" "F.Mask" "F.Paste")
-		(uuid "2aff8882-d371-4e3b-b766-ce7b9b1a6559")
+		(uuid "05a589ea-1125-4b1c-9340-8b2cf45e0e6d")
 	)
 	(pad "2" smd rect
-		(at 0.475 0)
-		(size 0.55 0.55)
+		(at 0.7 0)
+		(size 0.7 1.7)
 		(layers "F.Cu" "F.Mask" "F.Paste")
-		(uuid "57bc5678-cc05-40a9-a343-c9f0b993e054")
+		(uuid "b3fe897c-08b9-4012-899f-0d62f3b5f64d")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://generic_resc1005x35.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/abracon_aota-b201610s3r3-101-t.step"
 		(offset
 			(xyz 0 0 0)
 		)

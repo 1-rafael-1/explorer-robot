@@ -589,7 +589,7 @@
 		(uuid "2e85b596-6fdd-4f9e-8694-84dbbc6c2b4d")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://amphenol_10103594-0001lf.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/amphenol_10103594-0001lf.step"
 		(offset
 			(xyz 0 0.3 0)
 		)

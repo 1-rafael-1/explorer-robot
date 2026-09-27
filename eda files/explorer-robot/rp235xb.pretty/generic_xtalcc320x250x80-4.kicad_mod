@@ -1,13 +1,13 @@
-(footprint "generic_capc1005x50"
+(footprint "generic_xtalcc320x250x80-4"
 	(version 20260206)
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
 	(property "Reference" "REF**"
-		(at 0 -1 0)
+		(at 0 2.2 0)
 		(unlocked yes)
 		(layer "F.SilkS")
-		(uuid "b08bc485-52fc-4efc-b5b6-15587eb3449a")
+		(uuid "9e3ee82f-9b04-49c4-aead-35dee636398d")
 		(effects
 			(font
 				(size 0.8 0.5)
@@ -16,12 +16,12 @@
 			)
 		)
 	)
-	(property "Value" "100n"
+	(property "Value" "12MHz"
 		(at 0 1 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "c4489bc4-52bd-470a-9af5-5c8eb3fb0a8c")
+		(uuid "697ea1eb-105d-42fa-a9a3-74ff287b1159")
 		(effects
 			(font
 				(size 0.8 0.5)
@@ -30,12 +30,12 @@
 			)
 		)
 	)
-	(property "Datasheet" "file:///C:\\rpi-pdb\\parts\\Capacitors\\MLCC\\M1005\\MURATA_GRM155R71E104KE14D\\datasheets"
+	(property "Datasheet" "file:///C:\\rpi-pdb\\parts\\Frequency_Timing\\Crystals\\ABRACON_ABM8-272-T3\\datasheets"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "e5f89502-a106-41e9-810f-b3a7d8c6abbc")
+		(uuid "891d1600-bfe2-4c7b-aacb-c427c3f4f760")
 		(effects
 			(font
 				(size 1 1)
@@ -43,12 +43,12 @@
 			)
 		)
 	)
-	(property "Description" "Capacitor, MLCC, 100nF, 10%, M1005, 25V, X7R"
+	(property "Description" "XTAL, SMT, 12 MHz, Fundamental, Ftol=30ppm, Fstab=30ppm, 10pF, 3.2x2.5mm"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "9b66d821-08fd-4b23-8506-cc224a46d48e")
+		(uuid "94127fd0-1714-4e6f-8dfe-aef9bd6d9b4b")
 		(effects
 			(font
 				(size 1 1)
@@ -56,64 +56,12 @@
 			)
 		)
 	)
-	(property "package" "M1005"
-		(at 0 0 180)
+	(property "part_uid" "RP-01G8X7-GS352B"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "39661ade-1863-4948-9622-553a25658426")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "voltage" "25V"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "3be9749a-447a-4db2-bd9d-d5574a5de868")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "dielectric" "X7R"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "d6c5ce6a-eba2-4336-8c37-38b7f18fe26f")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "tolerance" "10%"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "37958ea3-9857-456d-b261-78a32003d65c")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "part_uid" "RP-01BJ9Y-KRGF41"
-		(at 0 0 180)
-		(unlocked yes)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "91fd5fdd-6c58-4a9f-bc94-8c467e0a29ea")
+		(uuid "8790e638-4aad-4997-a47b-74b812fdff7c")
 		(effects
 			(font
 				(size 1 1)
@@ -122,11 +70,11 @@
 		)
 	)
 	(property "status" "OK"
-		(at 0 0 180)
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "adc87ece-ab2c-4915-be1c-1a1bef598b02")
+		(uuid "25620df4-35db-4f6a-8fab-1ad7b8406be4")
 		(effects
 			(font
 				(size 1 1)
@@ -134,12 +82,12 @@
 			)
 		)
 	)
-	(property "manufacturer" "Murata"
-		(at 0 0 180)
+	(property "manufacturer" "Abracon"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "b2a958d8-0c7a-4ad1-8a07-e2f4c11ed967")
+		(uuid "6847112e-903f-413c-9360-e2932e9c0f6d")
 		(effects
 			(font
 				(size 1 1)
@@ -147,12 +95,12 @@
 			)
 		)
 	)
-	(property "manufacturer_pn" "GRM155R71E104KE14D"
-		(at 0 0 180)
+	(property "manufacturer_pn" "ABM8-272-T3"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "8f019999-ae29-4e28-817d-9d44097687c6")
+		(uuid "a6038eb4-54fc-4df0-be54-8bb7a81cb17f")
 		(effects
 			(font
 				(size 1 1)
@@ -160,12 +108,12 @@
 			)
 		)
 	)
-	(property "packaging" "180mm paper taping"
-		(at 0 0 180)
+	(property "packaging" "180mm dia. tape & reel"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "a8a3a597-b721-46e2-bdc5-87bf873537fb")
+		(uuid "7962137f-ad89-47f1-be51-24bf5adf88e1")
 		(effects
 			(font
 				(size 1 1)
@@ -173,12 +121,12 @@
 			)
 		)
 	)
-	(property "packaging_qty" "10000"
-		(at 0 0 180)
+	(property "packaging_qty" "3000"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "70c60fd8-e0cd-4e03-86fa-8ac4a541c218")
+		(uuid "7f66f3c6-e67c-4aad-bd2d-3c747857747b")
 		(effects
 			(font
 				(size 1 1)
@@ -186,12 +134,12 @@
 			)
 		)
 	)
-	(property "lcsc_pn" "C77014"
-		(at 0 0 180)
+	(property "lcsc_pn" "C20625731"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "57cd89c7-6dbd-4b26-8cc6-6e314be1e44b")
+		(uuid "60ccff64-50da-4be4-a710-9d2519c4955f")
 		(effects
 			(font
 				(size 1 1)
@@ -199,12 +147,12 @@
 			)
 		)
 	)
-	(property "temp_coefficient" "X7R"
-		(at 0 0 180)
+	(property "size" "3.2x2.5x0.8mm"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "2209c821-c8b5-47be-b8a0-99ffc22e27b2")
+		(uuid "1856ed4c-f397-4674-9d7c-44eaa869c376")
 		(effects
 			(font
 				(size 1 1)
@@ -212,12 +160,12 @@
 			)
 		)
 	)
-	(property "operating_temp_max" "+125C"
-		(at 0 0 180)
+	(property "frequency" "12MHz"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "05bb9423-a4ff-4737-8040-751e77b05690")
+		(uuid "60f8c5a4-e8ca-43a4-9827-8ac3be847180")
 		(effects
 			(font
 				(size 1 1)
@@ -225,12 +173,12 @@
 			)
 		)
 	)
-	(property "operating_temp_min" "-55C"
-		(at 0 0 180)
+	(property "tolerance" "30ppm"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "e374c460-8f04-4b46-b83f-db59e298e97f")
+		(uuid "c04d46c6-a80a-4530-807c-1b7f3a8c97de")
 		(effects
 			(font
 				(size 1 1)
@@ -238,12 +186,12 @@
 			)
 		)
 	)
-	(property "material" "Ceramic"
-		(at 0 0 180)
+	(property "operating_temp_max" "+85C"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "16af8a36-7132-4324-8ebe-a531fd4cf08a")
+		(uuid "cfa0a6f5-ae29-49e3-ae55-c1c5b5ce2619")
 		(effects
 			(font
 				(size 1 1)
@@ -251,12 +199,12 @@
 			)
 		)
 	)
-	(property "size" "1.0x0.5x0.5mm"
-		(at 0 0 180)
+	(property "load_capacitance" "10pF"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "fa63ae9b-f3c5-40d3-9f51-ad1065697046")
+		(uuid "20f16117-36bd-40dd-86d0-472d9e57944a")
 		(effects
 			(font
 				(size 1 1)
@@ -264,12 +212,12 @@
 			)
 		)
 	)
-	(property "capacitance" "100n"
-		(at 0 0 180)
+	(property "operating_temp_min" "-40C"
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "ba4d563e-d612-4c3b-831f-1d6da3a21cc2")
+		(uuid "300883a3-eb37-4c9d-bc30-5a3aaf0f9c3b")
 		(effects
 			(font
 				(size 1 1)
@@ -277,12 +225,12 @@
 			)
 		)
 	)
-	(property "z_height_nom" "0.5mm"
-		(at 0 0 180)
+	(property "z_height_max" ""
+		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "04400e52-71bb-4a5e-a1ea-55b7b19493c4")
+		(uuid "3744a448-76f8-476e-a9dc-294121ea6599")
 		(effects
 			(font
 				(size 1 1)
@@ -290,49 +238,112 @@
 			)
 		)
 	)
-	(property ki_fp_filters "RPI_COMPILED:generic_capc1005x50 RPI_COMPILED:generic_capc1005x50_wide")
+	(property "esr" "50R Max"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "30288542-a1b8-47bd-9c84-aeb12a3f92b8")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "package" "M3225"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "585f7f50-2174-490f-81b0-c046ff1763db")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "z_height_nom" "0.8mm"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d9e1137c-27b4-4a23-8dbd-4b0509188360")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "freq_stability" "30ppm"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "60daad80-34fd-4aca-8038-e0350c088bc1")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property ki_fp_filters "RPI_COMPILED:generic_xtalcc320x250x80-4")
 	(sheetname "/")
 	(sheetfile "RPI-RP2350B-MINIMAL_R4-S1.kicad_sch")
-	(attr smd dnp)
+	(attr smd)
 	(duplicate_pad_numbers_are_jumpers no)
+	(fp_circle
+		(center -2.2 0.85)
+		(end -2.05 0.85)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+		(uuid "9db7fa3b-8d64-40ff-8226-d41e362035d8")
+	)
 	(fp_rect
-		(start -0.5 -0.25)
-		(end 0.5 0.25)
+		(start -1.6 -1.25)
+		(end 1.6 1.25)
 		(stroke
 			(width 0.01)
 			(type solid)
 		)
 		(fill no)
 		(layer "F.CrtYd")
-		(uuid "a878fc3f-48e4-4be0-adbb-9dbba7de5922")
+		(uuid "51f39ea5-3bc5-412c-83b8-d4db0e95078b")
 	)
 	(fp_rect
-		(start -0.5 -0.25)
-		(end 0.5 0.25)
+		(start -1.6 -1.25)
+		(end 1.6 1.25)
 		(stroke
 			(width 0.01)
 			(type solid)
 		)
 		(fill no)
 		(layer "F.Fab")
-		(uuid "e43059ed-843b-4ffd-8f44-1a0a7127ca0f")
+		(uuid "0cfc28ce-ce5f-4fdb-b49d-66750c5ab6a6")
 	)
-	(fp_rect
-		(start -0.25 -0.25)
-		(end 0.25 0.25)
+	(fp_circle
+		(center -1.1 0.85)
+		(end -0.95 0.85)
 		(stroke
-			(width 0.01)
+			(width 0)
 			(type solid)
 		)
-		(fill no)
+		(fill yes)
 		(layer "F.Fab")
-		(uuid "a29ffe21-fc1d-43d2-b570-da67d54975f2")
+		(uuid "1ae68b86-3bff-486e-b387-2b638b8bc686")
 	)
 	(fp_text user "${REFERENCE}"
 		(at 0 0 0)
 		(unlocked yes)
 		(layer "F.Fab")
-		(uuid "5cc7fb37-dc2f-4cd3-a8ea-3b20de09bcd6")
+		(uuid "095a1925-d81d-4ddd-afb3-b65560e25551")
 		(effects
 			(font
 				(size 0.8 0.5)
@@ -341,19 +352,31 @@
 		)
 	)
 	(pad "1" smd rect
-		(at -0.475 0)
-		(size 0.55 0.55)
+		(at -1.1 0.85)
+		(size 1.4 1.2)
 		(layers "F.Cu" "F.Mask" "F.Paste")
-		(uuid "da8e69fd-75d5-4a69-818c-a9bb360741ca")
+		(uuid "e255f21f-5705-47bc-8f77-26f29fee7c2e")
 	)
 	(pad "2" smd rect
-		(at 0.475 0)
-		(size 0.55 0.55)
+		(at 1.1 0.85)
+		(size 1.4 1.2)
 		(layers "F.Cu" "F.Mask" "F.Paste")
-		(uuid "c62aabbe-70a6-4ce2-bb9a-c94f0ca94e1d")
+		(uuid "d61edc41-3506-4ca3-8592-e083256e7d76")
+	)
+	(pad "3" smd rect
+		(at 1.1 -0.85)
+		(size 1.4 1.2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "748972fc-17bc-4e8f-852e-a93e1e7b28e6")
+	)
+	(pad "4" smd rect
+		(at -1.1 -0.85)
+		(size 1.4 1.2)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "5ee44f94-bfaf-4d30-9c55-8ef9725524cf")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://generic_capc1005x50.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/generic_xtalcc320x250x80-4.step"
 		(offset
 			(xyz 0 0 0)
 		)

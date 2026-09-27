@@ -359,7 +359,7 @@
 		(uuid "cc656c9c-deed-4097-b5af-b1b3a69d3794")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://onsemi_ncp1117st33t3g.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/onsemi_ncp1117st33t3g.step"
 		(offset
 			(xyz 0 0 0)
 		)

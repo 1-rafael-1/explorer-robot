@@ -1181,7 +1181,7 @@
 		(uuid "8c7a6ac0-ed50-4cef-9a54-3a5ab00f1f5f")
 	)
 	(embedded_fonts no)
-	(model "kicad-embed://rpi_rp2350b.step"
+	(model "${KIPRJMOD}/rp235xb.3dshapes/rpi_rp2350b.step"
 		(offset
 			(xyz 0 0 0)
 		)
