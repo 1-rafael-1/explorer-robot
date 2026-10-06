@@ -240,7 +240,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": ""
+      "sch_revision": "v.0.1"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -589,6 +589,18 @@
           "show": true
         },
         {
+          "group_by": false,
+          "label": "LCSC",
+          "name": "LCSC",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "JLCPCB_URL",
+          "name": "JLCPCB_URL",
+          "show": true
+        },
+        {
           "group_by": true,
           "label": "Exclude from Simulation",
           "name": "${EXCLUDE_FROM_SIM}",
@@ -611,14 +623,56 @@
           "label": "Datasheet",
           "name": "Datasheet",
           "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Description",
+          "name": "Description",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MPN",
+          "name": "MPN",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "#",
+          "name": "${ITEM_NUMBER}",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "KLC_S3.3",
+          "name": "KLC_S3.3",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "KLC_S4.1",
+          "name": "KLC_S4.1",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "KLC_S4.2_DVDD",
+          "name": "KLC_S4.2_DVDD",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "KLC_S4.2_VREG_LX",
+          "name": "KLC_S4.2_VREG_LX",
+          "show": false
         }
       ],
       "filter_string": "",
       "group_symbols": true,
       "include_excluded_from_bom": true,
-      "name": "Default Editing",
+      "name": "",
       "sort_asc": true,
-      "sort_field": "Reference"
+      "sort_field": "${EXCLUDE_FROM_POS_FILES}"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -661,13 +715,21 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#PWR1-4,L1,R1,C1-3,U1",
+    "used_designators": "J1,SW1,O1,Y1,#PWR1-23,L1,TP1-3,R1-3,C1-22,U1-4",
     "variants": []
   },
   "sheets": [
     [
       "57778957-dc0c-4e39-b470-8f64ada5e845",
       "Root"
+    ],
+    [
+      "7d3241b2-95fb-44a6-85fe-f882fead429b",
+      "ICM-20948"
+    ],
+    [
+      "036d3ddb-edde-42a1-9588-f906d63057c4",
+      "rp2354b"
     ]
   ],
   "text_variables": {},
