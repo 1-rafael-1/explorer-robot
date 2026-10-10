@@ -159,12 +159,10 @@ pub struct D6LidarPins {
 /// serial. A power MOSFET (IRLS44N) on the supply rail allows
 /// firmware-controlled power cycling.
 ///
-/// GPIO 25 is unavailable (hardwired to the onboard LED), so this uses
-/// UART1 on GPIO 4/5 after relocating the motor's `right_fwd`/`right_bwd`
-/// pins, which are the RP2350's only UART1 TX/RX pin pair besides GPIO 8/9
-/// (GPIO 9 is taken by the right encoder). Full duplex (unlike the D6),
-/// since the module expects host commands and returns results over the
-/// same UART — hence a second DMA channel for TX.
+/// UART1 is on GPIO 4/5, freed by relocating the motor's `right_fwd`/
+/// `right_bwd` pins off them. Full duplex (unlike the D6), since the module
+/// expects host commands and returns results over the same UART — hence a
+/// second DMA channel for TX.
 pub struct AiCamPins {
     /// UART1 TX — connect to AI cam RX (GPIO 4).
     pub uart_tx: embassy_rp::Peri<'static, PIN_4>,

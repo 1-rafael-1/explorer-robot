@@ -10,19 +10,59 @@
 		(company "1-rafael-1")
 	)
 	(lib_symbols)
-	(text "RP2354B"
-		(exclude_from_sim no)
-		(at 151.638 105.41 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
+	(wire
+		(pts
+			(xy 140.97 97.79) (xy 161.29 97.79)
 		)
-		(uuid "02802a28-f1a0-4da5-b34f-7c8e401539d3")
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "20984df3-9935-4a02-a115-9602e5ed0123")
+	)
+	(wire
+		(pts
+			(xy 140.97 92.71) (xy 161.29 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3bef489b-7387-4f15-a4bf-33b7e5629ac5")
+	)
+	(wire
+		(pts
+			(xy 140.97 90.17) (xy 161.29 90.17)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4bb41526-78b9-495d-b946-057b56b9b2f1")
+	)
+	(wire
+		(pts
+			(xy 140.97 95.25) (xy 161.29 95.25)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4fd8a978-ded5-49ca-9c69-90597314c613")
+	)
+	(wire
+		(pts
+			(xy 140.97 100.33) (xy 161.29 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "76bd36a0-8818-46a3-a646-6e510910078f")
 	)
 	(sheet
-		(at 138.43 93.98)
-		(size 26.67 21.59)
+		(at 105.41 87.63)
+		(size 35.56 36.83)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -37,7 +77,7 @@
 		)
 		(uuid "036d3ddb-edde-42a1-9588-f906d63057c4")
 		(property "Sheetname" "rp2354b"
-			(at 138.43 93.2684 0)
+			(at 105.41 86.9184 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -48,7 +88,7 @@
 			)
 		)
 		(property "Sheetfile" "rp2354b.kicad_sch"
-			(at 138.43 116.1546 0)
+			(at 105.41 125.0446 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -56,6 +96,56 @@
 					(size 1.27 1.27)
 				)
 				(justify left top)
+			)
+		)
+		(pin "ICM-20948_INT" input
+			(at 140.97 100.33 0)
+			(uuid "7db4a207-3cff-4f9a-933e-ae031ea7817d")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "ICM-20948_SDO" input
+			(at 140.97 97.79 0)
+			(uuid "7a04bd43-ecfd-4790-a5fe-63748ffb79f6")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "ICM-20948_CS" output
+			(at 140.97 92.71 0)
+			(uuid "eaada89f-4285-4298-b728-568a4d9856a2")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "ICM-20948_SCLK" output
+			(at 140.97 90.17 0)
+			(uuid "b92243d2-9207-4b15-bbe9-9f908382a8d2")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "ICM-20948_SDI" output
+			(at 140.97 95.25 0)
+			(uuid "f8a6844d-77ae-4af8-b42c-917d1e2e995f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 		(instances
@@ -67,8 +157,8 @@
 		)
 	)
 	(sheet
-		(at 128.27 54.61)
-		(size 21.59 20.32)
+		(at 161.29 87.63)
+		(size 20.32 15.24)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -83,7 +173,7 @@
 		)
 		(uuid "7d3241b2-95fb-44a6-85fe-f882fead429b")
 		(property "Sheetname" "ICM-20948"
-			(at 128.27 53.8984 0)
+			(at 161.29 86.9184 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -94,7 +184,7 @@
 			)
 		)
 		(property "Sheetfile" "icm-20948.kicad_sch"
-			(at 128.27 75.5146 0)
+			(at 161.29 103.4546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -102,6 +192,56 @@
 					(size 1.27 1.27)
 				)
 				(justify left top)
+			)
+		)
+		(pin "ICM-20948_SDO" output
+			(at 161.29 97.79 180)
+			(uuid "7cb416ac-8fa8-4e0d-9ad2-83c1bcbea542")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "ICM-20948_CS" input
+			(at 161.29 92.71 180)
+			(uuid "a6511940-bb7e-4816-98b9-3b706fa97fb3")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "ICM-20948_SCLK" input
+			(at 161.29 90.17 180)
+			(uuid "94e537b2-57ff-48d1-8573-2c3d028c1541")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "ICM-20948_SDI" input
+			(at 161.29 95.25 180)
+			(uuid "388eeec9-9fb6-4b0b-bdc1-96c1a67ba9e0")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "ICM-20948_INT" output
+			(at 161.29 100.33 180)
+			(uuid "b881629c-ac31-494f-bd1a-7e83cc0591be")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 		(instances

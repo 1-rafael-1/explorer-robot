@@ -38,6 +38,11 @@ power and interface topology before it is.
 - Level-shift the IMU's digital lines — **SCLK, MOSI, MISO, CS and INT** — with a
   **TXB0108** (8-bit auto-direction, push-pull). Wiring: **VCCA = 1.8 V** (A port, IMU
   side), **VCCB = 3.3 V** (B port, MCU side), so VCCA ≤ VCCB holds.
+- Bring the level-shifted **INT** (ICM-20948 `INT1`, a push-pull output) out to
+  **GPIO 22** on the RP2350B — the pin directly above the SPI0 chip-select (GPIO 21), so
+  the `ICM-20948_INT` net routes with the rest of the IMU harness. Firmware does not
+  sample it yet (the DMP FIFO is polled on a timer); the line is reserved for event-driven
+  `data-ready` reads.
 - **OE (output enable) is active-high and must end up HIGH.** Low places all outputs
   in high-impedance and the bus goes dead. The datasheet's "tie OE to GND through a
   pulldown resistor" is only the power-up/power-down default (hold outputs Hi-Z until

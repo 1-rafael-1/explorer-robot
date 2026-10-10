@@ -69,7 +69,13 @@
           "thermal_relief_spoke_width": 0.5
         }
       },
-      "diff_pair_dimensions": [],
+      "diff_pair_dimensions": [
+        {
+          "gap": 0.0,
+          "via_gap": 0.0,
+          "width": 0.0
+        }
+      ],
       "drc_exclusions": [],
       "meta": {
         "version": 2
@@ -144,7 +150,7 @@
         "min_connection": 0.0,
         "min_copper_edge_clearance": 0.5,
         "min_groove_width": 0.0,
-        "min_hole_clearance": 0.25,
+        "min_hole_clearance": 0.1,
         "min_hole_to_hole": 0.25,
         "min_microvia_diameter": 0.2,
         "min_microvia_drill": 0.1,
@@ -152,10 +158,10 @@
         "min_silk_clearance": 0.0,
         "min_text_height": 0.8,
         "min_text_thickness": 0.08,
-        "min_through_hole_diameter": 0.3,
-        "min_track_width": 0.2,
-        "min_via_annular_width": 0.1,
-        "min_via_diameter": 0.5,
+        "min_through_hole_diameter": 0.15,
+        "min_track_width": 0.0889,
+        "min_via_annular_width": 0.05,
+        "min_via_diameter": 0.25,
         "solder_mask_to_copper_clearance": 0.0,
         "use_height_for_length_calcs": true
       },
@@ -172,6 +178,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -183,6 +190,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -194,6 +202,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -203,7 +212,9 @@
           "td_width_to_size_filter_ratio": 0.9
         }
       ],
-      "track_widths": [],
+      "track_widths": [
+        0.0
+      ],
       "tuning_pattern_settings": {
         "diff_pair_defaults": {
           "corner_radius_percentage": 80,
@@ -230,7 +241,12 @@
           "spacing": 0.6
         }
       },
-      "via_dimensions": [],
+      "via_dimensions": [
+        {
+          "diameter": 0.0,
+          "drill": 0.0
+        }
+      ],
       "zones_allow_external_fillets": false
     },
     "ipc2581": {
@@ -469,6 +485,7 @@
       "pin_to_pin": "warning",
       "power_pin_not_driven": "error",
       "same_local_global_label": "warning",
+      "same_local_global_power": "warning",
       "similar_label_and_power": "warning",
       "similar_labels": "warning",
       "similar_power": "warning",
@@ -495,7 +512,7 @@
     "classes": [
       {
         "bus_width": 12,
-        "clearance": 0.2,
+        "clearance": 0.1,
         "diff_pair_gap": 0.25,
         "diff_pair_via_gap": 0.25,
         "diff_pair_width": 0.2,
@@ -516,8 +533,8 @@
     "meta": {
       "version": 5
     },
-    "net_colors": null,
-    "netclass_assignments": null,
+    "net_colors": {},
+    "netclass_assignments": {},
     "netclass_patterns": []
   },
   "pcbnew": {
@@ -572,20 +589,14 @@
         },
         {
           "group_by": true,
-          "label": "DNP",
-          "name": "${DNP}",
+          "label": "Exclude from Position Files",
+          "name": "${EXCLUDE_FROM_POS_FILES}",
           "show": true
         },
         {
           "group_by": true,
           "label": "Exclude from BOM",
           "name": "${EXCLUDE_FROM_BOM}",
-          "show": true
-        },
-        {
-          "group_by": true,
-          "label": "Exclude from Board",
-          "name": "${EXCLUDE_FROM_BOARD}",
           "show": true
         },
         {
@@ -596,6 +607,18 @@
         },
         {
           "group_by": false,
+          "label": "MPN",
+          "name": "MPN",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "MFR",
+          "name": "MFR",
+          "show": true
+        },
+        {
+          "group_by": true,
           "label": "JLCPCB_URL",
           "name": "JLCPCB_URL",
           "show": true
@@ -608,8 +631,20 @@
         },
         {
           "group_by": true,
-          "label": "Exclude from Position Files",
-          "name": "${EXCLUDE_FROM_POS_FILES}",
+          "label": "Exclude from Board",
+          "name": "${EXCLUDE_FROM_BOARD}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "DNP",
+          "name": "${DNP}",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Datasheet",
+          "name": "Datasheet",
           "show": true
         },
         {
@@ -620,21 +655,9 @@
         },
         {
           "group_by": false,
-          "label": "Datasheet",
-          "name": "Datasheet",
-          "show": true
-        },
-        {
-          "group_by": false,
           "label": "Description",
           "name": "Description",
           "show": false
-        },
-        {
-          "group_by": false,
-          "label": "MPN",
-          "name": "MPN",
-          "show": true
         },
         {
           "group_by": false,
@@ -665,14 +688,20 @@
           "label": "KLC_S4.2_VREG_LX",
           "name": "KLC_S4.2_VREG_LX",
           "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Field12",
+          "name": "Field12",
+          "show": false
         }
       ],
       "filter_string": "",
       "group_symbols": true,
       "include_excluded_from_bom": true,
       "name": "",
-      "sort_asc": true,
-      "sort_field": "${EXCLUDE_FROM_POS_FILES}"
+      "sort_asc": false,
+      "sort_field": "MPN"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -711,17 +740,17 @@
     "top_level_sheets": [
       {
         "filename": "explorer-robot.kicad_sch",
-        "name": "Root",
+        "name": "System",
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "J1,SW1,O1,Y1,#PWR1-23,L1,TP1-3,R1-3,C1-22,U1-4",
+    "used_designators": "#PWR1-42,C1-28,J1,L1,O1,R1-4,SW1,TP1-9,U1-5,Y1",
     "variants": []
   },
   "sheets": [
     [
       "57778957-dc0c-4e39-b470-8f64ada5e845",
-      "Root"
+      "System"
     ],
     [
       "7d3241b2-95fb-44a6-85fe-f882fead429b",
