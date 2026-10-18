@@ -42,6 +42,7 @@ use touch_ui::{
 };
 
 use crate::{
+    resources::PanelResources,
     system::state::{
         CalibrationStatus,
         activity::{self, Activity, Snapshot, Stage},
@@ -53,7 +54,7 @@ use crate::{
             self, DriveCommand, ImuCalibrationKind,
             calibration::{self as drive_calibration, distance::DriveOutcome},
         },
-        io::panel::{Panel, PanelPins},
+        io::panel::Panel,
         sensors::lidar::{self, LidarStatus},
         testmode,
     },
@@ -155,7 +156,7 @@ const REINIT_BACKOFF_MS: u64 = 2_000;
 /// calibration's fixed-distance drive, and the coast-and-avoid mode's `LiDAR`
 /// acquisition, which may take several seconds.
 #[allow(clippy::unwrap_used)]
-pub fn init_ui(spawner: Spawner, pins: PanelPins) {
+pub fn init_ui(spawner: Spawner, pins: PanelResources) {
     spawner.spawn(ui_task(Panel::new(pins)).unwrap());
     spawner.spawn(distance_calibration_drive_task().unwrap());
     spawner.spawn(coast_avoid_task().unwrap());

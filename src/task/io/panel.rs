@@ -22,7 +22,7 @@ use defmt::info;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_rp::{
     gpio::{Input, Level, Output, Pull},
-    peripherals::{DMA_CH6, DMA_CH7, PIN_38, PIN_39, PIN_41, PIN_42, PIN_43, PIN_44, PIN_45, PIN_46, PIN_47, SPI1},
+    peripherals::{DMA_CH6, DMA_CH7, PIN_42, PIN_43, PIN_44, SPI1},
     spi::{self, Spi},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
@@ -34,41 +34,7 @@ use static_cell::{ConstStaticCell, StaticCell};
 use touch_async::{Calibration, TouchPanel, TouchSample};
 
 use crate::Irqs;
-
-// ── Pin resources ─────────────────────────────────────────────────────────────
-
-/// Pin and DMA resources for the shared `SPI1` panel bus (ADR-0008).
-///
-/// The panel occupies the contiguous high GPIO block 41–47, with the touch
-/// controller on 38/39 and the battery ADC keeping GPIO 40. `DMA_CH6` carries
-/// the bus's transmit direction and `DMA_CH7` its receive direction, because the
-/// bus is full duplex.
-pub struct PanelPins {
-    /// `SPI1` peripheral instance.
-    pub spi: embassy_rp::Peri<'static, SPI1>,
-    /// SPI clock (GPIO 42).
-    pub sck: embassy_rp::Peri<'static, PIN_42>,
-    /// SPI data out / MOSI (GPIO 43).
-    pub mosi: embassy_rp::Peri<'static, PIN_43>,
-    /// SPI data in / MISO (GPIO 44).
-    pub miso: embassy_rp::Peri<'static, PIN_44>,
-    /// DMA channel for the bus's transmit direction.
-    pub tx_dma: embassy_rp::Peri<'static, DMA_CH6>,
-    /// DMA channel for the bus's receive direction.
-    pub rx_dma: embassy_rp::Peri<'static, DMA_CH7>,
-    /// Display chip select (GPIO 41).
-    pub display_cs: embassy_rp::Peri<'static, PIN_41>,
-    /// Display data/command (GPIO 45).
-    pub dc: embassy_rp::Peri<'static, PIN_45>,
-    /// Display reset (GPIO 46).
-    pub rst: embassy_rp::Peri<'static, PIN_46>,
-    /// Display backlight (GPIO 47).
-    pub blk: embassy_rp::Peri<'static, PIN_47>,
-    /// Touch chip select (GPIO 38).
-    pub touch_cs: embassy_rp::Peri<'static, PIN_38>,
-    /// Touch pen-down interrupt (GPIO 39, active-low with a pull-up).
-    pub penirq: embassy_rp::Peri<'static, PIN_39>,
-}
+use crate::resources::PanelResources;
 
 // ── Bus and framebuffer ───────────────────────────────────────────────────────
 
@@ -221,7 +187,7 @@ impl Panel {
     /// operation that must await. This must be called exactly once per boot:
     /// it consumes the static framebuffer.
     #[must_use]
-    pub fn new(pins: PanelPins) -> Self {
+    pub fn new(pins: PanelResources) -> Self {
         let bus = PANEL_SPI_BUS.init(new_shared_bus(
             pins.spi,
             pins.sck,

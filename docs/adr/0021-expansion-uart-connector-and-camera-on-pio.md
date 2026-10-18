@@ -13,8 +13,9 @@ detection counts. That is comfortably below 115200 baud, and the link is idle mo
 of the time. A PIO UART is therefore sufficient for the camera, while the
 expansion MCU gets the hardware UART with DMA and buffering.
 
-**Status:** accepted. Not yet implemented: the firmware still brings the camera up
-on UART1, and no expansion connector exists in the schematic or PCB.
+**Status:** accepted. ADR-0022 revised the pin choices (camera GPIO 23/24/25,
+expansion UART1 GPIO 33–37). The camera's PIO0 transport is implemented; the
+expansion connector is still absent from the schematic and PCB.
 
 **Considered Options**
 
@@ -102,7 +103,7 @@ on UART1, and no expansion connector exists in the schematic or PCB.
 
 *Firmware shape:*
 
-- `AiCamPins` loses `uart`, `dma_tx` and `dma_rx`; it gains the PIO0 block, its two
+- `AiCamResources` loses `uart`, `dma_tx` and `dma_rx`; it gains the PIO0 block, its two
   state machines, and the TX/RX pins. `init_ai_cam_uart` becomes a PIO UART
   bring-up; the camera driver consumes `PioUartTx`/`PioUartRx` (`embedded_io_async`)
   instead of `Uart`.

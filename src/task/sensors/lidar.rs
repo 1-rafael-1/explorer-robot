@@ -182,7 +182,7 @@ static INGEST: StaticCell<[u8; INGEST_LEN]> = StaticCell::new();
 
 // ── Driver type ───────────────────────────────────────────────────────────────
 
-/// The concrete driver the task owns: buffered UART0 plus the GPIO26 power gate.
+/// The concrete driver the task owns: buffered UART0 plus the GPIO30 power gate.
 type LidarDriver = CoinD6<'static, BufferedUart, Output<'static>>;
 
 // ── Public API ────────────────────────────────────────────────────────────────

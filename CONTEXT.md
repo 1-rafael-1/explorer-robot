@@ -10,15 +10,16 @@
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
 - **Encoder** — Two-channel (A/B) hall encoder on each JGB37-520 motor. Counts 1320 pulses per output shaft revolution (165:1 gear ratio) via PWM input mode. Only one channel is read, so direction is inferred from the motor command rather than measured from the A/B phase.
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO). Its **VDDIO is 1.8 V only** (1.71–1.95 V, unlike the MPU-9250), so it runs on a dedicated 1.8 V rail and its SPI and INT lines are level-shifted to the 3V3 MCU (ADR-0017).
-- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): TX on GPIO12, RX on GPIO1, with an active-high low-side power MOSFET (IRLS44N) on GPIO26. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate on core1, and powered only while a mode needs it.
-- **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), reserved on dedicated UART1 (core0) with its own power MOSFET (IRLS44N). Not yet integrated — pins reserved only.
-- **Rangefinder** — VL53L0X time-of-flight laser rangefinder. Single unit, front-down (angled downward for stair/drop detection), on the I2C0 bus. No XSHUT sequencing needed — single device at default address. The 360° LiDAR covers forward/lateral/rear arcs, so only the downward-facing sensor is retained (currently stubbed for development).
+- **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): MCU TX on GPIO28, MCU RX on GPIO29, with an active-high low-side power MOSFET (IRLS44N) on GPIO30. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate on core1, and powered only while a mode needs it.
+- **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), on a PIO0 UART (core0): MCU TX on GPIO24, MCU RX on GPIO25, power MOSFET (IRLS44N) on GPIO23. Not yet integrated — pins reserved only. The PIO transport leaves hardware UART1 free for the expansion connector (ADR-0021).
+- **Rangefinder** — VL53L0X time-of-flight laser rangefinder for front-down stair/drop detection. The first unit is on I2C0 (GPIO16/17); a second unit can use I2C1 (GPIO26/27). The buses are electrically separate, so both sensors can keep the default `0x29` address without XSHUT sequencing. The 360° LiDAR covers forward/lateral/rear arcs; the downward-facing sensor is currently stubbed for development.
 - **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
+- **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 33–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle. See ADR-0022.
 
 ### LiDAR
 
@@ -44,7 +45,7 @@
 - **Calibration Target** — A marked point on the display at a known screen coordinate, touched during calibration to pair a raw reading with that coordinate.
 - **Touch Pressure** — A position-independent resistance proxy derived from a touch sample's two Z channels, distinguishing a firm press from a light one; a proxy, not a calibrated physical pressure.
 - **Touch IRQ** — The touch controller's active-low pen-down interrupt line (`PENIRQ`).
-- **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the Display and Touch Panel share SPI1).
+- **Shared SPI Bus** — One SPI bus carrying more than one device, arbitrated by chip select and per-device configuration (the Display and Touch Panel share SPI1). The touch header's `T_CLK`/`T_DIN`/`T_DO` are the shared `SPI1_SCK`/`SPI1_MOSI`/`SPI1_MISO` nets; only `T_CS` and `T_IRQ` (`PENIRQ`) are dedicated touch GPIOs.
 
 ### Menu
 

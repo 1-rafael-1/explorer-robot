@@ -7,17 +7,17 @@
 
 #![allow(clippy::missing_docs_in_private_items)]
 //!
-//! **Left Track Motor (PWM Slice 0):**
-//! - PWM: GPIO 0 (PWM0A)
+//! **Left Track Motor (PWM Slice 2):**
+//! - PWM: GPIO 4 (PWM2A)
+//! - Direction forward: GPIO 5 (direct)
+//! - Direction backward: GPIO 6 (direct)
+//!
+//! **Right Track Motor (PWM Slice 3):**
+//! - PWM: GPIO 7 (PWM3B)
 //! - Direction forward: GPIO 8 (direct)
-//! - Direction backward: GPIO 2 (direct)
+//! - Direction backward: GPIO 10 (direct)
 //!
-//! **Right Track Motor (PWM Slice 1):**
-//! - PWM: GPIO 3 (PWM1A)
-//! - Direction forward: GPIO 10 (direct)
-//! - Direction backward: GPIO 11 (direct)
-//!
-//! **Standby pin:** GPIO 6 (direct, active high)
+//! **Standby pin:** GPIO 12 (direct, active high)
 //!
 //! # Voltage Compensation
 //!
@@ -33,7 +33,7 @@
 //! # Architecture
 //!
 //! The motor driver uses a single-layer control system:
-//! 1. **PWM Control**: Speed via PWM duty cycle on GPIO 0, 3
+//! 1. **PWM Control**: Speed via PWM duty cycle on GPIO 4, 7
 //! 2. **Direction Control**: Direct GPIO Output pins (forward/backward per track)
 //! 3. **Standby**: Direct GPIO Output (active high, enable both driver halves)
 //!
@@ -382,23 +382,23 @@ async fn process_command(
 /// Motor driver task — processes commands and controls PWM + GPIO direction pins.
 ///
 /// # Arguments
-/// * `pwm_left` — PWM slice for left track motor (GPIO 0, PWM0 CH A)
-/// * `pwm_right` — PWM slice for right track motor (GPIO 3, PWM1 CH A)
-/// * `left_fwd` — GPIO for left motor forward direction (GPIO 8)
-/// * `left_bwd` — GPIO for left motor backward direction (GPIO 2)
-/// * `right_fwd` — GPIO for right motor forward direction (GPIO 10)
-/// * `right_bwd` — GPIO for right motor backward direction (GPIO 11)
-/// * `standby_pin` — GPIO for TB6612FNG standby pin (GPIO 6, active high)
+/// * `pwm_left` — PWM slice for left track motor (GPIO 4, PWM2 CH A)
+/// * `pwm_right` — PWM slice for right track motor (GPIO 7, PWM3 CH B)
+/// * `left_fwd` — GPIO for left motor forward direction (GPIO 5)
+/// * `left_bwd` — GPIO for left motor backward direction (GPIO 6)
+/// * `right_fwd` — GPIO for right motor forward direction (GPIO 8)
+/// * `right_bwd` — GPIO for right motor backward direction (GPIO 10)
+/// * `standby_pin` — GPIO for TB6612FNG standby pin (GPIO 12, active high)
 #[allow(clippy::similar_names)]
 #[embassy_executor::task]
 pub async fn motor_driver(
     pwm_left: Pwm<'static>,
     pwm_right: Pwm<'static>,
-    left_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_8>,
-    left_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_2>,
-    right_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_10>,
-    right_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_11>,
-    standby_pin: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_6>,
+    left_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_5>,
+    left_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_6>,
+    right_fwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_8>,
+    right_bwd: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_10>,
+    standby_pin: embassy_rp::Peri<'static, embassy_rp::peripherals::PIN_12>,
 ) {
     info!("Motor driver task starting");
 

@@ -38,7 +38,7 @@ The big to-dos, in no particular order:
 - **Bearings:** 12× 6802-2RS (DIN 625; a.k.a. 61802-2RS)
 - **Motor driver:** TB6612FNG dual H-bridge
 - **LiDAR:** COIN-D6 360° spinning dTOF (core1, buffered UART0 [] power MOSFET, driver integrated, off at boot and powered on demand)
-- **AI Cam:** Grove Vision AI V2 (core0, UART1 [] power MOSFET reserved, not yet integrated)
+- **AI Cam:** Grove Vision AI V2 (core0, PIO0 UART [] power MOSFET reserved, not yet integrated). UART1 is left free for the expansion connector.
 - **Rangefinder:** 1× VL53L0X ToF, front-down (stair/drop detection), on shared I2C0 bus (currently stubbed)
 - **IMU:** ICM-20948 9-axis over dedicated SPI bus
 - **Display:** ST7789 240×320 Panel driven landscape as a 320×240 framebuffer, on the shared SPI1 bus
