@@ -5,6 +5,7 @@
 	(uuid "57778957-dc0c-4e39-b470-8f64ada5e845")
 	(paper "A4")
 	(title_block
+		(title "System Overview and main connections")
 		(date "2026-09-27")
 		(rev "v.0.1")
 		(company "1-rafael-1")
@@ -668,7 +669,6 @@
 				(justify right)
 			)
 		)
-
 		(instances
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
@@ -679,7 +679,7 @@
 	)
 	(sheet
 		(at 82.55 64.77)
-		(size 33.02 43.18)
+		(size 33.02 25.4)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -705,7 +705,7 @@
 			)
 		)
 		(property "Sheetfile" "tb6612fng.kicad_sch"
-			(at 82.55 108.5346 0)
+			(at 82.55 90.7546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

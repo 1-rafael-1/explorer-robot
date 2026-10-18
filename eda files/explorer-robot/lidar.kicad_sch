@@ -5,6 +5,7 @@
 	(uuid "b2c251d6-dede-4542-a530-cc1522459671")
 	(paper "A4")
 	(title_block
+		(title "LIDAR connector")
 		(date "2026-09-27")
 		(rev "v.0.1")
 	)
