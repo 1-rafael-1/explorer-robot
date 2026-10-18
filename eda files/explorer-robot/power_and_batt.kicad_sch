@@ -3632,7 +3632,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Conn_01x02"
+		(property "Value" "BAT"
 			(at 177.8 64.7699 0)
 			(show_name no)
 			(do_not_autoplace no)

@@ -4520,6 +4520,16 @@
 	)
 	(wire
 		(pts
+			(xy 148.59 102.87) (xy 148.59 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2ccce4d2-d18f-404b-bceb-8e4b6c79bfa2")
+	)
+	(wire
+		(pts
 			(xy 264.16 33.02) (xy 264.16 34.29)
 		)
 		(stroke
@@ -5350,6 +5360,16 @@
 	)
 	(wire
 		(pts
+			(xy 184.15 102.87) (xy 184.15 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d6c92de2-6745-4cf8-a5ac-b1a317a6dc78")
+	)
+	(wire
+		(pts
 			(xy 55.88 24.13) (xy 59.69 24.13)
 		)
 		(stroke
@@ -5357,6 +5377,16 @@
 			(type default)
 		)
 		(uuid "d830891c-06e7-42fa-b61a-c920f2f1f1d1")
+	)
+	(wire
+		(pts
+			(xy 120.65 102.87) (xy 120.65 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "da2860f6-d100-4e47-b641-24ef34c11ecf")
 	)
 	(wire
 		(pts
@@ -5649,6 +5679,17 @@
 		)
 		(uuid "07f2f496-8d64-4663-86f2-17e129c2bc61")
 	)
+	(hierarchical_label "LIDAR_PWR"
+		(shape output)
+		(at 184.15 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "1450b516-a328-455f-b116-d95011957407")
+	)
 	(hierarchical_label "ICM-20948_CS"
 		(shape output)
 		(at 171.45 74.93 90)
@@ -5715,6 +5756,17 @@
 		)
 		(uuid "582ee8d8-2b39-429e-b712-c21e1340fa25")
 	)
+	(hierarchical_label "LIDAR_RX"
+		(shape output)
+		(at 148.59 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "6327013a-0f3f-454a-af66-f57f247001b9")
+	)
 	(hierarchical_label "MOT.B.IN.2"
 		(shape output)
 		(at 146.05 102.87 90)
@@ -5769,6 +5821,17 @@
 			(justify left)
 		)
 		(uuid "b693539a-bde0-4fb8-b447-3c94861659a6")
+	)
+	(hierarchical_label "LIDAR_TX"
+		(shape input)
+		(at 120.65 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d0ba2f8b-e67f-4335-8037-2ec074f2e538")
 	)
 	(hierarchical_label "LED_R"
 		(shape output)
@@ -13272,7 +13335,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "Conn_01x03"
+		(property "Value" "DBG"
 			(at 26.416 175.26 90)
 			(show_name no)
 			(do_not_autoplace no)

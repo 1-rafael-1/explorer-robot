@@ -811,7 +811,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Conn_01x04"
+		(property "Value" "LED"
 			(at 163.83 101.5999 0)
 			(show_name no)
 			(do_not_autoplace no)

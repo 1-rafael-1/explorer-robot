@@ -5737,7 +5737,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Motor_B_right"
+		(property "Value" "MBR"
 			(at 266.7 106.6799 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7172,7 +7172,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Motor_A_left"
+		(property "Value" "MAL"
 			(at 267.97 45.7199 0)
 			(show_name no)
 			(do_not_autoplace no)

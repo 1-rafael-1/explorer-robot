@@ -162,6 +162,36 @@
 	)
 	(wire
 		(pts
+			(xy 172.72 110.49) (xy 193.04 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ac3d4498-209b-47db-9908-d81d8e19d6a7")
+	)
+	(wire
+		(pts
+			(xy 172.72 105.41) (xy 193.04 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ad011303-e21f-43e6-9410-eeab83f90361")
+	)
+	(wire
+		(pts
+			(xy 172.72 107.95) (xy 193.04 107.95)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c7a1c75b-a274-4b45-80ce-d8e6f7bef370")
+	)
+	(wire
+		(pts
 			(xy 115.57 67.31) (xy 137.16 67.31)
 		)
 		(stroke
@@ -388,6 +418,36 @@
 				(justify right)
 			)
 		)
+		(pin "LIDAR_PWR" output
+			(at 172.72 105.41 0)
+			(uuid "db05535e-0be3-427f-b421-1137ece26ccf")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LIDAR_RX" output
+			(at 172.72 107.95 0)
+			(uuid "cdce9e6c-f4e1-4303-a57a-d24aab26ee0f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LIDAR_TX" input
+			(at 172.72 110.49 0)
+			(uuid "fbd40e20-d8b7-4ab7-b940-182470ea4b07")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
 		(instances
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
@@ -528,6 +588,82 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
 					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 193.04 102.87)
+		(size 20.32 10.16)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "59ee77a0-3af7-4f56-bf2b-31c06f43662c")
+		(property "Sheetname" "LIDAR"
+			(at 193.04 102.1584 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "lidar.kicad_sch"
+			(at 193.04 113.6146 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "LIDAR_PWR" input
+			(at 193.04 105.41 180)
+			(uuid "0f772b86-b888-493e-8bd4-1761294788ac")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "LIDAR_RX" input
+			(at 193.04 107.95 180)
+			(uuid "7b6bca29-2d98-4275-9598-f29e8406d800")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "LIDAR_TX" output
+			(at 193.04 110.49 180)
+			(uuid "445d4579-82d8-4e39-b053-47043c11bcb1")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "7")
 				)
 			)
 		)
