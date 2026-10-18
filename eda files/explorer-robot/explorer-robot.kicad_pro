@@ -612,6 +612,12 @@
           "show": true
         },
         {
+          "group_by": true,
+          "label": "JLCPCB_URL",
+          "name": "JLCPCB_URL",
+          "show": true
+        },
+        {
           "group_by": false,
           "label": "MFR",
           "name": "MFR",
@@ -619,8 +625,8 @@
         },
         {
           "group_by": true,
-          "label": "JLCPCB_URL",
-          "name": "JLCPCB_URL",
+          "label": "Footprint",
+          "name": "Footprint",
           "show": true
         },
         {
@@ -645,12 +651,6 @@
           "group_by": false,
           "label": "Datasheet",
           "name": "Datasheet",
-          "show": true
-        },
-        {
-          "group_by": true,
-          "label": "Footprint",
-          "name": "Footprint",
           "show": true
         },
         {
@@ -694,14 +694,32 @@
           "label": "Field12",
           "name": "Field12",
           "show": false
+        },
+        {
+          "group_by": false,
+          "label": "JLCPCP_URL",
+          "name": "JLCPCP_URL",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "remark",
+          "name": "remark",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Remark",
+          "name": "Remark",
+          "show": false
         }
       ],
       "filter_string": "",
       "group_symbols": true,
       "include_excluded_from_bom": true,
       "name": "",
-      "sort_asc": false,
-      "sort_field": "MPN"
+      "sort_asc": true,
+      "sort_field": "Reference"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -744,7 +762,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#PWR1-42,C1-28,J1,L1,O1,R1-4,SW1,TP1-9,U1-5,Y1",
+    "used_designators": "#FLG1-5,#PWR1-69,C1-51,D1-5,J1-4,L1-2,O1,Q1,R1-9,SW1,TP1-13,U1-8,Y1",
     "variants": []
   },
   "sheets": [
@@ -753,12 +771,20 @@
       "System"
     ],
     [
+      "036d3ddb-edde-42a1-9588-f906d63057c4",
+      "rp2354b"
+    ],
+    [
       "7d3241b2-95fb-44a6-85fe-f882fead429b",
       "ICM-20948"
     ],
     [
-      "036d3ddb-edde-42a1-9588-f906d63057c4",
-      "rp2354b"
+      "5150a953-897d-4ab2-903d-2b18d2e24ae3",
+      "TB6612FNG and encoders"
+    ],
+    [
+      "9d46820b-8f72-42a9-b57d-135ca095b278",
+      "Power and Battery"
     ]
   ],
   "text_variables": {},

@@ -12,7 +12,17 @@
 	(lib_symbols)
 	(wire
 		(pts
-			(xy 140.97 97.79) (xy 161.29 97.79)
+			(xy 115.57 77.47) (xy 137.16 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1bf3c6d4-f28c-4832-858e-590151a76b06")
+	)
+	(wire
+		(pts
+			(xy 172.72 74.93) (xy 193.04 74.93)
 		)
 		(stroke
 			(width 0)
@@ -22,7 +32,17 @@
 	)
 	(wire
 		(pts
-			(xy 140.97 92.71) (xy 161.29 92.71)
+			(xy 115.57 80.01) (xy 137.16 80.01)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2d8a23d9-0987-49da-8e84-bd8ef954434d")
+	)
+	(wire
+		(pts
+			(xy 172.72 69.85) (xy 193.04 69.85)
 		)
 		(stroke
 			(width 0)
@@ -32,7 +52,7 @@
 	)
 	(wire
 		(pts
-			(xy 140.97 90.17) (xy 161.29 90.17)
+			(xy 172.72 67.31) (xy 193.04 67.31)
 		)
 		(stroke
 			(width 0)
@@ -42,7 +62,7 @@
 	)
 	(wire
 		(pts
-			(xy 140.97 95.25) (xy 161.29 95.25)
+			(xy 172.72 72.39) (xy 193.04 72.39)
 		)
 		(stroke
 			(width 0)
@@ -52,7 +72,37 @@
 	)
 	(wire
 		(pts
-			(xy 140.97 100.33) (xy 161.29 100.33)
+			(xy 115.57 85.09) (xy 137.16 85.09)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "607485e1-e71d-4a6c-9edc-f41d441dc888")
+	)
+	(wire
+		(pts
+			(xy 115.57 82.55) (xy 137.16 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "68b7283e-c205-4e0d-920b-3823e29684e4")
+	)
+	(wire
+		(pts
+			(xy 115.57 74.93) (xy 137.16 74.93)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6dd63695-0fd0-4cd5-9981-6b6ddfa30af4")
+	)
+	(wire
+		(pts
+			(xy 172.72 77.47) (xy 193.04 77.47)
 		)
 		(stroke
 			(width 0)
@@ -60,9 +110,49 @@
 		)
 		(uuid "76bd36a0-8818-46a3-a646-6e510910078f")
 	)
+	(wire
+		(pts
+			(xy 115.57 87.63) (xy 137.16 87.63)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7b78ed45-6832-4dd3-810b-d52ca1eb51a9")
+	)
+	(wire
+		(pts
+			(xy 115.57 69.85) (xy 137.16 69.85)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7dab32e6-935d-41c9-9e88-2f9168bd6c2e")
+	)
+	(wire
+		(pts
+			(xy 115.57 67.31) (xy 137.16 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d14b0151-7f30-43d9-9a35-e6ffa246b421")
+	)
+	(wire
+		(pts
+			(xy 115.57 72.39) (xy 137.16 72.39)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ff4ad091-b58b-4aba-9c62-e8ab38843f71")
+	)
 	(sheet
-		(at 105.41 87.63)
-		(size 35.56 36.83)
+		(at 137.16 64.77)
+		(size 35.56 67.31)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -77,7 +167,7 @@
 		)
 		(uuid "036d3ddb-edde-42a1-9588-f906d63057c4")
 		(property "Sheetname" "rp2354b"
-			(at 105.41 86.9184 0)
+			(at 137.16 64.0584 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -88,7 +178,7 @@
 			)
 		)
 		(property "Sheetfile" "rp2354b.kicad_sch"
-			(at 105.41 125.0446 0)
+			(at 137.16 132.6646 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -99,7 +189,7 @@
 			)
 		)
 		(pin "ICM-20948_INT" input
-			(at 140.97 100.33 0)
+			(at 172.72 77.47 0)
 			(uuid "7db4a207-3cff-4f9a-933e-ae031ea7817d")
 			(effects
 				(font
@@ -109,7 +199,7 @@
 			)
 		)
 		(pin "ICM-20948_SDO" input
-			(at 140.97 97.79 0)
+			(at 172.72 74.93 0)
 			(uuid "7a04bd43-ecfd-4790-a5fe-63748ffb79f6")
 			(effects
 				(font
@@ -119,7 +209,7 @@
 			)
 		)
 		(pin "ICM-20948_CS" output
-			(at 140.97 92.71 0)
+			(at 172.72 69.85 0)
 			(uuid "eaada89f-4285-4298-b728-568a4d9856a2")
 			(effects
 				(font
@@ -129,7 +219,7 @@
 			)
 		)
 		(pin "ICM-20948_SCLK" output
-			(at 140.97 90.17 0)
+			(at 172.72 67.31 0)
 			(uuid "b92243d2-9207-4b15-bbe9-9f908382a8d2")
 			(effects
 				(font
@@ -139,8 +229,234 @@
 			)
 		)
 		(pin "ICM-20948_SDI" output
-			(at 140.97 95.25 0)
+			(at 172.72 72.39 0)
 			(uuid "f8a6844d-77ae-4af8-b42c-917d1e2e995f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.A.IN.1" output
+			(at 137.16 67.31 180)
+			(uuid "8c661842-5283-4e87-98a7-364bdd090dfd")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.A.IN.2" output
+			(at 137.16 69.85 180)
+			(uuid "f3851d7f-44a1-4ce0-b6dd-190f8ad6e615")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.A.L.ENC.A" input
+			(at 137.16 72.39 180)
+			(uuid "a70ed3f0-0d68-4478-8813-4bd45af3b76d")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.A.PWM" output
+			(at 137.16 74.93 180)
+			(uuid "8c1ae6b9-01a7-46fc-ac65-2c3fcf3c5293")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.B.IN.1" output
+			(at 137.16 77.47 180)
+			(uuid "b7229cb8-56e6-4594-b650-eb81949616c8")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.B.IN.2" output
+			(at 137.16 80.01 180)
+			(uuid "76225409-2fda-46ae-aef3-3e0f50e4f4e7")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.B.PWM" output
+			(at 137.16 82.55 180)
+			(uuid "ed182685-93c4-48e5-a91d-d2b51d115b2c")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.B.R.ENC.A" input
+			(at 137.16 85.09 180)
+			(uuid "0757c090-827a-43ea-aaf1-8011867287e4")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "MOT.STBY" output
+			(at 137.16 87.63 180)
+			(uuid "eb0bd2ba-c0fa-4076-a706-c4baf9af7cad")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 82.55 64.77)
+		(size 33.02 43.18)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "5150a953-897d-4ab2-903d-2b18d2e24ae3")
+		(property "Sheetname" "TB6612FNG and encoders"
+			(at 82.55 64.0584 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "tb6612fng.kicad_sch"
+			(at 82.55 108.5346 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "MOT.A.IN.1" input
+			(at 115.57 67.31 0)
+			(uuid "983b5742-63dd-48c1-8a39-b9d5d02a503f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.A.IN.2" input
+			(at 115.57 69.85 0)
+			(uuid "9651ec64-0fb4-4b4d-93a5-5719348df4e1")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.A.L.ENC.A" output
+			(at 115.57 72.39 0)
+			(uuid "a4650236-facd-4c57-a889-567d505e0d4a")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.A.PWM" input
+			(at 115.57 74.93 0)
+			(uuid "5f963d38-2428-44cf-a345-672bcaf04098")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.B.IN.1" input
+			(at 115.57 77.47 0)
+			(uuid "87cc2f08-1ac2-449e-a7a3-8fb4af0b14ad")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.B.IN.2" input
+			(at 115.57 80.01 0)
+			(uuid "40ce9d29-39b2-42d3-b983-049991dc9352")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.B.PWM" input
+			(at 115.57 82.55 0)
+			(uuid "c1ddc27d-0d1a-4e66-86b1-ad2e09227022")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.B.R.ENC.A" output
+			(at 115.57 85.09 0)
+			(uuid "a784bb12-e332-44b8-a02e-a636702b9a3a")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "MOT.STBY" input
+			(at 115.57 87.63 0)
+			(uuid "70bfc229-8d0b-4f85-a497-696bc8af715d")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -151,13 +467,13 @@
 		(instances
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
-					(page "3")
+					(page "4")
 				)
 			)
 		)
 	)
 	(sheet
-		(at 161.29 87.63)
+		(at 193.04 64.77)
 		(size 20.32 15.24)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -173,7 +489,7 @@
 		)
 		(uuid "7d3241b2-95fb-44a6-85fe-f882fead429b")
 		(property "Sheetname" "ICM-20948"
-			(at 161.29 86.9184 0)
+			(at 193.04 64.0584 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -184,7 +500,7 @@
 			)
 		)
 		(property "Sheetfile" "icm-20948.kicad_sch"
-			(at 161.29 103.4546 0)
+			(at 193.04 80.5946 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -195,7 +511,7 @@
 			)
 		)
 		(pin "ICM-20948_SDO" output
-			(at 161.29 97.79 180)
+			(at 193.04 74.93 180)
 			(uuid "7cb416ac-8fa8-4e0d-9ad2-83c1bcbea542")
 			(effects
 				(font
@@ -205,7 +521,7 @@
 			)
 		)
 		(pin "ICM-20948_CS" input
-			(at 161.29 92.71 180)
+			(at 193.04 69.85 180)
 			(uuid "a6511940-bb7e-4816-98b9-3b706fa97fb3")
 			(effects
 				(font
@@ -215,7 +531,7 @@
 			)
 		)
 		(pin "ICM-20948_SCLK" input
-			(at 161.29 90.17 180)
+			(at 193.04 67.31 180)
 			(uuid "94e537b2-57ff-48d1-8573-2c3d028c1541")
 			(effects
 				(font
@@ -225,7 +541,7 @@
 			)
 		)
 		(pin "ICM-20948_SDI" input
-			(at 161.29 95.25 180)
+			(at 193.04 72.39 180)
 			(uuid "388eeec9-9fb6-4b0b-bdc1-96c1a67ba9e0")
 			(effects
 				(font
@@ -235,7 +551,7 @@
 			)
 		)
 		(pin "ICM-20948_INT" output
-			(at 161.29 100.33 180)
+			(at 193.04 77.47 180)
 			(uuid "b881629c-ac31-494f-bd1a-7e83cc0591be")
 			(effects
 				(font
@@ -247,7 +563,53 @@
 		(instances
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
-					(page "2")
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 246.38 21.59)
+		(size 29.21 26.67)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "9d46820b-8f72-42a9-b57d-135ca095b278")
+		(property "Sheetname" "Power and Battery"
+			(at 246.38 20.8784 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "power_and_batt.kicad_sch"
+			(at 246.38 48.8446 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "5")
 				)
 			)
 		)
