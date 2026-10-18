@@ -718,7 +718,7 @@
       "group_symbols": true,
       "include_excluded_from_bom": true,
       "name": "",
-      "sort_asc": true,
+      "sort_asc": false,
       "sort_field": "Reference"
     },
     "bus_aliases": {},
@@ -762,7 +762,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#FLG1-5,#PWR1-69,C1-51,D1-5,J1-4,L1-2,O1,Q1,R1-9,SW1,TP1-13,U1-8,Y1",
+    "used_designators": "#FLG1-5,#PWR1-70,C1-51,D1-5,J1-5,L1-2,O1,Q1,R1-12,SW1,TP1-13,U1-8,Y1",
     "variants": []
   },
   "sheets": [
@@ -785,6 +785,10 @@
     [
       "9d46820b-8f72-42a9-b57d-135ca095b278",
       "Power and Battery"
+    ],
+    [
+      "9860c086-c7e4-4852-a7fc-52745f565991",
+      "RGB LED"
     ]
   ],
   "text_variables": {},

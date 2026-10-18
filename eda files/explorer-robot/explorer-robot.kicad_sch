@@ -12,6 +12,16 @@
 	(lib_symbols)
 	(wire
 		(pts
+			(xy 172.72 93.98) (xy 193.04 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "11aaed5a-d13d-4ff7-a8e0-d11a14d371c1")
+	)
+	(wire
+		(pts
 			(xy 115.57 77.47) (xy 137.16 77.47)
 		)
 		(stroke
@@ -112,6 +122,16 @@
 	)
 	(wire
 		(pts
+			(xy 172.72 91.44) (xy 193.04 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "78c914ca-5cc0-4eac-bbbb-362d7b3d17cf")
+	)
+	(wire
+		(pts
 			(xy 115.57 87.63) (xy 137.16 87.63)
 		)
 		(stroke
@@ -129,6 +149,16 @@
 			(type default)
 		)
 		(uuid "7dab32e6-935d-41c9-9e88-2f9168bd6c2e")
+	)
+	(wire
+		(pts
+			(xy 172.72 88.9) (xy 193.04 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7e4d16cb-a9ce-47b8-9d9d-cdba3ad8fedc")
 	)
 	(wire
 		(pts
@@ -326,6 +356,36 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+			)
+		)
+		(pin "LED_B" output
+			(at 172.72 93.98 0)
+			(uuid "346f45dc-a1db-45ee-a88a-06e9dd304ddf")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LED_G" output
+			(at 172.72 91.44 0)
+			(uuid "be2ef7e3-7e0b-4839-a534-992c4052a24a")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LED_R" output
+			(at 172.72 88.9 0)
+			(uuid "32d02625-14f4-4cf0-a429-033cdcc545d0")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 		(instances
@@ -569,8 +629,84 @@
 		)
 	)
 	(sheet
-		(at 246.38 21.59)
-		(size 29.21 26.67)
+		(at 193.04 86.36)
+		(size 20.32 10.16)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "9860c086-c7e4-4852-a7fc-52745f565991")
+		(property "Sheetname" "RGB LED"
+			(at 193.04 85.6484 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "rgb_led.kicad_sch"
+			(at 193.04 97.1046 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "LED_B" input
+			(at 193.04 93.98 180)
+			(uuid "bad5287e-cc1b-4a6c-9d20-ac851d157617")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "LED_G" input
+			(at 193.04 91.44 180)
+			(uuid "94b6fb01-4ec8-4a00-b678-53dd4b4268a3")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "LED_R" input
+			(at 193.04 88.9 180)
+			(uuid "83603468-0254-4d55-b7dd-959a416209c7")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 20.32 20.32)
+		(size 19.05 13.97)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -585,7 +721,7 @@
 		)
 		(uuid "9d46820b-8f72-42a9-b57d-135ca095b278")
 		(property "Sheetname" "Power and Battery"
-			(at 246.38 20.8784 0)
+			(at 20.32 19.6084 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -596,7 +732,7 @@
 			)
 		)
 		(property "Sheetfile" "power_and_batt.kicad_sch"
-			(at 246.38 48.8446 0)
+			(at 20.32 34.8746 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

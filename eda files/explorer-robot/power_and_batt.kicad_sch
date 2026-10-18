@@ -5,6 +5,7 @@
 	(uuid "1f87aff3-7d5f-4c72-9728-0b9e2878b8db")
 	(paper "A4")
 	(title_block
+		(title "Battery Power input and 5V supply")
 		(date "2026-09-27")
 		(rev "v.0.1")
 	)

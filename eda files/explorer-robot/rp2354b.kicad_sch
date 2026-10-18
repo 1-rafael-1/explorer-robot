@@ -4870,6 +4870,16 @@
 	)
 	(wire
 		(pts
+			(xy 151.13 102.87) (xy 151.13 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7b37b416-c5e7-4b6a-a554-b09b0ad0006a")
+	)
+	(wire
+		(pts
 			(xy 110.49 120.65) (xy 107.95 120.65)
 		)
 		(stroke
@@ -5000,6 +5010,16 @@
 	)
 	(wire
 		(pts
+			(xy 153.67 102.87) (xy 153.67 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "915c16d2-0d22-422b-aa91-5cd198bbccc8")
+	)
+	(wire
+		(pts
 			(xy 96.52 39.37) (xy 104.14 39.37)
 		)
 		(stroke
@@ -5087,6 +5107,16 @@
 			(type default)
 		)
 		(uuid "a1a49c76-d1ae-4079-9c51-ec1761a34b70")
+	)
+	(wire
+		(pts
+			(xy 156.21 102.87) (xy 156.21 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a701c7bd-461f-4d4c-8501-c878beb91a50")
 	)
 	(wire
 		(pts
@@ -5608,6 +5638,17 @@
 		)
 		(uuid "f66f886c-b5e6-45cc-898b-6a0598cbe666")
 	)
+	(hierarchical_label "LED_G"
+		(shape output)
+		(at 153.67 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "07f2f496-8d64-4663-86f2-17e129c2bc61")
+	)
 	(hierarchical_label "ICM-20948_CS"
 		(shape output)
 		(at 171.45 74.93 90)
@@ -5729,6 +5770,17 @@
 		)
 		(uuid "b693539a-bde0-4fb8-b447-3c94861659a6")
 	)
+	(hierarchical_label "LED_R"
+		(shape output)
+		(at 151.13 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "e3b0d705-39d6-46de-84d2-f0479d943f2d")
+	)
 	(hierarchical_label "ICM-20948_SDO"
 		(shape input)
 		(at 168.91 74.93 90)
@@ -5750,6 +5802,17 @@
 			(justify left)
 		)
 		(uuid "f6b36b59-f53b-4484-adde-16ffbbef31b7")
+	)
+	(hierarchical_label "LED_B"
+		(shape output)
+		(at 156.21 102.87 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "fc278164-3483-442f-8ecb-00d8832722c3")
 	)
 	(hierarchical_label "ICM-20948_SDI"
 		(shape output)
