@@ -989,7 +989,7 @@
 		(uuid "3d1ff091-d0aa-43d6-a296-f353392975da")
 	)
 	(junction
-		(at 160.02 91.44)
+		(at 165.1 91.44)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "6e76dcd4-2b7a-48e3-807c-f37c4208fa18")
@@ -1016,7 +1016,7 @@
 	)
 	(wire
 		(pts
-			(xy 156.21 86.36) (xy 160.02 86.36)
+			(xy 156.21 86.36) (xy 165.1 86.36)
 		)
 		(stroke
 			(width 0)
@@ -1046,6 +1046,16 @@
 	)
 	(wire
 		(pts
+			(xy 163.83 91.44) (xy 170.18 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "65793de5-2028-4047-94d0-712dc336c933")
+	)
+	(wire
+		(pts
 			(xy 170.18 90.17) (xy 170.18 91.44)
 		)
 		(stroke
@@ -1056,7 +1066,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 86.36) (xy 160.02 91.44)
+			(xy 165.1 86.36) (xy 165.1 91.44)
 		)
 		(stroke
 			(width 0)
@@ -1126,16 +1136,6 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 91.44) (xy 156.21 91.44)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c2cd5b44-4a52-43f5-b4c9-beac4bdc9625")
-	)
-	(wire
-		(pts
 			(xy 124.46 86.36) (xy 129.54 86.36)
 		)
 		(stroke
@@ -1143,16 +1143,6 @@
 			(type default)
 		)
 		(uuid "c3f8bfdb-a288-4547-bf85-7d7cd6c27d48")
-	)
-	(wire
-		(pts
-			(xy 160.02 91.44) (xy 170.18 91.44)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c556083d-4b62-42d2-a06b-361eb1ec7570")
 	)
 	(wire
 		(pts
@@ -1524,6 +1514,129 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
 					(reference "J7")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 160.02 91.44 270)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7be0979e-c935-4af1-a026-4f22f78f3bd7")
+		(property "Reference" "R17"
+			(at 160.02 93.726 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "100"
+			(at 160.02 96.266 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 160.02 89.662 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C22775"
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF1000T5E"
+			(at 160.02 91.44 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a9bb8127-a712-4433-aa8e-2922f1f97a09")
+		)
+		(pin "2"
+			(uuid "b6198395-06df-472f-bf61-9cc04e73e0bd")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
+					(reference "R17")
 					(unit 1)
 				)
 			)
