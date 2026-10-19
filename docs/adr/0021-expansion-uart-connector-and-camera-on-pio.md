@@ -19,7 +19,8 @@ expansion GPIO 32–37). The expansion 5 V feed is now switched by a TPS22917
 high-side load switch enabled by `EXP_PWR` on GPIO32, and the camera's 5 V branch
 uses the same switch on GPIO23. The camera's PIO0 transport is implemented; the
 expansion connector is still absent from the schematic and PCB. Branch power-down
-now requires UART quiesce and TX tri-state (ADR-0023).
+now requires UART quiesce, TX/RX tri-state and UART deinit (ADR-0023). The LiDAR
+implementation is the reference sequence.
 
 **Considered Options**
 
@@ -135,6 +136,9 @@ now requires UART quiesce and TX tri-state (ADR-0023).
 - `ExpansionResources` gains `power_enable` on GPIO32 (`EXP_PWR`) for the 5 V
   branch switch. The expansion task owns UART1, the switch and the connector
   control lines, and sequences power/UART bring-up and teardown (ADR-0023).
+- The LiDAR establishes the reference sequence (ADR-0023): stop, bounded flush and
+  shifter drain, drop the buffered UART, release TX/RX, clear `UARTCR.EN`, then
+  deassert `*_PWR`. The camera and expansion tasks must follow the same order.
 - The expansion UART gets its own task (AT client plus timeouts/retries). The camera
   task must drain its PIO RX FIFO promptly (see Consequences).
 
@@ -154,10 +158,12 @@ now requires UART quiesce and TX tri-state (ADR-0023).
   `AMS1117-3.3`) must stay within the TPS5430's rating and the peak budget in
   ADR-0019.
 - The connector's 5 V feed is now switched. With the switch off, QOD holds
-  `EXP_5V` low, and the expansion board's 3.3 V logic lines are tri-stated/held
-  low so they cannot back-power it through ESD diodes. The switch's reverse
-  current blocking also prevents a USB-powered expansion board from back-feeding
-  the 5 V rail. The connector is still not hot-pluggable.
+  `EXP_5V` low. Before deasserting `EXP_PWR`, UART1 is quiesced and dropped,
+  `EXP_TX` is tri-stated, `EXP_EN` is held low and `EXP_BOOT` is left low or
+  high-Z, so the expansion board's 3.3 V logic lines cannot back-power it through
+  ESD diodes. The switch's reverse current blocking also prevents a USB-powered
+  expansion board from back-feeding the 5 V rail. The connector is still not
+  hot-pluggable.
 - The three switched 5 V branches share the TPS5430 rail. The summed peak
   (LiDAR unmeasured, camera ~300–450 mA, ESP32-C6 ~250–350 mA, plus the
   AMS1117) can approach or exceed 1 A; the 6.0 V low-line may not hold 5 V at
@@ -175,4 +181,6 @@ now requires UART quiesce and TX tri-state (ADR-0023).
   UART logic level; confirm the TPS5430 5 V budget with the `AMS1117-3.3`, LiDAR
   and camera loads; confirm the TPS22917's availability and QOD load-capacitance
   limit; confirm whether the camera module's baud is configurable; and measure the
-  PIO UART's FIFO margin under display/SPI load during bring-up.
+  PIO UART's FIFO margin under display/SPI load during bring-up. Implement the
+  camera's PIO UART release/tri-state and boot delay, and the expansion task's
+  UART1/`EN`/`BOOT` sequencing, following ADR-0023.

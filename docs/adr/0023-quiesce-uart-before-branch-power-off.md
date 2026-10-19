@@ -9,11 +9,15 @@ current blocking stops current flowing from `VOUT` to `VIN`; it does not isolate
 the 3.3 V logic lines from the MCU. QOD holds the switched 5 V rail low, but it
 does not discharge the load's own 3.3 V rail.
 
-This applies to all three branches, not just the LiDAR. The LiDAR task currently
-keeps its `BufferedUart` alive for the whole runtime; that is no longer acceptable
-once the 5 V branch is switched independently.
+The requirement is the off-state electrical invariant, not the existence of a
+Rust object: with the branch unpowered, no MCU-driven line may source current
+into it. Quiescing, deinitializing and dropping the UART is the mechanism that
+makes the invariant hold. Dropping `BufferedUart` alone does not: it deinits only
+its ring buffers and IRQ, leaving `UARTCR.EN` set and the UART pins muxed.
 
 **Status:** accepted. Applies to the LiDAR, AI camera and expansion branches.
+The LiDAR is implemented per this ADR; the camera and expansion tasks follow the
+same pattern when they gain a runtime lifecycle.
 
 **Considered Options**
 
@@ -30,9 +34,15 @@ once the 5 V branch is switched independently.
 - **Add a bus switch or level shifter with an enable.** Deferred. It would work,
   but it adds parts and board area; tri-stating the MCU pins plus the branch power
   sequence is sufficient.
-- **Keep the UART static and just reconfigure the pin low.** Rejected. The
-  `BufferedUart` owns the pins and has no `free()`; the clean path is to stop
-  using it and reconstruct it for the next acquisition.
+- **Keep the UART object alive and re-mux the pins manually.** Rejected. The
+  `BufferedUart` does not retain the `Peri` handles after construction, so the
+  task can retain them and reborrow, but re-muxing a pin into the UART function
+  would duplicate embassy's private `Uart::init` or poke `FUNCSEL` directly.
+  Constructing the UART per powered period is the supported path.
+- **Keep the UART static and just reconfigure the pin low.** Rejected. A driven
+  low is a break condition, and it does not deinit the UART. The clean path is to
+  drop the `BufferedUart`, clear `UARTCR.EN`, release the pads, and reconstruct
+  for the next acquisition.
 
 **Decision**
 
@@ -45,16 +55,40 @@ The common rule is:
   bring up the UART and drive the control lines. Do not drive logic into a branch
   that is still unpowered.
 
+For the LiDAR, the sequence is:
+
+1. Send the stop command with a bounded timeout (best-effort).
+2. `CoinD6::release()` to recover the buffered UART and the power enable.
+3. Wait, bounded, for `BufferedUart::busy()` to clear. `flush()` only drains the
+   software ring; `BUSY` covers the hardware shifter, so without this wait the
+   stop command can be truncated.
+4. Drop the `BufferedUart`; this deinits its ring buffers and disables
+   `UART0_IRQ`.
+5. Release both UART pads with `Input::new(pin, Pull::None)`, dropped
+   immediately. This leaves TX and RX high-Z with no pull.
+6. Clear `UARTCR.EN`, `TXE` and `RXE` through the PAC.
+7. Deassert `LIDAR_PWR`.
+8. Record the power-down instant so the next power-up can enforce a minimum off
+   interval.
+
+Power-up reverses it: wait out the minimum off interval, assert `LIDAR_PWR`,
+wait `BRANCH_RISE` (50 ms provisional, pending the TPS22917 `CT` value), then
+construct the `BufferedUart` from the retained `Peri` handles and static buffers,
+construct the driver, and run `probe()` → `start()` → warm-up. `probe()` is the
+public device-info read; `power_on()` remains `set_high()` + `probe()` for the
+simple case.
+
 Per branch:
 
-- **LiDAR.** `release()` stops the device, calls `CoinD6::release()`, drops the
-  `BufferedUart` (which deinits its ring buffers and IRQ), leaves the MCU TX pin
-  high-Z with `Input::new(tx.reborrow(), Pull::None)`, then deasserts
-  `LIDAR_PWR`. `acquire()` asserts `LIDAR_PWR`, waits for the switch rise, then
-  reconstructs the `BufferedUart` from the retained `Peri` handles and runs
-  `power_on()` → `start()` → warm-up. The UART TX/RX buffers are `'static mut`
-  and are reborrowed for each construction. Optionally clear `UARTCR.EN` through
-  the PAC; `BufferedUart::new` re-enables it.
+- **LiDAR.** The task retains the raw `Peri` handles for UART0, GPIO28 and
+  GPIO29, plus the `'static mut` TX/RX buffers and the ingest buffer. A
+  `LidarSession` owns those resources, one `Output<'static>` for `LIDAR_PWR`
+  (held low while off), and the sequencing. It does not store the driver: the
+  driver borrows the ingest buffer only for the powered period, which avoids a
+  self-referential struct. `power_up(&mut ingest)` returns the driver;
+  `power_down(driver)` consumes it and runs the sequence above. Every path that
+  deasserts power — acquire failure, retry, streaming restart, terminal failure,
+  last lease return — goes through `power_down`.
 - **AI camera.** Stop the PIO UART, deinit/drop the PIO state machines and
   transport, reconfigure GPIO 24/25 as inputs, then deassert `AICAM_PWR`.
   Power-up: assert `AICAM_PWR`, wait for the switch rise and the camera boot, then
@@ -64,12 +98,18 @@ Per branch:
   deassert `EXP_PWR`. Power-up: assert `EXP_PWR`, wait for the `CT` rise, then
   release `EXP_EN` and bring up UART1.
 
-The LiDAR task therefore retains the raw `Peri` handles for UART0 and its pins
-and constructs the `BufferedUart` per acquisition. `CoinD6::release()` is the
-hook that returns the UART and the power enable. The `BufferedUart` API has no
-`free()`, but it does not retain the `Peri` values after construction, so
-`Peri::reborrow()` lets the task keep the handles and pass fresh reborrows to
-`BufferedUart::new`. Reborrow the `'static mut` TX/RX buffers the same way.
+The task-side ownership API is `acquire() -> Lease` and `return_lease(lease)`.
+`return_lease` names the ownership transfer; `CoinD6::release()` keeps its
+standard driver meaning of handing the UART and power pin back. The task, not
+the driver, owns the branch sequencing because only the task knows how to
+tri-state the pads and clear `UARTCR.EN`.
+
+`BufferedUart::new` accepts `Peri<'d, ...>` and `&'d mut [u8]` and returns a
+`BufferedUart` with no lifetime parameter, so retaining the `Peri` handles and
+reborrowing them per construction is supported. The TX/RX buffers are
+`'static mut` and are reborrowed the same way. `BufferedUart`'s drop deinits its
+ring buffers and disables its IRQ but does not clear `UARTCR.EN` or reset the pad
+mux; the explicit `Input` release and PAC clear are therefore required.
 
 The hardware keeps the second layer: 100 Ω series on the UART lines, 1 kΩ on the
 expansion `EN`/`BOOT`/`IRQ` lines (ADR-0021), the TPS22917 QOD, and its reverse
@@ -79,8 +119,11 @@ the 3.3 V logic.
 **Consequences**
 
 - The LiDAR UART is no longer a runtime-static resource. The task constructs it
-  per acquisition and drops it on release; `LidarDriver` no longer owns a UART
-  that outlives the powered branch.
+  per powered period and drops it on power-down; `LidarDriver` no longer owns a
+  UART that outlives the powered branch.
+- The LiDAR task retains the `Peri` handles and the `'static mut` buffers, and
+  the driver exists only inside `power_up`/`power_down`. The ingest buffer is
+  borrowed per acquisition; the session does not store the driver.
 - The camera and expansion tasks must own their UART/PIO lifecycle and their
   off-state pin configuration. Power-up and power-down sequencing becomes part of
   each branch's API rather than an incidental detail.
@@ -92,18 +135,28 @@ the 3.3 V logic.
   state; the task must not assume the UART exists immediately after `power_on`.
 - A branch that is powered down must not have its UART TX driven high, and must
   not have a low driven into a load that is independently powered.
-- Bench check: with the branch off, measure no current from the MCU TX/control
-  pins into the load's 3.3 V rail; with the branch on, verify the UART starts
-  cleanly after the switch rise and that a power cycle does not leave a stuck
-  framing/overrun condition.
+- `CoinD6::release()` remains a pure handback. The task-side operation is
+  `return_lease(lease)`; the two names no longer collide in prose.
+- The power-down path is bounded: `STOP_TIMEOUT` (100 ms) bounds the stop,
+  `BUSY_TIMEOUT` (10 ms) bounds the shifter drain, and `POWER_CYCLE_OFF` (200 ms)
+  is the provisional minimum off interval between power-ups.
+- The attempt timeout wraps `probe` → `start` → warm-up, not power assertion or
+  UART construction. There is no await point between `BufferedUart::new` and
+  returning the driver, so cancellation cannot leave a muxed UART with the
+  branch powering down.
+- Bench check: with the branch off, measure no current from the MCU TX/RX and
+  control pins into the load's 3.3 V rail; with the branch on, verify the UART
+  starts cleanly after the switch rise and that a power cycle does not leave a
+  stuck framing/overrun condition. The board is not manufactured yet, so this
+  measurement is deferred; acceptance for the firmware change is code review,
+  `cargo check`/clippy and the existing host tests.
 
 **Open items**
 
-- Implement the LiDAR per-acquisition UART refactor and verify that
-  `Peri::reborrow()` plus `BufferedUart::new` behaves correctly on the
-  `embassy-rp` version in use.
-- Confirm that the camera's PIO UART can release or safely tri-state GPIO 24/25
-  when the branch is off.
-- Confirm the expansion board's `EN`/`BOOT` pull-ups and whether they float high
-  when its 5 V is off; hold or tri-state them accordingly.
-- Measure the off-state back-feed on each branch before and after the refactor.
+- Measure the TPS22917 `CT` rise time and confirm or replace the provisional
+  50 ms `BRANCH_RISE`.
+- Measure the LiDAR's required off time and confirm or replace the provisional
+  200 ms minimum off interval.
+- Implement the camera's PIO UART release/tri-state and its boot delay.
+- Implement the expansion task's UART1/`EN`/`BOOT` sequencing.
+- Measure the off-state back-feed on each branch when the board exists.

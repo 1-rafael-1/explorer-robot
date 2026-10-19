@@ -33,7 +33,7 @@ use embassy_rp::{
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
-    uart::{self, BufferedUart, InterruptHandler as UartInterruptHandler},
+    uart::{self, InterruptHandler as UartInterruptHandler},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
@@ -312,46 +312,21 @@ fn init_imu(spawner: Spawner, spi: Spi<'static, SPI0, spi::Async>, cs: Output<'s
     spawner.spawn(task::sensors::imu::inertial_measurement_read(spi_bus, cs).unwrap());
 }
 
-/// `LiDAR` UART baud rate (230400 8N1).
-const D6_LIDAR_BAUD: u32 = 230_400;
-/// `BufferedUart` TX ring buffer size (start/stop commands are 4 bytes).
-const D6_LIDAR_TX_BUF_LEN: usize = 16;
-/// `BufferedUart` RX ring buffer size; absorbs stream data between reads.
-const D6_LIDAR_RX_BUF_LEN: usize = 4096;
-
-/// Static TX ring buffer for the `LiDAR`'s buffered UART.
-static D6_LIDAR_TX_BUF: StaticCell<[u8; D6_LIDAR_TX_BUF_LEN]> = StaticCell::new();
-/// Static RX ring buffer for the `LiDAR`'s buffered UART.
-static D6_LIDAR_RX_BUF: StaticCell<[u8; D6_LIDAR_RX_BUF_LEN]> = StaticCell::new();
-
-/// Bring up the COIN-D6 `LiDAR`'s buffered UART0 and spawn its task on core1.
+/// Build the COIN-D6 `LiDAR` session and spawn its task on core1.
 ///
-/// The UART is full duplex — the driver's bound needs a readable and writable
-/// stream even though start and stop are best-effort — on the contiguous TX/RX
-/// pair (GPIO 28 / GPIO 29), with the TPS22917 high-side load-switch enable on
-/// GPIO 30. The enable starts low, so the sensor is off at boot.
+/// The session retains UART0 and the contiguous TX/RX pair (GPIO 28 / GPIO 29),
+/// with the TPS22917 high-side load-switch enable on GPIO 30 held low. No UART
+/// is constructed at boot: the task builds one per powered period, after it has
+/// asserted the branch and waited for the switch rise (ADR-0023).
 ///
 /// Must be called on **core1** so `UART0_IRQ` is enabled on core1's NVIC,
 /// mirroring how `init_i2c_bus` must run on core0 for `I2C0_IRQ`.
 #[allow(clippy::unwrap_used)]
 fn init_lidar(spawner: Spawner, d6_pins: D6LidarResources) {
-    let mut uart_config = uart::Config::default();
-    uart_config.baudrate = D6_LIDAR_BAUD;
+    let session =
+        task::sensors::lidar::LidarSession::new(d6_pins.uart, d6_pins.uart_tx, d6_pins.uart_rx, d6_pins.power_enable);
 
-    let uart = BufferedUart::new(
-        d6_pins.uart,
-        d6_pins.uart_tx,
-        d6_pins.uart_rx,
-        Irqs,
-        D6_LIDAR_TX_BUF.init([0u8; D6_LIDAR_TX_BUF_LEN]),
-        D6_LIDAR_RX_BUF.init([0u8; D6_LIDAR_RX_BUF_LEN]),
-        uart_config,
-    );
-
-    // Powered off by default; the driver asserts this only while acquired.
-    let power_enable = Output::new(d6_pins.power_enable, Level::Low);
-
-    spawner.spawn(task::sensors::lidar::lidar_task(uart, power_enable).unwrap());
+    spawner.spawn(task::sensors::lidar::lidar_task(session).unwrap());
 }
 
 /// Bring up the Grove Vision AI V2 camera's PIO0 UART and load-switch enable.

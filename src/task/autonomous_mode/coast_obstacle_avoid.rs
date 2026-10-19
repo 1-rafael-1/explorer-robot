@@ -85,7 +85,7 @@ static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// The `LiDAR` lease held by the running mode.
 ///
 /// [`start`] stores the lease here and [`coast_obstacle_avoid_task`] takes and
-/// releases it on exit. The task is spawned by the autonomous-mode controller
+/// returns it on exit. The task is spawned by the autonomous-mode controller
 /// rather than by [`start`], so the token cannot travel as a task argument and
 /// crosses the two through this cell instead. Because the cell is published
 /// before the controller can spawn the task, a lease placed here is always
@@ -184,7 +184,7 @@ pub(super) fn spawn(spawner: Spawner) {
 /// [`ACTIVE`] is raised *before* it. A spawned task therefore can never observe
 /// `ACTIVE == true` with no lease to consume, and can never exit holding a lease
 /// it was not handed. If the request is refused, both are rolled back — nothing
-/// is left active and the lease is released. The mode active at that point is
+/// is left active and the lease is returned. The mode active at that point is
 /// another autonomous mode, or a coast run already past its loop, so briefly
 /// toggling this module's `ACTIVE` cannot be observed by a running coast task.
 ///
@@ -214,13 +214,13 @@ pub async fn start() -> Result<(), StartError> {
     };
 
     // Publish the lease before the task can be spawned. If a previous run still
-    // holds one, refuse rather than overwrite it: dropping that lease unreleased
-    // would leak its ref count and keep the sensor powered.
+    // holds one, refuse rather than overwrite it: dropping that lease without
+    // returning it would leak its ref count and keep the sensor powered.
     {
         let mut slot = LIDAR_LEASE.lock().await;
         if slot.is_some() {
             drop(slot);
-            lidar::release(lease).await;
+            lidar::return_lease(lease).await;
             return Err(StartError::Busy);
         }
         *slot = Some(lease);
@@ -232,7 +232,7 @@ pub async fn start() -> Result<(), StartError> {
     if STOP_REQUESTED.load(Ordering::Acquire) {
         let lease = LIDAR_LEASE.lock().await.take();
         if let Some(lease) = lease {
-            lidar::release(lease).await;
+            lidar::return_lease(lease).await;
         }
         return Err(StartError::Cancelled);
     }
@@ -241,12 +241,12 @@ pub async fn start() -> Result<(), StartError> {
 
     if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
         // No task was spawned, so roll the hand-off back: lower the flag and
-        // take the lease back to release it. No running coast task can observe
+        // take the lease back to return it. No running coast task can observe
         // this, because the mode active now is another autonomous mode.
         ACTIVE.store(false, Ordering::Relaxed);
         let lease = LIDAR_LEASE.lock().await.take();
         if let Some(lease) = lease {
-            lidar::release(lease).await;
+            lidar::return_lease(lease).await;
         }
         return Err(StartError::Busy);
     }
@@ -313,7 +313,7 @@ pub async fn coast_obstacle_avoid_task() {
     // mode still holds a lease.
     let lease = LIDAR_LEASE.lock().await.take();
     if let Some(lease) = lease {
-        lidar::release(lease).await;
+        lidar::return_lease(lease).await;
     }
     autonomous_mode::release_autonomous_mode();
     info!("coast-avoid: deactivated");

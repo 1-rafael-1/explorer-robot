@@ -117,8 +117,8 @@ pub async fn with_lidar<R>(f: impl FnOnce(Option<&Cloud>) -> R) -> R {
 
 /// Clear the stored `LiDAR` cloud and its obstacle flag.
 ///
-/// Called by the `LiDAR` task's release and terminal-failure paths so stale data
-/// cannot outlive a powered-down sensor: the cloud becomes absent and the
+/// Called by the `LiDAR` task's lease-return and terminal-failure paths so stale
+/// data cannot outlive a powered-down sensor: the cloud becomes absent and the
 /// obstacle flag is cleared in the lock-free snapshot.
 ///
 /// Returns [`ChangeDetected::ChangedToCleared`] when the obstacle flag had been

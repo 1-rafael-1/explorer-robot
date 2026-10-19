@@ -94,10 +94,11 @@ where
 
     /// Assert the power pin and wait for the device-info frame.
     ///
-    /// On power-on the device announces its identity with an `A5 5A` frame (type
-    /// `0x01`). This validates that frame — header, type, and checksum — and
-    /// drains its data area, so a subsequent [`Self::start`] is not preceded by
-    /// stale bytes.
+    /// This is [`Self::probe`] with the power enable asserted first. On power-on
+    /// the device announces its identity with an `A5 5A` frame (type `0x01`).
+    /// This validates that frame — header, type, and checksum — and drains its
+    /// data area, so a subsequent [`Self::start`] is not preceded by stale
+    /// bytes.
     ///
     /// # Errors
     ///
@@ -106,6 +107,24 @@ where
     /// [`Error::Resync`] if the frame is malformed.
     pub async fn power_on(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
         self.power.set_high().map_err(Error::Pin)?;
+        self.probe().await
+    }
+
+    /// Read and validate the device-info frame.
+    ///
+    /// On power-on the device announces its identity with an `A5 5A` frame (type
+    /// `0x01`). This validates that frame — header, type, and checksum — and
+    /// drains its data area, so a subsequent [`Self::start`] is not preceded by
+    /// stale bytes.
+    ///
+    /// Unlike [`Self::power_on`], this does not touch the power pin, so callers
+    /// that have already asserted power can probe the device directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Uart`] on a fatal UART error, [`Error::Timeout`] if the
+    /// frame never arrives, or [`Error::Resync`] if the frame is malformed.
+    pub async fn probe(&mut self) -> Result<(), Error<UART::Error, POWER::Error>> {
         self.read_device_info().await
     }
 

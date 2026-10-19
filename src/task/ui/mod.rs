@@ -218,12 +218,12 @@ async fn coast_avoid_task() {
 ///
 /// The task converges on the screen's latest intent, latched in
 /// [`ROOM_SCAN_WANTED`], rather than consuming queued requests, so a rapid
-/// leave/re-enter cannot drop the final release. Acquisition can take several
-/// seconds, so the intent may flip while `lidar::acquire()` is running; the
-/// latch is re-read after every acquisition wait and the lease handed straight
-/// back when the screen is already gone. The lease is held across iterations and
-/// released only by its holder, so leaving after a failed acquisition releases
-/// nothing and cannot power down a sensor another mode owns.
+/// leave/re-enter cannot drop the final lease return. Acquisition can take
+/// several seconds, so the intent may flip while `lidar::acquire()` is running;
+/// the latch is re-read after every acquisition wait and the lease handed
+/// straight back when the screen is already gone. The lease is held across
+/// iterations and returned only by its holder, so leaving after a failed
+/// acquisition returns nothing and cannot power down a sensor another mode owns.
 #[embassy_executor::task]
 async fn room_scan_task() {
     let mut lease: Option<lidar::Lease> = None;
@@ -246,16 +246,16 @@ async fn room_scan_task() {
                 if !ROOM_SCAN_WANTED.load(Ordering::Acquire) {
                     let held = lease.take();
                     if let Some(held) = held {
-                        lidar::release(held).await;
+                        lidar::return_lease(held).await;
                     }
                 }
             }
         } else {
             // A no-op when no lease is held — the whole point of the lease:
-            // leaving after a failed acquisition releases nothing.
+            // leaving after a failed acquisition returns nothing.
             let held = lease.take();
             if let Some(held) = held {
-                lidar::release(held).await;
+                lidar::return_lease(held).await;
             }
         }
     }
@@ -540,14 +540,14 @@ fn enter_room_scan(ui: &mut Ui) {
     ROOM_SCAN_SIGNAL.signal(());
 }
 
-/// Leave the Room Scan screen: release the single-active slot and the `LiDAR`
+/// Leave the Room Scan screen: return the single-active slot and the `LiDAR`
 /// lease it holds.
 ///
 /// The intent is latched rather than awaited, so the panel never blocks; the
 /// lifecycle task acts on it even if the leave lands while an acquisition is
 /// still warming. Called on every exit path, including a failed acquisition, it
 /// hands back only the lease this screen actually holds, so a failed acquisition
-/// releases nothing and cannot power down a sensor another mode owns.
+/// returns nothing and cannot power down a sensor another mode owns.
 fn leave_room_scan() {
     testmode::release_room_scan();
     ROOM_SCAN_WANTED.store(false, Ordering::Release);
@@ -637,7 +637,7 @@ async fn cancel_distance_calibration() {
 /// wrong producer holds is cleared by that producer's own re-arm when its next run
 /// starts, so setting them all is safe and leaves no running procedure
 /// unstoppable. Stopping coast-and-avoid clears its active flag; its task then
-/// brakes, releases the `LiDAR`, and exits on its own. The activity state is
+/// brakes, returns the `LiDAR` lease, and exits on its own. The activity state is
 /// cleared here because the panel is what moved on.
 async fn stop_running() {
     testmode::stop();
@@ -758,11 +758,11 @@ async fn refresh_screens(ui: &mut Ui) -> bool {
 /// Refresh the Room Scan radar frame and sensor caption, reporting a change.
 ///
 /// The radar comes from the perception snapshot and is `None` while no snapshot
-/// exists — before the sensor warms or after it is released — which the screen
-/// draws as "No data", never as an empty room. The cloud crosses owned with its
-/// sequence as the change token, so an unchanged sequence costs one counter
-/// comparison and no copy of the slot array (ADR-0016). The caption comes from
-/// the sensor's lock-free lifecycle status.
+/// exists — before the sensor warms or after its lease is returned — which the
+/// screen draws as "No data", never as an empty room. The cloud crosses owned
+/// with its sequence as the change token, so an unchanged sequence costs one
+/// counter comparison and no copy of the slot array (ADR-0016). The caption
+/// comes from the sensor's lock-free lifecycle status.
 async fn refresh_room_scan(ui: &mut Ui) -> bool {
     let mut redraw = ui.set_sensor_state(map_sensor_state(lidar::status()));
     redraw |= perception::with_lidar(|cloud| ui.set_radar(cloud.map(|c| (c.slots(), c.sequence())))).await;

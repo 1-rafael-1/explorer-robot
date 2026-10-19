@@ -33,8 +33,7 @@ use st7789_async::{ColorOrder, Config as DisplayConfig, Orientation, Rotation, S
 use static_cell::{ConstStaticCell, StaticCell};
 use touch_async::{Calibration, TouchPanel, TouchSample};
 
-use crate::Irqs;
-use crate::resources::PanelResources;
+use crate::{Irqs, resources::PanelResources};
 
 // ── Bus and framebuffer ───────────────────────────────────────────────────────
 

@@ -8,7 +8,9 @@ right.
 
 **Status:** accepted. Revised in place: the LiDAR's 5 V branch is switched by a
 TPS22917 high-side load switch, and the UART is quiesced and tri-stated before
-power-off (ADR-0023). Ownership is leased as well as ref-counted.
+power-off (ADR-0023). Ownership is leased as well as ref-counted. The task-side
+lease operation is `return_lease`; the driver's `release()` is only a handback of
+the UART and power pin.
 
 **Considered Options**
 
@@ -29,20 +31,24 @@ power-off (ADR-0023). Ownership is leased as well as ref-counted.
 **Decision**
 
 - A persistent core1 task owns the driver for the whole runtime and exposes
-  `acquire()` / `release()` / `status()`. Ownership is ref-counted and leased: `acquire()`
-  yields a lease that `release()` consumes, the sensor powers down when the last lease is
-  released, and a mode can only release the lease it holds. An acquire that is already in
-  flight is refused with `Busy`, so no second lifecycle starts while one is coming up.
+  `acquire()` / `return_lease()` / `status()`. Ownership is ref-counted and leased:
+  `acquire()` yields a lease that `return_lease()` consumes, the sensor powers down
+  when the last lease is returned, and a mode can only return the lease it holds. An
+  acquire that is already in flight is refused with `Busy`, so no second lifecycle
+  starts while one is coming up.
 - `acquire()` asserts the `LIDAR_PWR` enable, waits for the TPS22917 rise time, then
-  brings up the UART and runs `power_on()` → `start()` → `warm_up()` → streaming. A
-  `start()` failure is tolerated; warm-up is the real proof that data flows.
+  constructs the `BufferedUart` from the retained `Peri` handles and runs
+  `probe()` → `start()` → `warm_up()` → streaming. A `start()` failure is
+  tolerated; warm-up is the real proof that data flows.
 - Warm-up is bounded by a wall-clock timeout at the call site, because the driver has only
   byte-count watchdogs. On timeout the task power-cycles and retries a bounded number of
   times before reporting `Failed`.
-- `release()` stops the device, quiesces and deinits the UART, leaves the MCU TX pin
-  high-Z, then deasserts the `LIDAR_PWR` enable and clears stale state: the stored
-  cloud becomes `None`, the obstacle flag is cleared, and a cleared `ObstacleDetected`
-  edge is raised if the flag had been set (ADR-0023).
+- `return_lease()` stops the device, quiesces and deinits the UART, releases the MCU
+  TX and RX pins to high-Z, then deasserts the `LIDAR_PWR` enable and clears stale
+  state: the stored cloud becomes `None`, the obstacle flag is cleared, and a
+  cleared `ObstacleDetected` edge is raised if the flag had been set (ADR-0023).
+  It calls `CoinD6::release()` to recover the UART and power enable before the final
+  teardown steps.
 - Coast-and-Avoid acquires the LiDAR on entry and **refuses to start** if the acquisition
   fails, rather than driving with only the downward rangefinder for obstacle sense.
 - The LiDAR is off at boot; motor tests, IMU tests, calibration and idle never power it.
@@ -57,7 +63,7 @@ power-off (ADR-0023). Ownership is leased as well as ref-counted.
   steady state; the screen shows the warming state so the wait does not read as a hang.
 - Consumers must treat an absent cloud as unknown, not as an empty room: a `None` snapshot
   means the sensor is off or not yet warmed.
-- A stopped sensor can leave an obstacle flag behind, so `release()` carries the
+- A stopped sensor can leave an obstacle flag behind, so `return_lease()` carries the
   obligation to clear it in the same step.
 - A mode that never acquired holds no lease, so leaving a screen after a failed acquisition
   cannot power the sensor down under the mode that does own it.
@@ -66,7 +72,8 @@ power-off (ADR-0023). Ownership is leased as well as ref-counted.
   its QOD to hold the switched 5 V rail low when off. It has no current limit; the
   5 V buck and the pack protection are the forward-fault backstop.
 - The LiDAR UART is no longer a runtime-static resource. `BufferedUart` is
-  reconstructed per acquisition from retained `Peri` handles, and TX is tri-stated
-  while the branch is off (ADR-0023).
+  constructed per powered period from retained `Peri` handles, `UARTCR.EN` is
+  cleared on power-down, and both TX and RX are tri-stated while the branch is off
+  (ADR-0023).
 - The LiDAR's 5 V peak is unmeasured and shares the rail with the AI camera and
   expansion branches; the 5 V budget is revisited in ADR-0019.
