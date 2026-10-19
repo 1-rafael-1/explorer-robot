@@ -83,6 +83,16 @@
 	)
 	(wire
 		(pts
+			(xy 116.84 99.06) (xy 137.16 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5f0d0425-e11d-4fa5-91be-0d3a3fe6a3ac")
+	)
+	(wire
+		(pts
 			(xy 115.57 85.09) (xy 137.16 85.09)
 		)
 		(stroke
@@ -590,13 +600,13 @@
 			)
 		)
 		(pin "BATT_ADC" input
-			(at 172.72 148.59 0)
+			(at 137.16 99.06 180)
 			(uuid "051c8b0e-c8e4-4f5c-b01b-4e88cd634c57")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "LCD_CS" output
@@ -678,8 +688,8 @@
 		)
 	)
 	(sheet
-		(at 82.55 64.77)
-		(size 33.02 25.4)
+		(at 91.44 64.77)
+		(size 24.13 25.4)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -694,7 +704,7 @@
 		)
 		(uuid "5150a953-897d-4ab2-903d-2b18d2e24ae3")
 		(property "Sheetname" "TB6612FNG and encoders"
-			(at 82.55 64.0584 0)
+			(at 91.44 64.0584 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -705,7 +715,7 @@
 			)
 		)
 		(property "Sheetfile" "tb6612fng.kicad_sch"
-			(at 82.55 90.7546 0)
+			(at 91.44 90.7546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1062,8 +1072,8 @@
 		)
 	)
 	(sheet
-		(at 20.32 20.32)
-		(size 19.05 13.97)
+		(at 91.44 96.52)
+		(size 25.4 6.35)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -1078,7 +1088,7 @@
 		)
 		(uuid "9d46820b-8f72-42a9-b57d-135ca095b278")
 		(property "Sheetname" "Power and Battery"
-			(at 20.32 19.6084 0)
+			(at 91.44 95.8084 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1089,7 +1099,7 @@
 			)
 		)
 		(property "Sheetfile" "power_and_batt.kicad_sch"
-			(at 20.32 34.8746 0)
+			(at 91.44 103.4546 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1097,6 +1107,16 @@
 					(size 1.27 1.27)
 				)
 				(justify left top)
+			)
+		)
+		(pin "BATT_ADC" output
+			(at 116.84 99.06 0)
+			(uuid "2de6f0d2-5fbc-4e08-9a01-1b101f3b1796")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 		(instances
