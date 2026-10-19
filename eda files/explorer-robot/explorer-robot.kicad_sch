@@ -33,6 +33,16 @@
 	)
 	(wire
 		(pts
+			(xy 172.72 127) (xy 193.04 127)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1edf0e70-5362-48dc-a6b9-bdc9581bd9fd")
+	)
+	(wire
+		(pts
 			(xy 172.72 74.93) (xy 193.04 74.93)
 		)
 		(stroke
@@ -70,6 +80,16 @@
 			(type default)
 		)
 		(uuid "4bb41526-78b9-495d-b946-057b56b9b2f1")
+	)
+	(wire
+		(pts
+			(xy 172.72 124.46) (xy 193.04 124.46)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4e92af35-7c65-4170-9285-0c46f3502f4f")
 	)
 	(wire
 		(pts
@@ -200,6 +220,16 @@
 			(type default)
 		)
 		(uuid "c7a1c75b-a274-4b45-80ce-d8e6f7bef370")
+	)
+	(wire
+		(pts
+			(xy 172.72 121.92) (xy 193.04 121.92)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ccf23145-69e2-45ce-8bfe-1746245492d5")
 	)
 	(wire
 		(pts
@@ -460,27 +490,27 @@
 			)
 		)
 		(pin "I2C0_SDA" bidirectional
-			(at 172.72 113.03 0)
+			(at 137.16 158.75 180)
 			(uuid "34545ee4-5e38-4bb3-a22e-5d02a76fda09")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "I2C0_SCL" bidirectional
-			(at 172.72 115.57 0)
+			(at 137.16 161.29 180)
 			(uuid "87e661b8-0c05-4813-8ded-cd4c3fb5759b")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "AICAM_PWR" output
-			(at 172.72 118.11 0)
+			(at 172.72 121.92 0)
 			(uuid "a9e333f5-3173-4588-8d7f-0ec010f9213a")
 			(effects
 				(font
@@ -490,7 +520,7 @@
 			)
 		)
 		(pin "AICAM_RX" output
-			(at 172.72 120.65 0)
+			(at 172.72 124.46 0)
 			(uuid "42ed582f-cf13-435e-bf39-5f42dd6f21c3")
 			(effects
 				(font
@@ -500,7 +530,7 @@
 			)
 		)
 		(pin "AICAM_TX" input
-			(at 172.72 123.19 0)
+			(at 172.72 127 0)
 			(uuid "0a428310-0e59-46a4-8933-fb44d9d93776")
 			(effects
 				(font
@@ -510,93 +540,93 @@
 			)
 		)
 		(pin "I2C1_SDA" bidirectional
-			(at 172.72 125.73 0)
+			(at 137.16 156.21 180)
 			(uuid "4088a93c-3f65-464b-b6fe-9facd03a8830")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "I2C1_SCL" bidirectional
-			(at 172.72 128.27 0)
+			(at 137.16 153.67 180)
 			(uuid "5d3608a5-4119-499e-91c4-63cacc42b6f2")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "EXP_IRQ" input
-			(at 172.72 130.81 0)
+			(at 137.16 151.13 180)
 			(uuid "492fae02-0a33-457a-9f59-ac051882350c")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "EXP_EN" output
-			(at 172.72 133.35 0)
+			(at 137.16 148.59 180)
 			(uuid "450894f0-c46f-42ed-b07c-7c7632acc19c")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "EXP_BOOT" output
-			(at 172.72 135.89 0)
+			(at 137.16 146.05 180)
 			(uuid "fa9226d4-2ed4-4aea-a7de-ac8d6ceb2f40")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "EXP_TX" output
-			(at 172.72 138.43 0)
+			(at 137.16 143.51 180)
 			(uuid "8172ceb3-c032-4fba-85bb-2a9d65a74ede")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "EXP_RX" input
-			(at 172.72 140.97 0)
+			(at 137.16 140.97 180)
 			(uuid "74bf6a7d-5908-4b41-b50d-dbc736626b90")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "TOUCH_CS" output
-			(at 172.72 143.51 0)
+			(at 137.16 138.43 180)
 			(uuid "8711a6c3-d06d-486a-aff5-86963d2ca311")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "TOUCH_PENIRQ" input
-			(at 172.72 146.05 0)
+			(at 137.16 135.89 180)
 			(uuid "90d19977-7366-4112-8171-e96b3da424d1")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "BATT_ADC" input
@@ -610,73 +640,73 @@
 			)
 		)
 		(pin "LCD_CS" output
-			(at 172.72 151.13 0)
+			(at 137.16 130.81 180)
 			(uuid "06dcab98-d8cd-4076-928a-69578925d511")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "SPI1_SCK" output
-			(at 172.72 153.67 0)
+			(at 137.16 128.27 180)
 			(uuid "bd79b529-54a9-4231-a72d-cfc2b05cfd7f")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "SPI1_MOSI" output
-			(at 172.72 156.21 0)
+			(at 137.16 125.73 180)
 			(uuid "269cc302-c71e-412a-8a09-fcd8cc5c4479")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "SPI1_MISO" input
-			(at 172.72 158.75 0)
+			(at 137.16 123.19 180)
 			(uuid "2c2524c1-d0a3-4395-94d5-3556906c1cdd")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "LCD_DC" output
-			(at 172.72 161.29 0)
+			(at 137.16 120.65 180)
 			(uuid "01894ca2-bcd3-4fd1-aeb9-eca97f2071fc")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "LCD_RST" output
-			(at 172.72 163.83 0)
+			(at 137.16 118.11 180)
 			(uuid "a686903f-6eed-43d1-b5c3-447dbf8550a5")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(pin "LCD_BLK" output
-			(at 172.72 166.37 0)
+			(at 137.16 133.35 180)
 			(uuid "fed195ba-cb1e-43c3-bf7b-9eca6a98c59f")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(instances
@@ -1123,6 +1153,82 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
 					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 193.04 119.38)
+		(size 20.32 10.16)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "e28148a8-209c-4954-97f4-1069761fd156")
+		(property "Sheetname" "AI CAM"
+			(at 193.04 118.6684 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "aicam.kicad_sch"
+			(at 193.04 130.1246 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "AICAM_PWR" input
+			(at 193.04 121.92 180)
+			(uuid "8d6e31db-2c3a-42d2-a510-ef11ab77e935")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "AICAM_RX" input
+			(at 193.04 124.46 180)
+			(uuid "d65a32a4-5e3a-46b5-9e8c-53df561a700f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "AICAM_TX" output
+			(at 193.04 127 180)
+			(uuid "249e114c-b132-44d0-95b8-714d873a81b7")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "8")
 				)
 			)
 		)

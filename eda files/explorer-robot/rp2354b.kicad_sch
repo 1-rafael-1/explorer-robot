@@ -5220,6 +5220,16 @@
 	)
 	(wire
 		(pts
+			(xy 189.23 95.25) (xy 189.23 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a9cc2fde-c043-4aee-beae-3aec28f2b61d")
+	)
+	(wire
+		(pts
 			(xy 151.13 78.74) (xy 153.67 78.74)
 		)
 		(stroke
@@ -6272,6 +6282,17 @@
 			(justify left)
 		)
 		(uuid "c1487c0e-8641-429c-b73e-54c38117d24f")
+	)
+	(hierarchical_label "EXP_PWR"
+		(shape output)
+		(at 189.23 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "c3e49149-fe3f-4cc2-ba3f-afdf5bec038c")
 	)
 	(hierarchical_label "AICAM_RX"
 		(shape output)

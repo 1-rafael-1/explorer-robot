@@ -94,7 +94,7 @@ assign_resources! {
     /// 36/37 (ADR-0021). The UART is quiesced and its pins tri-stated before the
     /// branch is powered down (ADR-0023).
     ///
-    /// The module runs on-device ML inference (Himax `WiseEye2`) and reports
+    /// The module runs on-device ML inference and reports
     /// results over serial. Full duplex (unlike the D6), since the module expects
     /// host commands and returns results over the same UART.
     ai_cam: AiCamResources {
