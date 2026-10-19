@@ -7,8 +7,8 @@
 //!
 //! Pin grouping (ADR-0022): motor/encoders 4–12, RGB 13–15, I2C0 16–17,
 //! IMU 18–22, camera power/UART 23–25, I2C1 26–27, `LiDAR` 28–30,
-//! expansion 33–37, touch 38–39, battery ADC 40, display 41–47.
-//! Spare: 0–3, 31–32.
+//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47.
+//! Spare: 0–3, 31.
 
 #![allow(clippy::missing_docs_in_private_items)]
 
@@ -68,17 +68,19 @@ assign_resources! {
     /// Resources for the COIN-D6 360° spinning dTOF `LiDAR`.
     ///
     /// Runs on **core1** over a dedicated UART0 peripheral on GPIO 28 (TX) and
-    /// GPIO 29 (RX), with the power MOSFET gate on GPIO 30. The three pins are
-    /// adjacent, so the `LiDAR` harness leaves the MCU as one bundle. The sensor
-    /// is off at boot; the driver task powers it on demand and streams scan data
-    /// at 10 Hz (~230 400 baud).
+    /// GPIO 29 (RX), with a TPS22917 high-side load-switch enable on GPIO 30.
+    /// The three pins are adjacent, so the `LiDAR` harness leaves the MCU as one
+    /// bundle. The sensor is off at boot; the driver task powers its 5 V branch
+    /// on demand and streams scan data at 10 Hz (~230 400 baud). The UART is
+    /// quiesced and its TX pin tri-stated before the branch is powered down
+    /// (ADR-0023).
     lidar: D6LidarResources {
         /// UART0 TX — connect to `LiDAR` RX (GPIO 28).
         uart_tx: PIN_28,
         /// UART0 RX — connect to `LiDAR` TX (GPIO 29).
         uart_rx: PIN_29,
-        /// Power MOSFET gate (IRLS44N low-side switch, active-high, GPIO 30).
-        power_mosfet: PIN_30,
+        /// TPS22917 high-side load-switch enable (active-high, GPIO 30).
+        power_enable: PIN_30,
         /// UART0 peripheral instance.
         uart: UART0,
     }
@@ -86,8 +88,11 @@ assign_resources! {
     /// Resources for the Grove Vision AI V2 camera module.
     ///
     /// The camera runs on a **PIO0 UART**: GPIO 24 is MCU TX, GPIO 25 is MCU RX,
-    /// and the power MOSFET gate is GPIO 23. Using PIO for the camera leaves
-    /// UART1 free for the buffered expansion link on GPIO 36/37 (ADR-0021).
+    /// and a TPS22917 high-side load-switch enable is on GPIO 23. The module's
+    /// Grove input is 5 V (`GROVE_5V_IN`) and its UART is 3.3 V. Using PIO for
+    /// the camera leaves UART1 free for the buffered expansion link on GPIO
+    /// 36/37 (ADR-0021). The UART is quiesced and its pins tri-stated before the
+    /// branch is powered down (ADR-0023).
     ///
     /// The module runs on-device ML inference (Himax `WiseEye2`) and reports
     /// results over serial. Full duplex (unlike the D6), since the module expects
@@ -97,8 +102,8 @@ assign_resources! {
         uart_tx: PIN_24,
         /// PIO UART RX — connect to AI cam TX (GPIO 25).
         uart_rx: PIN_25,
-        /// Power MOSFET gate (IRLS44N low-side switch, active-high, GPIO 23).
-        power_mosfet: PIN_23,
+        /// TPS22917 high-side load-switch enable (active-high, GPIO 23).
+        power_enable: PIN_23,
         /// PIO block used for the camera UART.
         pio: PIO0,
     }
@@ -190,7 +195,13 @@ assign_resources! {
         dma: DMA_CH0,
     }
 
-    /// Reserved resources for the expansion connector (not yet driven).
+    /// Resources for the 7-pin expansion connector (not yet implemented).
+    ///
+    /// The 5 V branch is switched by a TPS22917 high-side load switch enabled by
+    /// `EXP_PWR` on GPIO 32. The connector uses UART1 on GPIO 36/37, with reset/
+    /// enable on GPIO 34, boot-mode on GPIO 35, and interrupt/status on GPIO 33.
+    /// Its logic is 3.3 V; the 5 V pin is power, not a logic reference. Quiesce
+    /// UART1 and hold `en`/`boot` low before switching the branch off (ADR-0023).
     expansion: ExpansionResources {
         /// UART1 peripheral instance.
         uart: UART1,
@@ -198,6 +209,8 @@ assign_resources! {
         tx_dma: DMA_CH4,
         /// UART1 RX DMA channel.
         rx_dma: DMA_CH5,
+        /// TPS22917 high-side load-switch enable (`EXP_PWR`, active-high, GPIO 32).
+        power_enable: PIN_32,
         /// Expansion interrupt/status line (GPIO 33).
         irq: PIN_33,
         /// Expansion enable line (GPIO 34).

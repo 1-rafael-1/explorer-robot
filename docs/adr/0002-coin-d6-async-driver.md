@@ -14,7 +14,8 @@ framing, aggregation, and settle logic can be validated without hardware.
 - Hand-rolled `#![no_std]`, HAL-agnostic async driver in the `coin-d6` workspace
   crate, modelled on `st7789-async`.
 - Generic over `embedded_io_async::Read + Write` and a synchronous
-  `embedded_hal::digital::OutputPin` for the power MOSFET.
+  `embedded_hal::digital::OutputPin` for the branch's active-high power enable
+  (a load-switch enable or MOSFET gate).
   **Deviation:** the spec named `embedded_hal_async::serial`, but
   `embedded-hal-async` 1.0 has no `serial` module, so the driver uses
   `embedded-io-async` (the standard async serial trait). The example drives the

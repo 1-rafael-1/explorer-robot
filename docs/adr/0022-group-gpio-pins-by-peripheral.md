@@ -11,7 +11,9 @@ connector and the IMU would force traces to cross each other on the two signal l
 
 **Status:** accepted. Replaces the pin choices in the firmware and defines the intended
 board pinout for the incomplete schematic. It revises the pin choices of ADR-0021 and
-supersedes the GPIO 23–25 rangefinder reserve in ADR-0009.
+supersedes the GPIO 23–25 rangefinder reserve in ADR-0009. ADR-0023 adds GPIO32
+`EXP_PWR` for the expansion connector's TPS22917 high-side load switch; GPIO31 remains
+spare.
 
 **Current assignment**
 
@@ -47,6 +49,10 @@ This is the starting point, before the regrouping.
 | 40 | — | battery ADC |
 | 41–47 | — | display CS/SCK/MOSI/MISO/DC/RST/BLK |
 
+> This table is the historical starting point and is superseded by the Decision
+table below. The production power switches are TPS22917 high-side load switches
+(ADR-0010, ADR-0021), not the low-side MOSFETs implied by the earlier net names.
+
 **Decision**
 
 Give every peripheral one contiguous GPIO run, in package order. The runs are chosen so
@@ -71,15 +77,16 @@ that every alternate-function constraint still holds.
 | 20 | IMU SPI0 MISO | SPI0 MISO |
 | 21 | IMU SPI0 CS | SPI0 CS |
 | 22 | IMU interrupt | any GPIO |
-| 23 | AI cam power | direct output |
+| 23 | AI cam power switch (TPS22917) | direct output |
 | 24 | `AICAM_RX` (MCU → cam) | PIO0 UART TX |
 | 25 | `AICAM_TX` (cam → MCU) | PIO0 UART RX |
 | 26 | I2C1 SDA | valid I2C1 pair, second rangefinder bus |
 | 27 | I2C1 SCL | valid I2C1 pair, second rangefinder bus |
 | 28 | LiDAR UART0 TX | UART0 TX |
 | 29 | LiDAR UART0 RX | UART0 RX |
-| 30 | LiDAR power | direct output |
-| 31–32 | spare | |
+| 30 | LiDAR power switch (TPS22917) | direct output |
+| 31 | spare | |
+| 32 | `EXP_PWR` | direct output |
 | 33 | `EXP_IRQ` | any GPIO |
 | 34 | `EXP_EN` | any GPIO |
 | 35 | `EXP_BOOT` | any GPIO |
@@ -97,8 +104,8 @@ that every alternate-function constraint still holds.
 | 47 | display BLK | direct output |
 
 The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1),
-28–30 (LiDAR), and 33–47 (expansion, touch, battery, display). The remaining pins
-(0–3, 31–32) are spare.
+28–30 (LiDAR), and 32–47 (expansion, touch, battery, display). The remaining pins
+(0–3, 31) are spare.
 
 **Consequences**
 
@@ -106,10 +113,13 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
   through the UART and LED groups. The two encoder inputs stay on odd GPIOs because
   `embassy-rp`'s `Pwm::new_input` binds to channel B.
 - The LiDAR moves from GPIO 1/12/26 to the adjacent run 28/29/30, and the camera moves
-  from 4/5/27 to 23/24/25. This frees GPIO 0–3 completely.
-- The camera now runs on a **PIO0 UART** on GPIO 24 (MCU TX) / GPIO 25 (MCU RX), with the
-  power gate on GPIO 23. Hardware UART1 is therefore free for the expansion connector on
-  GPIO 36/37; the connector itself is still not implemented.
+  from 4/5/27 to 23/24/25. This frees GPIO 0–3 completely. The production power switches
+  are TPS22917 high-side load switches, not the low-side MOSFETs of the starting point.
+- The camera now runs on a **PIO0 UART** on GPIO 24 (MCU TX) / GPIO 25 (MCU RX), with its
+  TPS22917 high-side load-switch enable on GPIO 23. Hardware UART1 is therefore free for
+  the expansion connector on GPIO 36/37; the connector itself is still not implemented.
+- The expansion group is GPIO 32–37: `EXP_PWR` on GPIO32 (TPS22917 enable), `EXP_IRQ`
+  GPIO33, `EXP_EN` GPIO34, `EXP_BOOT` GPIO35, and UART1 on GPIO36/37.
 - AI-cam net names follow the LiDAR convention (sensor perspective): `AICAM_TX` is
   camera → MCU and lands on the PIO UART RX pin (GPIO 25); `AICAM_RX` is MCU → camera and
   lands on the PIO UART TX pin (GPIO 24).
@@ -133,6 +143,6 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
 - At layout, keep the layer-3 3.3 V/5 V split out from under the SPI1 display bundle and
   the battery-ADC trace. Layer 2 is the only continuous reference plane, so the display
   clock/data and the ADC trace should cross the split as little as possible.
-- The spare pins are not contiguous (0–3, 31–32). They are intentionally left
+- The spare pins are not contiguous (0–3, 31). They are intentionally left
   as routing channels and for future point-to-point additions rather than being packed
   into one block and forcing a second long bundle across the MCU.

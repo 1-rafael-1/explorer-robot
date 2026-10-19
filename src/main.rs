@@ -328,8 +328,8 @@ static D6_LIDAR_RX_BUF: StaticCell<[u8; D6_LIDAR_RX_BUF_LEN]> = StaticCell::new(
 ///
 /// The UART is full duplex — the driver's bound needs a readable and writable
 /// stream even though start and stop are best-effort — on the contiguous TX/RX
-/// pair (GPIO 28 / GPIO 29), with the power gate on GPIO 30. The power gate
-/// starts low, so the sensor is off at boot.
+/// pair (GPIO 28 / GPIO 29), with the TPS22917 high-side load-switch enable on
+/// GPIO 30. The enable starts low, so the sensor is off at boot.
 ///
 /// Must be called on **core1** so `UART0_IRQ` is enabled on core1's NVIC,
 /// mirroring how `init_i2c_bus` must run on core0 for `I2C0_IRQ`.
@@ -349,19 +349,19 @@ fn init_lidar(spawner: Spawner, d6_pins: D6LidarResources) {
     );
 
     // Powered off by default; the driver asserts this only while acquired.
-    let power = Output::new(d6_pins.power_mosfet, Level::Low);
+    let power_enable = Output::new(d6_pins.power_enable, Level::Low);
 
-    spawner.spawn(task::sensors::lidar::lidar_task(uart, power).unwrap());
+    spawner.spawn(task::sensors::lidar::lidar_task(uart, power_enable).unwrap());
 }
 
-/// Bring up the Grove Vision AI V2 camera's PIO0 UART and power MOSFET.
+/// Bring up the Grove Vision AI V2 camera's PIO0 UART and load-switch enable.
 ///
 /// The camera uses two PIO0 state machines (TX on SM0, RX on SM1). This leaves
 /// PIO1 for the RGB LED and PIO2 free, and leaves hardware UART1 free for the
 /// buffered expansion link.
 ///
 /// This only brings the transport up — no protocol implementation yet.
-/// Returns the PIO UART halves and the MOSFET output for the real driver task
+/// Returns the PIO UART halves and the TPS22917 enable for the real driver task
 /// to consume once it exists.
 fn init_ai_cam_pio(
     ai_cam_pins: AiCamResources,
@@ -384,9 +384,9 @@ fn init_ai_cam_pio(
     let rx = PioUartRx::<PIO0, 1>::new(115_200, &mut pio0_common, sm1, ai_cam_pins.uart_rx, &rx_program);
 
     // Powered off by default; the real driver drives this high to power the module.
-    let power_mosfet = Output::new(ai_cam_pins.power_mosfet, Level::Low);
+    let power_enable = Output::new(ai_cam_pins.power_enable, Level::Low);
 
-    (tx, rx, power_mosfet)
+    (tx, rx, power_enable)
 }
 
 /// Spawn the startup task that fires the `Initialize` event.
@@ -423,8 +423,8 @@ fn main() -> ! {
     let battery = r.battery;
     let storage = r.storage;
     let core = r.core;
-    // `r.expansion` (UART1, DMA_CH4/5 and GPIO 33–37) stays untouched until
-    // the expansion connector lands.
+    // `r.expansion` (UART1, DMA_CH4/5 and GPIO 32–37, including `EXP_PWR`)
+    // stays untouched until the expansion connector lands.
 
     // ── Core1: LiDAR driver ─────────────────────────────────────────────────
     #[allow(static_mut_refs)]
