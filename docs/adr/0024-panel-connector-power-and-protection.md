@@ -82,7 +82,8 @@ part selection and the load-switch rise time remain provisional pending bring-up
 - The panel is no longer permanently powered. A wedged display or touch
   controller can be recovered by cycling `PANEL_PWR`, and the panel cannot
   back-feed the 5 V rail while the branch is off.
-- GPIO 0 leaves the spare pool; GPIO 1–3 and GPIO 31 remain spare.
+- GPIO 0 leaves the spare pool; ADR-0026 later assigns GPIO 1–3 and GPIO 31 to the
+  front/rear rangefinder `XSHUT`/`INT` lines.
 - The 5 V branch's peak current joins the ADR-0019 budget. The ST7789 backlight
   is the dominant panel load and must be measured; the TPS5430's 6.0 V low-line
   margin already needs attention.

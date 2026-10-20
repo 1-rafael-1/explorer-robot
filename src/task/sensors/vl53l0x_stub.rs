@@ -7,10 +7,9 @@
 //! # Architecture
 //!
 //! - Runs on **core0** as an embassy task.
-//! - Single front-down sensor (angled downward for stair/drop-off detection).
-//!   The 360° COIN-D6 `LiDAR` covers forward, lateral, and rear arcs, so only
-//!   the downward-facing sensor is retained — it sees what the planar `LiDAR`
-//!   cannot.
+//! - Front and rear downward-facing sensors on the production board (this stub
+//!   models one). The 360° COIN-D6 `LiDAR` covers forward, lateral, and rear
+//!   arcs, so the rangefinders see what the planar `LiDAR` cannot.
 //! - Edge-triggered floor-drop detection: tracks `last_drop_detected` and
 //!   only raises `FloorDropDetected { detected }` on state change.
 //! - Floor-drop state written to `perception::set_floor_drop()` on

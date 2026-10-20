@@ -13,8 +13,9 @@ connector and the IMU would force traces to cross each other on the two signal l
 board pinout for the incomplete schematic. It revises the pin choices of ADR-0021 and
 supersedes the GPIO 23–25 rangefinder reserve in ADR-0009. ADR-0023 adds GPIO32
 `EXP_PWR` for the expansion connector's TPS22917 high-side load switch. ADR-0024
-assigns GPIO0 to `PANEL_PWR` for the panel's TPS22917; GPIO1–3 and GPIO31 remain
-spare.
+assigns GPIO0 to `PANEL_PWR` for the panel's TPS22917, and ADR-0026 assigns
+GPIO1–3 and GPIO31 to the front/rear rangefinder `XSHUT`/`INT` lines. No GPIOs
+remain spare.
 
 **Current assignment**
 
@@ -62,7 +63,9 @@ that every alternate-function constraint still holds.
 | GPIO | Function | Constraint |
 |---:|---|---|
 | 0 | `PANEL_PWR` | panel TPS22917 enable, direct output (ADR-0024) |
-| 1–3 | spare | |
+| 1 | `RF_FRONT_XSHUT` | direct output, driven open-drain (ADR-0026) |
+| 2 | `RF_FRONT_INT` | any GPIO input (ADR-0026) |
+| 3 | `RF_REAR_XSHUT` | direct output, driven open-drain (ADR-0026) |
 | 4 | `MOT.A.PWM` | slice 2, channel A |
 | 5 | `MOT.A.IN.1` | direct output |
 | 6 | `MOT.A.IN.2` | direct output |
@@ -73,7 +76,7 @@ that every alternate-function constraint still holds.
 | 11 | `MOT.B.R.ENC.A` | slice 5, channel B (PWM input mode needs B) |
 | 12 | `MOT.STBY` | direct output |
 | 13–15 | RGB LED | PIO1, any GPIO |
-| 16–17 | I2C0 SDA/SCL | valid I2C0 pair |
+| 16–17 | I2C0 SDA/SCL | valid I2C0 pair, front rangefinder bus |
 | 18 | IMU SPI0 SCK | SPI0 CLK |
 | 19 | IMU SPI0 MOSI | SPI0 MOSI |
 | 20 | IMU SPI0 MISO | SPI0 MISO |
@@ -82,12 +85,12 @@ that every alternate-function constraint still holds.
 | 23 | AI cam power switch (TPS22917) | direct output |
 | 24 | `AICAM_RX` (MCU → cam) | PIO0 UART TX |
 | 25 | `AICAM_TX` (cam → MCU) | PIO0 UART RX |
-| 26 | I2C1 SDA | valid I2C1 pair, second rangefinder bus |
-| 27 | I2C1 SCL | valid I2C1 pair, second rangefinder bus |
+| 26 | I2C1 SDA | valid I2C1 pair, rear rangefinder bus |
+| 27 | I2C1 SCL | valid I2C1 pair, rear rangefinder bus |
 | 28 | LiDAR UART0 TX | UART0 TX |
 | 29 | LiDAR UART0 RX | UART0 RX |
 | 30 | LiDAR power switch (TPS22917) | direct output |
-| 31 | spare | |
+| 31 | `RF_REAR_INT` | any GPIO input (ADR-0026) |
 | 32 | `EXP_PWR` | direct output |
 | 33 | `EXP_IRQ` | any GPIO |
 | 34 | `EXP_EN` | any GPIO |
@@ -106,8 +109,9 @@ that every alternate-function constraint still holds.
 | 47 | display BLK | direct output |
 
 The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1),
-28–30 (LiDAR), and 32–47 (expansion, touch, battery, display). The remaining pins
-(1–3, 31) are spare.
+28–30 (LiDAR), and 32–47 (expansion, touch, battery, display). GPIO 0 is the panel
+power switch, and GPIO 1–3 and GPIO 31 carry the front/rear rangefinder control
+lines (ADR-0024, ADR-0026); no GPIOs are spare.
 
 **Consequences**
 
@@ -117,7 +121,8 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
 - The LiDAR moves from GPIO 1/12/26 to the adjacent run 28/29/30, and the camera moves
   from 4/5/27 to 23/24/25. This frees GPIO 0–3 completely. The production power switches
   are TPS22917 high-side load switches, not the low-side MOSFETs of the starting point.
-  ADR-0024 later assigns GPIO0 to the panel's `PANEL_PWR` enable; GPIO1–3 remain spare.
+  ADR-0024 later assigns GPIO0 to the panel's `PANEL_PWR` enable; ADR-0026 later assigns
+  GPIO1–3 and GPIO31 to the rangefinders.
 - The camera now runs on a **PIO0 UART** on GPIO 24 (MCU TX) / GPIO 25 (MCU RX), with its
   TPS22917 high-side load-switch enable on GPIO 23. Hardware UART1 is therefore free for
   the expansion connector on GPIO 36/37; the connector itself is still not implemented.
@@ -146,6 +151,6 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
 - At layout, keep the layer-3 3.3 V/5 V split out from under the SPI1 display bundle and
   the battery-ADC trace. Layer 2 is the only continuous reference plane, so the display
   clock/data and the ADC trace should cross the split as little as possible.
-- The spare pins are not contiguous (1–3, 31). They are intentionally left
-  as routing channels and for future point-to-point additions rather than being packed
-  into one block and forcing a second long bundle across the MCU.
+- GPIO1–3 and GPIO31 stop being spare: they carry the front/rear rangefinder
+  `XSHUT` and `INT` lines (ADR-0026). They remain point-to-point exceptions rather
+  than part of a contiguous peripheral run.

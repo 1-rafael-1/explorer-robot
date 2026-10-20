@@ -4692,6 +4692,16 @@
 	)
 	(wire
 		(pts
+			(xy 115.57 95.25) (xy 115.57 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3f8e6dfd-748e-488d-8c7e-f08837030186")
+	)
+	(wire
+		(pts
 			(xy 91.44 132.08) (xy 91.44 119.38)
 		)
 		(stroke
@@ -4862,6 +4872,16 @@
 	)
 	(wire
 		(pts
+			(xy 110.49 95.25) (xy 110.49 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "60a575c7-63e2-4ed2-8523-09a0795ff759")
+	)
+	(wire
+		(pts
 			(xy 218.44 38.1) (xy 220.98 38.1)
 		)
 		(stroke
@@ -4939,6 +4959,16 @@
 			(type default)
 		)
 		(uuid "780bc985-397f-4352-9f33-21451a14628a")
+	)
+	(wire
+		(pts
+			(xy 113.03 95.25) (xy 113.03 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "795f1686-bebe-495b-b95d-d6a09f5965b9")
 	)
 	(wire
 		(pts
@@ -5792,6 +5822,16 @@
 	)
 	(wire
 		(pts
+			(xy 186.69 95.25) (xy 186.69 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f3f46197-db42-4d79-9aec-a0bf242c055c")
+	)
+	(wire
+		(pts
 			(xy 262.89 34.29) (xy 264.16 34.29)
 		)
 		(stroke
@@ -6039,6 +6079,17 @@
 		)
 		(uuid "2bd7457b-46df-41ad-9932-da14431338b3")
 	)
+	(hierarchical_label "RF_FRONT_XSHUT"
+		(shape output)
+		(at 110.49 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "3038da06-64fd-41a5-a276-bdbb57e30e04")
+	)
 	(hierarchical_label "EXP_RX"
 		(shape input)
 		(at 201.93 95.25 90)
@@ -6071,6 +6122,17 @@
 			(justify left)
 		)
 		(uuid "3b47dfc2-9155-4c3f-b5d1-9aebc13435f4")
+	)
+	(hierarchical_label "RF_FRONT_INT"
+		(shape input)
+		(at 113.03 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "44074aad-5acf-49ef-bb4a-ea1c738a759e")
 	)
 	(hierarchical_label "LCD_DC"
 		(shape output)
@@ -6115,6 +6177,17 @@
 			(justify left)
 		)
 		(uuid "66103e3d-9261-4463-baaf-4a982c109dae")
+	)
+	(hierarchical_label "RF_REAR_XSHUT"
+		(shape output)
+		(at 115.57 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "6cecb56e-a25b-4bc7-b007-9bcc43e5899e")
 	)
 	(hierarchical_label "AICAM_TX"
 		(shape input)
@@ -6357,6 +6430,17 @@
 			(justify left)
 		)
 		(uuid "d28cc80a-92f1-4801-8054-b7a9d7269650")
+	)
+	(hierarchical_label "RF_REAR_INT"
+		(shape input)
+		(at 186.69 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "da937e14-5b02-4d9f-8b18-ae3fd50f44f6")
 	)
 	(hierarchical_label "LED_R"
 		(shape output)

@@ -30,7 +30,7 @@
 //! intent in [`STOP_REQUESTED`]: a stop that lands while [`start`] is still warming
 //! the sensor makes the start hand its lease straight back instead of driving. If
 //! the `LiDAR` cannot be acquired, [`start`] fails and the mode never drives: the
-//! downward rangefinder is a floor-drop sensor, not an obstacle sensor.
+//! downward rangefinders are floor-drop sensors, not obstacle sensors.
 //!
 //! The obstacle decision reads perception's lock-free flag, which the `LiDAR`
 //! task drives through the Front Sector test in the `lidar-cloud` crate (half-angle
@@ -141,7 +141,7 @@ pub enum StartError {
     /// already in flight and not yet streaming.
     Busy,
     /// The `LiDAR` could not be acquired. The mode refuses to run, because the
-    /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
+    /// downward rangefinders are floor-drop sensors and not obstacle sensors.
     LidarUnavailable,
     /// A stop arrived while the `LiDAR` was still warming, so the mode was
     /// abandoned instead of started.

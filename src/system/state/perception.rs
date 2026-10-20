@@ -5,9 +5,9 @@
 //! while the point cloud sits behind a mutex (rich path). The `LiDAR` task is
 //! the only writer of the obstacle flag.
 //!
-//! Obstacle perception is driven by a 360° `LiDAR` point cloud. The front-down
-//! VL53L0X rangefinder is a floor-drop detector (stairs, ledges) — it is **not**
-//! an obstacle sensor.
+//! Obstacle perception is driven by a 360° `LiDAR` point cloud. The front and
+//! rear VL53L0X rangefinders are floor-drop detectors (stairs, ledges) — they are
+//! **not** obstacle sensors.
 //!
 //! Lock order (when multiple state mutexes are needed):
 //! 1) power state mutex (use power module accessors)

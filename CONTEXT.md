@@ -18,14 +18,16 @@
 - **Quiesce** — To stop a branch's protocol, drain the UART's software buffer, and wait for the hardware transmitter to go idle before removing the UART from its pins. Quiescing is not the same as dropping the UART object.
 - **Tri-state** — To release an MCU pin to high impedance with no pull, so it cannot source current into an unpowered branch. A branch's UART lines are tri-stated rather than driven low; a driven low is a break condition.
 - **Branch Off-state** — The state of a switched branch after its protocol is stopped, its UART is quiesced and deinitialized, its MCU-side lines are tri-stated, and its `*_PWR` enable is low. No MCU pin may source current into the branch in this state.
-- **Rangefinder** — VL53L0X time-of-flight laser rangefinder for front-down stair/drop detection. The first unit is on I2C0 (GPIO16/17); a second unit can use I2C1 (GPIO26/27). The buses are electrically separate, so both sensors can keep the default `0x29` address without XSHUT sequencing. The 360° LiDAR covers forward/lateral/rear arcs; the downward-facing sensor is currently stubbed for development.
+- **Front Rangefinder** — VL53L0X time-of-flight module at the front of the enclosure, angled down and forward, on dedicated I2C0 (GPIO16/17). Its `XSHUT` is GPIO1 and its `INT` is GPIO2; it runs from the unswitched `+3.3V` rail through a 6-pin JST-PH connector (ADR-0026). Detects floor drops and near-field obstacles ahead.
+- **Rear Rangefinder** — VL53L0X time-of-flight module at the rear of the enclosure, angled down and backward, on dedicated I2C1 (GPIO26/27). Its `XSHUT` is GPIO3 and its `INT` is GPIO31; it has the same power and connector treatment as the front unit (ADR-0026). Detects floor drops and near-field obstacles behind when reversing.
+- **Rangefinder Pair** — The front and rear VL53L0X modules together. Their buses are electrically separate, so both keep the default `0x29` address without XSHUT sequencing. The pair is currently a floor-drop/near-field sensor; feeding it into obstacle avoidance is deferred (ADR-0026).
 - **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. Its 5 V branch is switched by a TPS22917 high-side load switch enabled by `PANEL_PWR` (GPIO0, ADR-0024). The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
-- **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 32–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle; the panel power switch is the point-to-point exception on GPIO0 (ADR-0024). Spare: GPIO1–3 and GPIO31. See ADR-0022.
+- **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 32–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle; the panel power switch is the point-to-point exception on GPIO0 (ADR-0024), and the rangefinder `XSHUT`/`INT` lines are point-to-point on GPIO1–3 and GPIO31 (ADR-0026). No spare GPIOs remain. See ADR-0022.
 
 ### LiDAR
 
@@ -61,7 +63,7 @@
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), I2C bus (VL53L0X rangefinder), flash storage, and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), the two I2C buses (front and rear VL53L0X rangefinders), flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task: the `coin-d6` driver, its on-demand high-side power lifecycle (including UART quiesce, TX/RX tri-state and UART deinit), and the spin-to-point-cloud mapping.
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, lifecycle events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
@@ -133,7 +135,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, or the boot flow, with a small progress snapshot — phase and percent. Written by the producers, read by the touch UI, which is the only thing that draws. A finished Procedure is presented as a Result Report.
 - **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). The old zero-distance sentinel is retired: a slot is `None` for no return.
-- **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder is a stair/drop sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder variant returns only if several rangefinders are ever added for obstacle detection.
+- **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.
 

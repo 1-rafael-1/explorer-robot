@@ -7,8 +7,8 @@
 //!
 //! Pin grouping (ADR-0022): motor/encoders 4–12, RGB 13–15, I2C0 16–17,
 //! IMU 18–22, camera power/UART 23–25, I2C1 26–27, `LiDAR` 28–30,
-//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47, panel power 0.
-//! Spare: 1–3, 31.
+//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47, panel power 0,
+//! rangefinder control 1–3 and 31. No GPIOs are spare.
 
 #![allow(clippy::missing_docs_in_private_items)]
 
@@ -163,7 +163,7 @@ assign_resources! {
         rx_dma: DMA_CH2,
     }
 
-    /// I2C0 bus for the first VL53L0X rangefinder.
+    /// I2C0 bus for the front-down VL53L0X rangefinder.
     rangefinder0: Rangefinder0Resources {
         /// I2C0 peripheral instance.
         i2c: I2C0,
@@ -171,9 +171,13 @@ assign_resources! {
         sda: PIN_16,
         /// I2C0 clock line (GPIO 17).
         scl: PIN_17,
+        /// Active-low shutdown, driven open-drain (GPIO 1).
+        xshut: PIN_1,
+        /// Interrupt input (GPIO 2).
+        interrupt: PIN_2,
     }
 
-    /// I2C1 bus for the second VL53L0X rangefinder.
+    /// I2C1 bus for the rear-down VL53L0X rangefinder.
     rangefinder1: Rangefinder1Resources {
         /// I2C1 peripheral instance.
         i2c: I2C1,
@@ -181,6 +185,10 @@ assign_resources! {
         sda: PIN_26,
         /// I2C1 clock line (GPIO 27).
         scl: PIN_27,
+        /// Active-low shutdown, driven open-drain (GPIO 3).
+        xshut: PIN_3,
+        /// Interrupt input (GPIO 31).
+        interrupt: PIN_31,
     }
 
     /// Battery-voltage ADC input.

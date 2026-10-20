@@ -177,8 +177,9 @@ implementation is the reference sequence.
   PIO UART is no longer adequate — that is a different transport decision.
 - Pins to keep clear at layout: camera GPIO 23/24/25, LiDAR GPIO 28/29/30,
   expansion `EXP_PWR` GPIO32, `EXP_IRQ` GPIO33, `EXP_EN` GPIO34, `EXP_BOOT`
-  GPIO35, UART1 GPIO36/37; GPIO31 remains spare; touch 38/39; battery ADC 40;
-  display 41–47. Confirm all of this against the PCB netlist before routing.
+  GPIO35, UART1 GPIO36/37; GPIO31 is the rear rangefinder INT (ADR-0026);
+  touch 38/39; battery ADC 40; display 41–47. Confirm all of this against the PCB
+  netlist before routing.
 - Open items: confirm the chosen expansion board's 5 V input range, peak current and
   UART logic level; confirm the TPS5430 5 V budget with the `AMS1117-3.3`, LiDAR
   and camera loads; confirm the TPS22917's availability and QOD load-capacitance

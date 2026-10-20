@@ -762,7 +762,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#FLG1-5,#PWR1-77,#PWR90,#PWR93-96,C1-53,C59-62,D1-5,J1-7,L1-2,O1,Q1-2,R1-17,SW1,TP1-13,U1-8,Y1",
+    "used_designators": "#FLG1-5,#PWR1-77,#PWR90,#PWR93-96,#PWR101,#PWR107-108,C1-53,C59-64,D1-5,J1-7,L1-2,O1,Q1-2,R1-17,SW1,TP1-13,U1-8,Y1",
     "variants": []
   },
   "sheets": [
@@ -805,6 +805,10 @@
     [
       "4bf141ee-a9c6-4b1a-a5de-548f18a63cc9",
       "Panel"
+    ],
+    [
+      "e5a1b2c3-d4e5-4f6a-9b0c-1d2e3f4a5b6c",
+      "Rangefinders"
     ]
   ],
   "text_variables": {},

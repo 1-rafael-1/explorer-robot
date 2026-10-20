@@ -5,8 +5,8 @@ autonomous navigation and sensor-driven obstacle avoidance.
 
 Built in Rust on [Embassy](https://embassy.dev/) for the RP2350 microcontroller.
 This iteration builds on hardware experience from [simple-robot](https://github.com/1-rafael-1/simple-robot), adding a
-360° spinning LiDAR (COIN-D6), a VL53L0X rangefinder (front-down), ICM-20948 IMU over
-SPI, a ST7789 TFT display, and a Grove Vision AI V2 camera module — as much as I can manage on custom PCB hardware. The ultrasonic/servo sweeping sensor array is ditched, and so are the IR sensors.
+360° spinning LiDAR (COIN-D6), two VL53L0X rangefinders (front- and rear-down),
+ICM-20948 IMU over SPI, a ST7789 TFT display, and a Grove Vision AI V2 camera module — as much as I can manage on custom PCB hardware. The ultrasonic/servo sweeping sensor array is ditched, and so are the IR sensors.
 
 ![Fully assembled explorer-robot](assembly/fully_assembled.jpg)
 
@@ -16,7 +16,7 @@ SPI, a ST7789 TFT display, and a Grove Vision AI V2 camera module — as much as
 
 Active development. Core subsystems (drive, perception, UI, calibration) are
 implemented: the LiDAR driver and the Panel and Touch Panel geometry are real,
-while the rangefinder and the AI camera remain stubbed or planned.
+while the rangefinders and the AI camera remain stubbed or planned.
 
 The big to-dos, in no particular order:
 
@@ -25,7 +25,7 @@ The big to-dos, in no particular order:
 - [x] Make an async tft driver
 - [x] Integrate the D6 lidar driver into the firmware
 - [x] Integrate the tft driver into the firmware
-- [ ] Make an async-capable VL53L0X driver and integrate that
+- [ ] Make an async-capable VL53L0X driver and integrate the front/rear pair
 - [ ] Make a new schematic adapting from simple-robot
 - [ ] Full breadboard demonstrator to see if the firmware is botched
 - [ ] Make an async Grove Vision AI V2 driver and integrate that
@@ -40,7 +40,7 @@ The big to-dos, in no particular order:
 - **LiDAR:** COIN-D6 360° spinning dTOF (core1, buffered UART0 [] high-side TPS22917 load switch, driver integrated, off at boot and powered on demand)
 - **AI Cam:** Grove Vision AI V2 (core0, PIO0 UART [] high-side TPS22917 load switch reserved, not yet integrated). UART1 is left free for the expansion connector.
 - **Expansion:** 7-pin 5 V-powered, 3.3 V-logic connector (not yet implemented); its 5 V branch is switched by a TPS22917 enabled by `EXP_PWR` on GPIO32, with UART1 on GPIO36/37.
-- **Rangefinder:** 1× VL53L0X ToF, front-down (stair/drop detection), on shared I2C0 bus (currently stubbed)
+- **Rangefinders:** 2× VL53L0X ToF, front- and rear-down (stair/drop and near-field detection), on separate I2C0/I2C1 buses (currently stubbed)
 - **IMU:** ICM-20948 9-axis over dedicated SPI bus
 - **Display:** ST7789 240×320 Panel driven landscape as a 320×240 framebuffer, on the shared SPI1 bus
 - **Input:** Resistive touch panel (XPT2046-class) sharing the display's SPI1 bus

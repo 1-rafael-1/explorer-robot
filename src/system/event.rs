@@ -96,10 +96,11 @@ pub enum Events {
 
     /// Floor-drop detection status changed (stairs, ledges).
     ///
-    /// Raised by the front-down VL53L0X rangefinder when the distance
-    /// reading crosses the drop threshold. This is *not* an obstacle —
-    /// the floor opening up (e.g. top of stairs) looks like a sudden
-    /// distance increase beyond range.
+    /// Raised by the front/rear VL53L0X rangefinders when the distance
+    /// reading crosses the drop threshold. The event currently carries a
+    /// single flag and does not distinguish which sensor raised it. This is
+    /// *not* an obstacle — the floor opening up (e.g. top of stairs) looks
+    /// like a sudden distance increase beyond range.
     ///
     /// In `CoastAndAvoid` mode a floor drop triggers the same
     /// stop/back-up/turn response as an obstacle. In other drive modes

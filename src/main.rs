@@ -53,12 +53,12 @@ mod task;
 
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
-/// Reserved for the first VL53L0X rangefinder on core0.
+/// Reserved for the front VL53L0X rangefinder on core0.
 pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
 
 /// Shared I2C1 bus protected by a critical-section mutex.
 ///
-/// Reserved for the second VL53L0X rangefinder on core0. Keeping the two
+/// Reserved for the rear VL53L0X rangefinder on core0. Keeping the two
 /// sensors on separate buses avoids an address clash when both use the default
 /// `0x29` address.
 pub type I2c1BusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C1, embassy_rp::i2c::Async>>;
@@ -101,7 +101,7 @@ static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
 
-/// Initialise the shared I2C0 bus for the first VL53L0X rangefinder.
+/// Initialise the shared I2C0 bus for the front VL53L0X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new_async` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
@@ -119,7 +119,7 @@ fn init_i2c_bus(
     I2C_BUS.init(Mutex::new(i2c))
 }
 
-/// Initialise the shared I2C1 bus for the second VL53L0X rangefinder.
+/// Initialise the shared I2C1 bus for the rear VL53L0X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new_async` enables `I2C1_IRQ` on
 /// core0's NVIC. The two sensors may share the same 7-bit address because they
@@ -414,12 +414,12 @@ fn main() -> ! {
     // ── Core0: all other tasks ──────────────────────────────────────────────
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
-        // I2C0 bus reserved for the first VL53L0X rangefinder stub.
+        // I2C0 bus reserved for the front VL53L0X rangefinder stub.
         // Initialised inside the closure so I2c::new_async enables I2C0_IRQ
         // on core0's NVIC.
         let _i2c_bus = init_i2c_bus(rangefinder0.i2c, rangefinder0.sda, rangefinder0.scl);
 
-        // I2C1 bus reserved for a second VL53L0X on a separate bus, so both
+        // I2C1 bus reserved for the rear VL53L0X on a separate bus, so both
         // sensors can keep the default 0x29 address.
         let _i2c1_bus = init_i2c1_bus(rangefinder1.i2c, rangefinder1.sda, rangefinder1.scl);
 
