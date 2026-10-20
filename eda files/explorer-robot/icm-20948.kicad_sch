@@ -2251,7 +2251,7 @@
 	)
 	(rectangle
 		(start 15.24 15.24)
-		(end 80.01 54.61)
+		(end 80.01 46.99)
 		(stroke
 			(width 0)
 			(type default)
@@ -2263,7 +2263,7 @@
 	)
 	(rectangle
 		(start 234.696 15.748)
-		(end 281.94 59.69)
+		(end 281.94 49.53)
 		(stroke
 			(width 0)
 			(type default)
@@ -2283,17 +2283,6 @@
 			(justify left top)
 		)
 		(uuid "4a859293-da8a-43e7-b1d9-1ff40185258c")
-	)
-	(text "Since CS is very unlikely to fail the CS test point\nmay be omitted if board space is too limited"
-		(exclude_from_sim no)
-		(at 234.442 60.96 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "4e579a85-1b23-4be3-91be-7c9b7b1b79ee")
 	)
 	(text "Linear Regulator"
 		(exclude_from_sim no)
@@ -2342,12 +2331,6 @@
 		(uuid "84cccde0-f779-4433-b3fd-358e13dea1f9")
 	)
 	(junction
-		(at 39.37 24.13)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "8f02d89b-f529-498a-92d3-176419c66aa1")
-	)
-	(junction
 		(at 26.67 24.13)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2358,12 +2341,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "d49dc693-6477-40b5-860e-83b9bdc1676b")
-	)
-	(junction
-		(at 69.85 24.13)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "e823179d-5a06-4e9a-9c0b-f0835859699f")
 	)
 	(junction
 		(at 118.11 123.19)
@@ -2427,16 +2404,6 @@
 	)
 	(wire
 		(pts
-			(xy 246.38 46.99) (xy 250.19 46.99)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "02b74ab1-f0bd-4255-a7a7-e1977d52d85e")
-	)
-	(wire
-		(pts
 			(xy 73.66 97.79) (xy 114.3 97.79)
 		)
 		(stroke
@@ -2467,7 +2434,7 @@
 	)
 	(wire
 		(pts
-			(xy 246.38 55.88) (xy 250.19 55.88)
+			(xy 246.38 44.45) (xy 250.19 44.45)
 		)
 		(stroke
 			(width 0)
@@ -2494,16 +2461,6 @@
 			(type default)
 		)
 		(uuid "1f0bbfbd-ac64-4af3-ac69-5965a840e3aa")
-	)
-	(wire
-		(pts
-			(xy 69.85 49.53) (xy 69.85 24.13)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "206c3094-2915-4cda-b89f-39eb7db14295")
 	)
 	(wire
 		(pts
@@ -2564,16 +2521,6 @@
 			(type default)
 		)
 		(uuid "365e926b-f3a0-4353-9452-08fa9ee0edbe")
-	)
-	(wire
-		(pts
-			(xy 260.35 46.99) (xy 265.43 46.99)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "36fcb677-5c11-467a-8f53-f4e805efe308")
 	)
 	(wire
 		(pts
@@ -2647,7 +2594,7 @@
 	)
 	(wire
 		(pts
-			(xy 34.29 24.13) (xy 39.37 24.13)
+			(xy 34.29 24.13) (xy 40.64 24.13)
 		)
 		(stroke
 			(width 0)
@@ -2684,16 +2631,6 @@
 			(type default)
 		)
 		(uuid "71b8a248-d9d9-42a7-9c4e-0ba4b4de0fc1")
-	)
-	(wire
-		(pts
-			(xy 39.37 24.13) (xy 40.64 24.13)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "721ff285-56c3-4835-906a-549e854c4b5d")
 	)
 	(wire
 		(pts
@@ -2767,7 +2704,7 @@
 	)
 	(wire
 		(pts
-			(xy 260.35 55.88) (xy 265.43 55.88)
+			(xy 260.35 44.45) (xy 265.43 44.45)
 		)
 		(stroke
 			(width 0)
@@ -2884,16 +2821,6 @@
 			(type default)
 		)
 		(uuid "bab14035-0257-4b04-a43c-fc548a3324d1")
-	)
-	(wire
-		(pts
-			(xy 39.37 49.53) (xy 39.37 24.13)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "bc4d71d4-4f29-44d2-813f-5804f83cb025")
 	)
 	(wire
 		(pts
@@ -3025,46 +2952,6 @@
 		)
 		(uuid "fd3ec865-5b60-42e6-b879-66b2496ccef6")
 	)
-	(label "3V3_BP"
-		(at 39.37 49.53 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "03d8c54d-1cdd-42d1-a579-d308277bf38e")
-	)
-	(label "1V8_BP"
-		(at 69.85 49.53 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "33b51cc3-55eb-4676-b2f9-d6b8e21415d6")
-	)
-	(label "1V8_BP"
-		(at 265.43 55.88 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "8643c527-a4f3-4d4b-9622-47653e043a66")
-	)
-	(label "3V3_BP"
-		(at 265.43 46.99 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "e50b8d8c-25e6-4f09-aa5b-f05cafe80b5a")
-	)
 	(hierarchical_label "ICM-20948_SCLK"
 		(shape input)
 		(at 73.66 95.25 180)
@@ -3141,85 +3028,6 @@
 			(justify left)
 		)
 		(uuid "ef8df79a-f1c8-45b1-bad0-554ff18d249e")
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 246.38 46.99 270)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "02c5ee3c-e150-4cf1-9757-a8f8009ace78")
-		(property "Reference" "#PWR026"
-			(at 240.03 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 242.57 46.9899 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 246.38 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 246.38 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 246.38 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "b5752c45-a6ed-4d5e-8df9-91d696543126")
-		)
-		(instances
-			(project "explorer-robot"
-				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/7d3241b2-95fb-44a6-85fe-f882fead429b"
-					(reference "#PWR026")
-					(unit 1)
-				)
-			)
-		)
 	)
 	(symbol
 		(lib_id "power:+1V8")
@@ -4345,7 +4153,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Sensor_Motion:InvenSense_QFN-24_3x3mm_P0.4mm"
+		(property "Footprint" "easyeda imports:QFN-24_L3.0-W3.0-P0.40-BL-EP"
 			(at 191.77 127 0)
 			(hide yes)
 			(show_name no)
@@ -4560,7 +4368,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 246.38 55.88 270)
+		(at 246.38 44.45 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -4571,7 +4379,7 @@
 		(fields_autoplaced yes)
 		(uuid "78258c52-57b1-4982-bcb6-939318214b9d")
 		(property "Reference" "#PWR029"
-			(at 240.03 55.88 0)
+			(at 240.03 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4582,7 +4390,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 242.57 55.8799 90)
+			(at 242.57 44.4499 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -4593,7 +4401,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 246.38 55.88 0)
+			(at 246.38 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4604,7 +4412,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 246.38 55.88 0)
+			(at 246.38 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4615,7 +4423,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 246.38 55.88 0)
+			(at 246.38 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4992,6 +4800,85 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/7d3241b2-95fb-44a6-85fe-f882fead429b"
 					(reference "C22")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+1V8")
+		(at 265.43 44.45 270)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "9074327b-5aa7-46f4-a82d-171f3e3d1e39")
+		(property "Reference" "#PWR071"
+			(at 261.62 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+1V8"
+			(at 269.24 44.4499 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 265.43 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 265.43 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+1V8\""
+			(at 265.43 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "64773b54-3d68-4022-a6ec-3773edcca0b0")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/7d3241b2-95fb-44a6-85fe-f882fead429b"
+					(reference "#PWR071")
 					(unit 1)
 				)
 			)
@@ -5714,7 +5601,7 @@
 				)
 			)
 		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
 			(at 255.27 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -6674,7 +6561,7 @@
 	)
 	(symbol
 		(lib_id "Connector:TestPoint_2Pole")
-		(at 255.27 55.88 0)
+		(at 255.27 44.45 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6684,7 +6571,7 @@
 		(dnp no)
 		(uuid "c7bc3436-4816-4fa5-a058-273fbec2a4a7")
 		(property "Reference" "TP4"
-			(at 254 50.8 0)
+			(at 254 39.37 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6694,7 +6581,7 @@
 			)
 		)
 		(property "Value" "T.LR.1V8"
-			(at 255.27 53.34 0)
+			(at 255.27 41.91 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6703,8 +6590,8 @@
 				)
 			)
 		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
-			(at 255.27 55.88 0)
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6715,7 +6602,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6726,7 +6613,7 @@
 			)
 		)
 		(property "Description" "2-polar test point"
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6737,7 +6624,7 @@
 			)
 		)
 		(property "JLCPCB_URL" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6748,7 +6635,7 @@
 			)
 		)
 		(property "KLC_S3.3" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6759,7 +6646,7 @@
 			)
 		)
 		(property "KLC_S4.1" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6770,7 +6657,7 @@
 			)
 		)
 		(property "KLC_S4.2_DVDD" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6781,7 +6668,7 @@
 			)
 		)
 		(property "KLC_S4.2_VREG_LX" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6792,7 +6679,7 @@
 			)
 		)
 		(property "MFR" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6803,7 +6690,7 @@
 			)
 		)
 		(property "JLCPCP_URL" ""
-			(at 255.27 55.88 0)
+			(at 255.27 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7116,7 +7003,7 @@
 				)
 			)
 		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
 			(at 255.27 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -7393,163 +7280,6 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/7d3241b2-95fb-44a6-85fe-f882fead429b"
 					(reference "#PWR038")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Connector:TestPoint_2Pole")
-		(at 255.27 46.99 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "fd54fbd9-e6dc-4d6a-b081-4fe1fd3a7e1a")
-		(property "Reference" "TP3"
-			(at 255.27 41.91 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "T.LR.3V3"
-			(at 255.27 44.45 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "2-polar test point"
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCB_URL" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S3.3" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.1" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_DVDD" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_VREG_LX" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MFR" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCP_URL" ""
-			(at 255.27 46.99 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "2"
-			(uuid "24a2c1b6-bcc9-4632-9b19-913e83b254d5")
-		)
-		(pin "1"
-			(uuid "c36a6627-9cc3-4466-ab2c-4a88ab15ab34")
-		)
-		(instances
-			(project "explorer-robot"
-				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/7d3241b2-95fb-44a6-85fe-f882fead429b"
-					(reference "TP3")
 					(unit 1)
 				)
 			)

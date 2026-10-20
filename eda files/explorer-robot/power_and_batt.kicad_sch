@@ -3458,7 +3458,7 @@
 				)
 			)
 		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
 			(at 31.75 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -4024,7 +4024,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Inductor_SMD:L_Bourns_SRP7028A_7.3x6.6mm"
+		(property "Footprint" "Inductor_SMD:L_AVX_LMLP07A7"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -6835,7 +6835,7 @@
 				)
 			)
 		)
-		(property "Value" "T.PWR.8V"
+		(property "Value" "T.PWR.BAT"
 			(at 31.75 24.13 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6845,7 +6845,7 @@
 				)
 			)
 		)
-		(property "Footprint" "tp:TestPoint_Bridge_Pitch3.81mm_Drill1.3mm"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
 			(at 31.75 26.67 0)
 			(hide yes)
 			(show_name no)

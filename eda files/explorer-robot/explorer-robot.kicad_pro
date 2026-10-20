@@ -276,7 +276,28 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [],
+    "erc_exclusions": [
+      [
+        "lib_symbol_mismatch|1066800|1244600|10e951bd-7667-4908-9f82-2d31737efeb6|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|1193800|1003300|a0980f51-c958-4a4a-9f8e-08d46c6ef8ba|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|1803400|1016000|aa6b646d-96da-45a5-a823-464247a3ae97|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|1968500|1143000|ea1f1d48-03d6-4262-bd8b-2393c9c10cf1|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|2286000|1003300|fbf898b2-9dbf-400f-93f8-4f1d8f8ec2fb|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ]
+    ],
     "meta": {
       "version": 0
     },
@@ -718,7 +739,7 @@
       "group_symbols": true,
       "include_excluded_from_bom": true,
       "name": "",
-      "sort_asc": true,
+      "sort_asc": false,
       "sort_field": "Reference"
     },
     "bus_aliases": {},
@@ -762,7 +783,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#FLG1-5,#PWR1-77,#PWR90,#PWR93-96,#PWR101,#PWR107-108,C1-53,C59-64,D1-5,J1-7,L1-2,O1,Q1-2,R1-17,SW1,TP1-13,U1-8,Y1",
+    "used_designators": "#FLG1-5,#PWR1-77,#PWR90,#PWR93-101,#PWR107-108,#PWR113-124,C1-53,C59-64,D1-5,J1-7,L1-2,O1,Q1-2,R1-17,SW1,TP1-30,U1-8,Y1",
     "variants": []
   },
   "sheets": [
