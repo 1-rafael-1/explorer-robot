@@ -2,4 +2,5 @@
 	(version 7)
 	(lib (name "rp235xb") (type "KiCad") (uri "${KIPRJMOD}/rp235xb.pretty") (options "") (descr ""))
 	(lib (name "tp") (type "KiCad") (uri "${KIPRJMOD}/tp.pretty") (options "") (descr ""))
+	(lib (name "easyeda imports") (type "KiCad") (uri "${KIPRJMOD}/easyeda_convertlib.pretty") (options "") (descr ""))
 )

@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "easyeda_imports") (type "KiCad") (uri "${KIPRJMOD}/easyeda_convertlib.pretty") (options "") (descr ""))
+)
