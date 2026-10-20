@@ -155,9 +155,9 @@ implementation is the reference sequence.
   a dropped frame is harmless.
 - The expansion connector is a **5 V-powered, 3.3 V-logic** interface. It is not a
   general-purpose power tap: the expansion board must accept 5 V and regulate its
-  own 3.3 V. The total 5 V load (expansion board, camera, LiDAR and the
-  `AMS1117-3.3`) must stay within the TPS5430's rating and the peak budget in
-  ADR-0019.
+  own 3.3 V. The total 5 V load (expansion board, LiDAR, panel and the
+  `AMS1117-3.3`, which carries the camera and the rest of the 3.3 V rail) must
+  stay within the TPS5430's rating and the peak budget in ADR-0019.
 - The connector's 5 V feed is now switched. With the switch off, QOD holds
   `EXP_5V` low. Before deasserting `EXP_PWR`, UART1 is quiesced and dropped,
   `EXP_TX` is tri-stated, `EXP_EN` is held low and `EXP_BOOT` is left low or
@@ -165,11 +165,12 @@ implementation is the reference sequence.
   ESD diodes. The switch's reverse current blocking also prevents a USB-powered
   expansion board from back-feeding the 5 V rail. The connector is still not
   hot-pluggable.
-- The three switched 5 V branches share the TPS5430 rail. The summed peak
-  (LiDAR unmeasured, camera ~300–450 mA, ESP32-C6 ~250–350 mA, plus the
-  AMS1117) can approach or exceed 1 A; the 6.0 V low-line may not hold 5 V at
-  that peak. ADR-0019 owns the budget; measure before relying on all three at
-  once.
+- The three switched 5 V branches share the TPS5430 rail; the AI camera's
+  switched 3.3 V branch loads that rail through the `AMS1117-3.3` (ADR-0025).
+  The summed peak (LiDAR unmeasured, ESP32-C6 ~250–350 mA, the camera's
+  100–150 mA inside the LDO input, plus the rest of the 3.3 V rail) can approach
+  or exceed 1 A; the 6.0 V low-line may not hold 5 V at that peak. ADR-0019 owns
+  the budget; measure before relying on all three at once.
 - `CONTEXT.md` and `README.md` describe the current arrangement; ADR-0022 is the
   authoritative pin table. Keep them in sync.
 - If the camera is ever changed to stream images rather than bounding boxes, the
