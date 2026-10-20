@@ -33,6 +33,26 @@
 	)
 	(wire
 		(pts
+			(xy 99.06 76.2) (xy 119.38 76.2)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0ac69bb0-60e6-4cd9-95b8-563f33c51501")
+	)
+	(wire
+		(pts
+			(xy 99.06 96.52) (xy 119.38 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0ae0f49f-d62a-42d7-a947-f9f4e9cb9472")
+	)
+	(wire
+		(pts
 			(xy 154.94 58.42) (xy 175.26 58.42)
 		)
 		(stroke
@@ -100,6 +120,16 @@
 			(type default)
 		)
 		(uuid "2e5082e1-9cff-4a9f-9910-65148cb78d5b")
+	)
+	(wire
+		(pts
+			(xy 99.06 88.9) (xy 119.38 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3a413696-ce60-4f34-a80b-3d5362d4cf07")
 	)
 	(wire
 		(pts
@@ -233,6 +263,46 @@
 	)
 	(wire
 		(pts
+			(xy 99.06 81.28) (xy 119.38 81.28)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8b16e840-0c7e-4ae5-b184-faf3183107f9")
+	)
+	(wire
+		(pts
+			(xy 99.06 83.82) (xy 119.38 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9375ca0d-dea9-4cbc-ba3f-138201a09763")
+	)
+	(wire
+		(pts
+			(xy 99.06 86.36) (xy 119.38 86.36)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "946e4364-2dec-4fce-b7dd-40b9d5730e91")
+	)
+	(wire
+		(pts
+			(xy 99.06 78.74) (xy 119.38 78.74)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9c288cba-14ed-44a8-96c8-f238569aa49d")
+	)
+	(wire
+		(pts
 			(xy 154.94 111.76) (xy 175.26 111.76)
 		)
 		(stroke
@@ -243,6 +313,16 @@
 	)
 	(wire
 		(pts
+			(xy 99.06 93.98) (xy 119.38 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a2123573-db80-496d-a465-13c4792f952b")
+	)
+	(wire
+		(pts
 			(xy 154.94 109.22) (xy 175.26 109.22)
 		)
 		(stroke
@@ -250,6 +330,26 @@
 			(type default)
 		)
 		(uuid "a70e8d0a-4ae3-405e-b8f9-85248463a8e4")
+	)
+	(wire
+		(pts
+			(xy 99.06 91.44) (xy 119.38 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a74250a0-1ad8-4632-83b0-9d4a3d5ccebe")
+	)
+	(wire
+		(pts
+			(xy 99.06 99.06) (xy 119.38 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a7f44104-b2cf-445b-bb42-cfd6be9b4dc4")
 	)
 	(wire
 		(pts
@@ -670,7 +770,7 @@
 			)
 		)
 		(pin "TOUCH_CS" output
-			(at 119.38 102.87 180)
+			(at 119.38 96.52 180)
 			(uuid "8711a6c3-d06d-486a-aff5-86963d2ca311")
 			(effects
 				(font
@@ -680,8 +780,18 @@
 			)
 		)
 		(pin "TOUCH_PENIRQ" input
-			(at 119.38 100.33 180)
+			(at 119.38 93.98 180)
 			(uuid "90d19977-7366-4112-8171-e96b3da424d1")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "PANEL_PWR" output
+			(at 119.38 99.06 180)
+			(uuid "ffca3df1-d8c9-4c3f-a6a5-a5f5caf6e4be")
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -700,7 +810,7 @@
 			)
 		)
 		(pin "LCD_CS" output
-			(at 119.38 95.25 180)
+			(at 119.38 88.9 180)
 			(uuid "06dcab98-d8cd-4076-928a-69578925d511")
 			(effects
 				(font
@@ -710,7 +820,7 @@
 			)
 		)
 		(pin "SPI1_SCK" output
-			(at 119.38 92.71 180)
+			(at 119.38 86.36 180)
 			(uuid "bd79b529-54a9-4231-a72d-cfc2b05cfd7f")
 			(effects
 				(font
@@ -720,7 +830,7 @@
 			)
 		)
 		(pin "SPI1_MOSI" output
-			(at 119.38 90.17 180)
+			(at 119.38 83.82 180)
 			(uuid "269cc302-c71e-412a-8a09-fcd8cc5c4479")
 			(effects
 				(font
@@ -730,7 +840,7 @@
 			)
 		)
 		(pin "SPI1_MISO" input
-			(at 119.38 87.63 180)
+			(at 119.38 81.28 180)
 			(uuid "2c2524c1-d0a3-4395-94d5-3556906c1cdd")
 			(effects
 				(font
@@ -740,7 +850,7 @@
 			)
 		)
 		(pin "LCD_DC" output
-			(at 119.38 85.09 180)
+			(at 119.38 78.74 180)
 			(uuid "01894ca2-bcd3-4fd1-aeb9-eca97f2071fc")
 			(effects
 				(font
@@ -750,7 +860,7 @@
 			)
 		)
 		(pin "LCD_RST" output
-			(at 119.38 82.55 180)
+			(at 119.38 76.2 180)
 			(uuid "a686903f-6eed-43d1-b5c3-447dbf8550a5")
 			(effects
 				(font
@@ -760,7 +870,7 @@
 			)
 		)
 		(pin "LCD_BLK" output
-			(at 119.38 97.79 180)
+			(at 119.38 91.44 180)
 			(uuid "fed195ba-cb1e-43c3-bf7b-9eca6a98c59f")
 			(effects
 				(font
@@ -889,6 +999,152 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
 					(page "9")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 73.66 73.66)
+		(size 25.4 27.94)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "4bf141ee-a9c6-4b1a-a5de-548f18a63cc9")
+		(property "Sheetname" "Panel"
+			(at 73.66 72.9484 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "panel.kicad_sch"
+			(at 73.66 102.1846 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "LCD_RST" input
+			(at 99.06 76.2 0)
+			(uuid "e54dacc5-9f85-4917-91dd-54cebf92fbca")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LCD_DC" input
+			(at 99.06 78.74 0)
+			(uuid "bcc5e99e-58c6-400f-ae44-8ff8b32ff601")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "SPI1_MISO" output
+			(at 99.06 81.28 0)
+			(uuid "d911e0da-3e5c-49e1-aa81-d315cfc6ef6e")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "SPI1_MOSI" input
+			(at 99.06 83.82 0)
+			(uuid "3a237ebe-1af5-4d19-ab0d-c362af6e026e")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "SPI1_SCK" input
+			(at 99.06 86.36 0)
+			(uuid "7b36a0dd-0eb9-4214-a68d-f8cc8f37443c")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LCD_CS" input
+			(at 99.06 88.9 0)
+			(uuid "afc837e4-fbb5-41f7-8096-fa0a2d077e85")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "LCD_BLK" input
+			(at 99.06 91.44 0)
+			(uuid "badfb876-deb4-4927-be31-a6ab738f4146")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "TOUCH_PENIRQ" output
+			(at 99.06 93.98 0)
+			(uuid "e0daa746-2b80-411f-9ed9-b517c4788803")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "TOUCH_CS" input
+			(at 99.06 96.52 0)
+			(uuid "7700c6e2-87fa-48c8-9b7d-b9189a98b756")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "PANEL_PWR" input
+			(at 99.06 99.06 0)
+			(uuid "db637463-eaee-40f0-8ce0-faca1b7d87df")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845"
+					(page "10")
 				)
 			)
 		)

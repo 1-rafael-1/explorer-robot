@@ -19,13 +19,13 @@
 - **Tri-state** — To release an MCU pin to high impedance with no pull, so it cannot source current into an unpowered branch. A branch's UART lines are tri-stated rather than driven low; a driven low is a break condition.
 - **Branch Off-state** — The state of a switched branch after its protocol is stopped, its UART is quiesced and deinitialized, its MCU-side lines are tri-stated, and its `*_PWR` enable is low. No MCU pin may source current into the branch in this state.
 - **Rangefinder** — VL53L0X time-of-flight laser rangefinder for front-down stair/drop detection. The first unit is on I2C0 (GPIO16/17); a second unit can use I2C1 (GPIO26/27). The buses are electrically separate, so both sensors can keep the default `0x29` address without XSHUT sequencing. The 360° LiDAR covers forward/lateral/rear arcs; the downward-facing sensor is currently stubbed for development.
-- **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. The robot's only input and output surface: the Display draws, the Touch Panel senses.
+- **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. Its 5 V branch is switched by a TPS22917 high-side load switch enabled by `PANEL_PWR` (GPIO0, ADR-0024). The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
 - **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
-- **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 32–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle. Spare: GPIO0–3 and GPIO31. See ADR-0022.
+- **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 32–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle; the panel power switch is the point-to-point exception on GPIO0 (ADR-0024). Spare: GPIO1–3 and GPIO31. See ADR-0022.
 
 ### LiDAR
 

@@ -134,23 +134,25 @@ For the 5 V rail:
   the switched expansion connector (ADR-0021), the AMS1117-3.3 input, and any 5 V
   display/backlight/peripheral. `VREG_VIN` is no longer a 5 V load (see
   sequencing below).
-- **Switched 5 V branches.** Put the LiDAR, AI camera and expansion connector
-  behind their own TPS22917 high-side load switches (`LIDAR_PWR` GPIO30,
-  `AICAM_PWR` GPIO23, `EXP_PWR` GPIO32). Each switch is 1–5.5 V, 2 A, active-high,
-  with a 1 µF `CIN`, a `CT` capacitor to `VIN`, `QOD` tied to `VOUT`, and a
-  pulldown on the enable. The TPS22917's reverse current blocking prevents a
-  USB-powered camera or expansion board from back-feeding the 5 V rail. Do not
-  put any of these switches in series with the AMS1117/`VREG_VIN`, and do not use
-  the TPS5430 `ENA` for a branch, because that would shut down the whole 5 V rail
-  and the 3.3 V LDO.
+- **Switched 5 V branches.** Put the LiDAR, AI camera, expansion connector and
+  panel behind their own TPS22917 high-side load switches (`LIDAR_PWR` GPIO30,
+  `AICAM_PWR` GPIO23, `EXP_PWR` GPIO32, `PANEL_PWR` GPIO0). Each switch is
+  1–5.5 V, 2 A, active-high, with a 1 µF `CIN`, a `CT` capacitor to `VIN`, `QOD`
+  tied to `VOUT`, and a pulldown on the enable. The TPS22917's reverse current
+  blocking prevents a USB-powered camera or expansion board from back-feeding the
+  5 V rail, and keeps the panel from back-feeding it while its branch is off. Do
+  not put any of these switches in series with the AMS1117/`VREG_VIN`, and do not
+  use the TPS5430 `ENA` for a branch, because that would shut down the whole 5 V
+  rail and the 3.3 V LDO.
 - **Peak budget.** Budget the branches at their peaks, not their averages:
   LiDAR unmeasured, Grove Vision AI V2 5 V input roughly 300–450 mA (its 3.3 V
   rail is rated 600 mA), ESP32-C6-class expansion roughly 250–350 mA at 5 V
-  (3.3 V Wi-Fi TX peak 354 mA), plus the AMS1117 input. The sum can approach or
-  exceed 1 A. The TPS5430 needs about 6.2 V input for 1 A at 5 V, so at the 6.0 V
-  cutoff the rail may not hold 5 V at the summed peak. The selected 22 µH
-  inductor also limits the practical output to ~1.4 A. Measure the branch
-  currents and revisit the cutoff or the buck if the sum is too high.
+  (3.3 V Wi-Fi TX peak 354 mA), the ST7789 panel's module and backlight (measure
+  it; the backlight is the dominant panel load), plus the AMS1117 input. The sum
+  can approach or exceed 1 A. The TPS5430 needs about 6.2 V input for 1 A at 5 V,
+  so at the 6.0 V cutoff the rail may not hold 5 V at the summed peak. The
+  selected 22 µH inductor also limits the practical output to ~1.4 A. Measure the
+  branch currents and revisit the cutoff or the buck if the sum is too high.
 - **Design values.** R1 = 10 kΩ / R2 = 3.24 kΩ (1%) for 5.0 V; L1 = 22 µH/1.4 A
   (SHOU HAN CYN5040-22UH, JLCPCB `C2879700`, 1.8 A saturation), which limits the
   practical output to ~1.4 A; use a 15 µH/3 A part if the TPS5430's full 3 A

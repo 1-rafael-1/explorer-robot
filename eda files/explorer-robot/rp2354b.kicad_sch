@@ -5790,6 +5790,16 @@
 	)
 	(wire
 		(pts
+			(xy 107.95 95.25) (xy 107.95 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f75aaa13-1a68-461d-a48b-4ffedfb8073d")
+	)
+	(wire
+		(pts
 			(xy 33.02 182.88) (xy 33.02 186.69)
 		)
 		(stroke
@@ -6018,6 +6028,17 @@
 			(justify left)
 		)
 		(uuid "32f83485-1b6b-47f9-a686-5b5186c8898a")
+	)
+	(hierarchical_label "PANEL_PWR"
+		(shape output)
+		(at 107.95 95.25 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "3b47dfc2-9155-4c3f-b5d1-9aebc13435f4")
 	)
 	(hierarchical_label "LCD_DC"
 		(shape output)

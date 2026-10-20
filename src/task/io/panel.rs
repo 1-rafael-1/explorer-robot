@@ -15,8 +15,9 @@
 //! can keep the firmware alive in a degraded state and retry with a backoff,
 //! mirroring the previous text display's offline behaviour.
 //!
-//! Pin map (ADR-0008): `SPI1` SCK/MOSI/MISO = GPIO 42/43/44; display
-//! CS/DC/RST/BLK = GPIO 41/45/46/47; touch CS/PENIRQ = GPIO 38/39.
+//! Pin map (ADR-0008, ADR-0024): `SPI1` SCK/MOSI/MISO = GPIO 42/43/44;
+//! display CS/DC/RST/BLK = GPIO 41/45/46/47; touch CS/PENIRQ = GPIO 38/39;
+//! the switched 5 V branch's TPS22917 enable is GPIO 0.
 
 use defmt::info;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
@@ -172,6 +173,9 @@ pub struct Panel {
     rst: Output<'static>,
     /// The display's backlight line, held high while the panel is powered.
     blk: Output<'static>,
+    /// The switched 5 V branch's TPS22917 enable, held high while the panel is
+    /// powered.
+    pwr: Output<'static>,
     /// Whether the backlight/reset pulse has already happened.
     reset_done: bool,
     /// The caller-side smoothing filters applied to raw touch samples.
@@ -207,6 +211,7 @@ impl Panel {
             irq: Input::new(pins.penirq, Pull::Up),
             rst: Output::new(pins.rst, Level::Low),
             blk: Output::new(pins.blk, Level::High),
+            pwr: Output::new(pins.power_enable, Level::High),
             reset_done: false,
             filters: Filters::new(),
         }
@@ -219,6 +224,7 @@ impl Panel {
     pub async fn bring_up(&mut self) -> bool {
         if !self.reset_done {
             self.reset_done = true;
+            self.pwr.set_high();
             self.blk.set_high();
             hardware_reset(&mut self.rst).await;
         }

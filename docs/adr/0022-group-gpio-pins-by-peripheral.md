@@ -12,7 +12,8 @@ connector and the IMU would force traces to cross each other on the two signal l
 **Status:** accepted. Replaces the pin choices in the firmware and defines the intended
 board pinout for the incomplete schematic. It revises the pin choices of ADR-0021 and
 supersedes the GPIO 23–25 rangefinder reserve in ADR-0009. ADR-0023 adds GPIO32
-`EXP_PWR` for the expansion connector's TPS22917 high-side load switch; GPIO31 remains
+`EXP_PWR` for the expansion connector's TPS22917 high-side load switch. ADR-0024
+assigns GPIO0 to `PANEL_PWR` for the panel's TPS22917; GPIO1–3 and GPIO31 remain
 spare.
 
 **Current assignment**
@@ -60,7 +61,8 @@ that every alternate-function constraint still holds.
 
 | GPIO | Function | Constraint |
 |---:|---|---|
-| 0–3 | spare | UART0 pair 0/1, I2C0 pair 0/1 |
+| 0 | `PANEL_PWR` | panel TPS22917 enable, direct output (ADR-0024) |
+| 1–3 | spare | |
 | 4 | `MOT.A.PWM` | slice 2, channel A |
 | 5 | `MOT.A.IN.1` | direct output |
 | 6 | `MOT.A.IN.2` | direct output |
@@ -105,7 +107,7 @@ that every alternate-function constraint still holds.
 
 The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1),
 28–30 (LiDAR), and 32–47 (expansion, touch, battery, display). The remaining pins
-(0–3, 31) are spare.
+(1–3, 31) are spare.
 
 **Consequences**
 
@@ -115,6 +117,7 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
 - The LiDAR moves from GPIO 1/12/26 to the adjacent run 28/29/30, and the camera moves
   from 4/5/27 to 23/24/25. This frees GPIO 0–3 completely. The production power switches
   are TPS22917 high-side load switches, not the low-side MOSFETs of the starting point.
+  ADR-0024 later assigns GPIO0 to the panel's `PANEL_PWR` enable; GPIO1–3 remain spare.
 - The camera now runs on a **PIO0 UART** on GPIO 24 (MCU TX) / GPIO 25 (MCU RX), with its
   TPS22917 high-side load-switch enable on GPIO 23. Hardware UART1 is therefore free for
   the expansion connector on GPIO 36/37; the connector itself is still not implemented.
@@ -143,6 +146,6 @@ The resulting occupied runs are GPIO 4–27 (motor, RGB, I2C0, IMU, camera, I2C1
 - At layout, keep the layer-3 3.3 V/5 V split out from under the SPI1 display bundle and
   the battery-ADC trace. Layer 2 is the only continuous reference plane, so the display
   clock/data and the ADC trace should cross the split as little as possible.
-- The spare pins are not contiguous (0–3, 31). They are intentionally left
+- The spare pins are not contiguous (1–3, 31). They are intentionally left
   as routing channels and for future point-to-point additions rather than being packed
   into one block and forcing a second long bundle across the MCU.

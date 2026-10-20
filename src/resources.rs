@@ -7,8 +7,8 @@
 //!
 //! Pin grouping (ADR-0022): motor/encoders 4–12, RGB 13–15, I2C0 16–17,
 //! IMU 18–22, camera power/UART 23–25, I2C1 26–27, `LiDAR` 28–30,
-//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47.
-//! Spare: 0–3, 31.
+//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47, panel power 0.
+//! Spare: 1–3, 31.
 
 #![allow(clippy::missing_docs_in_private_items)]
 
@@ -113,7 +113,9 @@ assign_resources! {
     /// The panel occupies the contiguous high GPIO block 41–47, with the touch
     /// controller on 38/39 and the battery ADC keeping GPIO 40. `DMA_CH6`
     /// carries the bus's transmit direction and `DMA_CH7` its receive direction,
-    /// because the bus is full duplex.
+    /// because the bus is full duplex. The panel's 5 V branch is switched by a
+    /// TPS22917 high-side load switch enabled by GPIO 0, which is physically
+    /// adjacent to GPIO 47 at the QFN ring's wrap point (ADR-0024).
     panel: PanelResources {
         /// `SPI1` peripheral instance.
         spi: SPI1,
@@ -139,6 +141,8 @@ assign_resources! {
         touch_cs: PIN_38,
         /// Touch pen-down interrupt (GPIO 39, active-low with a pull-up).
         penirq: PIN_39,
+        /// TPS22917 high-side load-switch enable (`PANEL_PWR`, active-high, GPIO 0).
+        power_enable: PIN_0,
     }
 
     /// SPI0 and control lines for the ICM-20948 IMU.
