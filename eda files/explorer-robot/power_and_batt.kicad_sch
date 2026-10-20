@@ -4014,7 +4014,7 @@
 				)
 			)
 		)
-		(property "Value" "22u"
+		(property "Value" "15u"
 			(at 161.29 119.634 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4024,7 +4024,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Inductor_SMD:L_APV_ANR5040"
+		(property "Footprint" "Inductor_SMD:L_Bourns_SRP7028A_7.3x6.6mm"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -4057,7 +4057,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/SHOUHAN-CYN504022UH/C2879700"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/SunltechTech-SLO0630H150MTT/C182182"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -4068,7 +4068,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C2879700"
+		(property "LCSC" "C182182"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -4079,7 +4079,7 @@
 				)
 			)
 		)
-		(property "MFR" "SHOU HAN"
+		(property "MFR" "Sunltech Tech"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -4090,7 +4090,7 @@
 				)
 			)
 		)
-		(property "MPN" "CYN5040-22UH"
+		(property "MPN" "SLO0630H150MTT"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -5463,7 +5463,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "550mV 1A"
+		(property "Value" "3A 40V"
 			(at 155.448 107.696 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5507,7 +5507,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/MDD_Microdiode_Semiconductor-SS14/C2480"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/MDD_Microdiode_Semiconductor-SS34/C8678"
 			(at 154.94 110.49 0)
 			(hide yes)
 			(show_name no)
@@ -5518,7 +5518,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C2480"
+		(property "LCSC" "C8678"
 			(at 154.94 110.49 0)
 			(hide yes)
 			(show_name no)
@@ -5540,7 +5540,7 @@
 				)
 			)
 		)
-		(property "MPN" "SS14"
+		(property "MPN" "SS34"
 			(at 154.94 110.49 0)
 			(hide yes)
 			(show_name no)
@@ -6269,186 +6269,6 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/9d46820b-8f72-42a9-b57d-135ca095b278"
 					(reference "#FLG02")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 242.57 80.01 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "b94e00f9-8929-49a0-9e4e-77e10de529f7")
-		(property "Reference" "C29"
-			(at 243.586 77.724 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "100n"
-			(at 243.586 82.296 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
-			(at 243.5352 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CC0603KRX7R9BB104"
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" "C14663"
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S3.3" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.1" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_DVDD" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_VREG_LX" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MFR" "YAGEO"
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCP_URL" ""
-			(at 242.57 80.01 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "5d4bddcc-88b1-4191-b037-61e3a6d627fd")
-		)
-		(pin "2"
-			(uuid "e843e9fb-63bf-4355-9290-8d19deeda556")
-		)
-		(instances
-			(project "explorer-robot"
-				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/9d46820b-8f72-42a9-b57d-135ca095b278"
-					(reference "C29")
 					(unit 1)
 				)
 			)

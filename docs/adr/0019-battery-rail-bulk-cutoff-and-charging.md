@@ -16,12 +16,16 @@ the same part at `VM` (ADR-0018), one capacitor part number shared with the 5 V
 `COUT`. The in-pack switch rating and the inrush/BMS check remain open. The 5 V
 rail is accepted with the caveat that it may sit around 4.9 V at the 6.0 V cutoff
 and 500 mA; the Coin D6 is specified for 4.5–5.5 V, so that is inside its range.
-The rail now also feeds the AI camera and the expansion connector through their
-own TPS22917 high-side switches (ADR-0010, ADR-0021). The 300–500 mA figure is a
-continuous target, not a peak guarantee: the three switched branches can sum
-above 1 A, so the peak budget and the 6.0 V low-line measurement remain open. The
-Coin D6, Grove Vision AI V2 and expansion-board peak currents, and the bench
-measurement, remain open. An on-board BMS is no longer planned.
+The 5 V power stage now uses a 15 µH/3 A inductor with 5 A saturation (`C182182`)
+and a 3 A SS34 catch diode (`C8678`); R9 stays at 3.3 kΩ for a 4.92 V setpoint.
+The rail now also feeds the expansion connector through its own TPS22917
+high-side switch (ADR-0010, ADR-0021); the AI camera branch moved from 5 V to
+`+3.3V` in ADR-0025 and now loads the 5 V rail through the `AMS1117-3.3`
+instead. The 300–500 mA figure is a continuous target, not a peak guarantee:
+the three switched branches can sum above 1 A, so the peak budget and the
+6.0 V low-line measurement remain open. The Coin D6, Grove Vision AI V2 and
+expansion-board peak currents, and the bench measurement, remain open. An
+on-board BMS is no longer planned.
 
 **Considered Options**
 
@@ -127,8 +131,9 @@ For the 5 V rail:
 
 - **Regulator.** Use the TPS5430DDAR (JLCPCB Basic, `C9864`) in SOIC-8-EP, fed
   from the protected `+8V` net after Q1. Do not feed it from the raw battery side
-  before Q1, or the 5 V rail loses reverse-polarity protection. Output is 5.0 V;
-  the continuous load target is 300–500 mA with 1 A-class margin, but the three
+  before Q1, or the 5 V rail loses reverse-polarity protection. Output is set to
+  4.92 V (R9 = 3.3 kΩ; see design values); the continuous load target is
+  300–500 mA with 1 A-class margin, but the three
   switched branches can peak above that. Loads are the switched Coin D6 LiDAR
   branch (ADR-0010), the switched Grove Vision AI V2 camera branch (ADR-0021),
   the switched expansion connector (ADR-0021), the AMS1117-3.3 input, and any 5 V
@@ -151,36 +156,48 @@ For the 5 V rail:
   it; the backlight is the dominant panel load), plus the AMS1117 input. The sum
   can approach or exceed 1 A. The TPS5430 needs about 6.2 V input for 1 A at 5 V,
   so at the 6.0 V cutoff the rail may not hold 5 V at the summed peak. The
-  selected 22 µH inductor also limits the practical output to ~1.4 A. Measure the
-  branch currents and revisit the cutoff or the buck if the sum is too high.
-- **Design values.** R1 = 10 kΩ / R2 = 3.24 kΩ (1%) for 5.0 V; L1 = 22 µH/1.4 A
-  (SHOU HAN CYN5040-22UH, JLCPCB `C2879700`, 1.8 A saturation), which limits the
-  practical output to ~1.4 A; use a 15 µH/3 A part if the TPS5430's full 3 A
-  capability is needed. D1 = B340A (40 V, 3 A) catch diode; CIN = 3× 10 µF/25 V
-  X5R 0805 (Samsung CL21A106KAYNNNE, JLCPCB `C15850`) close to VIN/GND, in
-  addition to the existing `+8V` bulk; CBOOT = 0.01 µF between BOOT and PH;
-  COUT = 220 µF/25 V polymer aluminum, 35 mΩ ESR, 1.95 A ripple (KNSCHA
-  217EC0037, JLCPCB `C42371908`). With 22 µH this gives a
-  ~12.3 kHz crossover and a ~20.7 kHz ESR zero, inside the internal
-  compensation's range. If a ceramic output capacitor is used instead, add the
-  external type-3 compensation network from the datasheet. `ENA` is active-high:
-  float or pull it up to enable; pull it below 0.5 V to disable. Add a `PWR_FLAG`
-  on `+5V` for ERC. The 25 V input-cap rating is required because the `+8V` rail
-  is exposed to the 14.5 V TVS clamp; the earlier 47 µF/10 V part is not acceptable.
+  15 µH/3 A inductor and the 3 A catch diode are no longer the current
+  bottleneck; the low-line duty cycle is. Measure the branch currents and
+  revisit the cutoff or the buck if the sum is too high.
+- **Design values.** R8 = 10 kΩ / R9 = 3.3 kΩ (1%) sets 4.92 V. Keep 3.3 kΩ:
+  it is a Basic part, all 5 V loads accept 4.92 V (the LiDAR and Coin D6 are
+  specified 4.5–5.5 V; the camera and expansion boards regulate their own
+  3.3 V), and it leaves slightly more low-line headroom. The divider/reference
+  worst case with 3.3 kΩ is ~4.75–5.09 V, still above the 4.5 V load minimum.
+  R9 = 3.24 kΩ (JLCPCB `C22994`, Extended) sets 4.99 V and is the optional
+  change only if a true 5.0 V nominal or a centered 5 V ±5 % stack is needed.
+  L2 = 15 µH/3 A, 5 A saturation (Sunltech SLO0630H150MTT, JLCPCB `C182182`,
+  115 mΩ max), 7.1 × 6.6 × 3.0 mm; it requires the new 7.3 × 6.6 mm footprint
+  and removes the earlier 1.4 A practical limit. D5 = SS34 (40 V, 3 A, JLCPCB
+  `C8678`) in `D_SMA` replaces the 1 A SS14. CIN = 3× 10 µF/25 V X5R 0805
+  (Samsung CL21A106KAYNNNE, JLCPCB `C15850`) close to VIN/GND, in addition to
+  the existing `+8V` bulk; CBOOT = 0.01 µF between BOOT and PH; COUT = 220 µF/
+  25 V polymer aluminum, 35 mΩ ESR, 1.95 A ripple (KNSCHA 217EC0037, JLCPCB
+  `C42371908`). With 15 µH this gives a ~18 kHz crossover and a ~20.7 kHz ESR
+  zero: the crossover is still inside the internal compensation's 3–30 kHz
+  range, but the ESR zero is only ~15 % above it, so verify the loop over
+  temperature. A 22 µH inductor would give a ~12.3 kHz crossover and a more
+  forgiving ~20.7 kHz ESR zero, but it was rejected for its lower saturation
+  margin. If a ceramic output capacitor is used instead, add the external
+  type-3 compensation network from the datasheet. `ENA` is active-high: float or
+  pull it up to enable; pull it below 0.5 V to disable. Add a `PWR_FLAG` on
+  `+5V` for ERC. The 25 V input-cap rating is required because the `+8V` rail is
+  exposed to the 14.5 V TVS clamp; the earlier 47 µF/10 V part is not acceptable.
 - **Low-line behaviour.** The TPS5430's 87% guaranteed maximum duty cycle (89%
   max) limits the minimum input for 5 V to about 6.0 V at 0.5 A, 6.2 V at 1 A,
   6.5 V at 2 A and 6.9 V at 3 A, using the datasheet's worst-case Rds(on), diode
-  drop and inductor DCR (the regulator's capability; the selected inductor limits
-  the practical output to ~1.4 A). The device's 5.5 V minimum input is below
-  the 6.0 V cutoff, so the limit is duty cycle, not UVLO. At the cutoff and
-  500 mA the 5 V rail may therefore sit around 4.9 V. This is outside the datasheet's guaranteed
-  5 V regulation but is accepted because the downstream LDOs still regulate and
-  the Coin D6 is specified for 4.5–5.5 V, so ~4.9 V is inside its range with
-  ~400 mV margin to the low end; a slightly lower spin speed is acceptable. The
-  AI camera and expansion boards regulate their own 3.3 V, but their 5 V input
-  range must include the sag. Confirm the LiDAR, camera and expansion currents at
-  4.9 V. If bench testing shows the rail falls below 4.5 V, raise the cutoff to
-  6.5 V (comfortable to ~2 A) or use a buck-boost.
+  drop and inductor DCR (the regulator's capability; the 15 µH inductor and
+  3 A diode are no longer the limiting elements). The device's 5.5 V minimum
+  input is below the 6.0 V cutoff, so the limit is duty cycle, not UVLO. At the
+  cutoff and 500 mA the 5 V rail may therefore sit around 4.9 V. This is outside
+  the datasheet's guaranteed 5 V regulation but is accepted because the
+  downstream LDOs still regulate and the Coin D6 is specified for 4.5–5.5 V, so
+  ~4.9 V is inside its range with ~400 mV margin to the low end; a slightly
+  lower spin speed is acceptable. The AI camera and expansion boards regulate
+  their own 3.3 V, but their 5 V input range must include the sag. Confirm the
+  LiDAR, camera and expansion currents at 4.9 V. If bench testing shows the rail
+  falls below 4.5 V, raise the cutoff to 6.5 V (comfortable to ~2 A) or use a
+  buck-boost.
 - **LDO behaviour.** The AMS1117-3.3 holds 3.3 V until its input falls below about
   4.4 V at 500 mA (the 1.1 V dropout is specified at 1 A; it is lower at 500 mA),
   so the 4.9 V low-line is above dropout. The ICM-20948 1.8 V LDO (ADR-0017)
@@ -238,25 +255,27 @@ For the 5 V rail:
   USB-powered camera or expansion board from back-feeding the 5 V rail, but they
   do not current-limit a forward fault; the expansion connector is not
   hot-pluggable.
-- The 5 V rail is a nominal 5 V rail, not a guaranteed 5 V rail at the 6.0 V
+- The +5V rail is nominally 4.92 V, not a guaranteed 5 V rail at the 6.0 V
   cutoff: at 500 mA it may sit around 4.9 V. The 3.3 V, 1.8 V and 1.1 V rails
   hold; the LiDAR, AI camera and expansion branches see the sag. The LiDAR is
   specified for 4.5–5.5 V, so ~4.9 V is within spec; the camera and expansion
   boards must accept the reduced 5 V input. This is the deliberate tradeoff for
   keeping the 6.0 V cutoff and a Basic part.
 - The 5 V low-line is outside the TPS5430's guaranteed 5 V regulation; bench-test
-  at 6.0 V/500 mA and 1 A with the LiDAR, camera, expansion branch and the 3.3 V
-  LDO connected. If any branch browns out or the 5 V rail falls below the LiDAR's
-  4.5 V minimum, raise the cutoff to 6.5 V or switch to a buck-boost.
-- The TPS5430's 3 A rating is credible with the PowerPAD, but the selected
-  22 µH/1.4 A inductor is the practical 5 V rail current limit (~1.4 A); the
-  B340A catch diode is also a thermal weak point at 3 A. At 300–500 mA both are
-  comfortable, and the 1.4 A limit still leaves 1 A-class margin. Use a
-  15 µH/3 A inductor if the full 3 A capability is ever needed.
-- The TPS5430 itself is Basic, but the selected 22 µH inductor and 220 µF polymer
-  output capacitor are Extended at JLCPCB, so the 5 V rail adds two extended-part
-  handling fees. Confirm the final assembly BOM and whether a Basic equivalent is
-  stocked for either passive.
+  at 6.0 V with 0.5 A, 1 A and 2 A loads, with the LiDAR, camera, expansion
+  branch and the 3.3 V LDO connected. If any branch browns out or the 5 V rail
+  falls below the LiDAR's 4.5 V minimum, raise the cutoff to 6.5 V or switch to
+  a buck-boost.
+- The TPS5430's 3 A rating is credible with the PowerPAD. The 15 µH/3 A
+  inductor (5 A saturation) and the 3 A SS34 catch diode remove the earlier
+  inductor/diode bottleneck; the practical limits are now the TPS5430's
+  low-line duty cycle and thermal margins. At 2 A the inductor and diode each
+  dissipate roughly 0.4–0.5 W, so verify their temperatures in the enclosure.
+- The TPS5430 and the SS34 are Basic, but the selected 15 µH inductor (`C182182`)
+  and 220 µF polymer output capacitor (`C42371908`) are Extended at JLCPCB, so
+  the 5 V rail adds two extended-part handling fees. R9 = 3.3 kΩ is Basic; the
+  optional 3.24 kΩ R9 is Extended. Confirm the final assembly BOM and whether a
+  Basic equivalent is stocked for either passive.
 - The 5 V rail is non-synchronous with a catch diode and a boot capacitor, and its
   internal compensation expects a low-ESR polymer/electrolytic/POSCAP output
   capacitor (selected: 220 µF/25 V polymer, 35 mΩ ESR). A ceramic-only output
@@ -276,8 +295,11 @@ For the 5 V rail:
   (later) whether to add an on-board 2S charger.
 - Open items (5 V rail): measure the Coin D6, Grove Vision AI V2 and
   expansion-board peak currents at 4.9 V; bench-test the TPS5430 low-line at
-  6.0 V/500 mA and 1 A with the three branches and the 3.3 V LDO; confirm the
-  3×0805 input-cap bank footprint and placement, the selected output capacitor's
-  footprint and polarity, and the PowerPAD layout. The 300–500 mA continuous
-  target is not a peak guarantee; if the summed peak cannot hold 5 V at the
-  6.0 V cutoff, raise the cutoff to 6.5 V or use a buck-boost.
+  6.0 V/500 mA, 1 A and 2 A with the three branches and the 3.3 V LDO; verify
+  the 15 µH loop with a load step over temperature; confirm the L2 land pattern
+  against the Sunltech SLO0630H150MTT datasheet (the schematic currently uses
+  the Bourns SRP7028A 7.3 × 6.6 mm footprint), the 3×0805 input-cap bank
+  footprint and placement, the selected output capacitor's footprint and
+  polarity, and the PowerPAD layout. The 300–500 mA continuous target is not a
+  peak guarantee; if the summed peak cannot hold 5 V at the 6.0 V cutoff, raise
+  the cutoff to 6.5 V or use a buck-boost.

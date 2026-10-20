@@ -1000,6 +1000,12 @@
 		(color 0 0 0 0)
 		(uuid "7e0a0572-8096-444f-9cd2-66ddc7e3f930")
 	)
+	(junction
+		(at 179.07 91.44)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "87bd11ba-075c-4121-b99d-fb11abbb484f")
+	)
 	(no_connect
 		(at 135.89 88.9)
 		(uuid "26a6256f-e057-406f-93c8-add5a3cbf492")
@@ -1033,6 +1039,16 @@
 			(type default)
 		)
 		(uuid "2b5f32aa-387d-4d9c-9644-ff8ab7d34adb")
+	)
+	(wire
+		(pts
+			(xy 179.07 91.44) (xy 180.34 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "38d1f84a-3759-400b-b6fa-302edb6afbd5")
 	)
 	(wire
 		(pts
@@ -1126,6 +1142,16 @@
 	)
 	(wire
 		(pts
+			(xy 179.07 90.17) (xy 179.07 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b8253a10-05e8-407e-a1fc-17cc7b0bc666")
+	)
+	(wire
+		(pts
 			(xy 176.53 99.06) (xy 180.34 99.06)
 		)
 		(stroke
@@ -1156,13 +1182,23 @@
 	)
 	(wire
 		(pts
-			(xy 170.18 91.44) (xy 180.34 91.44)
+			(xy 170.18 91.44) (xy 179.07 91.44)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "db5f85b4-7b3d-4813-bf0c-a5e4b295a058")
+	)
+	(wire
+		(pts
+			(xy 179.07 80.01) (xy 179.07 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e35d16e7-d607-4396-848c-82f7ce90c622")
 	)
 	(wire
 		(pts
@@ -1426,6 +1462,84 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
 					(reference "#PWR075")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 179.07 80.01 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "53630e54-516f-45f1-b446-90506c22e759")
+		(property "Reference" "#PWR093"
+			(at 179.07 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 179.07 74.93 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 179.07 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 179.07 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 179.07 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "f3c78231-ae28-4a02-a42d-06ff4938c7eb")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
+					(reference "#PWR093")
 					(unit 1)
 				)
 			)
@@ -2291,6 +2405,131 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
 					(reference "#PWR073")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 179.07 86.36 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "c6268055-8db4-4961-994c-f33f977691b1")
+		(property "Reference" "C40"
+			(at 186.182 87.376 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10u"
+			(at 186.182 84.836 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 178.1048 82.55 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16532-CL21A106KAYNNNE/C15850"
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
+			(at 179.07 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "1ed18d96-713b-42db-8b2c-f3cbb33d6f48")
+		)
+		(pin "1"
+			(uuid "85f5db68-9c21-4836-8abf-5eddd08fde3f")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/59ee77a0-3af7-4f56-bf2b-31c06f43662c"
+					(reference "C40")
 					(unit 1)
 				)
 			)

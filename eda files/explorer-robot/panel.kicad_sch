@@ -1292,6 +1292,18 @@
 		(uuid "0d48593d-9a2f-4539-b138-0a5fc33e8e24")
 	)
 	(junction
+		(at 157.48 77.47)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "450288bf-ce23-45ab-ac77-e86541d86778")
+	)
+	(junction
+		(at 163.83 77.47)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "872bde76-f0dd-4398-a540-6bc72d1ad70c")
+	)
+	(junction
 		(at 100.33 77.47)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -1303,17 +1315,27 @@
 	)
 	(wire
 		(pts
-			(xy 139.7 87.63) (xy 139.7 88.9)
+			(xy 163.83 67.31) (xy 163.83 69.85)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "0ae761cf-2bf5-4767-88ae-555560a51759")
+		(uuid "08257134-c849-4a45-83e5-e1373fda8011")
 	)
 	(wire
 		(pts
-			(xy 160.02 100.33) (xy 165.1 100.33)
+			(xy 163.83 77.47) (xy 175.26 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1284364b-6a4f-487d-a21c-0ae2b2691cfe")
+	)
+	(wire
+		(pts
+			(xy 140.97 87.63) (xy 146.05 87.63)
 		)
 		(stroke
 			(width 0)
@@ -1323,13 +1345,13 @@
 	)
 	(wire
 		(pts
-			(xy 139.7 77.47) (xy 139.7 80.01)
+			(xy 157.48 77.47) (xy 163.83 77.47)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "265a87a6-a157-4f9f-a440-30650473d01b")
+		(uuid "2817a100-3f1c-4d54-b4fb-7b3fccbebf4b")
 	)
 	(wire
 		(pts
@@ -1343,16 +1365,6 @@
 	)
 	(wire
 		(pts
-			(xy 194.31 77.47) (xy 194.31 90.17)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "30653912-0eae-44ec-9a84-bc64852558b3")
-	)
-	(wire
-		(pts
 			(xy 100.33 86.36) (xy 100.33 87.63)
 		)
 		(stroke
@@ -1363,7 +1375,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 113.03) (xy 165.1 113.03)
+			(xy 140.97 100.33) (xy 146.05 100.33)
 		)
 		(stroke
 			(width 0)
@@ -1373,7 +1385,7 @@
 	)
 	(wire
 		(pts
-			(xy 181.61 92.71) (xy 194.31 92.71)
+			(xy 162.56 80.01) (xy 175.26 80.01)
 		)
 		(stroke
 			(width 0)
@@ -1383,7 +1395,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 97.79) (xy 172.72 97.79)
+			(xy 140.97 85.09) (xy 153.67 85.09)
 		)
 		(stroke
 			(width 0)
@@ -1393,7 +1405,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 120.65) (xy 172.72 120.65)
+			(xy 140.97 107.95) (xy 153.67 107.95)
 		)
 		(stroke
 			(width 0)
@@ -1423,7 +1435,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 118.11) (xy 165.1 118.11)
+			(xy 140.97 105.41) (xy 146.05 105.41)
 		)
 		(stroke
 			(width 0)
@@ -1433,7 +1445,7 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 107.95) (xy 194.31 107.95)
+			(xy 153.67 95.25) (xy 175.26 95.25)
 		)
 		(stroke
 			(width 0)
@@ -1473,7 +1485,7 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 95.25) (xy 194.31 95.25)
+			(xy 153.67 82.55) (xy 175.26 82.55)
 		)
 		(stroke
 			(width 0)
@@ -1493,7 +1505,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 120.65) (xy 194.31 120.65)
+			(xy 161.29 107.95) (xy 175.26 107.95)
 		)
 		(stroke
 			(width 0)
@@ -1503,7 +1515,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 95.25) (xy 165.1 95.25)
+			(xy 140.97 82.55) (xy 146.05 82.55)
 		)
 		(stroke
 			(width 0)
@@ -1513,7 +1525,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 110.49) (xy 194.31 110.49)
+			(xy 161.29 97.79) (xy 175.26 97.79)
 		)
 		(stroke
 			(width 0)
@@ -1523,7 +1535,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 110.49) (xy 172.72 110.49)
+			(xy 140.97 97.79) (xy 153.67 97.79)
 		)
 		(stroke
 			(width 0)
@@ -1533,7 +1545,7 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 118.11) (xy 194.31 118.11)
+			(xy 153.67 105.41) (xy 175.26 105.41)
 		)
 		(stroke
 			(width 0)
@@ -1543,7 +1555,7 @@
 	)
 	(wire
 		(pts
-			(xy 139.7 77.47) (xy 194.31 77.47)
+			(xy 139.7 77.47) (xy 157.48 77.47)
 		)
 		(stroke
 			(width 0)
@@ -1553,7 +1565,7 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 115.57) (xy 172.72 115.57)
+			(xy 140.97 102.87) (xy 153.67 102.87)
 		)
 		(stroke
 			(width 0)
@@ -1563,7 +1575,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 97.79) (xy 194.31 97.79)
+			(xy 161.29 85.09) (xy 175.26 85.09)
 		)
 		(stroke
 			(width 0)
@@ -1573,7 +1585,7 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 113.03) (xy 194.31 113.03)
+			(xy 153.67 100.33) (xy 175.26 100.33)
 		)
 		(stroke
 			(width 0)
@@ -1593,13 +1605,23 @@
 	)
 	(wire
 		(pts
-			(xy 160.02 107.95) (xy 165.1 107.95)
+			(xy 140.97 95.25) (xy 146.05 95.25)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "e2dca157-e24f-4caf-ace0-b02cbd89cdba")
+	)
+	(wire
+		(pts
+			(xy 157.48 69.85) (xy 157.48 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e5114315-4727-43e4-8746-5cae9bd5f02c")
 	)
 	(wire
 		(pts
@@ -1613,7 +1635,7 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 100.33) (xy 194.31 100.33)
+			(xy 153.67 87.63) (xy 175.26 87.63)
 		)
 		(stroke
 			(width 0)
@@ -1623,7 +1645,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 115.57) (xy 194.31 115.57)
+			(xy 161.29 102.87) (xy 175.26 102.87)
 		)
 		(stroke
 			(width 0)
@@ -1633,7 +1655,7 @@
 	)
 	(hierarchical_label "LCD_RST"
 		(shape input)
-		(at 160.02 113.03 180)
+		(at 140.97 100.33 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1644,7 +1666,7 @@
 	)
 	(hierarchical_label "LCD_CS"
 		(shape input)
-		(at 160.02 107.95 180)
+		(at 140.97 95.25 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1655,7 +1677,7 @@
 	)
 	(hierarchical_label "SPI1_MOSI"
 		(shape input)
-		(at 160.02 97.79 180)
+		(at 140.97 85.09 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1666,7 +1688,7 @@
 	)
 	(hierarchical_label "SPI1_MISO"
 		(shape output)
-		(at 160.02 100.33 180)
+		(at 140.97 87.63 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1677,7 +1699,7 @@
 	)
 	(hierarchical_label "SPI1_SCK"
 		(shape input)
-		(at 160.02 95.25 180)
+		(at 140.97 82.55 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1688,7 +1710,7 @@
 	)
 	(hierarchical_label "TOUCH_CS"
 		(shape input)
-		(at 160.02 118.11 180)
+		(at 140.97 105.41 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1699,7 +1721,7 @@
 	)
 	(hierarchical_label "LCD_DC"
 		(shape input)
-		(at 160.02 110.49 180)
+		(at 140.97 97.79 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1721,7 +1743,7 @@
 	)
 	(hierarchical_label "LCD_BLK"
 		(shape input)
-		(at 160.02 115.57 180)
+		(at 140.97 102.87 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1732,7 +1754,7 @@
 	)
 	(hierarchical_label "TOUCH_PENIRQ"
 		(shape output)
-		(at 160.02 120.65 180)
+		(at 140.97 107.95 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1820,7 +1842,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 181.61 92.71 270)
+		(at 162.56 80.01 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -1831,7 +1853,7 @@
 		(fields_autoplaced yes)
 		(uuid "15db80d8-112a-43a1-b2a1-f7fc056198d5")
 		(property "Reference" "#PWR092"
-			(at 175.26 92.71 0)
+			(at 156.21 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1842,7 +1864,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 176.53 92.71 90)
+			(at 157.48 80.01 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1852,7 +1874,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 181.61 92.71 0)
+			(at 162.56 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1863,7 +1885,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 181.61 92.71 0)
+			(at 162.56 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1874,7 +1896,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 181.61 92.71 0)
+			(at 162.56 80.01 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2023,7 +2045,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 176.53 97.79 270)
+		(at 157.48 85.09 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2034,7 +2056,7 @@
 		(fields_autoplaced yes)
 		(uuid "28afa99e-0cfe-490a-a05d-30cb66bbf666")
 		(property "Reference" "R28"
-			(at 176.53 96.52 90)
+			(at 157.48 83.82 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2044,7 +2066,7 @@
 			)
 		)
 		(property "Value" "33"
-			(at 176.53 99.06 90)
+			(at 157.48 86.36 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2054,7 +2076,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 176.53 97.79 0)
+			(at 157.48 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2065,7 +2087,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 176.53 97.79 0)
+			(at 157.48 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2076,7 +2098,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 176.53 97.79 0)
+			(at 157.48 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2096,132 +2118,6 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
 					(reference "R28")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 139.7 83.82 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "367fced7-a1ae-4efa-9dbc-5c5ebe9d57ea")
-		(property "Reference" "C59"
-			(at 140.716 81.534 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "1u"
-			(at 140.716 86.106 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL10A105KB8NNNC"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" "C15849"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16531-CL10A105KB8NNNC/C15849"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MFR" "Samsung Electro-Mechanics"
-			(at 139.7 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "dac29d44-c1aa-480b-a9be-6fd7a2ce8f83")
-		)
-		(pin "2"
-			(uuid "97db821c-6d09-444f-9d66-196af774a6db")
-		)
-		(instances
-			(project "explorer-robot"
-				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
-					(reference "C59")
 					(unit 1)
 				)
 			)
@@ -2354,7 +2250,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 176.53 120.65 270)
+		(at 157.48 107.95 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2365,7 +2261,7 @@
 		(fields_autoplaced yes)
 		(uuid "3fccd501-dd68-4b80-ab24-0f92c0ce4f28")
 		(property "Reference" "R35"
-			(at 176.53 119.38 90)
+			(at 157.48 106.68 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2375,7 +2271,7 @@
 			)
 		)
 		(property "Value" "1k"
-			(at 176.53 121.92 90)
+			(at 157.48 109.22 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2385,7 +2281,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2396,7 +2292,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2407,7 +2303,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2418,7 +2314,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/21904-0603WAF1001T5E/C21190"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2429,7 +2325,7 @@
 			)
 		)
 		(property "LCSC" "C21190"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2440,7 +2336,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2451,7 +2347,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1001T5E"
-			(at 176.53 120.65 0)
+			(at 157.48 107.95 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2478,7 +2374,7 @@
 	)
 	(symbol
 		(lib_id "Connector_Generic:Conn_01x05")
-		(at 199.39 95.25 0)
+		(at 180.34 82.55 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2489,7 +2385,7 @@
 		(fields_autoplaced yes)
 		(uuid "6fb2318a-a69b-4b45-aea9-ebd6efccc76d")
 		(property "Reference" "J11"
-			(at 201.93 92.71 0)
+			(at 182.88 80.01 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2500,7 +2396,7 @@
 			)
 		)
 		(property "Value" "PANEL.BUS"
-			(at 201.93 95.25 0)
+			(at 182.88 82.55 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2511,7 +2407,7 @@
 			)
 		)
 		(property "Footprint" "Connector_JST:JST_PH_B5B-PH-K_1x05_P2.00mm_Vertical"
-			(at 199.39 95.25 0)
+			(at 180.34 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2522,7 +2418,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 199.39 95.25 0)
+			(at 180.34 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2533,7 +2429,7 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x05, script generated"
-			(at 199.39 95.25 0)
+			(at 180.34 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2562,6 +2458,131 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
 					(reference "J11")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 163.83 73.66 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "72505004-4a0c-4665-a27d-04d22d0ed16c")
+		(property "Reference" "C62"
+			(at 170.942 74.676 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10u"
+			(at 170.942 72.136 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 162.8648 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16532-CL21A106KAYNNNE/C15850"
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
+			(at 163.83 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "ce710467-1e8a-4101-82c1-0d695c687c6c")
+		)
+		(pin "1"
+			(uuid "65db95d1-f56c-4f15-9ab7-3950f4bd77f9")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
+					(reference "C62")
 					(unit 1)
 				)
 			)
@@ -2646,7 +2667,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 168.91 95.25 270)
+		(at 149.86 82.55 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2657,7 +2678,7 @@
 		(fields_autoplaced yes)
 		(uuid "84436979-bef0-40a8-a785-61b342ba2245")
 		(property "Reference" "R27"
-			(at 168.91 93.98 90)
+			(at 149.86 81.28 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2667,7 +2688,7 @@
 			)
 		)
 		(property "Value" "33"
-			(at 168.91 96.52 90)
+			(at 149.86 83.82 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2677,7 +2698,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 168.91 95.25 0)
+			(at 149.86 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2688,7 +2709,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 95.25 0)
+			(at 149.86 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2699,7 +2720,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 168.91 95.25 0)
+			(at 149.86 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2725,85 +2746,8 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 139.7 88.9 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "8967775e-a028-42ad-b867-f1685497a731")
-		(property "Reference" "#PWR090"
-			(at 139.7 95.25 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 139.7 92.71 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 139.7 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 139.7 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 139.7 88.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "652c0513-aa01-4b47-8fd1-65808851e457")
-		)
-		(instances
-			(project "explorer-robot"
-				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
-					(reference "#PWR090")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:R")
-		(at 168.91 113.03 270)
+		(at 149.86 100.33 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2814,7 +2758,7 @@
 		(fields_autoplaced yes)
 		(uuid "94086af8-9935-42ad-91fe-27a6ec308a45")
 		(property "Reference" "R32"
-			(at 168.91 111.76 90)
+			(at 149.86 99.06 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2824,7 +2768,7 @@
 			)
 		)
 		(property "Value" "100"
-			(at 168.91 114.3 90)
+			(at 149.86 101.6 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2834,7 +2778,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2845,7 +2789,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2856,7 +2800,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2867,7 +2811,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2878,7 +2822,7 @@
 			)
 		)
 		(property "LCSC" "C22775"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2889,7 +2833,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2900,7 +2844,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1000T5E"
-			(at 168.91 113.03 0)
+			(at 149.86 100.33 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2926,41 +2870,39 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector_Generic:Conn_01x06")
-		(at 199.39 114.3 0)
+		(lib_id "power:GND")
+		(at 157.48 67.31 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
-		(in_bom no)
+		(in_bom yes)
 		(on_board yes)
-		(in_pos_files no)
+		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "aa6b646d-96da-45a5-a823-464247a3ae97")
-		(property "Reference" "J12"
-			(at 201.93 111.76 0)
+		(uuid "98df9cd8-6de4-416e-a440-eb1c058260fb")
+		(property "Reference" "#PWR090"
+			(at 157.48 60.96 0)
+			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
 			)
 		)
-		(property "Value" "PANEL.CTRL"
-			(at 201.93 114.3 0)
+		(property "Value" "GND"
+			(at 157.734 62.23 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_JST:JST_PH_B6B-PH-K_1x06_P2.00mm_Vertical"
-			(at 199.39 114.3 0)
+		(property "Footprint" ""
+			(at 157.48 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2971,7 +2913,163 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 199.39 114.3 0)
+			(at 157.48 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 157.48 67.31 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9293a507-4a29-4010-a794-744feadf2795")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
+					(reference "#PWR090")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 163.83 67.31 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "a89d3171-c8f5-4954-9301-91475a970aae")
+		(property "Reference" "#PWR096"
+			(at 163.83 60.96 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 163.83 62.23 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 163.83 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 163.83 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 163.83 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "4ba8349a-e3aa-4e9b-8e4c-bfab39fe57b0")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
+					(reference "#PWR096")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector_Generic:Conn_01x06")
+		(at 180.34 101.6 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files no)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "aa6b646d-96da-45a5-a823-464247a3ae97")
+		(property "Reference" "J12"
+			(at 182.88 99.06 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "PANEL.CTRL"
+			(at 182.88 101.6 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Connector_JST:JST_PH_B6B-PH-K_1x06_P2.00mm_Vertical"
+			(at 180.34 101.6 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 180.34 101.6 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2982,7 +3080,7 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x06, script generated"
-			(at 199.39 114.3 0)
+			(at 180.34 101.6 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3021,7 +3119,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 176.53 110.49 270)
+		(at 157.48 97.79 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3032,7 +3130,7 @@
 		(fields_autoplaced yes)
 		(uuid "ae2cc0ae-d07f-49d0-b69c-795660a0f823")
 		(property "Reference" "R31"
-			(at 176.53 109.22 90)
+			(at 157.48 96.52 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3042,7 +3140,7 @@
 			)
 		)
 		(property "Value" "100"
-			(at 176.53 111.76 90)
+			(at 157.48 99.06 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3052,7 +3150,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3063,7 +3161,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3074,7 +3172,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3085,7 +3183,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3096,7 +3194,7 @@
 			)
 		)
 		(property "LCSC" "C22775"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3107,7 +3205,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3118,7 +3216,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1000T5E"
-			(at 176.53 110.49 0)
+			(at 157.48 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3145,7 +3243,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 168.91 118.11 270)
+		(at 149.86 105.41 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3156,7 +3254,7 @@
 		(fields_autoplaced yes)
 		(uuid "b241ef7f-e672-41d5-9076-c560e0da38f8")
 		(property "Reference" "R34"
-			(at 168.91 116.84 90)
+			(at 149.86 104.14 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3166,7 +3264,7 @@
 			)
 		)
 		(property "Value" "100"
-			(at 168.91 119.38 90)
+			(at 149.86 106.68 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3176,7 +3274,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3187,7 +3285,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3198,7 +3296,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3209,7 +3307,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3220,7 +3318,7 @@
 			)
 		)
 		(property "LCSC" "C22775"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3231,7 +3329,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3242,7 +3340,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1000T5E"
-			(at 168.91 118.11 0)
+			(at 149.86 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3268,8 +3366,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R")
-		(at 176.53 115.57 270)
+		(lib_id "Device:C")
+		(at 157.48 73.66 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3278,29 +3376,31 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "d69f9ec6-6668-4920-9bb9-dea328309c2e")
-		(property "Reference" "R33"
-			(at 176.53 114.3 90)
+		(uuid "c55f8209-020a-4c52-8664-db833637aff5")
+		(property "Reference" "C59"
+			(at 156.464 75.946 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
-		(property "Value" "100"
-			(at 176.53 116.84 90)
+		(property "Value" "1u"
+			(at 156.464 71.374 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 176.53 115.57 0)
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+			(at 157.48 73.66 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3311,7 +3411,131 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 176.53 115.57 0)
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL10A105KB8NNNC"
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15849"
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16531-CL10A105KB8NNNC/C15849"
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 157.48 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "18ca8f74-5bc1-4d8a-8e96-a2a7f6126549")
+		)
+		(pin "2"
+			(uuid "dddbdba9-78ef-423b-a6b3-692adec1cc3f")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/4bf141ee-a9c6-4b1a-a5de-548f18a63cc9"
+					(reference "C59")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 157.48 102.87 270)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "d69f9ec6-6668-4920-9bb9-dea328309c2e")
+		(property "Reference" "R33"
+			(at 157.48 101.6 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "100"
+			(at 157.48 104.14 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 157.48 102.87 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3322,7 +3546,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 176.53 115.57 0)
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3333,7 +3557,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
-			(at 176.53 115.57 0)
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3344,7 +3568,7 @@
 			)
 		)
 		(property "LCSC" "C22775"
-			(at 176.53 115.57 0)
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3355,7 +3579,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 176.53 115.57 0)
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3366,7 +3590,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1000T5E"
-			(at 176.53 115.57 0)
+			(at 157.48 102.87 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3516,7 +3740,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 168.91 107.95 270)
+		(at 149.86 95.25 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3527,7 +3751,7 @@
 		(fields_autoplaced yes)
 		(uuid "e81a8c19-d5f4-41a5-b87f-8e2424e041e6")
 		(property "Reference" "R30"
-			(at 168.91 106.68 90)
+			(at 149.86 93.98 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3537,7 +3761,7 @@
 			)
 		)
 		(property "Value" "100"
-			(at 168.91 109.22 90)
+			(at 149.86 96.52 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3547,7 +3771,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3558,7 +3782,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3569,7 +3793,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3580,7 +3804,7 @@
 			)
 		)
 		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23502-0603WAF1000T5E/C22775"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3591,7 +3815,7 @@
 			)
 		)
 		(property "LCSC" "C22775"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3602,7 +3826,7 @@
 			)
 		)
 		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3613,7 +3837,7 @@
 			)
 		)
 		(property "MPN" "0603WAF1000T5E"
-			(at 168.91 107.95 0)
+			(at 149.86 95.25 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3717,7 +3941,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 168.91 100.33 270)
+		(at 149.86 87.63 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3728,7 +3952,7 @@
 		(fields_autoplaced yes)
 		(uuid "ff5e3fc6-f9e1-477f-84e6-616a496e7657")
 		(property "Reference" "R29"
-			(at 168.91 99.06 90)
+			(at 149.86 86.36 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3738,7 +3962,7 @@
 			)
 		)
 		(property "Value" "33"
-			(at 168.91 101.6 90)
+			(at 149.86 88.9 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3748,7 +3972,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 168.91 100.33 0)
+			(at 149.86 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3759,7 +3983,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.91 100.33 0)
+			(at 149.86 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3770,7 +3994,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 168.91 100.33 0)
+			(at 149.86 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)

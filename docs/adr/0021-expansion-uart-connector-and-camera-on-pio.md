@@ -16,9 +16,10 @@ expansion MCU gets the hardware UART with DMA and buffering.
 
 **Status:** accepted. ADR-0022 revised the pin choices (camera GPIO 23/24/25,
 expansion GPIO 32–37). The expansion 5 V feed is now switched by a TPS22917
-high-side load switch enabled by `EXP_PWR` on GPIO32, and the camera's 5 V branch
-uses the same switch on GPIO23. The camera's PIO0 transport is implemented; the
-expansion connector is still absent from the schematic and PCB. Branch power-down
+high-side load switch enabled by `EXP_PWR` on GPIO32, and the camera branch uses
+the same switch on GPIO23. ADR-0025 moved the camera branch from 5 V to 3.3 V;
+the expansion connector remains on 5 V. The camera's PIO0 transport is
+implemented; the expansion connector is still absent from the schematic and PCB. Branch power-down
 now requires UART quiesce, TX/RX tri-state and UART deinit (ADR-0023). The LiDAR
 implementation is the reference sequence.
 

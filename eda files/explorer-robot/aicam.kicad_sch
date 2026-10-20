@@ -727,7 +727,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "power:+5V"
+		(symbol "power:+3.3V"
 			(power global)
 			(pin_numbers
 				(hide yes)
@@ -752,7 +752,7 @@
 					)
 				)
 			)
-			(property "Value" "+5V"
+			(property "Value" "+3.3V"
 				(at 0 3.556 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -784,7 +784,7 @@
 					)
 				)
 			)
-			(property "Description" "Power symbol creates a global label with name \"+5V\""
+			(property "Description" "Power symbol creates a global label with name \"+3.3V\""
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -806,7 +806,7 @@
 					)
 				)
 			)
-			(symbol "+5V_0_1"
+			(symbol "+3.3V_0_1"
 				(polyline
 					(pts
 						(xy -0.762 1.27) (xy 0 2.54)
@@ -844,7 +844,7 @@
 					)
 				)
 			)
-			(symbol "+5V_1_1"
+			(symbol "+3.3V_1_1"
 				(pin power_in line
 					(at 0 0 90)
 					(length 0)
@@ -989,6 +989,12 @@
 		(uuid "1c254dcb-d8a7-4ec0-a7de-8f9ffb9a0aeb")
 	)
 	(junction
+		(at 177.8 91.44)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "2a96c379-7eb1-4774-82b6-e7855dbdd06b")
+	)
+	(junction
 		(at 170.18 91.44)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -1046,6 +1052,16 @@
 	)
 	(wire
 		(pts
+			(xy 177.8 90.17) (xy 177.8 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "35f3842c-f086-4baa-869d-187e769cdefd")
+	)
+	(wire
+		(pts
 			(xy 123.19 91.44) (xy 135.89 91.44)
 		)
 		(stroke
@@ -1083,6 +1099,26 @@
 			(type default)
 		)
 		(uuid "6bf2c9e6-2757-4597-9416-231e53a6e6ef")
+	)
+	(wire
+		(pts
+			(xy 177.8 80.01) (xy 177.8 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6d0ef903-c111-4cb1-9ba1-cd43701d22f5")
+	)
+	(wire
+		(pts
+			(xy 177.8 91.44) (xy 180.34 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "75f3ff14-2e1d-415f-8c60-466e538ddf89")
 	)
 	(wire
 		(pts
@@ -1146,7 +1182,7 @@
 	)
 	(wire
 		(pts
-			(xy 170.18 91.44) (xy 180.34 91.44)
+			(xy 170.18 91.44) (xy 177.8 91.44)
 		)
 		(stroke
 			(width 0)
@@ -2096,6 +2132,209 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:C")
+		(at 177.8 86.36 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "85d386c4-8925-4c6a-81ea-c975f0b37d10")
+		(property "Reference" "C60"
+			(at 184.912 87.376 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10u"
+			(at 184.912 84.836 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 176.8348 82.55 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16532-CL21A106KAYNNNE/C15850"
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
+			(at 177.8 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "57c05912-99b9-44b8-abe2-a66d916dbccd")
+		)
+		(pin "1"
+			(uuid "2d4ef7ac-741e-4527-8227-3434571d2bdb")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/e28148a8-209c-4954-97f4-1069761fd156"
+					(reference "C60")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 177.8 80.01 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8ab46f68-ef24-4d1d-bbc4-581e978964ab")
+		(property "Reference" "#PWR094"
+			(at 177.8 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 177.8 74.93 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 177.8 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 177.8 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 177.8 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "63735428-4322-463d-81cb-77c58a17628f")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/e28148a8-209c-4954-97f4-1069761fd156"
+					(reference "#PWR094")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R")
 		(at 160.02 91.44 270)
 		(unit 1)
@@ -2219,7 +2458,7 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+5V")
+		(lib_id "power:+3.3V")
 		(at 124.46 86.36 90)
 		(unit 1)
 		(body_style 1)
@@ -2228,7 +2467,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "bb2558b3-c193-4e0b-bd56-40dfffc78d4a")
 		(property "Reference" "#PWR078"
 			(at 128.27 86.36 0)
@@ -2241,8 +2479,8 @@
 				)
 			)
 		)
-		(property "Value" "+5V"
-			(at 119.38 86.36 0)
+		(property "Value" "+3.3V"
+			(at 117.602 86.614 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2273,7 +2511,7 @@
 				)
 			)
 		)
-		(property "Description" "Power symbol creates a global label with name \"+5V\""
+		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
 			(at 124.46 86.36 0)
 			(hide yes)
 			(show_name no)
