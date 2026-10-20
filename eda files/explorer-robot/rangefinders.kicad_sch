@@ -1516,6 +1516,50 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16532-CL21A106KAYNNNE/C15850"
+			(at 106.68 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 106.68 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 106.68 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
+			(at 106.68 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "2a5551fa-4f74-4e5f-a73a-1e1f7ddea281")
 		)
@@ -1597,6 +1641,39 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 67.31 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 67.31 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 67.31 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "fef2c151-53a1-4264-af83-40182c1bf16e")
 		)
@@ -1668,6 +1745,50 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 215.9 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16532-CL21A106KAYNNNE/C15850"
+			(at 215.9 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15850"
+			(at 215.9 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 215.9 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A106KAYNNNE"
 			(at 215.9 87.63 0)
 			(hide yes)
 			(show_name no)
@@ -1910,6 +2031,39 @@
 		)
 		(property "Description" "Resistor"
 			(at 176.53 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 176.53 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 176.53 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 176.53 99.06 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2181,6 +2335,28 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23889-0603WAF4701T5E/C23162"
+			(at 185.42 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23162"
+			(at 185.42 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "35ca5fbb-bbea-4cb3-aa92-d5e2d9da6dc3")
 		)
@@ -2341,6 +2517,50 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+			(at 210.82 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C14663"
+			(at 210.82 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "YAGEO"
+			(at 210.82 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0603KRX7R9BB104"
+			(at 210.82 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "2d89c597-095f-43e5-b1ab-4899bbd792ae")
 		)
@@ -2413,6 +2633,39 @@
 		)
 		(property "Description" "Resistor"
 			(at 67.31 101.6 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 67.31 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 67.31 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 67.31 101.6 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2522,9 +2775,9 @@
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
-		(in_pos_files yes)
+		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "a0980f51-c958-4a4a-9f8e-08d46c6ef8ba")
@@ -2667,6 +2920,39 @@
 		)
 		(property "Description" "Resistor"
 			(at 176.53 101.6 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 176.53 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 176.53 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 176.53 101.6 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2850,6 +3136,28 @@
 			)
 		)
 		(property "MPN" "0603WAF4701T5E"
+			(at 76.2 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23889-0603WAF4701T5E/C23162"
+			(at 76.2 90.17 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23162"
 			(at 76.2 90.17 0)
 			(hide yes)
 			(show_name no)
@@ -3202,6 +3510,28 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23889-0603WAF4701T5E/C23162"
+			(at 76.2 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23162"
+			(at 76.2 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "d8488512-d476-4446-81ec-8b010b334726")
 		)
@@ -3306,6 +3636,28 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23889-0603WAF4701T5E/C23162"
+			(at 185.42 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23162"
+			(at 185.42 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "90abb1d3-f7c2-4c39-9d80-85a79f4758bd")
 		)
@@ -3327,9 +3679,9 @@
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
-		(in_pos_files yes)
+		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "fbf898b2-9dbf-400f-93f8-4f1d8f8ec2fb")
@@ -3472,6 +3824,50 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 101.6 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+			(at 101.6 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C14663"
+			(at 101.6 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "YAGEO"
+			(at 101.6 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0603KRX7R9BB104"
 			(at 101.6 87.63 0)
 			(hide yes)
 			(show_name no)

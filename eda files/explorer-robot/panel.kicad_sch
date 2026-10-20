@@ -2450,6 +2450,39 @@
 				)
 			)
 		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 157.48 85.09 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 157.48 85.09 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 157.48 85.09 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "991022ee-efa8-4d77-a958-0cd08b996ee4")
 		)
@@ -3221,6 +3254,39 @@
 		)
 		(property "Description" "Resistor"
 			(at 149.86 82.55 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 149.86 82.55 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 149.86 82.55 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 149.86 82.55 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4966,6 +5032,39 @@
 		)
 		(property "Description" "Resistor"
 			(at 149.86 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/23867-0603WAF330JT5E/C23140"
+			(at 149.86 87.63 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C23140"
+			(at 149.86 87.63 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "0603WAF330JT5E"
+			(at 149.86 87.63 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
