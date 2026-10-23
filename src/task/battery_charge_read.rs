@@ -66,12 +66,11 @@ const BATTERY_VOLTAGE_UPPER: f32 = 8.4;
 /// ADC reference voltage (3.3V is RP2350's reference)
 const REF_VOLTAGE: f32 = 3.3;
 
-/// Hardware voltage divider ratio
-/// High side = 33kΩ, low side to ADC = 10kΩ
-/// Ratio = 10/(33+10) = 0.2326
-/// Source impedance = 33k || 10k = ~7.7kΩ (suitable for RP2350 ADC)
+/// Higher resistor value for voltage divider
 const DIVIDER_R_HIGH_OHMS: f32 = 33_000.0;
+/// Lower resistor value for voltage divider
 const DIVIDER_R_LOW_OHMS: f32 = 10_000.0;
+/// Voltage divider ratio calculation
 const V_DIVIDER_RATIO: f32 = DIVIDER_R_LOW_OHMS / (DIVIDER_R_HIGH_OHMS + DIVIDER_R_LOW_OHMS);
 
 /// ADC resolution (12-bit = 4096 steps)
