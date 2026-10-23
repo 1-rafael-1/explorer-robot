@@ -71,6 +71,11 @@ and interrupt need level translation.
 - Firmware resets the IMU before verifying its identity: `init_imu_sensor` constructs
   with `Icm20948Driver::new`, calls `init()` (soft reset), then `verify_who_am_i()`,
   both inside the retry loop. This is defence in depth with R46.
+- Tie **every unused TXB0108 I/O pair to GND on both sides** — A1–A3 and B1–B3
+  (`U4` pins 1/3/4 and 17/18/20) — as the datasheet requires (both sides of an unused
+  pair must be held in the same state). This produces six benign ERC `pin_to_pin`
+  warnings because the GND net carries the `#FLG02` PWR_FLAG; they are accepted and
+  ERC still reports 0 errors.
 - The TXB0108 translates **push-pull only**. If any line on this bus is ever
   open-drain (I²C, for instance), use a **TXS0108**-class part instead.
 - Run the IMU SPI at or below its **~7 MHz** device limit; that ceiling makes any

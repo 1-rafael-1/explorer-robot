@@ -6544,7 +6544,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10n"
+		(property "Value" "2n2"
 			(at 238.506 121.666 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6588,7 +6588,7 @@
 				)
 			)
 		)
-		(property "MPN" "0603B103K500NT"
+		(property "MPN" "0603B222K500NT"
 			(at 237.49 119.38 0)
 			(hide yes)
 			(show_name no)
@@ -6599,7 +6599,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C57112"
+		(property "LCSC" "C1604"
 			(at 237.49 119.38 0)
 			(hide yes)
 			(show_name no)
@@ -6610,7 +6610,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/58143-0603B103K500NT/C57112"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1956-0603B222K500NT/C1604"
 			(at 237.49 119.38 0)
 			(hide yes)
 			(show_name no)
@@ -6676,7 +6676,7 @@
 				)
 			)
 		)
-		(property "JLCPCP_URL" ""
+		(property "JLCPCP_URL" "https://jlcpcb.com/partdetail/1956-0603B222K500NT/C1604"
 			(at 237.49 119.38 0)
 			(hide yes)
 			(show_name no)
@@ -7877,7 +7877,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10n"
+		(property "Value" "2n2"
 			(at 239.776 61.976 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7921,7 +7921,7 @@
 				)
 			)
 		)
-		(property "MPN" "0603B103K500NT"
+		(property "MPN" "0603B222K500NT"
 			(at 238.76 59.69 0)
 			(hide yes)
 			(show_name no)
@@ -7932,7 +7932,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C57112"
+		(property "LCSC" "C1604"
 			(at 238.76 59.69 0)
 			(hide yes)
 			(show_name no)
@@ -7943,7 +7943,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/58143-0603B103K500NT/C57112"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1956-0603B222K500NT/C1604"
 			(at 238.76 59.69 0)
 			(hide yes)
 			(show_name no)
