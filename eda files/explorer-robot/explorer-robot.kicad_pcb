@@ -31670,7 +31670,7 @@
 				)
 			)
 		)
-		(property "Description" "Inductor"
+		(property "Description" ""
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -31681,10 +31681,9 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/SunltechTech-SLO0630H150MTT/C182182"
+		(property "KiLib_Generator" "inductor/SMD"
 			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
+			(layer "F.SilkS")
 			(hide yes)
 			(uuid "8ce62bd2-da38-4da8-a290-acef8d283719")
 			(effects
@@ -31694,55 +31693,13 @@
 				)
 			)
 		)
-		(property "LCSC" "C182182"
-			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "46746213-17ee-4ceb-a336-cc270effcf05")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MFR" "Sunltech Tech"
-			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "8f261ea1-1aa9-4738-af70-8c8e9736403a")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MPN" "SLO0630H150MTT"
-			(at 0 0 0)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "bda26b02-dbb3-41d7-8f9e-676cdbd1c2e5")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
+		(component_classes
+			(class "/Power and Battery/")
 		)
 		(property ki_fp_filters "Choke_* *Coil* Inductor_* L_*")
 		(path "/9d46820b-8f72-42a9-b57d-135ca095b278/44869c9c-ba85-4c21-a3ba-95c2ae69ed40")
 		(sheetname "/Power and Battery/")
 		(sheetfile "power_and_batt.kicad_sch")
-		(units
-			(unit
-				(name "A")
-				(pins "1" "2")
-			)
-		)
 		(attr smd)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line

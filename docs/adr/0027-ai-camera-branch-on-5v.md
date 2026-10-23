@@ -39,8 +39,8 @@ module harness mapping (which module pins `J8` feeds) remains open.
   and `AICAM_PWR` on GPIO23 still drives `ON` (pin 3). No firmware change.
 - **The switch remains suitable at 5 V.** The TPS22917 is specified over
   `VIN` = 1–5.5 V; 5 V is inside that range, and the on-resistance and timing
-  figures quoted for 3.3 V in ADR-0025 no longer apply. `CT` stays open
-  (`tON` ≈ 120 µs at 3.6 V and slower at lower `VIN`; at 5 V it is no slower),
+  figures quoted for 3.3 V in ADR-0025 no longer apply. `CT` is tied to `VIN`
+  through `C30` = 1 nF (about 4 ms rise, much lower inrush than open CT),
   `QOD` remains tied to `VOUT` through `R20` = 100 Ω, and the `ON` threshold
   (`VIH` 1.0 V) is still driven directly by the 3.3 V GPIO.
 - **The UART stays 3.3 V.** The camera's UART is on the XIAO header D6/D7 and

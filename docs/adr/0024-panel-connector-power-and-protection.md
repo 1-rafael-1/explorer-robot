@@ -53,8 +53,9 @@ part selection and the load-switch rise time remain provisional pending bring-up
     `LCD_BLK`, `TOUCH_CS`, `TOUCH_PENIRQ`.
 - **Switched 5 V.** A TPS22917 high-side load switch (`U11`) sits between the
   `+5V` rail and `PANEL.BUS` pin 1. `VIN` = `+5V`, `VOUT` → connector, `CT` tied
-  to `VIN`, `QOD` returned to `VOUT` through 100 Ω, and 1 µF `CIN` and 1 µF
-  `COUT`. The enable is `PANEL_PWR` on **GPIO 0**, active-high. GPIO 0–3 close
+  to `VIN` through 1 nF (`C68`), `QOD` returned to `VOUT` through 100 Ω, and
+  1 µF `CIN` and 1 µF `COUT`. The enable is `PANEL_PWR` on **GPIO 0**,
+  active-high. GPIO 0–3 close
   the QFN-80 ring and are physically adjacent to GPIO 47, so GPIO 0 keeps the
   enable trace short even though it is outside the 41–47 display run.
 - **Series resistors.** 33 Ω in series with each of the three shared SPI lines

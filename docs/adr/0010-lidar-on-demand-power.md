@@ -54,8 +54,9 @@ the UART and power pin.
 - The LiDAR is off at boot; motor tests, IMU tests, calibration and idle never power it.
 - The load switch is a high-side TPS22917 on GPIO30. The connector's pin 2 is ground;
   only the 5 V pin is switched. The UART lines carry 100 Ω series resistors. The
-  TPS22917 uses a 1 µF `CIN`, a `CT` capacitor to `VIN` for a controlled rise, `QOD`
-  tied to `VOUT`, and a pulldown on the enable (it also has a smart pulldown).
+  TPS22917 uses a 1 µF `CIN`, a 1 nF `CT` capacitor to `VIN` (`C29`) for a
+  controlled rise, `QOD` tied to `VOUT`, and a pulldown on the enable (it also
+  has a smart pulldown).
 
 **Consequences**
 

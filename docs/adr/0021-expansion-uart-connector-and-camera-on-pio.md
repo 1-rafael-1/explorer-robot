@@ -64,7 +64,8 @@ implementation is the reference sequence.
 - Keep the camera's physical wiring on **GPIO 24 (MCU TX) / GPIO 25 (MCU RX)**
   per ADR-0022; only the peripheral behind those pins changes. The camera's 5 V
   branch is switched high-side by a TPS22917 enabled by **GPIO 23**
-  (`AICAM_PWR`), with `QOD` to `VOUT`, `CT` to `VIN`, and a pulldown on `ON`.
+  (`AICAM_PWR`), with `QOD` to `VOUT`, `CT` to `VIN` through 1 nF (`C30`),
+  and a pulldown on `ON`.
   The module's Grove input is 5 V and its UART is 3.3 V.
 - Run the camera UART at **115200 8N1**, matching the current configuration.
 
@@ -106,10 +107,11 @@ implementation is the reference sequence.
   `AMS1117-3.3`.
 - **5 V is switched by a TPS22917 high-side load switch.** `VIN` = `+5V`,
   `VOUT` → ferrite bead → `EXP_5V`; `ON` = `EXP_PWR` GPIO32 with a pulldown;
-  `CT` to `VIN`; `QOD` to `VOUT`; 1 µF `CIN` and 1 µF `COUT`. The TPS22917's
-  reverse current blocking prevents a USB-powered expansion board from
-  back-feeding the 5 V rail. It has no current limit; the expansion board is not
-  hot-pluggable, and the TPS5430/pack protection are the forward-fault backstop.
+  `CT` to `VIN` through 1 nF (`C67`); `QOD` to `VOUT`; 1 µF `CIN` and 1 µF
+  `COUT`. The TPS22917's reverse current blocking prevents a USB-powered
+  expansion board from back-feeding the 5 V rail. It has no current limit; the
+  expansion board is not hot-pluggable, and the TPS5430/pack protection are the
+  forward-fault backstop.
   Keep the 10 µF + 100 nF at the connector and the ferrite bead.
 - **Off-state back-power handling.** Before deasserting `EXP_PWR`, stop UART1,
   tri-state `EXP_TX`, hold `EXP_EN` low and leave `EXP_BOOT` low/high-Z; then

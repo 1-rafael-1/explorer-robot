@@ -4034,7 +4034,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Inductor_SMD:L_AVX_LMLP07A7"
+		(property "Footprint" "easyeda imports:IND-SMD_L7.1-W6.6_SLO0618H"
 			(at 161.29 115.57 0)
 			(hide yes)
 			(show_name no)

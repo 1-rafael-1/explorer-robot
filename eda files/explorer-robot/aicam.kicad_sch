@@ -983,7 +983,7 @@
 		)
 	)
 	(junction
-		(at 129.54 86.36)
+		(at 125.73 80.01)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "1c254dcb-d8a7-4ec0-a7de-8f9ffb9a0aeb")
@@ -1006,13 +1006,15 @@
 		(color 0 0 0 0)
 		(uuid "e48537b5-8a13-4518-b85a-1b6464064033")
 	)
-	(no_connect
-		(at 135.89 88.9)
-		(uuid "6e4dc195-7017-446e-a18e-a41156f2d8c0")
+	(junction
+		(at 129.54 80.01)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "f719c614-478d-4269-aa25-833f80a71381")
 	)
 	(wire
 		(pts
-			(xy 124.46 86.36) (xy 129.54 86.36)
+			(xy 124.46 80.01) (xy 129.54 80.01)
 		)
 		(stroke
 			(width 0)
@@ -1052,6 +1054,16 @@
 	)
 	(wire
 		(pts
+			(xy 129.54 88.9) (xy 135.89 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1818f6d3-61f0-47e1-b033-03ad93c28542")
+	)
+	(wire
+		(pts
 			(xy 177.8 90.17) (xy 177.8 91.44)
 		)
 		(stroke
@@ -1069,6 +1081,26 @@
 			(type default)
 		)
 		(uuid "54360b7d-3bbd-48bf-9825-eb693562f929")
+	)
+	(wire
+		(pts
+			(xy 129.54 80.01) (xy 129.54 81.28)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "58562c7b-72fa-431b-b793-605d7562b8e5")
+	)
+	(wire
+		(pts
+			(xy 125.73 76.2) (xy 125.73 80.01)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "59c8799e-089c-4d5d-bb9e-fcf82a55752f")
 	)
 	(wire
 		(pts
@@ -1142,23 +1174,23 @@
 	)
 	(wire
 		(pts
-			(xy 129.54 74.93) (xy 129.54 77.47)
+			(xy 125.73 67.31) (xy 125.73 68.58)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "881b2826-3fb0-4764-b4fe-c5d7b545f6a9")
+		(uuid "83363a44-3ded-4924-b54e-8a27eeb9f477")
 	)
 	(wire
 		(pts
-			(xy 129.54 85.09) (xy 129.54 86.36)
+			(xy 135.89 80.01) (xy 135.89 86.36)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "8a2daea5-f636-482b-96d4-17a1e87f139d")
+		(uuid "8c4ceed4-52e3-4a5f-872a-3f48fdc3e430")
 	)
 	(wire
 		(pts
@@ -1169,16 +1201,6 @@
 			(type default)
 		)
 		(uuid "8e91ca3b-67cc-4296-aa08-fde4df39a40b")
-	)
-	(wire
-		(pts
-			(xy 129.54 86.36) (xy 135.89 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "aae0efba-550a-449f-ab15-3850dda5d7f0")
 	)
 	(wire
 		(pts
@@ -1209,6 +1231,16 @@
 			(type default)
 		)
 		(uuid "cbd17040-782c-4838-96ea-a4daafd5c8fa")
+	)
+	(wire
+		(pts
+			(xy 129.54 80.01) (xy 135.89 80.01)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "dc4728b9-3be1-45b0-9d13-4af6eccc01e6")
 	)
 	(wire
 		(pts
@@ -1557,7 +1589,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 129.54 81.28 0)
+		(at 129.54 85.09 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -1565,31 +1597,31 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "32fe8156-a03f-436a-880d-7b6f4a6ed77c")
-		(property "Reference" "C55"
-			(at 130.556 78.994 0)
+		(uuid "1ba4bcb0-880e-4f57-995a-a98fe5dd6d6c")
+		(property "Reference" "C30"
+			(at 123.444 83.82 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
-		(property "Value" "1u"
-			(at 130.556 83.566 0)
+		(property "Value" "1n"
+			(at 123.444 86.36 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
-			(at 130.5052 85.09 0)
+			(at 128.5748 81.28 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1600,7 +1632,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 129.54 81.28 0)
+			(at 129.54 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1611,7 +1643,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 129.54 81.28 0)
+			(at 129.54 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1621,8 +1653,8 @@
 				)
 			)
 		)
-		(property "MPN" "CL10A105KB8NNNC"
-			(at 129.54 81.28 0)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1940-CL10B102KB8NNNC/C1588"
+			(at 129.54 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1632,63 +1664,8 @@
 				)
 			)
 		)
-		(property "LCSC" "C15849"
-			(at 129.54 81.28 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16531-CL10A105KB8NNNC/C15849"
-			(at 129.54 81.28 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S3.3" ""
-			(at 129.54 81.28 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.1" ""
-			(at 129.54 81.28 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_DVDD" ""
-			(at 129.54 81.28 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "KLC_S4.2_VREG_LX" ""
-			(at 129.54 81.28 0)
+		(property "LCSC" "C1588"
+			(at 129.54 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1699,7 +1676,7 @@
 			)
 		)
 		(property "MFR" "Samsung Electro-Mechanics"
-			(at 129.54 81.28 0)
+			(at 129.54 85.09 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1709,16 +1686,27 @@
 				)
 			)
 		)
-		(pin "1"
-			(uuid "78c3a04d-ef25-44b1-a76d-086730765df3")
+		(property "MPN" "CL10B102KB8NNNC"
+			(at 129.54 85.09 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
 		(pin "2"
-			(uuid "c8cd3c15-5e55-4377-b8ce-2ed3e7823299")
+			(uuid "e80f636d-9e66-4b9b-ac8c-656dc85b13f3")
+		)
+		(pin "1"
+			(uuid "60d4fa21-eda8-415b-8bba-3269885b9aac")
 		)
 		(instances
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/e28148a8-209c-4954-97f4-1069761fd156"
-					(reference "C55")
+					(reference "C30")
 					(unit 1)
 				)
 			)
@@ -2055,7 +2043,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 129.54 74.93 180)
+		(at 125.73 67.31 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2066,7 +2054,7 @@
 		(fields_autoplaced yes)
 		(uuid "84228af9-611b-4b2e-b32f-e9d068f56e18")
 		(property "Reference" "#PWR082"
-			(at 129.54 68.58 0)
+			(at 125.73 60.96 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2077,7 +2065,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 129.54 69.85 0)
+			(at 125.73 62.23 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2087,7 +2075,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 129.54 74.93 0)
+			(at 125.73 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2098,7 +2086,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 129.54 74.93 0)
+			(at 125.73 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2109,7 +2097,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 129.54 74.93 0)
+			(at 125.73 67.31 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2336,7 +2324,7 @@
 	)
 	(symbol
 		(lib_id "power:+5V")
-		(at 124.46 86.36 90)
+		(at 124.46 80.01 90)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2347,7 +2335,7 @@
 		(fields_autoplaced yes)
 		(uuid "8de78e47-8af5-4837-8335-7a890146fc1e")
 		(property "Reference" "#PWR078"
-			(at 128.27 86.36 0)
+			(at 128.27 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2358,7 +2346,7 @@
 			)
 		)
 		(property "Value" "+5V"
-			(at 120.65 86.3599 90)
+			(at 120.65 80.0099 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2369,7 +2357,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 124.46 86.36 0)
+			(at 124.46 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2380,7 +2368,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 124.46 86.36 0)
+			(at 124.46 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2391,7 +2379,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+5V\""
-			(at 124.46 86.36 0)
+			(at 124.46 80.01 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2531,6 +2519,175 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/e28148a8-209c-4954-97f4-1069761fd156"
 					(reference "R20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 125.73 72.39 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "c7395533-6a72-4db8-beda-2c5325f2a8da")
+		(property "Reference" "C55"
+			(at 126.746 70.104 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "1u"
+			(at 126.746 74.676 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+			(at 126.6952 76.2 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL10A105KB8NNNC"
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C15849"
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/16531-CL10A105KB8NNNC/C15849"
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S3.3" ""
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.1" ""
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.2_DVDD" ""
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.2_VREG_LX" ""
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "Samsung Electro-Mechanics"
+			(at 125.73 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "945d7cc8-598c-4a17-a61c-fd3bdb468c79")
+		)
+		(pin "2"
+			(uuid "462adc2a-8a42-40cf-be3e-7f113964da42")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/e28148a8-209c-4954-97f4-1069761fd156"
+					(reference "C55")
 					(unit 1)
 				)
 			)

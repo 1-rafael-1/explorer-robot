@@ -821,7 +821,7 @@
       "include_excluded_from_bom": true,
       "name": "",
       "sort_asc": true,
-      "sort_field": "Value"
+      "sort_field": "Reference"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -864,7 +864,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#FLG1-5,#PWR1-78,#PWR89-90,#PWR93-101,#PWR107-108,#PWR113-127,C1-53,C58-64,D1-5,H1-4,J1-7,L1-2,O1,Q1-2,R1-17,R45-46,SW1,TP1-30,U1-8,Y1",
+    "used_designators": "#FLG1-5,#PWR1-78,#PWR89-90,#PWR93-101,#PWR107-108,#PWR113-129,C1-53,C55-56,C58-64,C67-68,D1-5,H1-4,J1-7,L1-2,O1,Q1-2,R1-17,R45-46,SW1,TP1-30,U1-8,Y1",
     "variants": []
   },
   "sheets": [
