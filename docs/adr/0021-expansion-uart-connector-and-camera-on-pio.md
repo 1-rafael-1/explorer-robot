@@ -17,10 +17,11 @@ expansion MCU gets the hardware UART with DMA and buffering.
 **Status:** accepted. ADR-0022 revised the pin choices (camera GPIO 23/24/25,
 expansion GPIO 32–37). The expansion 5 V feed is now switched by a TPS22917
 high-side load switch enabled by `EXP_PWR` on GPIO32, and the camera branch uses
-the same switch on GPIO23. ADR-0025 moved the camera branch from 5 V to 3.3 V;
-the expansion connector remains on 5 V. The camera's PIO0 transport is
-implemented; the expansion connector is still absent from the schematic and PCB. Branch power-down
-now requires UART quiesce, TX/RX tri-state and UART deinit (ADR-0023). The LiDAR
+the same switch on GPIO23. ADR-0025 moved the camera branch to 3.3 V and ADR-0027
+moved it back to 5 V; the expansion connector is also on 5 V. The camera's PIO0
+transport is implemented; the expansion connector is still absent from the
+schematic and PCB. Branch power-down now requires UART quiesce, TX/RX tri-state
+and UART deinit (ADR-0023). The LiDAR
 implementation is the reference sequence.
 
 **Considered Options**
@@ -155,8 +156,8 @@ implementation is the reference sequence.
   a dropped frame is harmless.
 - The expansion connector is a **5 V-powered, 3.3 V-logic** interface. It is not a
   general-purpose power tap: the expansion board must accept 5 V and regulate its
-  own 3.3 V. The total 5 V load (expansion board, LiDAR, panel and the
-  `AMS1117-3.3`, which carries the camera and the rest of the 3.3 V rail) must
+  own 3.3 V. The total 5 V load (expansion board, LiDAR, panel, camera and the
+  `AMS1117-3.3`, which carries the rest of the 3.3 V rail) must
   stay within the TPS5430's rating and the peak budget in ADR-0019.
 - The connector's 5 V feed is now switched. With the switch off, QOD holds
   `EXP_5V` low. Before deasserting `EXP_PWR`, UART1 is quiesced and dropped,
@@ -165,12 +166,13 @@ implementation is the reference sequence.
   ESD diodes. The switch's reverse current blocking also prevents a USB-powered
   expansion board from back-feeding the 5 V rail. The connector is still not
   hot-pluggable.
-- The three switched 5 V branches share the TPS5430 rail; the AI camera's
-  switched 3.3 V branch loads that rail through the `AMS1117-3.3` (ADR-0025).
-  The summed peak (LiDAR unmeasured, ESP32-C6 ~250–350 mA, the camera's
-  100–150 mA inside the LDO input, plus the rest of the 3.3 V rail) can approach
-  or exceed 1 A; the 6.0 V low-line may not hold 5 V at that peak. ADR-0019 owns
-  the budget; measure before relying on all three at once.
+- The four switched 5 V branches share the TPS5430 rail: LiDAR, expansion,
+  panel and AI camera (ADR-0027); the camera is no longer behind the
+  `AMS1117-3.3`, so the 3.3 V rail no longer carries it. The summed peak (LiDAR
+  unmeasured, ESP32-C6 ~250–350 mA, the camera's 100–150 mA, plus the AMS1117
+  input for the rest of the 3.3 V rail) can approach or exceed 1 A; the 6.0 V
+  low-line may not hold 5 V at that peak. ADR-0019 owns the budget; measure
+  before relying on all four at once.
 - `CONTEXT.md` and `README.md` describe the current arrangement; ADR-0022 is the
   authoritative pin table. Keep them in sync.
 - If the camera is ever changed to stream images rather than bounding boxes, the

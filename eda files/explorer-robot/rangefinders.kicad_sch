@@ -1674,6 +1674,17 @@
 				)
 			)
 		)
+		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
+			(at 67.31 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "fef2c151-53a1-4264-af83-40182c1bf16e")
 		)
@@ -2063,6 +2074,17 @@
 			)
 		)
 		(property "MPN" "0603WAF330JT5E"
+			(at 176.53 99.06 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
 			(at 176.53 99.06 90)
 			(hide yes)
 			(show_name no)
@@ -2675,6 +2697,17 @@
 				)
 			)
 		)
+		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
+			(at 67.31 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "b74ffb20-7da3-46bd-b45d-3615bb66a952")
 		)
@@ -2952,6 +2985,17 @@
 			)
 		)
 		(property "MPN" "0603WAF330JT5E"
+			(at 176.53 101.6 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "UNI-ROYAL(Uniroyal Elec)"
 			(at 176.53 101.6 90)
 			(hide yes)
 			(show_name no)

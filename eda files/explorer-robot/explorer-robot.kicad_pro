@@ -269,7 +269,7 @@
       "version": 0
     },
     "sheet_component_classes": {
-      "enabled": false
+      "enabled": true
     }
   },
   "cvpcb": {
@@ -549,6 +549,66 @@
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "clearance": 1.0,
+        "diff_pair_gap": 0.3,
+        "diff_pair_width": 0.6,
+        "microvia_diameter": 0.1,
+        "microvia_drill": 0.2,
+        "name": "1V1_PWR",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.2,
+        "tuning_profile": "0,3 mm",
+        "via_diameter": 0.25,
+        "via_drill": 0.0
+      },
+      {
+        "clearance": 0.2,
+        "diff_pair_gap": 0.3,
+        "diff_pair_width": 0.3,
+        "microvia_diameter": 0.2,
+        "microvia_drill": 0.6,
+        "name": "1V8_PWR",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 2,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.25,
+        "tuning_profile": "0,1 mm",
+        "via_diameter": 0.0,
+        "via_drill": 0.1
+      },
+      {
+        "clearance": 0.3,
+        "diff_pair_gap": 0.3,
+        "diff_pair_width": 0.3,
+        "microvia_diameter": 0.2,
+        "microvia_drill": 0.6,
+        "name": "3V3_PWR",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 1,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.3,
+        "tuning_profile": "0,1 mm",
+        "via_diameter": 0.0,
+        "via_drill": 0.1
+      },
+      {
+        "clearance": 0.2,
+        "diff_pair_gap": 0.6,
+        "diff_pair_width": 0.2,
+        "microvia_diameter": 0.0,
+        "microvia_drill": 0.1,
+        "name": "8V_PWR",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 3,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.8,
+        "tuning_profile": "0,3 mm",
+        "via_diameter": 1.0,
+        "via_drill": 0.5
       }
     ],
     "meta": {
@@ -556,7 +616,28 @@
     },
     "net_colors": {},
     "netclass_assignments": {},
-    "netclass_patterns": []
+    "netclass_patterns": [
+      {
+        "netclass": "8V_PWR",
+        "pattern": "/TB6612FNG and encoders/*0*"
+      },
+      {
+        "netclass": "8V_PWR",
+        "pattern": "+8V"
+      },
+      {
+        "netclass": "3V3_PWR",
+        "pattern": "+3.3V"
+      },
+      {
+        "netclass": "1V8_PWR",
+        "pattern": "+1V8"
+      },
+      {
+        "netclass": "8V_PWR",
+        "pattern": "/Power and Battery/BAT"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {
@@ -740,7 +821,7 @@
       "include_excluded_from_bom": true,
       "name": "",
       "sort_asc": true,
-      "sort_field": "LCSC"
+      "sort_field": "Reference"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -783,7 +864,7 @@
         "uuid": "57778957-dc0c-4e39-b470-8f64ada5e845"
       }
     ],
-    "used_designators": "#FLG1-5,#PWR1-77,#PWR90,#PWR93-101,#PWR107-108,#PWR113-124,C1-53,C59-64,D1-5,J1-7,L1-2,O1,Q1-2,R1-17,SW1,TP1-30,U1-8,Y1",
+    "used_designators": "#FLG1-5,#PWR1-78,#PWR89-90,#PWR93-101,#PWR107-108,#PWR113-124,C1-53,C58-64,D1-5,H1-4,J1-7,L1-2,O1,Q1-2,R1-17,R45,SW1,TP1-30,U1-8,Y1",
     "variants": []
   },
   "sheets": [

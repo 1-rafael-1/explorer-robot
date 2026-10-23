@@ -19,14 +19,19 @@ and 500 mA; the Coin D6 is specified for 4.5–5.5 V, so that is inside its rang
 The 5 V power stage now uses a 15 µH/3 A inductor with 5 A saturation (`C182182`)
 and a 3 A SS34 catch diode (`C8678`); R9 stays at 3.3 kΩ for a 4.92 V setpoint.
 The rail now also feeds the expansion connector through its own TPS22917
-high-side switch (ADR-0010, ADR-0021); the AI camera branch moved from 5 V to
-`+3.3V` in ADR-0025 and now loads the 5 V rail through the `AMS1117-3.3`
-instead, with the 3.3 V rail bounded at 400 mA. The 300–500 mA figure is a
-continuous target, not a peak guarantee: the three switched 5 V branches plus
+high-side switch (ADR-0010, ADR-0021), and the AI camera is a fourth switched
+5 V branch (ADR-0027). ADR-0025 had briefly moved the camera to `+3.3V`, which
+loaded the 5 V rail through the `AMS1117-3.3`; ADR-0027 moved it back to 5 V,
+so the 3.3 V rail is relieved by the camera current (still bounded at 400 mA).
+The 300–500 mA figure is a
+continuous target, not a peak guarantee: the four switched 5 V branches plus
 the 3.3 V LDO can sum above 1 A, so the peak budget and the
 6.0 V low-line measurement remain open. The Coin D6, Grove Vision AI V2 and
 expansion-board peak currents, and the bench measurement, remain open. An
-on-board BMS is no longer planned.
+on-board BMS is no longer planned. Reverse-polarity protection is settled: Q1
+is the **AO3407A** (Alpha & Omega Semicon, JLCPCB `C15155`, SOT-23, ±20 V Vgs),
+and a firmware motor-stall timeout of 250–500 ms is a precondition for the
+retained 3 A JST-XH connector.
 
 **Considered Options**
 
@@ -51,6 +56,14 @@ on-board BMS is no longer planned.
   area, and put a second series element in the motor return. Its over-discharge
   threshold is typically ~2.4–2.5 V/cell — lower than the 3.0 V we want — so even
   if it were fitted it would be the backstop, not the policy.
+- **Reverse-polarity FET: AO3407A, not AO3401A + gate zener.** Accepted. The
+  AO3401A (`C15127`) is a Basic part, but its ±12 V Vgs leaves little margin to
+  the 14.5 V P4SMA10CA clamp on `+8V`. The AO3407A (Alpha & Omega Semicon,
+  `C15155`) is the same SOT-23 footprint and pinout, rated ±20 V Vgs, 48 mΩ at
+  −10 V and 4.3 A. The zener fallback is also an Extended part, so the cost is
+  comparable and the FET swap removes a part and a joint. The AO4407A SO-8
+  (13 mΩ) would give much more thermal margin but needs a re-layout; the
+  DMP3056L (±25 V, `C150724`) is the alternate if the AO3407A is unavailable.
 - **Integrate on-board charging now.** Deferred. A safe 2S on-board charger needs
   CC/CV, cell balancing, input negotiation and thermal care (e.g. a 2S
   charger-with-balance IC, BQ25887- or IP2326-class) — more responsibility than this
@@ -80,10 +93,10 @@ For the 5 V rail:
 - **A buck-boost (TPS63060-class).** Deferred. It would hold 5 V below 6.0 V, but
   it adds cost and complexity and is likely an Extended part. Revisit if the
   Coin D6 or the 4.9 V low-line proves unacceptable.
-- **Four TPS22917 high-side load switches: three on 5 V and one on 3.3 V.**
+- **Four TPS22917 high-side load switches, all on 5 V.**
   Accepted. The same 6-pin SOT-23-6 part, used four times: the LiDAR, expansion
-  connector and panel on switched 5 V, plus the AI camera switch on `+3.3V`
-  (ADR-0025). They give reverse current blocking, QOD, adjustable rise and
+  connector, panel and AI camera on switched 5 V (the camera per ADR-0027).
+  They give reverse current blocking, QOD, adjustable rise and
   0.5 µA quiescent current.
   They have no current limit, so forward faults rely on the TPS5430 and the pack
   protection; the expansion connector is not hot-pluggable. The switches sit on
@@ -128,6 +141,20 @@ For the 5 V rail:
   worst-case battery current drawn by the motor driver (the TB6612FNG is rated
   1.2 A/channel continuous and 3.2 A/channel peak; battery current is lower at
   partial duty).
+- **Reverse-polarity protection: Q1 = AO3407A** (Alpha & Omega Semicon, JLCPCB
+  `C15155`), SOT-23, −30 V, ±20 V Vgs, 48 mΩ max at −10 V, 4.3 A, 68 mΩ at
+  125 °C. Drain to `BAT`, source to `+8V`, gate to GND through R6 = 100 kΩ. No
+  gate zener is fitted; the ±20 V rating clears the P4SMA10CA clamp (14.5 V max
+  at 27.6 A, and ~11–12 V at realistic currents). This supersedes the AO3401A
+  (`C15127`, ±12 V Vgs).
+- **Firmware motor-stall timeout (250–500 ms) is a precondition.** The JST-XH
+  battery connector is rated 3 A/contact, and the measured worst-case battery
+  current (two motors stalled plus the 5 V branch peak) is ~3.2–3.5 A at 6.0 V.
+  That is acceptable for a short stall but not for a sustained one: Q1 is a
+  SOT-23 (≈0.82 W at 3.3 A, ≈102 °C rise at 125 °C/W), and the TB6612FNG is
+  1.2 A/channel continuous. Firmware must detect a stall and cut motor drive
+  within 250–500 ms. The connector is retained by user decision; the timeout is
+  what makes that acceptable.
 
 **5 V rail**
 
@@ -135,16 +162,16 @@ For the 5 V rail:
   from the protected `+8V` net after Q1. Do not feed it from the raw battery side
   before Q1, or the 5 V rail loses reverse-polarity protection. Output is set to
   4.92 V (R9 = 3.3 kΩ; see design values); the continuous load target is
-  300–500 mA with 1 A-class margin, but the three switched 5 V branches can peak
+  300–500 mA with 1 A-class margin, but the four switched 5 V branches can peak
   above that. Loads are the switched Coin D6 LiDAR branch (ADR-0010), the
   switched expansion connector (ADR-0021), the switched panel branch
-  (ADR-0024), the AMS1117-3.3 input (which now carries the AI camera,
-  ADR-0025), and any 5 V display/backlight/peripheral. `VREG_VIN` is no longer a
+  (ADR-0024), the switched AI camera branch (ADR-0027), the AMS1117-3.3 input,
+  and any 5 V display/backlight/peripheral. `VREG_VIN` is no longer a
   5 V load (see sequencing below).
-- **Switched branches.** Put the LiDAR, expansion connector and panel behind
-  their own TPS22917 high-side load switches on 5 V (`LIDAR_PWR` GPIO30,
-  `EXP_PWR` GPIO32, `PANEL_PWR` GPIO0), and the AI camera behind its own
-  TPS22917 on `+3.3V` (`AICAM_PWR` GPIO23, ADR-0025). Each switch is 1–5.5 V,
+- **Switched branches.** Put the LiDAR, expansion connector, panel and AI
+  camera behind their own TPS22917 high-side load switches on 5 V (`LIDAR_PWR`
+  GPIO30, `EXP_PWR` GPIO32, `PANEL_PWR` GPIO0, `AICAM_PWR` GPIO23; the camera
+  per ADR-0027). Each switch is 1–5.5 V,
   2 A, active-high, with a 1 µF `CIN`, a `CT` capacitor to `VIN`, `QOD` tied to
   `VOUT`, and a pulldown on the enable. The TPS22917's reverse current blocking
   prevents a USB-powered camera or expansion board from back-feeding its rail,
@@ -153,12 +180,13 @@ For the 5 V rail:
   use the TPS5430 `ENA` for a branch, because that would shut down the whole 5 V
   rail and the 3.3 V LDO.
 - **Peak budget.** Budget the branches at their peaks, not their averages:
-  LiDAR unmeasured, the AI camera roughly 100–150 mA while inferring (see
-  ADR-0025; the earlier 300–450 mA figure was the module's 5 V-input estimate),
+  LiDAR unmeasured, the AI camera roughly 100–150 mA while inferring on 5 V
+  (ADR-0027; the earlier 300–450 mA figure was the module's 5 V-input estimate),
   ESP32-C6-class expansion roughly 250–350 mA at 5 V (3.3 V Wi-Fi TX peak
   354 mA), the ST7789 panel's module and backlight (measure it; the backlight is
-  the dominant panel load), plus the AMS1117 input, which carries the camera and
-  the rest of the 3.3 V rail (bounded at 400 mA). The sum can approach or exceed
+  the dominant panel load), plus the AMS1117 input, which carries the rest of
+  the 3.3 V rail (bounded at 400 mA; the camera is no longer behind it). The sum
+  can approach or exceed
   1 A. The TPS5430 needs about 6.2 V input for 1 A at 5 V,
   so at the 6.0 V cutoff the rail may not hold 5 V at the summed peak. The
   15 µH/3 A inductor and the 3 A catch diode are no longer the current
@@ -167,8 +195,8 @@ For the 5 V rail:
 - **Design values.** R8 = 10 kΩ / R9 = 3.3 kΩ (1%) sets 4.92 V. Keep 3.3 kΩ:
   it is a Basic part, all 5 V loads accept 4.92 V (the LiDAR and Coin D6 are
   specified 4.5–5.5 V; the expansion board regulates its own 3.3 V, and the
-  camera is fed by the AMS1117-3.3), and it leaves slightly more low-line
-  headroom. The divider/reference worst case with 3.3 kΩ is ~4.75–5.09 V, still
+  camera's on-module buck accepts a 5 V input), and it leaves slightly more
+  low-line headroom. The divider/reference worst case with 3.3 kΩ is ~4.75–5.09 V, still
   above the 4.5 V load minimum.
   R9 = 3.24 kΩ (JLCPCB `C22994`, Extended) sets 4.99 V and is the optional
   change only if a true 5.0 V nominal or a centered 5 V ±5 % stack is needed.
@@ -200,10 +228,9 @@ For the 5 V rail:
   downstream LDOs still regulate and the Coin D6 is specified for 4.5–5.5 V, so
   ~4.9 V is inside its range with ~400 mV margin to the low end; a slightly
   lower spin speed is acceptable. The expansion board regulates its own 3.3 V
-  and must accept the reduced 5 V input; the camera is fed from `+3.3V`, so it
-  sees the sag only through the AMS1117's dropout headroom (still above the
-  ~4.4 V input floor at 500 mA). Confirm the LiDAR and expansion currents at
-  4.9 V. If bench testing shows the rail falls below 4.5 V, raise the cutoff to
+  and must accept the reduced 5 V input; the camera is now a switched 5 V branch
+  (ADR-0027) and sees the sag directly, so confirm its input minimum. Confirm the
+  LiDAR and expansion currents at 4.9 V. If bench testing shows the rail falls below 4.5 V, raise the cutoff to
   6.5 V (comfortable to ~2 A) or use a buck-boost.
 - **LDO behaviour.** The AMS1117-3.3 holds 3.3 V until its input falls below about
   4.4 V at 500 mA (the 1.1 V dropout is specified at 1 A; it is lower at 500 mA),
@@ -211,8 +238,7 @@ For the 5 V rail:
   holds 1.8 V until the 3.3 V rail falls below about 2.0 V, and the RP2350's
   internal 1.1 V regulator holds 1.1 V while `VREG_VIN` is at least 2.7 V. A
   0.1 V sag on the 5 V rail therefore does not sag the 3.3 V, 1.8 V or 1.1 V rails
-  proportionally; the LiDAR and expansion branches see the 5 V sag, and the
-  camera sees it only through the AMS1117's dropout headroom.
+  proportionally; the LiDAR, expansion and camera branches see the 5 V sag.
 - **Sequencing.** Move `VREG_VIN` from `+5V` to `+3.3V`; keep `VREG_AVDD` on
   `+3.3V` through R1 33 Ω and C1 4.7 µF. The RP2350 datasheet allows
   `VREG_VIN` from 2.7 V to 5.5 V and, when `VREG_VIN` is limited to 3.135–3.63 V,
@@ -247,7 +273,12 @@ For the 5 V rail:
   ratings; add a pre-charge/soft-start if they are marginal.
 - The pack BMS does not replace board-level reverse-polarity protection: it
   protects the cells, not the board, and its behaviour with the pack connected
-  backwards is not specified. That remains a board-level decision.
+  backwards is not specified. That remains a board-level decision. The board
+  implements it with Q1 (AO3407A, ±20 V Vgs) and D1 (P4SMA10CA).
+- The battery path's deliberate weak point is the JST-XH connector (3 A/contact)
+  against a ~3.3 A stall peak. The firmware stall timeout bounds how long that
+  peak can last; bench-check Q1 and connector temperature during a deliberately
+  sustained stall.
 - The AMS1117-3.3 holds 3.3 V until its input falls below about 4.4 V at 500 mA;
   the 4.9 V low-line of the 5 V rail is above that, so the 3.3 V rail stays in
   regulation at the 6.0 V cutoff. Below about 4.4 V, the 3.3 V rail follows the
@@ -265,13 +296,13 @@ For the 5 V rail:
   hot-pluggable.
 - The +5V rail is nominally 4.92 V, not a guaranteed 5 V rail at the 6.0 V
   cutoff: at 500 mA it may sit around 4.9 V. The 3.3 V, 1.8 V and 1.1 V rails
-  hold; the LiDAR and expansion branches see the sag, while the camera sees it
-  only through the AMS1117's headroom. The LiDAR is specified for 4.5–5.5 V, so
-  ~4.9 V is within spec; the expansion board must accept the reduced 5 V input.
+  hold; the LiDAR, expansion and camera branches see the sag. The LiDAR is
+  specified for 4.5–5.5 V, so ~4.9 V is within spec; the expansion board must
+  accept the reduced 5 V input.
   This is the deliberate tradeoff for keeping the 6.0 V cutoff and a Basic part.
 - The 5 V low-line is outside the TPS5430's guaranteed 5 V regulation; bench-test
-  at 6.0 V with 0.5 A, 1 A and 2 A loads, with the LiDAR, expansion branch and
-  the 3.3 V LDO (camera included) connected. If any branch browns out or the 5 V
+  at 6.0 V with 0.5 A, 1 A and 2 A loads, with the LiDAR, expansion branch,
+  camera and the 3.3 V LDO connected. If any branch browns out or the 5 V
   rail falls below the LiDAR's 4.5 V minimum, raise the cutoff to 6.5 V or switch
   to a buck-boost.
 - The TPS5430's 3 A rating is credible with the PowerPAD. The 15 µH/3 A
@@ -298,7 +329,9 @@ For the 5 V rail:
 - Open items: confirm the BMS over-current trip against the motor start/stall
   current and the 440 µF battery-bank inrush; confirm whether the BMS balances the
   cells and includes short-circuit protection; confirm the in-pack switch's current
-  rating against the inrush; the battery bulk is settled at 2× 220 µF polymer and
+  rating against the inrush; verify the firmware motor-stall timeout (250–500 ms
+  on both channels) and measure Q1 and JST-XH connector temperature during a
+  sustained stall; the battery bulk is settled at 2× 220 µF polymer and
   the `VM` bulk at 1× 220 µF, removing the 3× 100 µF and 2× 100 µF parts; decide
   (later) whether to add an on-board 2S charger.
 - Open items (5 V rail): measure the Coin D6, Grove Vision AI V2 and

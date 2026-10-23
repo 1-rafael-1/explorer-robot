@@ -3336,6 +3336,16 @@
 		)
 		(uuid "ffc6122e-b4b0-4997-b5c2-bee918149909")
 	)
+	(label "BAT"
+		(at 180.34 73.66 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "9ab3c36f-570e-4098-a01b-5a59c699a8ba")
+	)
 	(hierarchical_label "BATT_ADC"
 		(shape output)
 		(at 99.06 63.5 180)
@@ -7239,7 +7249,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/Alpha_OmegaSemicon-AO3401A/C15127"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/Alpha_OmegaSemicon-AO3407A/C15155"
 			(at 160.02 72.39 0)
 			(hide yes)
 			(show_name no)
@@ -7250,7 +7260,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C15127"
+		(property "LCSC" "C15155"
 			(at 160.02 72.39 0)
 			(hide yes)
 			(show_name no)
@@ -7272,7 +7282,7 @@
 				)
 			)
 		)
-		(property "MPN" "AO3401A"
+		(property "MPN" "AO3407A"
 			(at 160.02 72.39 0)
 			(hide yes)
 			(show_name no)
@@ -7450,7 +7460,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "20K"
+		(property "Value" "33K"
 			(at 105.41 69.8499 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7494,7 +7504,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/4591-0603WAF2002T5E/C4184"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/4623-0603WAF3302T5E/C4216"
 			(at 102.87 68.58 0)
 			(hide yes)
 			(show_name no)
@@ -7505,7 +7515,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C4184"
+		(property "LCSC" "C4216"
 			(at 102.87 68.58 0)
 			(hide yes)
 			(show_name no)
@@ -7527,7 +7537,7 @@
 				)
 			)
 		)
-		(property "MPN" "0603WAF2002T5E"
+		(property "MPN" "0603WAF3302T5E"
 			(at 102.87 68.58 0)
 			(hide yes)
 			(show_name no)

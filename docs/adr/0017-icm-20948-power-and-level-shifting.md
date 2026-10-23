@@ -10,8 +10,7 @@ neither 1.8 V nor a peripheral supply. So the IMU needs its own 1.8 V rail, and
 because its logic then runs at 1.8 V while the RP2350B's I/O runs at 3V3, its SPI bus
 and interrupt need level translation.
 
-**Status:** accepted. The IMU is not yet placed in the schematic; this records the
-power and interface topology before it is.
+**Status:** accepted and implemented. The IMU is placed in `icm-20948.kicad_sch`; both `VDD` (`U3.13`) and `VDDIO` (`U3.8`) are on `+1V8`, and the SPI/INT lines run through the TXB0108 at 3.3 V. Verified in the netlist 2026-10-23.
 
 **Considered Options**
 
