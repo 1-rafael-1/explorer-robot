@@ -581,7 +581,7 @@
         "priority": 0,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.2,
-        "tuning_profile": "0,3 mm",
+        "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3
       },
@@ -596,7 +596,7 @@
         "priority": 2,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.25,
-        "tuning_profile": "0,1 mm",
+        "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3
       },
@@ -611,7 +611,7 @@
         "priority": 1,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.3,
-        "tuning_profile": "0,1 mm",
+        "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3
       },
@@ -626,7 +626,7 @@
         "priority": 3,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.8,
-        "tuning_profile": "0,3 mm",
+        "tuning_profile": "",
         "via_diameter": 1.0,
         "via_drill": 0.5
       }
