@@ -76,7 +76,12 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        [
+          "lib_footprint_mismatch|173750000|59240000|12977475-0f8f-42b9-b106-85d5aed29a7c|00000000-0000-0000-0000-000000000000",
+          "side lines unnecessary"
+        ]
+      ],
       "meta": {
         "version": 2
       },
@@ -213,7 +218,10 @@
         }
       ],
       "track_widths": [
-        0.0
+        0.15,
+        0.2,
+        0.3,
+        0.5
       ],
       "tuning_pattern_settings": {
         "diff_pair_defaults": {
@@ -243,8 +251,20 @@
       },
       "via_dimensions": [
         {
-          "diameter": 0.0,
-          "drill": 0.0
+          "diameter": 0.45,
+          "drill": 0.2
+        },
+        {
+          "diameter": 0.6,
+          "drill": 0.3
+        },
+        {
+          "diameter": 0.8,
+          "drill": 0.4
+        },
+        {
+          "diameter": 1.0,
+          "drill": 0.5
         }
       ],
       "zones_allow_external_fillets": false
@@ -551,55 +571,55 @@
         "wire_width": 6
       },
       {
-        "clearance": 1.0,
+        "clearance": 0.2,
         "diff_pair_gap": 0.3,
         "diff_pair_width": 0.6,
-        "microvia_diameter": 0.1,
-        "microvia_drill": 0.2,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
         "name": "1V1_PWR",
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": 0,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.2,
         "tuning_profile": "0,3 mm",
-        "via_diameter": 0.25,
-        "via_drill": 0.0
+        "via_diameter": 0.6,
+        "via_drill": 0.3
       },
       {
         "clearance": 0.2,
         "diff_pair_gap": 0.3,
         "diff_pair_width": 0.3,
-        "microvia_diameter": 0.2,
-        "microvia_drill": 0.6,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
         "name": "1V8_PWR",
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": 2,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.25,
         "tuning_profile": "0,1 mm",
-        "via_diameter": 0.0,
-        "via_drill": 0.1
+        "via_diameter": 0.6,
+        "via_drill": 0.3
       },
       {
         "clearance": 0.3,
         "diff_pair_gap": 0.3,
         "diff_pair_width": 0.3,
-        "microvia_diameter": 0.2,
-        "microvia_drill": 0.6,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
         "name": "3V3_PWR",
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": 1,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
         "track_width": 0.3,
         "tuning_profile": "0,1 mm",
-        "via_diameter": 0.0,
-        "via_drill": 0.1
+        "via_diameter": 0.6,
+        "via_drill": 0.3
       },
       {
         "clearance": 0.2,
         "diff_pair_gap": 0.6,
         "diff_pair_width": 0.2,
-        "microvia_diameter": 0.0,
+        "microvia_diameter": 0.3,
         "microvia_drill": 0.1,
         "name": "8V_PWR",
         "pcb_color": "rgba(0, 0, 0, 0.000)",

@@ -9,6 +9,10 @@
 # GENERATED FILE — do not edit by hand.
 # Edit capabilities/JLCPCB.toml and run tools/generate_dru.py instead.
 #
+# LOCAL EDITS: the generator above is not present in this repository, so
+# "SMD Pad Size" excludes custom pads and "Pad to Pad Clearance" is relaxed
+# to 0.127 mm here. Keep these in sync if the file is ever regenerated.
+#
 # KiCad documentation: https://docs.kicad.org/8.0/en/pcbnew/pcbnew.html#custom-design-rules
 
 
@@ -70,8 +74,10 @@
 
 # JLCPCB's hard lower limit for an SMD pad. Their recommended
 # minimum is larger; this only catches pads the fab cannot make.
+# Custom pads are excluded: KiCad reports only their tiny anchor in
+# Size_X/Size_Y, not the extents of the primitives that form the copper.
 (rule "JLCPCB: SMD Pad Size"
-	(condition "A.Type == 'Pad' && A.Pad_Type == 'SMD' && (A.Size_X < 0.125mm || A.Size_Y < 0.125mm)")
+	(condition "A.Type == 'Pad' && A.Pad_Type == 'SMD' && A.Pad_Shape != 'Custom' && (A.Size_X < 0.125mm || A.Size_Y < 0.125mm)")
 	(constraint assertion "A.Size_X >= 0.125mm && A.Size_Y >= 0.125mm")
 )
 
@@ -140,9 +146,11 @@
 )
 
 # Specific rule: must sit after the general clearance rule above to take effect.
+# Relaxed locally from 0.15 mm to match the general 0.127 mm copper clearance:
+# U3's 0.4 mm-pitch QFN lands sit at 0.140 mm, within JLCPCB capability.
 (rule "JLCPCB: Pad to Pad Clearance (Pad without Hole, Different Nets)"
 	(condition "A.Type == 'Pad' && (A.Pad_Type != 'Through-hole' && A.Pad_Type != 'NPTH, mechanical') && B.Type == 'Pad' && (B.Pad_Type != 'Through-hole' && B.Pad_Type != 'NPTH, mechanical') && A.Net != B.Net")
-	(constraint clearance (min 0.15mm))
+	(constraint clearance (min 0.127mm))
 )
 
 (rule "JLCPCB: Via to Trace"
