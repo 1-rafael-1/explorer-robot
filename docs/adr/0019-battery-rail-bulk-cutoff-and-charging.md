@@ -201,10 +201,15 @@ For the 5 V rail:
   R9 = 3.24 kΩ (JLCPCB `C22994`, Extended) sets 4.99 V and is the optional
   change only if a true 5.0 V nominal or a centered 5 V ±5 % stack is needed.
   L2 = 15 µH/3 A, 5 A saturation (Sunltech SLO0630H150MTT, JLCPCB `C182182`,
-  115 mΩ max), 7.1 × 6.6 × 3.0 mm; it requires the new 7.3 × 6.6 mm footprint
-  and removes the earlier 1.4 A practical limit. D5 = SS34 (40 V, 3 A, JLCPCB
-  `C8678`) in `D_SMA` replaces the 1 A SS14. CIN = 3× 10 µF/25 V X5R 0805
-  (Samsung CL21A106KAYNNNE, JLCPCB `C15850`) close to VIN/GND, in addition to
+  115 mΩ max), 7.1 × 6.6 × 3.0 mm. The schematic uses JLC’s official EasyEDA
+  footprint for the part (`IND-SMD_L7.1-W6.6_SLO0618H`; the name is inherited
+  from the shared library package), whose two 2.49 × 3.79 mm pads sit at
+  ±2.795 mm. The Sunltech datasheet recommends 3.3 × 3.0 mm pads at ±2.1 mm
+  (7.5 mm outer span); JLC’s pattern covers the end terminals but is not the
+  datasheet geometry. This removes the earlier 1.4 A practical limit.
+  D5 = SS34 (40 V, 3 A, JLCPCB `C8678`) in `D_SMA` replaces the 1 A SS14.
+  CIN = 3× 10 µF/25 V X5R 0805 (Samsung CL21A106KAYNNNE, JLCPCB `C15850`)
+  close to VIN/GND, in addition to
   the existing `+8V` bulk; CBOOT = 0.01 µF between BOOT and PH; COUT = 220 µF/
   25 V polymer aluminum, 35 mΩ ESR, 1.95 A ripple (KNSCHA 217EC0037, JLCPCB
   `C42371908`). With 15 µH this gives a ~18 kHz crossover and a ~20.7 kHz ESR
@@ -337,10 +342,11 @@ For the 5 V rail:
 - Open items (5 V rail): measure the Coin D6, Grove Vision AI V2 and
   expansion-board peak currents at 4.9 V; bench-test the TPS5430 low-line at
   6.0 V/500 mA, 1 A and 2 A with the three branches and the 3.3 V LDO; verify
-  the 15 µH loop with a load step over temperature; confirm the L2 land pattern
-  against the Sunltech SLO0630H150MTT datasheet (the schematic currently uses
-  the Bourns SRP7028A 7.3 × 6.6 mm footprint), the 3×0805 input-cap bank
-  footprint and placement, the selected output capacitor's footprint and
+  the 15 µH loop with a load step over temperature; decide whether to accept
+  JLC’s L2 land pattern or resize it to the Sunltech datasheet geometry
+  (3.3 × 3.0 mm pads at ±2.1 mm) and sync the PCB instance (still
+  `Inductor_SMD:L_AVX_LMLP07A7`); check the 3×0805 input-cap bank footprint
+  and placement, the selected output capacitor's footprint and
   polarity, and the PowerPAD layout. The 300–500 mA continuous target is not a
   peak guarantee; if the summed peak cannot hold 5 V at the 6.0 V cutoff, raise
   the cutoff to 6.5 V or use a buck-boost.
