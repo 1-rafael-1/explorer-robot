@@ -6812,7 +6812,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL10A106KP8NNNC"
+		(property "MPN" "CL10A106MA8NRNC"
 			(at 26.67 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -6823,7 +6823,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C19702"
+		(property "LCSC" "C96446"
 			(at 26.67 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -6834,7 +6834,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/20411-CL10A106KP8NNNC/C19702"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/97651-CL10A106MA8NRNC/C96446"
 			(at 26.67 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -8023,7 +8023,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 139.3952 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -8056,7 +8056,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 138.43 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8067,7 +8067,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 138.43 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8078,7 +8078,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 138.43 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8133,7 +8133,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 138.43 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8593,7 +8593,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 124.1552 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -8626,7 +8626,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 123.19 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8637,7 +8637,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 123.19 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8648,7 +8648,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 123.19 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -8703,7 +8703,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 123.19 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -9088,7 +9088,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 177.4952 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -9121,7 +9121,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 176.53 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -9132,7 +9132,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 176.53 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -9143,7 +9143,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 176.53 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -9198,7 +9198,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 176.53 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -9425,7 +9425,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 265.1252 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -9458,7 +9458,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL10C150JB8NNNC"
+		(property "MPN" "0402CG150J500NT"
 			(at 264.16 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -9469,7 +9469,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C1644"
+		(property "LCSC" "C1548"
 			(at 264.16 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -9480,7 +9480,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1996-CL10C150JB8NNNC/C1644"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1900-0402CG150J500NT/C1548"
 			(at 264.16 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -9535,7 +9535,7 @@
 				)
 			)
 		)
-		(property "MFR" "Samsung Electro-Mechanics"
+		(property "MFR" "FH (Guangdong Fenghua Advanced Tech)"
 			(at 264.16 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -10023,7 +10023,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 254.9652 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -10056,7 +10056,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL10C150JB8NNNC"
+		(property "MPN" "0402CG150J500NT"
 			(at 254 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -10067,7 +10067,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C1644"
+		(property "LCSC" "C1548"
 			(at 254 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -10078,7 +10078,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1996-CL10C150JB8NNNC/C1644"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1900-0402CG150J500NT/C1548"
 			(at 254 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -10133,7 +10133,7 @@
 				)
 			)
 		)
-		(property "MFR" "Samsung Electro-Mechanics"
+		(property "MFR" "FH (Guangdong Fenghua Advanced Tech)"
 			(at 254 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -11376,7 +11376,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 105.1052 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -11409,7 +11409,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 104.14 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -11420,7 +11420,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 104.14 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -11431,7 +11431,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 104.14 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -11486,7 +11486,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 104.14 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12027,7 +12027,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 89.8652 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -12060,7 +12060,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 88.9 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12071,7 +12071,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 88.9 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12082,7 +12082,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 88.9 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12137,7 +12137,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 88.9 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12385,7 +12385,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 131.7752 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -12418,7 +12418,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 130.81 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12429,7 +12429,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 130.81 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12440,7 +12440,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 130.81 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -12495,7 +12495,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 130.81 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -13730,7 +13730,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 97.4852 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -13763,7 +13763,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 96.52 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -13774,7 +13774,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 96.52 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -13785,7 +13785,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 96.52 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -13840,7 +13840,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 96.52 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14225,7 +14225,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 147.0152 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -14258,7 +14258,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 146.05 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14269,7 +14269,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 146.05 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14280,7 +14280,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 146.05 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14335,7 +14335,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 146.05 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14484,7 +14484,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 116.5352 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -14517,7 +14517,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 115.57 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14528,7 +14528,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 115.57 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14539,7 +14539,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 115.57 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14594,7 +14594,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 115.57 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14821,7 +14821,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 162.2552 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -14854,7 +14854,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 161.29 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14865,7 +14865,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 161.29 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14876,7 +14876,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 161.29 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -14931,7 +14931,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 161.29 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15001,7 +15001,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 169.8752 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -15034,7 +15034,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 168.91 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15045,7 +15045,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 168.91 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15056,7 +15056,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 168.91 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15111,7 +15111,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 168.91 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15181,7 +15181,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 154.6352 39.37 0)
 			(hide yes)
 			(show_name no)
@@ -15214,7 +15214,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0603KRX7R9BB104"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 153.67 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15225,7 +15225,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C14663"
+		(property "LCSC" "C1525"
 			(at 153.67 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15236,7 +15236,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/1877-CL05B104KO5NNNC/C1525"
 			(at 153.67 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15291,7 +15291,7 @@
 				)
 			)
 		)
-		(property "MFR" "YAGEO"
+		(property "MFR" "Samsung Electro-Mechanics"
 			(at 153.67 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -15362,7 +15362,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
 			(at 262.382 29.21 90)
 			(hide yes)
 			(show_name no)
@@ -15395,7 +15395,7 @@
 				)
 			)
 		)
-		(property "MPN" "0603WAF1001T5E"
+		(property "MPN" "0402WGF1001TCE"
 			(at 264.16 29.21 0)
 			(hide yes)
 			(show_name no)
@@ -15406,7 +15406,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C21190"
+		(property "LCSC" "C11702"
 			(at 264.16 29.21 0)
 			(hide yes)
 			(show_name no)
@@ -15417,7 +15417,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/21904-0603WAF1001T5E/C21190"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/12256-0402WGF1001TCE/C11702"
 			(at 264.16 29.21 0)
 			(hide yes)
 			(show_name no)
@@ -16869,7 +16869,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL10A106KP8NNNC"
+		(property "MPN" "CL10A106MA8NRNC"
 			(at 34.29 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -16880,7 +16880,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C19702"
+		(property "LCSC" "C96446"
 			(at 34.29 27.94 0)
 			(hide yes)
 			(show_name no)
@@ -16891,7 +16891,7 @@
 				)
 			)
 		)
-		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/20411-CL10A106KP8NNNC/C19702"
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/97651-CL10A106MA8NRNC/C96446"
 			(at 34.29 27.94 0)
 			(hide yes)
 			(show_name no)
