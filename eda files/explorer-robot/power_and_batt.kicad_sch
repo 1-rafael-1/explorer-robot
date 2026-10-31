@@ -2573,10 +2573,22 @@
 		(uuid "abf2c4da-e822-4761-a465-b2c626643770")
 	)
 	(junction
+		(at 92.71 63.5)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b4f3bfe7-60a3-46d4-be12-dcae252b115c")
+	)
+	(junction
 		(at 106.68 115.57)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "c786e6fc-2f1e-446d-95fe-b8f2efd0795d")
+	)
+	(junction
+		(at 92.71 50.8)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c81ff76d-3ba1-4bdd-bbad-3fbd49cb1c6a")
 	)
 	(junction
 		(at 102.87 74.93)
@@ -2728,7 +2740,7 @@
 	)
 	(wire
 		(pts
-			(xy 99.06 63.5) (xy 102.87 63.5)
+			(xy 88.9 63.5) (xy 92.71 63.5)
 		)
 		(stroke
 			(width 0)
@@ -2778,6 +2790,16 @@
 	)
 	(wire
 		(pts
+			(xy 92.71 60.96) (xy 92.71 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "43398fc5-263c-42a1-8cab-17fa1bdcaf5c")
+	)
+	(wire
+		(pts
 			(xy 86.36 130.81) (xy 86.36 139.7)
 		)
 		(stroke
@@ -2808,6 +2830,26 @@
 	)
 	(wire
 		(pts
+			(xy 92.71 50.8) (xy 92.71 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4a9ae871-9760-4491-8e07-49330a6ae3b2")
+	)
+	(wire
+		(pts
+			(xy 92.71 50.8) (xy 102.87 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4dde4a29-9b9b-4364-990e-2d16256ba30b")
+	)
+	(wire
+		(pts
 			(xy 172.72 50.8) (xy 172.72 57.15)
 		)
 		(stroke
@@ -2828,7 +2870,7 @@
 	)
 	(wire
 		(pts
-			(xy 90.17 50.8) (xy 102.87 50.8)
+			(xy 90.17 50.8) (xy 92.71 50.8)
 		)
 		(stroke
 			(width 0)
@@ -2975,6 +3017,16 @@
 			(type default)
 		)
 		(uuid "8770fafa-54c6-41c5-bff3-f851b2852d92")
+	)
+	(wire
+		(pts
+			(xy 92.71 63.5) (xy 102.87 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8a6497e3-528c-4f2d-95f0-62907a710379")
 	)
 	(wire
 		(pts
@@ -3348,7 +3400,7 @@
 	)
 	(hierarchical_label "BATT_ADC"
 		(shape output)
-		(at 99.06 63.5 180)
+		(at 88.9 63.5 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -4531,6 +4583,186 @@
 			(project "explorer-robot"
 				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/9d46820b-8f72-42a9-b57d-135ca095b278"
 					(reference "D4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 92.71 57.15 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "51657317-de40-4c13-b65f-4e28fd7f29f1")
+		(property "Reference" "C69"
+			(at 93.726 54.864 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100n"
+			(at 93.726 59.436 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+			(at 93.6752 60.96 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0603KRX7R9BB104"
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC" "C14663"
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCB_URL" "https://jlcpcb.com/partdetail/YAGEO-CC0603KRX7R9BB104/C14663"
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S3.3" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.1" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.2_DVDD" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "KLC_S4.2_VREG_LX" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MFR" "YAGEO"
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "JLCPCP_URL" ""
+			(at 92.71 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e67bbec4-ee79-4a8b-a304-706717316bc1")
+		)
+		(pin "2"
+			(uuid "52a482bf-ae76-4d7b-ba3e-27c52d914272")
+		)
+		(instances
+			(project "explorer-robot"
+				(path "/57778957-dc0c-4e39-b470-8f64ada5e845/9d46820b-8f72-42a9-b57d-135ca095b278"
+					(reference "C69")
 					(unit 1)
 				)
 			)
