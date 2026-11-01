@@ -1,7 +1,7 @@
 # The LiDAR task owns its power lifecycle; a mode enables and disables the sensor
 
-The COIN-D6 is powered on demand (ADR-0010), and its driver is owned for the whole runtime
-by a single core1 task. Access to *that* task's service was leased and ref-counted, so that
+The COIN-D6 is powered on demand (ADR-0010), and its driver is owned by a single core1
+task. Access to *that* task's service was leased and ref-counted, so that
 two modes could hold the powered sensor at once. But only one mode ever needs perception at
 a time — the panel is modal, and the test-mode and autonomous-mode slots each admit one mode
 — so the reference count only ever papered over a teardown race, while forcing every consumer
@@ -26,7 +26,9 @@ and to reason about an acquisition generation. This replaces the lease with a on
 
 - A mode enables the sensor when it needs perception and disables it when it is done. The
   commands are one-way on a dedicated `Channel`, as motor and flash commands are; the task
-  owns power, warm-up, retries, streaming and power-off, and keeps the driver for the runtime.
+  owns power, warm-up, retries, streaming and power-off. The task keeps the branch's retained
+  resources for the runtime and rebuilds the driver, and its UART, for each powered period
+  (ADR-0023).
 - Readiness is observed through the lock-free `status()` — `Off`, `Warming`, `Streaming`,
   `Failed`. The task does not signal; callers poll.
 - Bring-up is edge-triggered: a failed attempt holds at `Failed` until a `Disable` clears it,

@@ -37,8 +37,9 @@ scans either one revolution at a time or aggregated over several revolutions.
 | GND | GND |
 | +5 V | 5 V rail |
 
-> These are the standalone example's pins. The robot integration uses different
-> pins (LiDAR RX on GPIO1, MOSFET on GPIO26); see the repository `CONTEXT.md`.
+> These are the standalone example's pins. The robot integration uses GPIO28
+> (MCU TX), GPIO29 (MCU RX), and a TPS22917 high-side load-switch enable on
+> GPIO30; see the repository `CONTEXT.md`.
 
 ## Tests
 

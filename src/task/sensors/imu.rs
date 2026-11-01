@@ -478,27 +478,21 @@ async fn update_statics_from_dmp(
     }
 }
 
-/// Power-up, detect, and fully initialise the ICM-20948, retrying on failure.
+/// Power-up, reset, verify, and fully initialise the ICM-20948, retrying on failure.
 ///
 /// Uses `SpiInterface` + `SpiDevice` on the dedicated SPI bus. The SPI
-/// interface owns the bus by value. Chip initialisation (`init`) retries on
-/// transient failures.
+/// interface owns the bus by value. The device is reset *before* its identity is
+/// verified: the RP2350 resets its GPIOs pulled low, so the IMU can power up
+/// with CS asserted, which the ICM-20948 does not support as a power-up state.
+/// Resetting first puts it in a known state, and the retry loop covers a
+/// marginal first transaction.
 async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<'static> {
     info!("Waiting {}ms for IMU power-up...", IMU_BOOT_DELAY_MS);
     Timer::after(Duration::from_millis(IMU_BOOT_DELAY_MS)).await;
 
     let spi_device = SpiDev::new(spi_bus, cs);
     let interface = SpiInterface::new(spi_device);
-
-    let mut imu = match Icm20948Driver::try_new(interface).await {
-        Ok(imu) => imu,
-        Err(e) => {
-            warn!("ICM-20948 SPI detection failed: {:?} — task halted", e);
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }
-    };
+    let mut imu = Icm20948Driver::new(interface);
 
     let mut delay = Delay;
     let mut attempt: u32 = 0;
@@ -511,11 +505,14 @@ async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<
         );
 
         match imu.init(&mut delay).await {
-            Ok(()) => {
-                info!("ICM-20948 initialized successfully via SPI");
-                Timer::after(Duration::from_millis(100)).await;
-                return imu;
-            }
+            Ok(()) => match imu.verify_who_am_i().await {
+                Ok(()) => {
+                    info!("ICM-20948 initialized successfully via SPI");
+                    Timer::after(Duration::from_millis(100)).await;
+                    return imu;
+                }
+                Err(e) => warn!("ICM-20948 identity check failed (attempt {}): {:?}", attempt, e),
+            },
             Err(e) => warn!("ICM-20948 init failed (attempt {}): {:?}", attempt, e),
         }
 

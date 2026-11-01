@@ -1,0 +1,103 @@
+# ICM-20948 on a dedicated 1.8 V rail, with its SPI bus level-shifted
+
+The ICM-20948's fields are not symmetric with the rest of the board. Its **VDD**
+accepts 1.71–3.6 V, but its **VDDIO is 1.71–1.95 V** — 1.8 V only, *not* 3.3 V. The
+InvenSense datasheet calls this out in its abstract: "Note: ICM-20948 VDDIO range is
+1.71 V to 1.95 V, different than the MPU-9250 9-axis device." The board's only rail
+today is 3V3 (from the `AMS1117-3.3` in `eda files/explorer-robot/rp2354b.kicad_sch`),
+and the MCU's internal regulator is the digital core rail (DVDD = `+1V1`), which is
+neither 1.8 V nor a peripheral supply. So the IMU needs its own 1.8 V rail, and
+because its logic then runs at 1.8 V while the RP2350B's I/O runs at 3V3, its SPI bus
+and interrupt need level translation.
+
+**Status:** accepted and implemented. The IMU is placed in `icm-20948.kicad_sch`; both `VDD` (`U3.13`) and `VDDIO` (`U3.8`) are on `+1V8`, and the SPI/INT lines run through the TXB0108 at 3.3 V. Verified in the netlist 2026-10-23. `R46` (2.2 kΩ) pulls the MCU-side CS up to 3.3 V, and firmware resets the IMU before verifying its identity; both were added 2026-10-23.
+
+**Considered Options**
+
+- **Power both VDD and VDDIO from the existing 3V3 rail, no shifters.** Rejected:
+  3.3 V is out of spec for VDDIO (max 1.95 V). This is the tempting shortcut and the
+  trap this ADR exists to prevent.
+- **VDD from 3V3, VDDIO from 1.8 V.** Allowed (both pins stay in range), but carries
+  two rails to the part for no benefit over a single 1.8 V feed.
+- **Run the RP2350's IOVDD at 1.8 V and skip the shifters.** Rejected: the RP2350 has
+  a single IOVDD domain, so this drags the whole 3.3 V I/O population (the ST7789
+  panel and the rest) down to 1.8 V or onto its own translation. Worse than shifting
+  only the IMU.
+- **Use an IMU with a 3.3 V-tolerant VDDIO (e.g. MPU-9250-class).** Rejected for now:
+  `icm20948-rs` (with the DMP) is already integrated into the firmware. Noted as an
+  option for a future revision if the 1.8 V rail and shifter ever become a burden.
+- **Rely on the ICM's software reset with no CS pull-up.** Rejected as the *only*
+  mitigation: the RP2350 resets Bank 0 GPIOs pulled low, so the TXB drives CS low while
+  the IMU powers up, which the ICM-20948 does not support. Firmware now resets before
+  verifying identity as well, but the pull-up removes the dependency on the device
+  accepting that first command in an undefined state.
+
+**Decision**
+
+- Add a small 1.8 V LDO off 3V3 and feed it to **both** ICM-20948 `VDD` and `VDDIO`.
+  This matches the datasheet's typical operating circuit (VDD = VDDIO = 1.8 V) and
+  satisfies VDDIO ≤ VDD.
+- Keep **3V3 at 3.3 V** for the RP2350B IOVDD and the other peripherals; do not lower
+  IOVDD to 1.8 V.
+- Level-shift the IMU's digital lines — **SCLK, MOSI, MISO, CS and INT** — with a
+  **TXB0108** (8-bit auto-direction, push-pull). Wiring: **VCCA = 1.8 V** (A port, IMU
+  side), **VCCB = 3.3 V** (B port, MCU side), so VCCA ≤ VCCB holds.
+- Bring the level-shifted **INT** (ICM-20948 `INT1`, a push-pull output) out to
+  **GPIO 22** on the RP2350B — the pin directly above the SPI0 chip-select (GPIO 21), so
+  the `ICM-20948_INT` net routes with the rest of the IMU harness. Firmware does not
+  sample it yet (the DMP FIFO is polled on a timer); the line is reserved for event-driven
+  `data-ready` reads.
+- **OE (output enable) is active-high and must end up HIGH.** Low places all outputs
+  in high-impedance and the bus goes dead. The datasheet's "tie OE to GND through a
+  pulldown resistor" is only the power-up/power-down default (hold outputs Hi-Z until
+  VCCA and VCCB are ramped and stable) — it is **not** the operating state. Enable it
+  after both rails are up, by pulling OE **up to VCCA** through a resistor (~100 kΩ),
+  or by driving it from an MCU GPIO released after boot. Never tie OE low
+  permanently.
+- Note that OE is referenced to VCCA, which here is the 1.8 V rail, so "high" is ~1.8 V.
+  If an MCU GPIO drives OE, confirm the TXB0108 recommended-operating/absolute-max
+  table allows that level against VCCA = 1.8 V; the safe default is to keep OE at VCCA.
+- The "external pull resistors > 50 kΩ" rule applies to the **I/O lines**, not to OE
+  (the TXB's internal ~4 kΩ series resistor degrades VOH/VOL under any external pull;
+  `VOH = VCCx · RPD / (RPD + 4.5 kΩ)`). In normal push-pull operation no line pull-ups
+  are needed. **CS is the exception:** the RP2350 resets its Bank 0 GPIOs pulled low
+  (datasheet §9.3), so the TXB's B5 input is low at power-up and the IMU would see CS
+  asserted. `R46` = **2.2 kΩ from `ICM-20948_CS` (B5) to `+3.3V`** holds B5 at ~2.6 V
+  against the RP2350's 36–113 kΩ reset pull-down, above the TXB's
+  `VIH = 0.65 × 3.3 V ≈ 2.15 V`. This is below the >50 kΩ guideline because B5 is the
+  **input** side of the unidirectional CS line; the resistor does not contend with the
+  TXB's output driver. The A-side pull-up proposed in the review could not override the
+  TXB's weak low driver (its own VOL equation gives ~0.08 V at 100 kΩ).
+- Firmware resets the IMU before verifying its identity: `init_imu_sensor` constructs
+  with `Icm20948Driver::new`, calls `init()` (soft reset), then `verify_who_am_i()`,
+  both inside the retry loop. This is defence in depth with R46.
+- Tie **every unused TXB0108 I/O pair to GND on both sides** — A1–A3 and B1–B3
+  (`U4` pins 1/3/4 and 17/18/20) — as the datasheet requires (both sides of an unused
+  pair must be held in the same state). This produces six benign ERC `pin_to_pin`
+  warnings because the GND net carries the `#FLG02` PWR_FLAG; they are accepted and
+  ERC still reports 0 errors.
+- The TXB0108 translates **push-pull only**. If any line on this bus is ever
+  open-drain (I²C, for instance), use a **TXS0108**-class part instead.
+- Run the IMU SPI at or below its **~7 MHz** device limit; that ceiling makes any
+  standard translator fast enough.
+
+**Consequences**
+
+- The power tree gains a second regulated level: 3V3 (AMS1117) → 1.8 V LDO → IMU. The
+  1.8 V rail is IMU-only for now.
+- The BOM grows by the 1.8 V LDO, the TXB0108 and its decoupling (bypass caps at both
+  VCCA and VCCB pins, close to the pins).
+- The SPI bus now crosses a translation seam: keep those traces short (the TXB's
+  one-shot is ~10 ns, so long traces reflect) and keep them out of the noisy motor
+  routing.
+- The IMU is a **1.8 V logic domain**, not a 3.3 V one. Do not hang it on, or power it
+  from, the RP2350 core rail (`+1V1`), and do not assume "the ICM-20948 is 3.3 V like
+  the MPU-9250" — the 1.95 V VDDIO max is the recurring mistake this board must avoid.
+- Enabling OE is a real step, not a tie-off. A design review should treat a
+  ground-referenced OE (or an OE left floating) as a bug that silently dead-buses the
+  IMU.
+- The CS line carries a 2.2 kΩ pull-up to 3V3 on the MCU side. It draws ~1.5 mA only
+  while CS is asserted, and it keeps the IMU deselected through MCU reset. Firmware
+  must not assume the IMU is addressable before `init()` completes.
+- If the IMU is ever re-homed or the board re-spun, revisit the shifter in favour of a
+  3.3 V-VDDIO IMU, which would remove both the 1.8 V rail and the translation seam.

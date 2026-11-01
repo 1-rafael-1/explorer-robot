@@ -6,7 +6,8 @@ convenience: the panel can render a control for every action, and the encoder's 
 are wanted elsewhere, but it leaves the robot with no input that works when the UI task is
 hung or the panel is dead.
 
-**Status:** accepted
+**Status:** accepted. The pin reservation is revised in place: GPIO 22 is reassigned to
+the ICM-20948 INT line (ADR-0017), so the rangefinder reserve moves to GPIO 23, 24 and 25.
 
 **Considered Options**
 
@@ -32,7 +33,9 @@ hung or the panel is dead.
 - Because the hold gesture was the only way out of some running procedures, tests that had
   no stop API (`turns`, `straight_drive`, `arc_drive`) gain stop signals.
 - GPIO 22, 23 and 24 return to the spare pool, reserved for the future rangefinder
-  round-robin.
+  round-robin. **Revised:** GPIO 22 is now the ICM-20948 INT line (ADR-0017), so the
+  rangefinder reserve is **GPIO 23, 24 and 25** — the contiguous run just above the IMU
+  SPI0 block (SCK/MOSI/MISO/CS = 18/19/20/21).
 
 **Consequences**
 

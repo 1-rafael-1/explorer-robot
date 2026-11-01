@@ -50,7 +50,7 @@ boundary — only a strong default.
   estimate.
 - The occupancy depends on the rotor settling near 400 points before streaming: a revolution
   carrying fewer than 360 points could leave even 1.0° slots empty. The warm-up phase
-  (ADR-0010, ADR-0017) is what holds this.
+  (ADR-0010, ADR-0028) is what holds this.
 - The cloud is ~11% coarser than the sensor (1.0° vs 0.9°) and collapses ~40 of 400 samples per
   revolution. That resolution cost is accepted in exchange for a `No Return` that is usually
   measured rather than a sampling artefact.

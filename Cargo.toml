@@ -92,6 +92,7 @@ nalgebra = { version = "0.34", default-features = false, features = ["libm"] }
 embedded-hal-async = "1.0.0"
 sequential-storage = "7.1.0"
 embedded-storage-async = "0.4.1"
+assign-resources = "0.5.0"
 
 # [patch.crates-io]
 # embassy-rp = { git = "https://github.com/embassy-rs/embassy" }

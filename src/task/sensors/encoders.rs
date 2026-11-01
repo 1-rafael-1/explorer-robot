@@ -44,7 +44,7 @@
 //! - **Gear Ratio**: 120:1 (960 pulses per output shaft revolution)
 //! - **Reading Method**: PWM input mode counting rising edges
 //! - **Counter Size**: 16-bit (0-65535, wraps around)
-//! - **Pins**: Left encoder GPIO 7, Right encoder GPIO 8
+//! - **Pins**: Left encoder GPIO 9, Right encoder GPIO 11
 //!
 //! # Sampling Rate Guidelines
 //!
@@ -149,8 +149,8 @@ impl EncoderChannels {
 /// Supports start/stop and manual reset.
 ///
 /// # Parameters
-/// - `encoder_left`: PWM channel configured as encoder input for left motor (GPIO 7)
-/// - `encoder_right`: PWM channel configured as encoder input for right motor (GPIO 8)
+/// - `encoder_left`: PWM channel configured as encoder input for left motor (GPIO 9)
+/// - `encoder_right`: PWM channel configured as encoder input for right motor (GPIO 11)
 #[embassy_executor::task]
 pub async fn encoder_read(encoder_left: Pwm<'static>, encoder_right: Pwm<'static>) {
     info!("Encoder read task started");

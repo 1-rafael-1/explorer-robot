@@ -1,0 +1,97 @@
+{
+    "components": [
+        {
+            "componentId": "C9864",
+            "files": {
+                "step": "ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.step",
+                "wrl": "ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.wrl"
+            },
+            "footprint": "ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP",
+            "model": {
+                "name": "ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP",
+                "rotationDeg": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "stepOffsetMm": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "translationMm": {
+                    "x": 101.275007,
+                    "y": 76.52512,
+                    "z": 0
+                },
+                "uuid": "f5377fc2ccbb41ff8aa998b5ab8a4f05"
+            },
+            "modelStem": "ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP",
+            "status": "success",
+            "symbol": "TPS5430DDAR"
+        },
+        {
+            "componentId": "C20625731",
+            "files": {
+                "step": "CRYSTAL-SMD_4P-L3.2-W2.5-BL.step",
+                "wrl": "CRYSTAL-SMD_4P-L3.2-W2.5-BL.wrl"
+            },
+            "footprint": "CRYSTAL-SMD_4P-L3.2-W2.5-BL",
+            "model": {
+                "name": "CRYSTAL-SMD_4P-L3.2-W2.5-BL",
+                "rotationDeg": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "stepOffsetMm": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "translationMm": {
+                    "x": 1016,
+                    "y": 762.000127,
+                    "z": 0
+                },
+                "uuid": "02485e56ba8d4732a26526d2983fc729"
+            },
+            "modelStem": "CRYSTAL-SMD_4P-L3.2-W2.5-BL",
+            "status": "success",
+            "symbol": "ABM8-272-T3_C20625731"
+        },
+        {
+            "componentId": "C726001",
+            "diagnostic": "Failed to convert OBJ to WRL",
+            "files": {
+            },
+            "footprint": "QFN-24_L3.0-W3.0-P0.40-BL-EP",
+            "model": {
+                "name": "QFN-24_L3.0-W3.0-H0.9-P0.40-BL-EP",
+                "rotationDeg": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 90
+                },
+                "stepOffsetMm": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "translationMm": {
+                    "x": 1016,
+                    "y": 762.1905,
+                    "z": 0
+                },
+                "uuid": "ee2e77f6ae6443fd8761dd68811b5307"
+            },
+            "modelStem": "QFN-24_L3.0-W3.0-H0.9-P0.40-BL-EP",
+            "status": "failed",
+            "symbol": "ICM-20948"
+        }
+    ],
+    "format": "EasyKiConverter.3d-model-manifest",
+    "library": "easyeda_convertlib",
+    "targetFormat": 0,
+    "version": 1
+}
