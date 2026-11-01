@@ -6,7 +6,7 @@ wear item; keeping it running through motor tests, calibration and idle trades i
 for nothing. The cost is a warm-up wait at every mode entry and a power lifecycle to get
 right.
 
-**Status:** accepted. Revised in place: the LiDAR's 5 V branch is switched by a TPS22917 high-side load switch, and the UART is quiesced and tri-stated before power-off (ADR-0023). The leased ownership model originally recorded here is superseded by ADR-0017: the LiDAR task owns its power lifecycle, and a mode enables and disables the sensor rather than holding a lease. The bullets below state the enable/disable model.
+**Status:** accepted. Revised in place: the LiDAR's 5 V branch is switched by a TPS22917 high-side load switch, and the UART is quiesced and tri-stated before power-off (ADR-0023). The leased ownership model originally recorded here is superseded by ADR-0028: the LiDAR task owns its power lifecycle, and a mode enables and disables the sensor rather than holding a lease. The bullets below state the enable/disable model.
 
 **Considered Options**
 
@@ -28,7 +28,7 @@ right.
 
 - A persistent core1 task owns the driver for the whole runtime and exposes
   `enable()` / `disable()` / `status()`. A mode enables the sensor when it needs perception and
-  disables it when it is done; the task owns power, warm-up, retries and streaming (ADR-0017).
+  disables it when it is done; the task owns power, warm-up, retries and streaming (ADR-0028).
   At most one mode needs perception at a time, so the enabled sensor serves every reader.
 - `enable()` asserts the `LIDAR_PWR` enable, waits for the TPS22917 rise time, then
   constructs the `BufferedUart` from the retained `Peri` handles and runs
@@ -62,7 +62,7 @@ right.
   obligation to clear it in the same step.
 - `disable()` is one-way and not owner-scoped, so a leave delivered after another mode has
   enabled the sensor powers it down under that mode; the window is small and accepted rather
-  than guarded (ADR-0017).
+  than guarded (ADR-0028).
 - The TPS22917 load switch stays wired even though it is now load-bearing rather than
   optional. It keeps the LiDAR ground solid, blocks reverse current from the module, and
   uses its QOD to hold the switched 5 V rail low when off. It has no current limit; the

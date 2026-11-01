@@ -1,7 +1,7 @@
 # The LiDAR task owns its power lifecycle; a mode enables and disables the sensor
 
-The COIN-D6 is powered on demand (ADR-0010), and its driver is owned for the whole runtime
-by a single core1 task. Access to *that* task's service was leased and ref-counted, so that
+The COIN-D6 is powered on demand (ADR-0010), and its driver is owned by a single core1
+task. Access to *that* task's service was leased and ref-counted, so that
 two modes could hold the powered sensor at once. But only one mode ever needs perception at
 a time — the panel is modal, and the test-mode and autonomous-mode slots each admit one mode
 — so the reference count only ever papered over a teardown race, while forcing every consumer

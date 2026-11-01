@@ -16,7 +16,7 @@
 //! encoder commands are: the task owns the branch power, the vendor start
 //! command, the warm-up, the retries, streaming and the power-off, and rebuilds
 //! the driver for each powered period. At most one mode needs perception at a
-//! time (ADR-0017) — the panel is modal, and each mode slot admits one mode — so
+//! time (ADR-0028) — the panel is modal, and each mode slot admits one mode — so
 //! the enabled sensor serves every reader.
 //!
 //! Readiness is observed by polling the lock-free [`status`] — `Off`, `Warming`,
@@ -621,7 +621,7 @@ async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<boo
     // Reduce onto the cloud's own slot grid rather than the driver's native 0.9°
     // default: the 1.0° width is deliberately wider than the sensor's sample
     // spacing, so a slot is normally sampled and a `None` slot usually means a
-    // measured no-return rather than an unsampled hole (ADR-0018).
+    // measured no-return rather than an unsampled hole (ADR-0029).
     let config = AggregationConfig {
         resolution_deg: SLOT_WIDTH_DEG,
         ..AggregationConfig::default()

@@ -98,7 +98,7 @@ Per branch:
   deassert `EXP_PWR`. Power-up: assert `EXP_PWR`, wait for the `CT` rise, then
   release `EXP_EN` and bring up UART1.
 
-The task-side ownership API is `enable()` / `disable()` (ADR-0017). `disable`
+The task-side ownership API is `enable()` / `disable()` (ADR-0028). `disable`
 names the command to power the branch down; `CoinD6::release()` keeps its
 standard driver meaning of handing the UART and power pin back. The task, not
 the driver, owns the branch sequencing because only the task knows how to
