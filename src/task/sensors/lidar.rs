@@ -7,30 +7,40 @@
 //! asserts the enable, waits for the switch rise and constructs the buffered
 //! UART; [`LidarSession::power_down`] quiesces it, drops it, releases TX and RX
 //! to high-Z, clears `UARTCR.EN`/`TXE`/`RXE`, and only then deasserts
-//! `LIDAR_PWR` (ADR-0023). The task is driven by a command channel.
+//! `LIDAR_PWR` (ADR-0023). The task is driven by a one-way command channel.
+//!
+//! # The model
+//!
+//! A mode calls [`enable`] when it needs perception and [`disable`] when it is
+//! done. The commands are one-way on a dedicated [`Channel`], as motor, flash and
+//! encoder commands are: the task owns the branch power, the vendor start
+//! command, the warm-up, the retries, streaming and the power-off, and rebuilds
+//! the driver for each powered period. At most one mode needs perception at a
+//! time (ADR-0017) — the panel is modal, and each mode slot admits one mode — so
+//! the enabled sensor serves every reader.
+//!
+//! Readiness is observed by polling the lock-free [`status`] — `Off`, `Warming`,
+//! `Streaming` or `Failed`; the task never signals. Bring-up is edge-triggered: a
+//! duplicate [`enable`] is inert, and a failed attempt holds at `Failed` until a
+//! [`disable`], so a caller cannot spin retries by polling. [`enable`] releases a
+//! latched failure itself — sending the `Disable` and waiting for the task to
+//! publish the reset as `Off` — so a caller that re-enters a mode after a failure
+//! recovers rather than wedging on an ignored `Enable`. [`disable`] stops the
+//! device, powers the branch down and clears the stale cloud, obstacle flag and
+//! cleared edge (ADR-0015) in the same step.
 //!
 //! # Lifecycle
 //!
-//! The sensor is off at boot and no UART exists. [`acquire`] powers the branch
-//! on, probes the device-info frame, sends the vendor start command (a failure
-//! is logged and tolerated, because the device may already be streaming), and
-//! waits for the rotor to settle. The driver's only watchdogs count bytes, so
-//! the warm-up wait is bounded by a wall clock here: on timeout the task powers
-//! the branch down and retries a bounded number of times before reporting
-//! [`AcquireError::Failed`]. Every path that deasserts `LIDAR_PWR` — acquire
-//! failure, retry, streaming restart, terminal failure and the last lease return
-//! — goes through [`LidarSession::power_down`], so no path can switch the branch
-//! off with a live UART.
-//!
-//! Ownership is leased and ref-counted. A successful [`acquire`] yields a
-//! move-only [`Lease`] and a second acquire of a streaming sensor is a
-//! ref-count increment; an acquisition that races an in-flight bring-up is
-//! refused with [`AcquireError::Busy`], and the task — not the caller — decides
-//! that refusal. [`return_lease`] consumes the lease, so a mode can only hand
-//! back a lease it actually holds: the sensor stops, drops its power, and clears
-//! the stale state — cloud, obstacle flag and cleared edge — in the same step,
-//! but only when the last lease is returned. Powering the device is what the
-//! on-robot check watches: the gate goes high only while a lease is held.
+//! The sensor is off at boot and no UART exists. [`enable`] powers the branch on,
+//! probes the device-info frame, sends the vendor start command (a failure is
+//! logged and tolerated, because the device may already be streaming), and waits
+//! for the rotor to settle. The driver's only watchdogs count bytes, so the
+//! warm-up wait is bounded by a wall clock here: on timeout the task powers the
+//! branch down and retries a bounded number of times before reporting
+//! [`LidarStatus::Failed`]. Every path that deasserts `LIDAR_PWR` — bring-up
+//! failure, retry, streaming restart, terminal failure and disable — goes through
+//! [`LidarSession::power_down`], so no path can switch the branch off with a live
+//! UART.
 //!
 //! # Streaming
 //!
@@ -41,12 +51,12 @@
 //! Sector test drives the lock-free obstacle flag, and a change raises
 //! [`Events::ObstacleDetected`]. The driver's own watchdogs count bytes, not
 //! time, so a powered sensor that goes silent would otherwise stall the read
-//! forever; expiring the bound powers the branch down and re-acquires it, exactly
+//! forever; expiring the bound powers the branch down and re-brings it up, exactly
 //! as a read error does. A persistently dead sensor therefore still ends in
-//! [`LidarStatus::Failed`] and a queued lease return is still honoured, rather
-//! than silent spin.
+//! [`LidarStatus::Failed`] and a queued disable is still honoured, rather than
+//! silent spin.
 
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use coin_d6::{AggregationConfig, CoinD6, Config, Scan, WarmupConfig, aggregate};
 use defmt::{Debug2Format, info, warn};
@@ -78,41 +88,9 @@ pub enum LidarStatus {
     Warming,
     /// Warmed up and publishing scans into perception.
     Streaming,
-    /// A lifecycle attempt exhausted its retries; the sensor is powered down.
+    /// A bring-up or restart failed; the sensor is powered down and holds at
+    /// `Failed` until a disable then enable.
     Failed,
-}
-
-/// Why an [`acquire`] request could not be honoured.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
-pub enum AcquireError {
-    /// An acquisition is already in flight and not yet streaming. The task
-    /// refuses the request without starting a second lifecycle.
-    Busy,
-    /// The lifecycle exhausted its retries; the sensor stays powered down.
-    Failed,
-}
-
-// ── Lease ──────────────────────────────────────────────────────────────────────
-
-/// A move-only token proving the holder acquired the `LiDAR`.
-///
-/// The token is neither [`Clone`] nor [`Copy`], and its only field is private, so
-/// the one way to obtain one is a successful [`acquire`]. [`return_lease`]
-/// consumes it, so a mode can only hand back a lease it actually holds —
-/// returning a sensor another mode owns is not expressible. The obligation on the
-/// holder is that every acquired lease is eventually handed back; a lease
-/// dropped without returning leaks its ref count and keeps the sensor powered.
-#[must_use = "the sensor is powered down only when the lease is handed back to return_lease"]
-pub struct Lease {
-    /// Private marker; keeps the constructor confined to this module.
-    _private: (),
-}
-
-impl Lease {
-    /// Seal the token shipped back in an [`acquire`] reply.
-    const fn new() -> Self {
-        Self { _private: () }
-    }
 }
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
@@ -141,8 +119,8 @@ const WARMUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// executor-agnostic and has no wall clock, so only the call site can supply a
 /// real bound. A healthy revolution takes ~90 ms at nominal rotor speed, so two
 /// seconds gives roughly a 20× margin while still keeping a queued
-/// [`LidarCommand::ReturnLease`] reachable. Expiry is handled exactly like a read
-/// error: the branch is powered down and re-acquired.
+/// [`LidarCommand::Disable`] reachable. Expiry is handled exactly like a read
+/// error: the branch is powered down and re-brought up.
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// Bounded best-effort stop command during power-down.
 const STOP_TIMEOUT: Duration = Duration::from_millis(100);
@@ -157,8 +135,10 @@ const POWER_CYCLE_OFF: Duration = Duration::from_millis(200);
 /// TPS22917 switch rise time after asserting `LIDAR_PWR`. Provisional, pending
 /// the board's `CT` value (ADR-0023).
 const BRANCH_RISE: Duration = Duration::from_millis(50);
-/// Bounded number of power-cycle attempts per acquire.
-const ACQUIRE_ATTEMPTS: u8 = 3;
+/// Bounded number of power-cycle attempts per enable.
+const BRINGUP_ATTEMPTS: u8 = 3;
+/// Poll interval while [`enable`] waits for a latched failure to reset (ms).
+const FAILURE_RESET_POLL_MS: u64 = 50;
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -337,95 +317,57 @@ const STATUS_FAILED: u8 = 3;
 /// Current lifecycle state, read lock-free from any context.
 static LIDAR_STATUS: AtomicU8 = AtomicU8::new(STATUS_OFF);
 
-/// Generation of the acquisition lifecycle, used to tag [`LidarCommand::Acquire`].
-///
-/// An [`acquire`] caller reads the generation before it enqueues its request and
-/// the task compares that tag with the value in force as it serves the request.
-/// The task bumps it when a bring-up begins and again when streaming is reached,
-/// so a tag that no longer matches can only have been read before a transition —
-/// a request made while an acquisition was already in flight. That is the
-/// authority behind [`AcquireError::Busy`]; the caller-side `Warming` test is
-/// only a fast path.
-static ACQUIRE_GENERATION: AtomicU32 = AtomicU32::new(0);
-
-// ── Command channel & replies ─────────────────────────────────────────────────
+// ── Command channel ───────────────────────────────────────────────────────────
 
 /// Commands accepted by the `LiDAR` task.
 #[derive(Debug, Clone, Copy)]
 enum LidarCommand {
-    /// Run the power-on/warm-up lifecycle, if the tag is still current.
-    Acquire {
-        /// The [`ACQUIRE_GENERATION`] value the caller read before sending.
-        generation: u32,
-    },
-    /// Return the lease: stop, power off, and clear stale state when it was the
-    /// last one outstanding.
-    ReturnLease,
+    /// Power the sensor on and stream, if it is not already enabled.
+    Enable,
+    /// Stop, power off, and clear stale state.
+    Disable,
 }
 
 /// Command channel to the `LiDAR` task (capacity 4).
 static COMMAND: Channel<CriticalSectionRawMutex, LidarCommand, 4> = Channel::new();
-
-/// One reply per [`LidarCommand::Acquire`]; a channel rather than a signal so
-/// concurrent callers each receive one reply without losing a wake-up. A
-/// successful reply carries the [`Lease`] the caller then owns.
-static ACQUIRE_REPLY: Channel<CriticalSectionRawMutex, Result<Lease, AcquireError>, 4> = Channel::new();
-
-/// One acknowledgement per [`LidarCommand::ReturnLease`].
-static RETURN_LEASE_REPLY: Channel<CriticalSectionRawMutex, (), 4> = Channel::new();
 
 /// Caller-allocated ingest chunk for the driver (at least 1 KiB).
 static INGEST: StaticCell<[u8; INGEST_LEN]> = StaticCell::new();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Power on the sensor and wait until it is warmed and streaming.
+/// Ask the task to enable the sensor, without waiting for it to stream.
 ///
-/// On success returns the move-only [`Lease`] the caller must hand back to
-/// [`return_lease`]. Sends the start command (tolerating a write failure, since
-/// the device may already be streaming) and waits for the rotor to settle behind
-/// a wall-clock bound. On timeout the task powers the branch down and retries a
-/// bounded number of times, then reports [`AcquireError::Failed`] and leaves the
-/// status `Failed`.
+/// One-way: this raises this mode's need and returns once the request is queued,
+/// plus at most the short failure reset below. The task owns the bring-up, the
+/// warm-up, the retries and streaming, so readiness is observed by polling
+/// [`status`]. A duplicate is inert — no second bring-up and no extra power — so a
+/// caller cannot spin retries by polling.
 ///
-/// An acquisition already in flight is refused with [`AcquireError::Busy`],
-/// without starting a second lifecycle. The [`status`] test below is only a fast
-/// path that avoids waiting out a multi-second warm-up; the authority is the
-/// task, which refuses any request whose [`ACQUIRE_GENERATION`] tag a bring-up or
-/// the streaming transition has made stale. Acquiring an already-streaming
-/// sensor is a ref-count increment and yields another lease.
-///
-/// # Errors
-///
-/// [`AcquireError::Busy`] if an acquisition is already in flight and not yet
-/// streaming, [`AcquireError::Failed`] if the lifecycle exhausted its retries.
-pub async fn acquire() -> Result<Lease, AcquireError> {
-    // Read the generation *before* the status fast path: the tag must describe
-    // the phase the caller is about to act on, so a caller racing a bring-up
-    // cannot pick up the generation that bring-up leaves behind at streaming.
-    let generation = ACQUIRE_GENERATION.load(Ordering::Relaxed);
-    // Fast path only — the task re-checks the tag and is the authority.
-    if status() == LidarStatus::Warming {
-        return Err(AcquireError::Busy);
+/// A previous run can leave the sensor latched [`LidarStatus::Failed`], and the
+/// task ignores an `Enable` while it is held, so an enable sent on its own would
+/// be swallowed. This therefore releases the latch first — a `Disable`, then a
+/// wait for the task to publish the reset as [`LidarStatus::Off`] — so the enable
+/// below always starts a fresh bring-up, whether the sensor is off, streaming or
+/// failed, and a caller that re-enters a mode after a failure recovers.
+pub async fn enable() {
+    if status() == LidarStatus::Failed {
+        COMMAND.send(LidarCommand::Disable).await;
+        while status() == LidarStatus::Failed {
+            Timer::after(Duration::from_millis(FAILURE_RESET_POLL_MS)).await;
+        }
     }
-    COMMAND.send(LidarCommand::Acquire { generation }).await;
-    ACQUIRE_REPLY.receive().await
+    COMMAND.send(LidarCommand::Enable).await;
 }
 
-/// Stop the device, drop its power, and clear all stale state.
+/// Ask the task to disable the sensor, without waiting for a reply.
 ///
-/// Consumes the lease the caller holds, so only an owner can return one.
-/// Returns once the task has completed it, so a caller can rely on the cloud
-/// being absent and the obstacle flag cleared. The sensor is torn down only when
-/// this was the last outstanding lease; while another mode still holds one, the
-/// device keeps streaming. The stop command is best-effort; the power gate and
-/// the state clear always run on the last return.
-pub async fn return_lease(lease: Lease) {
-    // Destructure the token so it is provably consumed: only an owner of a lease
-    // can hand one back, and the task alone decides whether it was the last.
-    let Lease { _private: () } = lease;
-    COMMAND.send(LidarCommand::ReturnLease).await;
-    RETURN_LEASE_REPLY.receive().await;
+/// One-way: clears this mode's need, and the task stops the device, powers the
+/// branch down and clears the stale cloud, obstacle flag and cleared edge in the
+/// same step. Disabling when not enabled is inert. The outcome is observed by
+/// polling [`status`].
+pub async fn disable() {
+    COMMAND.send(LidarCommand::Disable).await;
 }
 
 /// Current lifecycle state. Lock-free (an `AtomicU8`), safe from any context.
@@ -441,11 +383,23 @@ pub fn status() -> LidarStatus {
 
 // ── Embassy task ──────────────────────────────────────────────────────────────
 
+/// Why a powered period ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamEnd {
+    /// A disable asked the task to power the sensor down.
+    Disabled,
+    /// A streaming read ended badly; the branch is off and the task should
+    /// power-cycle and bring the device back up.
+    Restart,
+    /// The device failed and could not be brought up again.
+    Failed,
+}
+
 /// `LiDAR` driver embassy task.
 ///
-/// Idles (sensor off) until an acquire command arrives, runs the lifecycle, then
-/// streams revolutions until the last lease is returned or the device dies. Runs
-/// on **core1** so `UART0_IRQ` is enabled on core1's NVIC.
+/// Idles (sensor off) until an enable asks for the sensor, runs the bring-up, then
+/// streams revolutions until a disable powers it down or the device dies. Runs on
+/// **core1** so `UART0_IRQ` is enabled on core1's NVIC.
 #[embassy_executor::task]
 #[allow(clippy::large_futures)]
 pub async fn lidar_task(mut session: LidarSession) {
@@ -457,30 +411,15 @@ pub async fn lidar_task(mut session: LidarSession) {
     info!("[lidar] task started on core1 (sensor off)");
 
     loop {
-        // Off (or failed): block until a command arrives.
+        // Off (or failed): block until an enable asks for the sensor. A disable
+        // when the sensor is already off is inert.
         match COMMAND.receive().await {
-            LidarCommand::Acquire { generation } => {
-                // Admission is decided here, not by the caller's fast path. A tag
-                // that is not the generation in force was read before a past
-                // transition, so that caller raced an acquisition already in
-                // flight; refuse it without starting another lifecycle.
-                if generation != ACQUIRE_GENERATION.load(Ordering::Relaxed) {
-                    ACQUIRE_REPLY.send(Err(AcquireError::Busy)).await;
-                    continue;
-                }
-            }
-            LidarCommand::ReturnLease => {
-                // Already off — nothing to stop or clear.
-                RETURN_LEASE_REPLY.send(()).await;
-                continue;
-            }
+            LidarCommand::Enable => {}
+            LidarCommand::Disable => continue,
         }
 
-        info!("[lidar] acquire requested");
-        // The initial bring-up sends its own `Ok` reply. If it fails, the task
-        // answers the waiting acquirer here; a later restart failure has no
-        // waiting acquirer and is surfaced through the status cell only.
-        if !serve_acquire(
+        info!("[lidar] enable requested");
+        match serve_enabled(
             &mut session,
             &mut ingest[..],
             &mut scratch,
@@ -489,23 +428,34 @@ pub async fn lidar_task(mut session: LidarSession) {
         )
         .await
         {
-            ACQUIRE_REPLY.send(Err(AcquireError::Failed)).await;
-            warn!("[lidar] acquire failed");
+            StreamEnd::Disabled => continue,
+            StreamEnd::Failed => {}
+            StreamEnd::Restart => {
+                // `serve_enabled` never returns this: it restarts internally.
+                continue;
+            }
+        }
+
+        // The device failed, either bringing up or while streaming, and the
+        // branch is already powered down. Hold at `Failed` until a disable clears
+        // the latch: a duplicate enable cannot spin retries while it is held. The
+        // clear is published as `Off`, so a caller resetting a latched failure can
+        // observe the reset land before it enables, rather than racing its enable
+        // against the stale `Failed`.
+        warn!("[lidar] device failed permanently");
+        loop {
+            match COMMAND.receive().await {
+                LidarCommand::Disable => {
+                    set_status(LidarStatus::Off);
+                    break;
+                }
+                LidarCommand::Enable => {}
+            }
         }
     }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-
-/// How a streaming run ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamOutcome {
-    /// The last lease was returned; the driver is powered down and status `Off`.
-    LastLeaseReturned,
-    /// The device stopped responding; the driver is powered down and the caller
-    /// should re-acquire it.
-    Restart,
-}
 
 /// Store a new lifecycle state in the lock-free status cell.
 fn set_status(status: LidarStatus) {
@@ -518,48 +468,25 @@ fn set_status(status: LidarStatus) {
     LIDAR_STATUS.store(encoded, Ordering::Relaxed);
 }
 
-/// Begin a new acquisition generation.
+/// Serve one enabled period: bring the branch up with bounded retries, stream,
+/// and power-cycle to recover from streaming failures.
 ///
-/// Called as a bring-up starts and again as streaming is reached, so every tag a
-/// caller read before that point stops matching the value in force and its
-/// request is refused as [`AcquireError::Busy`].
-fn advance_generation() {
-    ACQUIRE_GENERATION.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Serve one acquire request through streaming until the last lease is returned
-/// or the branch fails permanently.
-///
-/// Brings the branch up with bounded retries. Power assertion and UART
-/// construction happen outside the attempt timeout; each failed attempt goes
-/// through [`LidarSession::power_down`], and the next
-/// [`LidarSession::power_up`] enforces the minimum off interval. On the first
-/// success this sends the `Ok` lease reply and seeds the obstacle edge tracker;
-/// on a later success after a streaming failure it keeps the outstanding leases
-/// and just resumes.
-///
-/// Returns `true` once the initial bring-up succeeded and its reply was sent.
-/// Returns `false` only when the initial bring-up exhausted its retries; the
-/// caller then answers the waiting acquirer with [`AcquireError::Failed`]. The
-/// status is left `Failed` and stale state is cleared in both failure cases.
+/// Power assertion and UART construction happen outside the attempt timeout; each
+/// failed attempt goes through [`LidarSession::power_down`], and the next
+/// [`LidarSession::power_up`] enforces the minimum off interval. A device that
+/// cannot be brought up leaves the status `Failed`, the branch off and stale
+/// state cleared.
 #[allow(clippy::large_futures)]
-async fn serve_acquire(
+async fn serve_enabled(
     session: &mut LidarSession,
     ingest: &mut [u8],
     scratch: &mut Scan,
     sequence: &mut u64,
     last_obstacle: &mut Option<bool>,
-) -> bool {
+) -> StreamEnd {
     let mut started = false;
-    // Leases outstanding for the streaming run; preserved across a restart so a
-    // mode that leased the sensor before the drop still owns it afterwards.
-    let mut leases: u32 = 1;
 
     loop {
-        // A bring-up beginning starts a new generation: every tag read before
-        // this point describes an earlier phase and must not be served as a
-        // lease.
-        advance_generation();
         set_status(LidarStatus::Warming);
 
         let mut attempt: u8 = 1;
@@ -567,14 +494,14 @@ async fn serve_acquire(
             let Some(mut candidate) = session.power_up(&mut *ingest).await else {
                 break None;
             };
-            match with_timeout(WARMUP_TIMEOUT, attempt_acquire(&mut candidate, scratch)).await {
+            match with_timeout(WARMUP_TIMEOUT, attempt_bring_up(&mut candidate, scratch)).await {
                 Ok(true) => break Some(candidate),
-                Ok(false) => warn!("[lidar] acquire attempt {} failed", attempt),
-                Err(_) => warn!("[lidar] acquire attempt {} timed out", attempt),
+                Ok(false) => warn!("[lidar] bring-up attempt {} failed", attempt),
+                Err(_) => warn!("[lidar] bring-up attempt {} timed out", attempt),
             }
             // Power the branch down so the retry starts from a known off-state.
             session.power_down(candidate).await;
-            if attempt >= ACQUIRE_ATTEMPTS {
+            if attempt >= BRINGUP_ATTEMPTS {
                 break None;
             }
             attempt += 1;
@@ -583,42 +510,31 @@ async fn serve_acquire(
         let Some(driver) = driver else {
             set_status(LidarStatus::Failed);
             clear_stale_state(last_obstacle).await;
-            if started {
-                warn!("[lidar] device failed permanently");
-            }
-            return started;
+            return StreamEnd::Failed;
         };
 
-        // Streaming is a new generation: tags read during bring-up are now
-        // stale and must not be served as leases while this run streams.
-        advance_generation();
         set_status(LidarStatus::Streaming);
         if started {
             info!("[lidar] device restarted");
         } else {
             started = true;
             info!("[lidar] streaming");
-            ACQUIRE_REPLY.send(Ok(Lease::new())).await;
-            // Seed the edge tracker with the current flag so the first scan only
-            // raises an event on a real change.
-            *last_obstacle = Some(perception::is_obstacle_detected());
         }
+        // Seed the edge tracker with the current flag so the first scan only
+        // raises an event on a real change.
+        *last_obstacle = Some(perception::is_obstacle_detected());
 
-        match stream_scans(session, driver, scratch, sequence, last_obstacle, &mut leases).await {
-            StreamOutcome::LastLeaseReturned => {
-                info!("[lidar] streaming stopped");
-                return true;
-            }
-            StreamOutcome::Restart => {
-                info!("[lidar] restarting device");
-            }
+        match stream_scans(session, driver, scratch, sequence, last_obstacle).await {
+            StreamEnd::Disabled => return StreamEnd::Disabled,
+            StreamEnd::Restart => info!("[lidar] restarting device"),
+            StreamEnd::Failed => unreachable!("stream_scans reports restart, not failure"),
         }
     }
 }
 
-/// One acquire attempt: probe the device-info frame, send start (tolerated), and
+/// One bring-up attempt: probe the device-info frame, send start (tolerated), and
 /// warm up.
-async fn attempt_acquire(driver: &mut LidarDriver<'_>, scratch: &mut Scan) -> bool {
+async fn attempt_bring_up(driver: &mut LidarDriver<'_>, scratch: &mut Scan) -> bool {
     if let Err(error) = driver.probe().await {
         warn!("[lidar] device-info probe failed: {:?}", Debug2Format(&error));
         return false;
@@ -640,53 +556,34 @@ async fn attempt_acquire(driver: &mut LidarDriver<'_>, scratch: &mut Scan) -> bo
     }
 }
 
-/// Stream revolutions until the last lease is returned or the device dies.
+/// Stream revolutions until a disable powers the sensor down or the device dies.
 ///
-/// Commands are polled between revolutions. An acquire tagged with the current
-/// generation is a ref-count increment and yields another [`Lease`]; a stale tag
-/// is refused as [`AcquireError::Busy`] rather than served as a lease. A lease
-/// return decrements the count and tears the device down only as it reaches zero,
-/// so a mode handing back its lease cannot stop a sensor another mode still
-/// holds.
+/// Commands are polled between revolutions. A duplicate enable is inert — the
+/// sensor is already up. A disable stops the device, powers the branch down,
+/// clears its stale cloud and obstacle flag, and returns [`StreamEnd::Disabled`].
 ///
 /// Each revolution is read behind [`STREAM_READ_TIMEOUT`], so the read cannot
 /// block indefinitely on a silent link: a driver read error and a wall-clock
-/// expiry both power the branch down and return [`StreamOutcome::Restart`], and
-/// both keep honouring a lease return queued meanwhile. The driver is consumed
-/// on every return path, and its ingest borrow is released with it.
+/// expiry both power the branch down and return [`StreamEnd::Restart`], leaving
+/// the caller to bring the device back up.
 async fn stream_scans(
     session: &mut LidarSession,
     mut driver: LidarDriver<'_>,
     scratch: &mut Scan,
     sequence: &mut u64,
     last_obstacle: &mut Option<bool>,
-    leases: &mut u32,
-) -> StreamOutcome {
+) -> StreamEnd {
     loop {
         while let Ok(command) = COMMAND.try_receive() {
             match command {
-                LidarCommand::Acquire { generation } => {
-                    if generation == ACQUIRE_GENERATION.load(Ordering::Relaxed) {
-                        *leases = leases.saturating_add(1);
-                        ACQUIRE_REPLY.send(Ok(Lease::new())).await;
-                    } else {
-                        // Read before a transition: this caller raced the
-                        // bring-up that started this run, or the streaming
-                        // transition itself, so refuse it instead of serving a
-                        // second lease and powering nothing extra on.
-                        ACQUIRE_REPLY.send(Err(AcquireError::Busy)).await;
-                    }
+                LidarCommand::Enable => {
+                    // Already enabled and streaming; a duplicate is inert.
                 }
-                LidarCommand::ReturnLease => {
-                    *leases = leases.saturating_sub(1);
-                    if *leases == 0 {
-                        session.power_down(driver).await;
-                        clear_stale_state(last_obstacle).await;
-                        set_status(LidarStatus::Off);
-                        RETURN_LEASE_REPLY.send(()).await;
-                        return StreamOutcome::LastLeaseReturned;
-                    }
-                    RETURN_LEASE_REPLY.send(()).await;
+                LidarCommand::Disable => {
+                    session.power_down(driver).await;
+                    clear_stale_state(last_obstacle).await;
+                    set_status(LidarStatus::Off);
+                    return StreamEnd::Disabled;
                 }
             }
         }
@@ -705,7 +602,7 @@ async fn stream_scans(
                     Debug2Format(&error)
                 );
                 session.power_down(driver).await;
-                return StreamOutcome::Restart;
+                return StreamEnd::Restart;
             }
             Err(_) => {
                 // The driver's byte watchdog only counts bytes that arrive, so
@@ -713,7 +610,7 @@ async fn stream_scans(
                 // arrived within the wall-clock bound; restart like any error.
                 warn!("[lidar] scan read timed out (sensor silent), restarting device");
                 session.power_down(driver).await;
-                return StreamOutcome::Restart;
+                return StreamEnd::Restart;
             }
         }
     }
@@ -721,6 +618,10 @@ async fn stream_scans(
 
 /// Map one revolution into a cloud, publish it, and drive the obstacle edge.
 async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<bool>) {
+    // Reduce onto the cloud's own slot grid rather than the driver's native 0.9°
+    // default: the 1.0° width is deliberately wider than the sensor's sample
+    // spacing, so a slot is normally sampled and a `None` slot usually means a
+    // measured no-return rather than an unsampled hole (ADR-0018).
     let config = AggregationConfig {
         resolution_deg: SLOT_WIDTH_DEG,
         ..AggregationConfig::default()
@@ -746,9 +647,9 @@ async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<boo
 
 /// Clear the stale cloud and obstacle flag, raising the cleared edge if needed.
 ///
-/// Lease return and terminal failure both funnel through here so a powered-down
-/// sensor never leaves an obstacle flag or an old cloud behind. The cleared edge
-/// is raised only when the flag had actually been set.
+/// Disable and terminal-failure both funnel through here so a powered-down sensor
+/// never leaves an obstacle flag or an old cloud behind. The cleared edge is
+/// raised only when the flag had actually been set.
 async fn clear_stale_state(last_obstacle: &mut Option<bool>) {
     if perception::clear_lidar_state().await == ChangeDetected::ChangedToCleared {
         raise_event(Events::ObstacleDetected {

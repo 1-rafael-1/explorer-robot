@@ -87,8 +87,8 @@ Per branch:
   driver borrows the ingest buffer only for the powered period, which avoids a
   self-referential struct. `power_up(&mut ingest)` returns the driver;
   `power_down(driver)` consumes it and runs the sequence above. Every path that
-  deasserts power — acquire failure, retry, streaming restart, terminal failure,
-  last lease return — goes through `power_down`.
+  deasserts power — enable failure, retry, streaming restart, terminal failure,
+  disable — goes through `power_down`.
 - **AI camera.** Stop the PIO UART, deinit/drop the PIO state machines and
   transport, reconfigure GPIO 24/25 as inputs, then deassert `AICAM_PWR`.
   Power-up: assert `AICAM_PWR`, wait for the switch rise and the camera boot, then
@@ -98,8 +98,8 @@ Per branch:
   deassert `EXP_PWR`. Power-up: assert `EXP_PWR`, wait for the `CT` rise, then
   release `EXP_EN` and bring up UART1.
 
-The task-side ownership API is `acquire() -> Lease` and `return_lease(lease)`.
-`return_lease` names the ownership transfer; `CoinD6::release()` keeps its
+The task-side ownership API is `enable()` / `disable()` (ADR-0017). `disable`
+names the command to power the branch down; `CoinD6::release()` keeps its
 standard driver meaning of handing the UART and power pin back. The task, not
 the driver, owns the branch sequencing because only the task knows how to
 tri-state the pads and clear `UARTCR.EN`.
@@ -136,7 +136,7 @@ the 3.3 V logic.
 - A branch that is powered down must not have its UART TX driven high, and must
   not have a low driven into a load that is independently powered.
 - `CoinD6::release()` remains a pure handback. The task-side operation is
-  `return_lease(lease)`; the two names no longer collide in prose.
+  `disable()`; the two names no longer collide in prose.
 - The power-down path is bounded: `STOP_TIMEOUT` (100 ms) bounds the stop,
   `BUSY_TIMEOUT` (10 ms) bounds the shifter drain, and `POWER_CYCLE_OFF` (200 ms)
   is the provisional minimum off interval between power-ups.
