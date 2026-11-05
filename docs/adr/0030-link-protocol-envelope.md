@@ -15,7 +15,13 @@ task scheduling are separate decisions.
 settled. The payload catalogue is settled in ADR-0031, and the baud, frame timeout and ring
 sizes in ADR-0033. The baseline stream rates remain open, and the reliability model is
 provisional until the protocol crate's host tests exercise it. Command authority is settled in
-ADR-0034: the lease is liveness, not authority.
+ADR-0034: the lease is liveness, not authority. ADR-0035 adds a 2 s peer-silence **Deadman** on
+the same `last_peer_frame`: the 5 s lease stays liveness and also disarms it, and the daemon
+`PING`s at 1 Hz while a Session is open. ADR-0036 adds `BRIDGE_CONTROL` (`0x0004`) and makes it
+the third acknowledged control frame after `HELLO`/`PING`; the Bridge now consumes one control
+message (`THROTTLE` out, `BRIDGE_CONTROL` in) instead of being envelope-only. ADR-0037 puts the
+pairing-token gate and the single-client enforcement at the Bridge, before any frame is forwarded;
+the robot still holds only link state.
 
 **Considered Options**
 

@@ -153,7 +153,7 @@ flags u8, motor_cal u8, imu_cal u8, mag_cal u8, distance_cal u8
 ```
 
 *Control ids.* `0x0001 HELLO`, `0x0002 PING` (the reply is `IS_ACK` on the same id), `0x0003
-THROTTLE`; `0x0004+` reserved.
+THROTTLE`, `0x0004 BRIDGE_CONTROL` (robot → Bridge, acked; ADR-0036); `0x0005+` reserved.
 
 *The drift rule.*
 

@@ -16,6 +16,11 @@ embassy should be testable on the host (ADR-0030 already chooses a `remote-proto
 **Status:** accepted. No code is written by this decision; it specifies the task that the
 robot-side transport effort builds. The baud and ring sizes are ADR-0033's, and command
 authority is settled in ADR-0034 (one Active Claim: anyone may stop, starts need a free claim).
+ADR-0035 gives `LinkCore::tick` the peer-silence **Deadman** and has the Link Task call the
+robot's one failsafe entry when it fires. ADR-0036 makes the Bridge a peer for `BRIDGE_CONTROL`
+and gives it a credential record and a bounded Setup Mode; the Link Task gains the panel-triggered
+setup action and its ACK. ADR-0037 makes the Bridge authenticate the one Remote against a pairing
+token and broadcast discovery; the robot remains unaware of both.
 
 **Considered Options**
 

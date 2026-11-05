@@ -18,6 +18,10 @@ point for a sensor; motion needs one arbiter, but not an owner.
 Remote is subordinate by construction, and the lease stays liveness. The claim refactor and the
 two motion-path debts are implementation work (tickets 19 and 20); no firmware is changed by this
 decision. The lease is not reopened here: what happens to motion on link loss remains ticket 06's.
+That ticket is resolved in ADR-0035, which also narrows one sentence here: `procedure::stop()`
+latches and interrupts but no longer writes Activity, so the claim owner's terminal call can
+record a failsafe failure, and the claim gains a transient `Panel`/`Remote` origin used only by
+the deadman — not for authority.
 
 **Considered Options**
 
