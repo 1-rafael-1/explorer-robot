@@ -1,0 +1,84 @@
+[workspace]
+# A workspace of its own: this crate targets `riscv32imc-unknown-none-elf` and
+# relies on `.cargo/config.toml` here for its target and runner, which the
+# robot's workspace cannot provide.
+
+[package]
+edition      = "2024"
+name         = "esp-bridge"
+rust-version = "1.95"
+version      = "0.1.0"
+
+[[bin]]
+name = "esp-bridge"
+path = "./src/bin/main.rs"
+
+[dependencies]
+esp-hal = { version = "~1.2.2", features = ["defmt", "esp32c3", "unstable"] }
+
+esp-rtos = { version = "0.4.0", features = [
+  "defmt",
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32c3",
+] }
+
+defmt                  = "1.0.1"
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["defmt", "esp32c3"] }
+
+embassy-net = { version = "0.9.1", features = [
+  "defmt",
+  "dhcpv4",
+  "medium-ethernet",
+  "tcp",
+  "udp",
+] }
+embedded-io = { version = "0.7.1", features = ["defmt"] }
+embedded-io-async = { version = "0.7.0", features = ["defmt"] }
+esp-alloc = { version = "0.11.0", features = ["defmt", "esp32c3"] }
+esp-backtrace = { version = "0.20.0", features = [
+  "defmt",
+  "esp32c3",
+  "panic-handler",
+] }
+esp-println = { version = "0.18.0", features = ["defmt-espflash", "esp32c3"] }
+# for more networking protocol support see https://crates.io/crates/edge-net
+embassy-executor = { version = "0.10.0", features = ["defmt"] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+esp-radio = { version = "1.0.0-beta.1", features = [
+  "defmt",
+  "esp-alloc",
+  "esp32c3",
+  "unstable",
+  "wifi",
+] }
+smoltcp = { version = "0.14.0", default-features = false, features = [
+  "defmt",
+  "medium-ethernet",
+  "multicast",
+  "proto-dhcpv4",
+  "proto-dns",
+  "proto-ipv4",
+  "socket-dns",
+  "socket-icmp",
+  "socket-raw",
+  "socket-tcp",
+  "socket-udp",
+] }
+
+critical-section = "1.2.0"
+static_cell      = "2.1.1"
+
+
+# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.dev]
+# The default debug profile is too slow and too big for resource-constrained devices.
+# Always build with some optimizations enabled.
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1     # LLVM can perform better optimizations using a single thread
+debug         = 2     # prefer slower builds but better debugging experience
+lto           = 'fat'
+opt-level     = 's'

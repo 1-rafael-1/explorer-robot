@@ -9,6 +9,9 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [workspace]
 members = ["st7789-async", "coin-d6", "hardware-tests", "touch-async", "lidar-cloud", "touch-ui"]
+# Separate workspace: targets `riscv32imc-unknown-none-elf` with its own
+# `.cargo/config.toml`, so it cannot share this workspace's target and runner.
+exclude = ["esp-bridge"]
 resolver = "3"
 
 [features]

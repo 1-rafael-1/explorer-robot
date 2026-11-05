@@ -19,10 +19,18 @@ expansion GPIO 32–37). The expansion 5 V feed is now switched by a TPS22917
 high-side load switch enabled by `EXP_PWR` on GPIO32, and the camera branch uses
 the same switch on GPIO23. ADR-0025 moved the camera branch to 3.3 V and ADR-0027
 moved it back to 5 V; the expansion connector is also on 5 V. The camera's PIO0
-transport is implemented; the expansion connector is still absent from the
-schematic and PCB. Branch power-down now requires UART quiesce, TX/RX tri-state
+transport is implemented; the expansion connector is present in the schematic and
+PCB. Branch power-down now requires UART quiesce, TX/RX tri-state
 and UART deinit (ADR-0023). The LiDAR
 implementation is the reference sequence.
+
+**As built (2026-11-04):** the port is two JST-PH 2.0 mm connectors, not the single
+7-pin keyed connector specified below — `J9` (`EXP.PWR`: switched 5 V, GND) and
+`J10` (`EXP.DATA`: TX, RX, EN, BOOT, IRQ). The series ferrite bead on the 5 V feed
+and the ESD clamp array are **not fitted**; the connector capacitors are
+10 µF + 1 µF. Whether to accept, bodge or re-spin is an open decision, recorded
+with the verified pinout in
+`.scratch/expansion-remote/issues/10-harness-and-port-as-built.md`.
 
 **Considered Options**
 

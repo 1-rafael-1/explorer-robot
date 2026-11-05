@@ -17,7 +17,8 @@ its ring buffers and IRQ, leaving `UARTCR.EN` set and the UART pins muxed.
 
 **Status:** accepted. Applies to the LiDAR, AI camera and expansion branches.
 The LiDAR is implemented per this ADR; the camera and expansion tasks follow the
-same pattern when they gain a runtime lifecycle.
+same pattern when they gain a runtime lifecycle. The expansion (Link Port)
+sequence and its task ownership are specified in ADR-0032.
 
 **Considered Options**
 

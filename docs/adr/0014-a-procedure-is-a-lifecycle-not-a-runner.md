@@ -6,7 +6,9 @@ outcome, release the single-active slot, raise the completion event. Two of them
 the stop latch's four forwarding functions verbatim. A single runner that every producer
 hands a body to is the obvious collapse, and it is wrong here.
 
-**Status:** accepted.
+**Status:** accepted. The per-family stop latch is superseded by ADR-0034: one Procedure is live
+at a time, so one latch reaches exactly the one that runs. The lifecycle itself is unchanged in
+intent.
 
 **Considered Options**
 
