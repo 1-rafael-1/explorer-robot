@@ -2,6 +2,10 @@
 //!
 //! Provides on-demand autonomous mode tasks spawned via a controller task.
 //!
+//! The controller remains for the deferred Attempt Straight mode. Coast-and-avoid
+//! no longer routes through it: the UI takes the one Active Claim and its `LiDAR`
+//! warm-up helper spawns the mode task directly.
+//!
 //! Gap analysis uses the `lidar-cloud` cloud and obstacle detection reads the
 //! lock-free flag the `LiDAR` task drives through that crate's Front Sector test.
 
@@ -17,8 +21,6 @@ pub mod gap_analysis;
 #[derive(Clone, Copy)]
 /// Command sent to the autonomous mode controller.
 pub(super) enum AutonomousCommand {
-    /// Spawn coast-and-avoid autonomous mode task.
-    CoastObstacleAvoid,
     /// Spawn attempt-straight-line autonomous mode task with a target distance.
     AttemptStraightLine {
         /// Target travel distance in cm (100–1000).
@@ -62,7 +64,6 @@ pub(super) fn release_autonomous_mode() {
 async fn autonomous_mode_controller(spawner: Spawner) {
     loop {
         match AUTONOMOUS_MODE_COMMAND.receive().await {
-            AutonomousCommand::CoastObstacleAvoid => coast_obstacle_avoid::spawn(spawner),
             AutonomousCommand::AttemptStraightLine { target_distance_cm } => {
                 attempt_straight_line::spawn(spawner, target_distance_cm);
             }

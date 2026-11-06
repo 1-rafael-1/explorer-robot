@@ -1,47 +1,46 @@
-//! Obstacle- and floor-drop-avoidance autonomous drive mode: coast until
-//! `LiDAR` detects an obstacle within the forward threshold or a floor-drop
-//! sensor detects a ledge, then back up and turn a random angle before resuming.
+//! Obstacle- and floor-drop-avoidance autonomous drive mode: coast forward until
+//! the `LiDAR` reports an obstacle within the forward threshold or a floor-drop
+//! sensor reports a ledge, then brake, back up and turn a random angle before
+//! resuming.
 //!
 //! # Control flow
 //!
 //! ```text
-//! start() ──► drive forward (SetTracks)
-//!                  │
-//!     obstacle or floor drop detected
-//!  (perception::is_obstacle_detected ||
-//!   perception::is_floor_drop_detected)
-//!                  │
-//!          ┌── ACTIVE? ──┐
-//!          No            Yes
-//!          │             │
-//!        brake        back up (SetTracks, reverse)
-//!        exit            │
-//!                   random turn (SetTracks, differential)
-//!                        │
-//!                  raise ObstacleAvoidanceAttempted
-//!                        │
-//!                  ◄─────┘ (loop)
+//! pre-flight: obstacle || floor drop?
+//!        │ no                              │ yes
+//!        ▼                                 │
+//! forward leg [DriveContinuous]             │
+//!        │ obstacle edge / stop            │
+//!        ▼                                 ▼
+//! avoidance manoeuvre [Brake, back up, turn]
+//!        │
+//!        └──► raise ObstacleAvoidanceAttempted ──► pre-flight
 //! ```
 //!
-//! # Starting and stopping
+//! Every leg is one closed-loop [`DriveQueueBuilder`] queue. The forward leg is a
+//! single [`DriveAction::DriveContinuous`] step that ends only on an interrupt: the
+//! obstacle and floor-drop behaviour handlers send `EmergencyBrake` on their edges.
+//! The avoidance manoeuvre is one queue of [`DriveAction::Brake`],
+//! [`DriveAction::DriveDistance`] and [`DriveAction::RotateExact`] steps, all
+//! abort-on-fail, so a failure on any step stops the rest.
 //!
-//! Call [`start`] to enable the `LiDAR` and begin the mode, and [`stop`] to
-//! request a graceful exit. Enabling can take seconds, so [`stop`] latches its
-//! intent in [`STOP_REQUESTED`]: a stop that lands while [`start`] is still warming
-//! the sensor makes the start disable the sensor and abandon the start instead of
-//! driving. If the `LiDAR` cannot be enabled, [`start`] fails and the mode never
-//! drives: the downward rangefinder is a floor-drop sensor, not an obstacle sensor.
+//! # Claim and lifecycle
 //!
-//! The obstacle decision reads perception's lock-free flag, which the `LiDAR`
-//! task drives through the Front Sector test in the `lidar-cloud` crate (half-angle
-//! and threshold defined there, once). Floor-drop sensors cover ledge detection, and
-//! `MotorCommand::SetTracks` does direct motor control.
+//! The UI's `LiDAR` warm-up helper spawns this task with the one Active Claim the
+//! UI took with [`crate::task::procedure::start`]. The claim's stop latch is the
+//! only cancellation authority: a stop makes the in-flight queue resolve
+//! `Cancelled`, and the mode then brakes, disables the `LiDAR` and releases the
+//! claim with [`Claim::abandon`]. A failure records its reason with
+//! [`Claim::fail`] instead. The mode never requests or releases the autonomous-mode
+//! controller, which remains reserved for the deferred Attempt Straight mode.
+//!
+//! The obstacle decision reads perception's lock-free flag, which the `LiDAR` task
+//! drives through the Front Sector test in the `lidar-cloud` crate (half-angle and
+//! threshold defined there, once). Floor-drop sensors cover ledge detection.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use defmt::info;
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Instant;
 use nanorand::{Rng, WyRand};
 
 use crate::{
@@ -50,45 +49,26 @@ use crate::{
         state::perception,
     },
     task::{
-        autonomous_mode::{self, AutonomousCommand},
-        motor_driver::{self, MotorCommand},
-        sensors::lidar::{self, LidarStatus},
+        drive::{
+            CompletionStatus, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind, DriveQueueBuilder,
+            DriveQueueCompletion, DriveQueueSubmitError,
+            types::{DriveQueueBuildError, RotationDirection, RotationMotion},
+        },
+        procedure::Claim,
+        sensors::lidar,
     },
 };
 
-// ── Active flag ───────────────────────────────────────────────────────────────
-
-/// Set while the coast-and-avoid loop is running.
-///
-/// Raised by [`start`] once the sensor is streaming and the start request is
-/// accepted, and cleared again if the request is refused. Also cleared by
-/// [`stop`], which latches the request in [`STOP_REQUESTED`] at the same time so
-/// a start still waiting for the sensor can notice it.
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Records a [`stop`] that lands while [`start`] is still warming the `LiDAR`.
-///
-/// Enabling can take seconds, and the running screen is up the whole time, so the
-/// operator can tap Stop before [`start`] has raised [`ACTIVE`] — a stop that
-/// would otherwise have nothing to clear and would be lost. [`stop`] latches the
-/// intent here, and [`start`] checks it while polling the sensor status: a latched
-/// stop makes the start disable the sensor and abandon the start. [`start`] arms
-/// the latch at its top, so a stop from a finished run is inert while a fresh one
-/// during the warm-up is honoured. The store uses `Release` and the check
-/// `Acquire`, making the ordering explicit even though every access happens on
-/// core0.
-static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 // ── Tuning constants ──────────────────────────────────────────────────────────
 
-/// Speed for forward coasting (−100 … +100).
-const FORWARD_SPEED: i8 = 80;
+/// Speed for forward coasting (0-100).
+const FORWARD_SPEED: u8 = 80;
 
-/// Speed for reverse backup (−100 … +100).
-const REVERSE_SPEED: i8 = -60;
+/// Speed for reverse backup (0-100).
+const REVERSE_SPEED: u8 = 60;
 
-/// In-place rotation speed magnitude (−100 … +100).
-const TURN_SPEED: i8 = 60;
+/// In-place rotation speed magnitude (0-100).
+const TURN_SPEED: u8 = 60;
 
 /// Minimum random turn angle (degrees).
 const TURN_ANGLE_MIN: u8 = 45;
@@ -96,281 +76,263 @@ const TURN_ANGLE_MIN: u8 = 45;
 /// Maximum random turn angle (degrees).
 const TURN_ANGLE_MAX: u8 = 180;
 
-/// Duration to drive backward after obstacle detection (milliseconds).
-const BACKUP_DURATION_MS: u64 = 600;
-
-/// Interval between perception checks while driving forward (milliseconds).
-const PERCEPTION_CHECK_INTERVAL_MS: u64 = 100;
-
-/// Approximate time to turn 90 degrees with differential drive at `TURN_SPEED` (ms).
-const TURN_90_DEG_MS: u64 = 500;
-
-/// Interval between `LiDAR` status polls while waiting for the sensor to warm up (milliseconds).
-const LIDAR_STATUS_POLL_MS: u64 = 50;
-
-// ── State machine ────────────────────────────────────────────────────────────────
-
-/// States of the coast-and-avoid state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    /// Driving forward, periodically checking for obstacles.
-    Forward,
-    /// Backing up after an obstacle was detected.
-    BackingUp,
-    /// Turning a random angle to avoid the obstacle.
-    Turning,
-}
-
-// ── Start errors ───────────────────────────────────────────────────────────────
-
-/// Why coast-and-avoid could not start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
-pub enum StartError {
-    /// Another autonomous mode is already active.
-    Busy,
-    /// The `LiDAR` could not be enabled. The mode refuses to run, because the
-    /// downward rangefinder is a floor-drop sensor and not an obstacle sensor.
-    LidarUnavailable,
-    /// A stop arrived while the `LiDAR` was still warming, so the mode was
-    /// abandoned instead of started.
-    ///
-    /// The UI records the [`label`](Self::label) through its `activity::fail`,
-    /// but that is a no-op while the activity is already Idle — which it is after
-    /// a Stop — so a cancelled start cannot resurrect a failure screen.
-    Cancelled,
-}
-
-impl StartError {
-    /// A short, operator-facing description for the running screen.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Busy => "LiDAR busy",
-            Self::LidarUnavailable => "LiDAR unavailable",
-            Self::Cancelled => "Stopped",
-        }
-    }
-}
-
-// ── Public API ───────────────────────────────────────────────────────────────────
-
-/// Spawn the coast-and-avoid autonomous task.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner) {
-    spawner.spawn(coast_obstacle_avoid_task().unwrap());
-}
-
-/// Enable the `LiDAR` and activate the coast-and-avoid autonomous mode.
+/// Distance to reverse after detecting a blocked route, in centimetres.
 ///
-/// The sensor is enabled and waited on *before* the mode is spawned, so the
-/// mode never drives while the sensor is still warming or unavailable. A stop
-/// that arrives during the wait disables the sensor and abandons the start,
-/// leaving nothing enabled.
+/// Provisional: tuned at the first physical bring-up.
+const BACKUP_DISTANCE_CM: f32 = 20.0;
+
+/// Consecutive avoidance manoeuvres without a forward leg that end the mode.
 ///
-/// # Errors
+/// The counter resets only when a forward leg starts, so a flag that never clears
+/// cannot loop forever: three manoeuvres without a forward leg fail with
+/// `"Blocked"`.
+const BLOCKED_MANOEUVRE_LIMIT: u8 = 3;
+
+// ── Spawn ─────────────────────────────────────────────────────────────────────
+
+/// Spawn the coast-and-avoid mode task under `claim`.
 ///
-/// Returns [`StartError::LidarUnavailable`] if the `LiDAR` cannot be brought
-/// up, [`StartError::Busy`] if another autonomous mode is already active, or
-/// [`StartError::Cancelled`] if a stop arrived while the sensor was warming.
-pub async fn start() -> Result<(), StartError> {
-    // Arm the cancel latch before enabling: a stop from an earlier run must
-    // not count, but one that arrives during the warm-up must.
-    STOP_REQUESTED.store(false, Ordering::Release);
+/// Returns `true` once the task is spawned. If the task slot is unavailable this
+/// logs and returns `false` without touching `claim`: the caller still owns it and
+/// is responsible for powering the `LiDAR` down and abandoning the claim.
+#[must_use]
+pub fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    let Ok(token) = coast_obstacle_avoid_task(claim) else {
+        error!("coast-avoid: spawn failed");
+        return false;
+    };
 
-    // [`lidar::enable`] releases a failure latched by a previous run before it
-    // enables, so this start's own bring-up decides the outcome rather than a
-    // stale `Failed` that would refuse it before it begins.
-    lidar::enable().await;
-
-    // The sensor's own task owns the bring-up, so poll its lock-free status
-    // until it is streaming, has failed, or a stop arrives. The enable is
-    // one-way, so this poll is the only wait.
-    loop {
-        if STOP_REQUESTED.load(Ordering::Acquire) {
-            lidar::disable().await;
-            return Err(StartError::Cancelled);
-        }
-        match lidar::status() {
-            LidarStatus::Streaming => break,
-            LidarStatus::Failed => {
-                // The sensor is powered down and will not retry until a fresh
-                // disable-then-enable, so clear the need and refuse to drive.
-                lidar::disable().await;
-                return Err(StartError::LidarUnavailable);
-            }
-            LidarStatus::Off | LidarStatus::Warming => {
-                Timer::after(Duration::from_millis(LIDAR_STATUS_POLL_MS)).await;
-            }
-        }
-    }
-
-    ACTIVE.store(true, Ordering::Relaxed);
-
-    if !autonomous_mode::request_start(AutonomousCommand::CoastObstacleAvoid).await {
-        // No task was spawned, so roll the enable back. No running coast task
-        // can observe this, because the mode active now is another autonomous
-        // mode.
-        ACTIVE.store(false, Ordering::Relaxed);
-        lidar::disable().await;
-        return Err(StartError::Busy);
-    }
-
-    Ok(())
-}
-
-/// Request a graceful stop of the coast-and-avoid mode.
-///
-/// Clears the active flag so the loop exits after the current drive command
-/// resolves, and latches the request in [`STOP_REQUESTED`] so a start still
-/// waiting for the `LiDAR` disables the sensor and abandons the start instead of
-/// driving.
-pub fn stop() {
-    ACTIVE.store(false, Ordering::Relaxed);
-    STOP_REQUESTED.store(true, Ordering::Release);
+    spawner.spawn(token);
+    true
 }
 
 // ── Task ──────────────────────────────────────────────────────────────────────
 
 /// Coast-and-avoid autonomous drive task.
 ///
-/// Spawned on demand by the autonomous mode controller each time the mode is
-/// activated. Runs until deactivated, then returns so the task slot is freed
-/// for the next activation.
+/// Spawned once the `LiDAR` is streaming. Runs until a stop or a failure, then
+/// stops the hardware and records the terminal claim outcome.
 #[embassy_executor::task]
-pub async fn coast_obstacle_avoid_task() {
+async fn coast_obstacle_avoid_task(claim: Claim) {
     info!("coast-avoid: activated");
 
-    // Ensure a clean starting state.
-    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-    Timer::after(Duration::from_millis(200)).await;
+    let outcome = run(&claim).await;
+    stop_hardware().await;
 
-    // Enable motor drivers.
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
-    Timer::after(Duration::from_millis(10)).await;
-
-    let mut turn_direction_clockwise: bool = true;
-    let mut turn_degrees: u8 = TURN_ANGLE_MIN;
-    let mut state = State::Forward;
-
-    while ACTIVE.load(Ordering::Relaxed) {
-        state = match state {
-            State::Forward => run_forward().await,
-            State::BackingUp => run_backing_up().await,
-            State::Turning => {
-                let next = run_turning(turn_degrees, turn_direction_clockwise).await;
-
-                // After turning, pick a new random angle and flip direction
-                // for the next avoidance cycle.
-                turn_degrees = random_turn_angle();
-                turn_direction_clockwise = !turn_direction_clockwise;
-
-                next
-            }
-        };
+    match outcome {
+        Outcome::Stopped => claim.abandon().await,
+        Outcome::Failed(reason) => claim.fail(reason).await,
     }
 
-    // Clean stop.
-    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-    Timer::after(Duration::from_millis(200)).await;
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    // Leaving the mode disables the sensor; the sensor's task stops it, drops
-    // its power, and clears its stale cloud and obstacle flag.
-    lidar::disable().await;
-    autonomous_mode::release_autonomous_mode();
     info!("coast-avoid: deactivated");
 }
 
-// ── State handlers ───────────────────────────────────────────────────────────────
+// ── Mode loop ─────────────────────────────────────────────────────────────────
 
-/// Drive forward until an obstacle is detected or the mode is stopped.
-async fn run_forward() -> State {
-    info!("coast-avoid: driving forward");
+/// How the mode ended, before the terminal claim call.
+enum Outcome {
+    /// The operator stopped the mode; abandon the claim.
+    Stopped,
+    /// The mode failed for `reason`; fail the claim.
+    Failed(&'static str),
+}
 
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed: FORWARD_SPEED,
-        right_speed: FORWARD_SPEED,
-    })
-    .await;
+/// How a forward leg ended.
+enum ForwardOutcome {
+    /// The operator stopped the mode.
+    Stopped,
+    /// An obstacle or floor-drop flag is set; run an avoidance manoeuvre.
+    Blocked,
+    /// The leg failed without a set flag; fail the mode with `reason`.
+    Failed(&'static str),
+}
+
+/// How one avoidance manoeuvre ended.
+enum ManoeuvreOutcome {
+    /// The manoeuvre completed; raise the avoidance event and re-check the flags.
+    Attempted,
+    /// The operator stopped the mode.
+    Stopped,
+    /// The queue was cancelled without a stop; count another manoeuvre and retry.
+    Restart,
+    /// The manoeuvre failed; fail the mode with `reason`.
+    Failed(&'static str),
+}
+
+/// Run the mode until it is stopped or fails.
+///
+/// The blocked counter resets only when a forward leg starts, never when a
+/// manoeuvre succeeds: a flag that stays set therefore runs at most
+/// [`BLOCKED_MANOEUVRE_LIMIT`] manoeuvres before failing with `"Blocked"`.
+async fn run(claim: &Claim) -> Outcome {
+    let mut blocked_manoeuvres: u8 = 0;
+    let mut turn_clockwise = true;
 
     loop {
-        if !ACTIVE.load(Ordering::Relaxed) {
-            return State::Forward;
+        // Pre-flight: only clear ground starts a forward leg, and starting one
+        // resets the blocked counter.
+        if !blocked_ahead() {
+            blocked_manoeuvres = 0;
+            match run_forward(claim).await {
+                ForwardOutcome::Stopped => return Outcome::Stopped,
+                ForwardOutcome::Failed(reason) => return Outcome::Failed(reason),
+                ForwardOutcome::Blocked => {}
+            }
         }
 
-        // Check perception state for obstacles or floor drops ahead.
-        if perception::is_obstacle_detected() || perception::is_floor_drop_detected() {
-            info!("coast-avoid: obstacle or floor drop detected ahead, braking");
-            motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-            Timer::after(Duration::from_millis(200)).await;
+        // Avoidance: keep manoeuvring until the pre-flight is clear.
+        loop {
+            if blocked_manoeuvres >= BLOCKED_MANOEUVRE_LIMIT {
+                return Outcome::Failed("Blocked");
+            }
+            blocked_manoeuvres += 1;
 
-            return State::BackingUp;
+            match run_manoeuvre(claim, turn_clockwise).await {
+                ManoeuvreOutcome::Stopped => return Outcome::Stopped,
+                ManoeuvreOutcome::Failed(reason) => return Outcome::Failed(reason),
+                ManoeuvreOutcome::Restart => {
+                    // A cancellation without a stop restarts the manoeuvre; the
+                    // pre-flight is deliberately not consulted here.
+                    turn_clockwise = !turn_clockwise;
+                }
+                ManoeuvreOutcome::Attempted => {
+                    raise_event(Events::ObstacleAvoidanceAttempted).await;
+                    turn_clockwise = !turn_clockwise;
+                    if !blocked_ahead() {
+                        break;
+                    }
+                }
+            }
         }
-
-        Timer::after(Duration::from_millis(PERCEPTION_CHECK_INTERVAL_MS)).await;
     }
 }
 
-/// Back up a fixed distance (time-based) to clear the obstacle.
-async fn run_backing_up() -> State {
-    info!("coast-avoid: backing up");
+/// Run the forward leg and classify how it ended.
+async fn run_forward(claim: &Claim) -> ForwardOutcome {
+    info!("coast-avoid: driving forward");
 
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed: REVERSE_SPEED,
-        right_speed: REVERSE_SPEED,
-    })
-    .await;
-
-    Timer::after(Duration::from_millis(BACKUP_DURATION_MS)).await;
-
-    if !ACTIVE.load(Ordering::Relaxed) {
-        return State::Forward;
+    match submit_queue(build_forward()).await {
+        Err(reason) => ForwardOutcome::Failed(reason),
+        Ok(completion) => match completion.status {
+            CompletionStatus::Cancelled => {
+                if claim.is_stop_requested() {
+                    ForwardOutcome::Stopped
+                } else if blocked_ahead() {
+                    ForwardOutcome::Blocked
+                } else {
+                    ForwardOutcome::Failed("Drive interrupted")
+                }
+            }
+            CompletionStatus::Failed(reason) => {
+                if blocked_ahead() {
+                    ForwardOutcome::Blocked
+                } else {
+                    ForwardOutcome::Failed(reason)
+                }
+            }
+            CompletionStatus::Success => ForwardOutcome::Failed("Continuous Drive completed"),
+        },
     }
-
-    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-    Timer::after(Duration::from_millis(200)).await;
-
-    State::Turning
 }
 
-/// Turn a random angle in the given direction.
-///
-/// Uses differential drive: one track forward, the other backward.
-async fn run_turning(degrees: u8, clockwise: bool) -> State {
+/// Run one avoidance manoeuvre and classify how it ended.
+async fn run_manoeuvre(claim: &Claim, clockwise: bool) -> ManoeuvreOutcome {
+    let degrees = random_turn_angle();
+    let direction = if clockwise {
+        RotationDirection::Clockwise
+    } else {
+        RotationDirection::CounterClockwise
+    };
     info!(
-        "coast-avoid: turning {} deg {}",
+        "coast-avoid: backing up {=f32} cm and turning {} deg {}",
+        BACKUP_DISTANCE_CM,
         degrees,
         if clockwise { "CW" } else { "CCW" }
     );
 
-    let (left_speed, right_speed) = if clockwise {
-        (TURN_SPEED, -TURN_SPEED)
-    } else {
-        (-TURN_SPEED, TURN_SPEED)
-    };
-
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed,
-        right_speed,
-    })
-    .await;
-
-    // Compute turn duration proportional to the angle.
-    let turn_ms = u64::from(degrees) * TURN_90_DEG_MS / 90;
-    Timer::after(Duration::from_millis(turn_ms)).await;
-
-    if !ACTIVE.load(Ordering::Relaxed) {
-        return State::Forward;
+    match submit_queue(build_manoeuvre(f32::from(degrees), direction)).await {
+        Err(reason) => ManoeuvreOutcome::Failed(reason),
+        Ok(completion) => match completion.status {
+            CompletionStatus::Success => ManoeuvreOutcome::Attempted,
+            CompletionStatus::Cancelled => {
+                if claim.is_stop_requested() {
+                    ManoeuvreOutcome::Stopped
+                } else {
+                    ManoeuvreOutcome::Restart
+                }
+            }
+            CompletionStatus::Failed(reason) => ManoeuvreOutcome::Failed(reason),
+        },
     }
-
-    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-    Timer::after(Duration::from_millis(200)).await;
-
-    raise_event(Events::ObstacleAvoidanceAttempted).await;
-
-    State::Forward
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────────
+// ── Queues ────────────────────────────────────────────────────────────────────
+
+/// Build the forward leg: one continuous-drive step.
+fn build_forward() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+    queue.push(DriveCommand::Drive(DriveAction::DriveContinuous {
+        direction: DriveDirection::Forward,
+        speed: FORWARD_SPEED,
+    }))?;
+    Ok(queue)
+}
+
+/// Build the avoidance manoeuvre: brake, reverse a fixed distance, then turn.
+fn build_manoeuvre(degrees: f32, direction: RotationDirection) -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Brake))?;
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::DriveDistance {
+        kind: DriveDistanceKind::Straight {
+            distance_cm: BACKUP_DISTANCE_CM,
+        },
+        direction: DriveDirection::Backward,
+        speed: REVERSE_SPEED,
+    }))?;
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::RotateExact {
+        degrees,
+        direction,
+        motion: RotationMotion::Stationary { speed: TURN_SPEED },
+    }))?;
+    Ok(queue)
+}
+
+/// Build the cleanup queue: brake and enter standby.
+fn build_stop() -> Result<DriveQueueBuilder, DriveQueueBuildError> {
+    let mut queue = DriveQueueBuilder::new();
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Brake))?;
+    queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::Standby))?;
+    Ok(queue)
+}
+
+/// Build and submit a queue, mapping build and submit errors to a short reason.
+async fn submit_queue(
+    queue: Result<DriveQueueBuilder, DriveQueueBuildError>,
+) -> Result<DriveQueueCompletion, &'static str> {
+    let queue = queue.map_err(DriveQueueBuildError::label)?;
+    queue.submit().await.map_err(DriveQueueSubmitError::label)
+}
+
+// ── Cleanup ───────────────────────────────────────────────────────────────────
+
+/// Stop the hardware once: brake, enter standby, then power the `LiDAR` down.
+///
+/// The interrupt that ended the run has usually braked already, but an explicit
+/// `Brake`/`Standby` pair leaves the drive subsystem idle on every exit path. A
+/// failed cleanup queue is logged only; the terminal claim call still runs.
+async fn stop_hardware() {
+    if let Err(reason) = submit_queue(build_stop()).await {
+        warn!("coast-avoid: cleanup queue failed: {}", reason);
+    }
+    lidar::disable().await;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Whether either forward-blocking perception flag is set.
+fn blocked_ahead() -> bool {
+    perception::is_obstacle_detected() || perception::is_floor_drop_detected()
+}
 
 /// Generate a random turn angle between `TURN_ANGLE_MIN` and `TURN_ANGLE_MAX`.
 fn random_turn_angle() -> u8 {

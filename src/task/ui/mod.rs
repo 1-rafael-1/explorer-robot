@@ -31,7 +31,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use defmt::{debug, warn};
+use defmt::{debug, error, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal};
@@ -86,8 +86,13 @@ pub async fn send_ui_event(event: UiEvent) {
     UI_EVENT_CHANNEL.sender().send(event).await;
 }
 
-/// Requests that the coast-and-avoid drive mode start.
-static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
+/// Requests that the coast-and-avoid drive mode start, carrying the claim it runs
+/// under.
+///
+/// The start publishes "Enabling `LiDAR`", then hands the claim to [`coast_avoid_task`]
+/// through this channel. Capacity one: a start is dispatched only after the previous
+/// claim was received, and the one Active Claim already prevents two starts.
+static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, Claim, 1> = Channel::new();
 
 /// Latched intent of the Room Scan screen: `true` while the radar screen wants
 /// the sensor, `false` once it has left.
@@ -148,6 +153,10 @@ const GESTURE_DEADLINE_MS: u64 = 30_000;
 /// Backoff before retrying an offline panel, in milliseconds.
 const REINIT_BACKOFF_MS: u64 = 2_000;
 
+/// Interval between `LiDAR` status polls while the coast-and-avoid helper waits
+/// for the sensor to warm up, in milliseconds.
+const LIDAR_STATUS_POLL_MS: u64 = 50;
+
 // ── Initialisation ──────────────────────────────────────────────────────────────
 
 /// Build the panel, spawn the UI controller task, and spawn the helper tasks it
@@ -160,7 +169,7 @@ const REINIT_BACKOFF_MS: u64 = 2_000;
 #[allow(clippy::unwrap_used)]
 pub fn init_ui(spawner: Spawner, pins: PanelResources) {
     spawner.spawn(ui_task(Panel::new(pins)).unwrap());
-    spawner.spawn(coast_avoid_task().unwrap());
+    spawner.spawn(coast_avoid_task(spawner).unwrap());
     spawner.spawn(room_scan_task().unwrap());
 }
 
@@ -183,20 +192,57 @@ pub async fn show_main_menu() {
     send_ui_event(UiEvent::ShowMainMenu).await;
 }
 
-/// Start coast-and-avoid when the panel asks, off the UI task.
+/// Warm up the `LiDAR` for coast-and-avoid, off the UI task, then hand the mode the
+/// claim.
 ///
-/// Enabling the `LiDAR` can take several seconds, so the UI task must not await
-/// it: it dispatches a request and polls the activity state and the sensor's
-/// lock-free status while this task enables the sensor and starts the mode. On
-/// failure the mode records the reason, which the running screen shows, and never
-/// drives.
+/// The start already published "Enabling `LiDAR`" and took the one Active Claim, so
+/// the running screen is up from the first frame. Enabling can take seconds, so the
+/// UI task must not await it: it sends the claim here and returns. This task polls
+/// the sensor's lock-free status and makes the terminal claim call itself:
+///
+/// - a stop during the warm-up disables the sensor and abandons the claim;
+/// - a failed bring-up disables the sensor and fails the claim with
+///   "`LiDAR` unavailable";
+/// - once streaming it spawns the mode task with the claim. A spawn failure
+///   disables the sensor and abandons the claim so nothing keeps running.
 #[embassy_executor::task]
-async fn coast_avoid_task() {
+async fn coast_avoid_task(spawner: Spawner) {
     loop {
-        COAST_AVOID_REQUEST.receive().await;
-        if let Err(error) = coast_obstacle_avoid::start().await {
-            warn!("[ui] coast-and-avoid start failed: {}", error.label());
-            activity::fail(error.label()).await;
+        let claim = COAST_AVOID_REQUEST.receive().await;
+
+        // [`lidar::enable`] releases a failure latched by a previous run before it
+        // enables, so this run's own bring-up decides the outcome.
+        lidar::enable().await;
+
+        loop {
+            if claim.is_stop_requested() {
+                lidar::disable().await;
+                claim.abandon().await;
+                info!("[ui] coast-and-avoid: stopped during LiDAR warm-up");
+                break;
+            }
+
+            match lidar::status() {
+                LidarStatus::Streaming => {
+                    if !coast_obstacle_avoid::spawn(spawner, claim) {
+                        lidar::disable().await;
+                        claim.abandon().await;
+                        error!("[ui] coast-and-avoid: mode task spawn failed");
+                    }
+                    break;
+                }
+                LidarStatus::Failed => {
+                    // The sensor is powered down and will not retry until a fresh
+                    // disable-then-enable, so clear it and refuse to drive.
+                    lidar::disable().await;
+                    claim.fail("LiDAR unavailable").await;
+                    warn!("[ui] coast-and-avoid: LiDAR unavailable");
+                    break;
+                }
+                LidarStatus::Off | LidarStatus::Warming => {
+                    Timer::after(Duration::from_millis(LIDAR_STATUS_POLL_MS)).await;
+                }
+            }
         }
     }
 }
@@ -567,16 +613,31 @@ async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
 
 /// Start coast-and-avoid from the panel without blocking on the `LiDAR` enable.
 ///
-/// The activity is recorded first so the running screen appears immediately and
-/// names the mode; the [`coast_avoid_task`] helper then enables the `LiDAR`,
-/// which the running screen tracks through [`lidar::status`]. If the sensor
-/// cannot be brought up, the helper records the failure reason and the screen
-/// holds it until the operator dismisses it back to the Drive Mode menu.
+/// The start takes the one Active Claim and publishes the starting activity, so the
+/// running screen appears immediately and names the mode. The claim is then handed
+/// to [`coast_avoid_task`], which enables the `LiDAR` and spawns the mode once the
+/// sensor is streaming. A `Busy` or `Rejected` start leaves the entry's landing
+/// screen showing: the model navigated to the running screen when the entry was
+/// tapped, and a running screen with no mode behind it would be a lie. If the
+/// helper's channel refuses the claim, nothing can run it, so abandon it.
 async fn start_coast_and_avoid(ui: &mut Ui) {
-    activity::begin(Activity::Procedure(Procedure::CoastAndAvoid), "Enabling LiDAR").await;
-    let snapshot = activity::snapshot().await;
-    ui.show_status(status_view(&snapshot));
-    COAST_AVOID_REQUEST.try_send(()).ok();
+    match procedure::start(Procedure::CoastAndAvoid).await {
+        StartOutcome::Started(claim) => {
+            claim.phase("Enabling LiDAR", None).await;
+            if COAST_AVOID_REQUEST.try_send(claim).is_err() {
+                claim.abandon().await;
+                ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
+                return;
+            }
+
+            let snapshot = activity::snapshot().await;
+            ui.show_status(status_view(&snapshot));
+        }
+        StartOutcome::Busy | StartOutcome::Rejected => {
+            warn!("[ui] coast-and-avoid refused — another claim is held");
+            ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
+        }
+    }
 }
 
 /// Record the attempt-straight distance the operator set, without starting it.
@@ -608,13 +669,11 @@ async fn cancel_distance_calibration() {
 /// Stop whatever the running screen is showing, and forget it.
 ///
 /// `procedure::stop` latches the stop for whichever claim holds the slot and
-/// interrupts a drive in flight; the claim's owner cleans up and records the
-/// terminal outcome. Coast-and-avoid's own stop remains until ticket 08; the
-/// activity state is cleared here for now, and ticket 09 removes that once every
-/// owner records its own end state.
+/// interrupts a drive in flight; the claim's owner observes the latch, cleans up
+/// and records the terminal outcome. Clearing the activity here is a temporary
+/// bridge: ticket 09 lets every owner record its own end state.
 async fn stop_running() {
     procedure::stop();
-    coast_obstacle_avoid::stop();
     activity::clear().await;
 }
 
@@ -694,8 +753,8 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
 /// The body line a running screen shows for a snapshot.
 ///
 /// A drive mode reports the sensor's state while it runs; once its start has
-/// failed, the reason the producer recorded (the [`coast_obstacle_avoid::StartError`]
-/// label) takes over the line.
+/// failed, the reason the producer recorded through the claim's `fail` takes over
+/// the line.
 fn status_body(snapshot: &Snapshot) -> &'static str {
     match snapshot.activity {
         Activity::Procedure(Procedure::CoastAndAvoid) if snapshot.stage != Stage::Failed => {
