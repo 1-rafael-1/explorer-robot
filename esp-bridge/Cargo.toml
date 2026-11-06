@@ -71,6 +71,8 @@ smoltcp = { version = "0.14.0", default-features = false, features = [
 ] }
 
 critical-section = "1.2.0"
+heapless         = { version = "0.9", features = ["defmt", "portable-atomic"] }
+portable-atomic  = "1"
 static_cell      = "2.1.1"
 
 

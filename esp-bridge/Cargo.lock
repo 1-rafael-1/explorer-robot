@@ -812,6 +812,8 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "heapless 0.9.3",
+ "portable-atomic",
  "remote-protocol",
  "smoltcp 0.14.0",
  "static_cell",
@@ -1412,6 +1414,7 @@ checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
  "defmt 1.2.0",
  "hash32 0.3.1",
+ "portable-atomic",
  "stable_deref_trait",
 ]
 
