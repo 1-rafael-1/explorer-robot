@@ -1,0 +1,19 @@
+[package]
+name = "claim-slot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Pure one-Active-Claim slot: generation and stop latch. no_std and host-tested."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+
+[[test]]
+name = "claim_slot"
+required-features = ["std"]

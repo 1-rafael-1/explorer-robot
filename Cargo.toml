@@ -11,6 +11,7 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 members = [
     "st7789-async",
     "coin-d6",
+    "claim-slot",
     "hardware-tests",
     "touch-async",
     "lidar-cloud",
