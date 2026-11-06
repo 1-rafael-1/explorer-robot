@@ -10,5 +10,13 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 # Host tests and the simulated lossy link. The wire crate itself is always `no_std`.
 std = []
 
+[[test]]
+name = "crc"
+required-features = ["std"]
+
+[[test]]
+name = "frame"
+required-features = ["std"]
+
 [lints]
 workspace = true

@@ -10,6 +10,16 @@
 //! requirement so a major bump cannot pass unnoticed (ADR-0040).
 
 #![no_std]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+pub mod crc;
+pub mod error;
+pub mod frame;
+
+pub use crc::{Crc16, crc16};
+pub use error::{CodecError, EncodeError, FrameError};
+pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
 
 /// The wire major version carried in every frame header.
 pub const PROTOCOL_MAJOR: u8 = 1;
