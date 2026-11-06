@@ -16,6 +16,8 @@ decides where the trust gate belongs.
 before any Link Protocol byte is forwarded, and the Bridge accepts exactly one authenticated client.
 The Link Protocol is unchanged; the gate is transport-level. The trust boundary is the home LAN
 plus the token; TLS and the internet stay out of scope. No firmware is written by this decision.
+ADR-0039 adds a `setup_mode` flag bit to the Beacon and defines `tcp_port = 0` as "no Link
+listener", so the daemon can report provisioning honestly where the station Beacon is available.
 
 **Considered Options**
 
@@ -57,13 +59,21 @@ The Bridge broadcasts, every 3 s on its station interface, a small UDP datagram:
 | device id | 6 B | derived from the Bridge MAC; stable across IP changes |
 | name | ≤16 B | display name, derived by default as `Explorer-XXXX` |
 | tcp port | 2 B | the Link Protocol listener |
-| flags | 1 B | provisioned, robot link ready |
+| flags | 1 B | bit 0 provisioned, bit 1 robot link ready, bit 2 setup_mode; bits 3–7 reserved (zero) |
 
 It is sent only while the station is associated and the Link Port is enabled. It carries no secret;
 its only consumer is the daemon. The daemon listens on a fixed UDP port, deduplicates by device id,
 lists what it finds and caches the last endpoint per robot, so discovery is only needed on first
 connect or after an address change. A manual `host:port` entry covers networks that block broadcast
 or isolate clients. IPv4 only.
+
+`setup_mode` is observable only where the station Beacon exists. ADR-0036's Setup Mode is APSTA
+when a station config exists and AP-only otherwise; in APSTA the Beacon still reaches the home LAN
+and carries the flag, so the daemon can report `setup_mode` and decline to connect. In AP-only
+setup (unprovisioned, or a station that is down) there is no station Beacon, so the daemon shows
+`no_robots` and must not infer setup from silence. `tcp_port = 0` means the Beacon is advertising
+a portal-only Bridge with no Link listener; the daemon treats it as `setup_mode` and does not
+connect. The Beacon flag is a small Bridge change, not a robot one.
 
 *The pairing token.*
 
@@ -161,14 +171,17 @@ the same token gates the app-facing WebSocket too (ticket 15).
 
 **Open items**
 
-- Implement the beacon, the auth preamble, the RNG token generation, `BRIDGE_CONTROL` actions 1 and
-  2, the daemon's discovery and token store, and the app's pairing/failure screens.
+- Implement the beacon (including the `setup_mode` flag and `tcp_port = 0`), the auth preamble, the
+  RNG token generation, `BRIDGE_CONTROL` actions 1 and 2, the daemon's discovery and token store,
+  and the app's pairing/failure screens.
 - Choose the fixed UDP/TCP ports and keep the beacon interval a constant; decide where the
   Bridge↔daemon constants live (ticket 14's layout) without putting them in the robot's path.
+  Ticket 14 is resolved in ADR-0040: `remote/bridge-net` holds the Beacon, the preamble and the
+  ports, and the robot never depends on it.
 - Pick the `no_std` HMAC/SHA-256 crates and record their code-size cost on the Bridge.
 - Confirm the C3's hardware RNG source and generate the token once, at first boot.
-- Ticket 15 owns the daemon's concrete auth carrier, the token file path, the loopback default and
-  the app-facing auth when serving beyond loopback.
+- Ticket 15 is resolved in ADR-0039: the daemon's auth carrier is raw TCP with a framed HMAC
+  preamble; the token file, loopback default and app-facing auth are recorded there.
 - Ticket 13 owns the pairing entry and the "no robots / unauthorized / another client" states.
 - TLS is the trigger that would move the plaintext part of this boundary; it is out of scope now.
 - If `embassy-net` moves to `xarxa` (map Notes), the beacon and portal are userspace and unchanged.

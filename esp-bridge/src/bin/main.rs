@@ -7,14 +7,15 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use bridge_net as _;
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer};
 use esp_backtrace as _;
-use esp_hal::clock::CpuClock;
-use esp_hal::timer::timg::TimerGroup;
+use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 use esp_println as _;
 use esp_radio::wifi::scan::ScanConfig;
+use remote_protocol as _;
 
 extern crate alloc;
 

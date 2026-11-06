@@ -1,0 +1,13 @@
+[package]
+name = "bridge-net"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+description = "The Bridge-to-daemon network edge: discovery Beacon, HMAC preamble and fixed ports."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[dependencies]
+remote-protocol = { path = "../../remote-protocol", version = "1" }
+
+[lints]
+workspace = true

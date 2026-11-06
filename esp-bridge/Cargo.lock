@@ -77,6 +77,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-net"
+version = "1.0.0"
+dependencies = [
+ "remote-protocol",
+]
+
+[[package]]
 name = "bt-hci"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -790,6 +797,7 @@ dependencies = [
 name = "esp-bridge"
 version = "0.1.0"
 dependencies = [
+ "bridge-net",
  "critical-section",
  "defmt 1.2.0",
  "embassy-executor",
@@ -804,6 +812,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "remote-protocol",
  "smoltcp 0.14.0",
  "static_cell",
 ]
@@ -1748,6 +1757,10 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "remote-protocol"
+version = "1.0.0"
 
 [[package]]
 name = "riscv"

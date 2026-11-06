@@ -1,0 +1,17 @@
+[package]
+name = "remote-link"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The robot-side Link Protocol core: parser, stream slots, event ring, lease and dedupe."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[features]
+# Host tests and the simulated link in `remote-protocol`.
+std = ["remote-protocol/std"]
+
+[dependencies]
+remote-protocol = { path = "../remote-protocol", version = "1" }
+
+[lints]
+workspace = true

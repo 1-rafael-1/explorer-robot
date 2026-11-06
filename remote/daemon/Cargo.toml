@@ -1,0 +1,14 @@
+[package]
+name = "remote-daemon"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The remote relay: raw TCP to the Bridge, one JSON WebSocket and the static app."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[dependencies]
+remote-protocol = { path = "../../remote-protocol", version = "1" }
+bridge-net = { path = "../bridge-net", version = "1" }
+
+[lints]
+workspace = true

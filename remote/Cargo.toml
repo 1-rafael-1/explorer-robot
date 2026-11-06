@@ -1,0 +1,19 @@
+[workspace]
+members = ["bridge-net", "daemon"]
+resolver = "3"
+
+# Mirrors the robot workspace's clippy table (ADR-0040): there is no cross-workspace lint
+# inheritance, so the two tables are kept in step by hand.
+[workspace.lints.clippy]
+all = { level = "warn", priority = 1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "warn"
+missing_docs_in_private_items = "warn"
+cargo_common_metadata = "allow"
+future_not_send = "allow"
+multiple_crate_versions = "allow"

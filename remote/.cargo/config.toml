@@ -1,0 +1,5 @@
+# Cargo discovers configuration from the current directory upward, so this overrides the robot
+# workspace's `thumbv8m.main-none-eabihf` default. It applies only when the current directory is
+# this one or below (ADR-0040).
+[build]
+target = "x86_64-unknown-linux-gnu"

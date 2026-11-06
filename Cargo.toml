@@ -8,10 +8,20 @@ description = "Explorer robot v3 — tracked robot with LiDAR-based autonomous n
 repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [workspace]
-members = ["st7789-async", "coin-d6", "hardware-tests", "touch-async", "lidar-cloud", "touch-ui"]
-# Separate workspace: targets `riscv32imc-unknown-none-elf` with its own
-# `.cargo/config.toml`, so it cannot share this workspace's target and runner.
-exclude = ["esp-bridge"]
+members = [
+    "st7789-async",
+    "coin-d6",
+    "hardware-tests",
+    "touch-async",
+    "lidar-cloud",
+    "touch-ui",
+    "remote-protocol",
+    "remote-link",
+]
+# Separate workspaces with their own targets and runners: `esp-bridge` is RISC-V and
+# `remote` is a host workspace. Keeping both out of `members` is what stops the robot's
+# `cargo check`/`clippy` from building them on `thumbv8m.main-none-eabihf` (ADR-0040).
+exclude = ["esp-bridge", "remote"]
 resolver = "3"
 
 [features]
