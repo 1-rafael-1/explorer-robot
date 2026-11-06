@@ -13,11 +13,10 @@
 //! stages. Per-turn telemetry (target, achieved, yaw, deviation) is logged; a
 //! stopped test leaves without raising its completion event.
 
-use defmt::{info, warn};
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
-use touch_ui::Procedure;
 
-use super::{submit, test_lifecycle};
+use super::submit;
 use crate::{
     system::{
         event::{Events, raise_event},
@@ -29,7 +28,7 @@ use crate::{
             send_drive_command,
             types::{DriveQueueBuildError, RotationDirection, RotationMotion},
         },
-        procedure::Lifecycle,
+        procedure::Claim,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -71,28 +70,33 @@ const STAGES: [TurnStage; 4] = [
     },
 ];
 
-/// The runs test's lifecycle: the test family's stop latch and slot, raising
-/// `TestingCompleted` when every stage ran.
-const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::Turns);
-
 /// Spawn the turns test task via the controller.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner) {
-    spawner.spawn(turns_test_task().unwrap());
+///
+/// The caller's claim travels with the task; a spawn that fails releases it so a
+/// dead task does not hold the slot.
+pub(super) fn spawn(spawner: Spawner, claim: Claim) {
+    if let Ok(token) = turns_test_task(claim) {
+        spawner.spawn(token);
+    } else {
+        error!("turns: spawn failed");
+        claim.release();
+    }
 }
 
-/// Turns test task: runs the stages, then reports completion.
+/// Turns test task: runs the stages, then reports the claim's terminal outcome.
 #[embassy_executor::task]
-async fn turns_test_task() {
-    if run_turns_test().await {
-        LIFECYCLE.complete("Turns complete").await;
+async fn turns_test_task(claim: Claim) {
+    if run_turns_test(&claim).await {
+        claim.complete("Turns complete").await;
     } else {
-        LIFECYCLE.release();
+        // A stop: the owner clears the Activity now that `procedure::stop` does
+        // not. A failure already released the claim, so this is a no-op there.
+        claim.abandon().await;
     }
 }
 
 /// Run the in-place turns test, reporting whether every stage ran.
-async fn run_turns_test() -> bool {
+async fn run_turns_test(claim: &Claim) -> bool {
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }
@@ -101,22 +105,22 @@ async fn run_turns_test() -> bool {
     info!("turns: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
 
-    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
+    if claim.wait_or_stop(COUNTDOWN_MS).await {
         return false;
     }
 
     for (index, stage) in STAGES.iter().enumerate() {
-        if LIFECYCLE.is_stop_requested() {
+        if claim.is_stop_requested() {
             return false;
         }
-        LIFECYCLE
+        claim
             .phase(stage.phase, Some(activity::percent_done(index, STAGES.len())))
             .await;
 
         match submit(build_turn_queue(stage.speed)).await {
             Ok(completion) => report_turn(&completion),
             Err(reason) => {
-                LIFECYCLE.fail(reason).await;
+                claim.fail(reason).await;
                 return false;
             }
         }
@@ -127,7 +131,7 @@ async fn run_turns_test() -> bool {
     }
 
     // Leave the robot settled with the last telemetry in the log.
-    let _ = LIFECYCLE.wait_or_stop(SETTLE_MS).await;
+    let _ = claim.wait_or_stop(SETTLE_MS).await;
     true
 }
 

@@ -141,6 +141,11 @@ pub struct Slot {
 
 impl Slot {
     /// A slot backed by `claim` and `release`.
+    ///
+    /// No family builds a guarded slot since the test family moved to the Active
+    /// Claim; ticket 09 deletes this type with the rest of the per-family
+    /// lifecycle.
+    #[allow(dead_code)]
     #[must_use]
     pub const fn guarded(claim: fn() -> bool, release: fn()) -> Self {
         Self { claim, release }

@@ -55,7 +55,7 @@ use crate::{
             calibration::{self as drive_calibration, distance::DriveOutcome},
         },
         io::panel::Panel,
-        procedure::{self, Claim, ClaimKind, ScreenKind},
+        procedure::{self, Claim, ClaimKind, ScreenKind, StartOutcome},
         sensors::lidar::{self, LidarStatus},
         testmode,
     },
@@ -490,21 +490,26 @@ async fn handle_menu_item(ui: &mut Ui, item: Item) {
 
 /// Start the test-mode `procedure`.
 ///
-/// The producer records the identity in the activity state, so the running screen
-/// names it from the entry rather than from a parallel kind enumeration. A refused
-/// start — the family's slot still busy — goes back to the entry's landing screen:
-/// the model navigated to the running screen when the entry was tapped, so leaving
-/// it there would draw a running screen with no test behind it. The landing screen
-/// comes from the entry's identity, not from the stale status view the model still
-/// holds from whatever ran last.
+/// The start claims the one Active Claim and publishes the starting activity, so
+/// the running screen names the procedure from the entry rather than from a
+/// parallel kind enumeration. `Started` hands the claim to [`testmode::start`],
+/// which routes it to the test task. A `Busy` or `Rejected` start goes back to the
+/// entry's landing screen: the model navigated to the running screen when the
+/// entry was tapped, so leaving it there would draw a running screen with no test
+/// behind it. The landing screen comes from the entry's identity, not from the
+/// stale status view the model still holds from whatever ran last.
 async fn start_test(ui: &mut Ui, procedure: Procedure) {
-    if !testmode::start(procedure).await {
-        ui.show_screen(procedure.landing_screen());
-        return;
-    }
+    match procedure::start(procedure).await {
+        StartOutcome::Started(claim) => {
+            testmode::start(claim, procedure).await;
 
-    let snapshot = activity::snapshot().await;
-    ui.show_status(status_view(&snapshot));
+            let snapshot = activity::snapshot().await;
+            ui.show_status(status_view(&snapshot));
+        }
+        StartOutcome::Busy | StartOutcome::Rejected => {
+            ui.show_screen(procedure.landing_screen());
+        }
+    }
 }
 
 /// Enter the Room Scan screen: claim the one Active Claim and enable the sensor.
@@ -625,16 +630,13 @@ async fn cancel_distance_calibration() {
 
 /// Stop whatever the running screen is showing, and forget it.
 ///
-/// Every producer latch is set, plus the drive interrupt that cancels a leg in
-/// flight. The panel cannot tell which producer is mid-start — a procedure
-/// requested microseconds ago may not have published itself yet — and a latch the
-/// wrong producer holds is cleared by that producer's own re-arm when its next run
-/// starts, so setting them all is safe and leaves no running procedure
-/// unstoppable. Stopping coast-and-avoid clears its active flag; its task then
-/// brakes, disables the `LiDAR`, and exits on its own. The activity state is
-/// cleared here because the panel is what moved on.
+/// `procedure::stop` latches the stop for whichever claim holds the slot and
+/// interrupts a drive in flight; the claim's owner cleans up and records the
+/// terminal outcome. The old family stops for the calibrations and coast-and-avoid
+/// remain until tickets 06 and 08; the activity state is cleared here for now,
+/// and ticket 09 removes that once every owner records its own end state.
 async fn stop_running() {
-    testmode::stop();
+    procedure::stop();
     drive_calibration::request_stop();
     coast_obstacle_avoid::stop();
     activity::clear().await;

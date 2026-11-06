@@ -6,14 +6,12 @@
 //!
 //! ICM-20948 communicates over SPI.
 
-use defmt::info;
+use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use touch_ui::Procedure;
 
-use super::test_lifecycle;
 use crate::task::{
-    procedure::Lifecycle,
+    procedure::Claim,
     sensors::imu::{
         DmpFusionMode, Orientation, get_latest_readings, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
     },
@@ -25,28 +23,31 @@ const SAMPLE_INTERVAL_MS: u64 = 20;
 /// Ticks between log reports (50 ticks ≈ 1 s).
 const LOG_EVERY_TICKS: u32 = 50;
 
-/// The IMU 6-axis test's lifecycle: the test family's stop latch and slot, with
-/// no completion event — the test streams until the operator stops it.
-const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::Imu6Axis);
-
 /// Spawn the IMU 6-axis test task via the controller.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner) {
-    spawner.spawn(imu6_test_task().unwrap());
+///
+/// The caller's claim travels with the task; a spawn that fails releases it so a
+/// dead task does not hold the slot.
+pub(super) fn spawn(spawner: Spawner, claim: Claim) {
+    if let Ok(token) = imu6_test_task(claim) {
+        spawner.spawn(token);
+    } else {
+        error!("imu6: spawn failed");
+        claim.release();
+    }
 }
 
 /// IMU 6-axis test task: streams readings until stopped.
 #[embassy_executor::task]
-async fn imu6_test_task() {
+async fn imu6_test_task(claim: Claim) {
     start_imu_readings();
     Timer::after(Duration::from_millis(30)).await;
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
-    LIFECYCLE.phase("6-axis streaming", None).await;
+    claim.phase("6-axis streaming", None).await;
 
     let mut tick: u32 = 0;
     let mut missing: u32 = 0;
 
-    while !LIFECYCLE.wait_or_stop(SAMPLE_INTERVAL_MS).await {
+    while !claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
         let r = get_latest_readings().await;
         let orientation = r.orientation;
         let gyro = r.calibrated_gyro;
@@ -73,7 +74,7 @@ async fn imu6_test_task() {
     }
 
     stop_imu_readings();
-    LIFECYCLE.release();
+    claim.abandon().await;
 }
 
 /// Log the fused orientation in Euler angles, when there is one.
