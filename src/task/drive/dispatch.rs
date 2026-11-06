@@ -49,32 +49,6 @@ impl DriveLoop {
             DriveCommand::Drive(action) => {
                 self.handle_drive_action(action, completion_requested).await;
             }
-            DriveCommand::RunMotorCalibration => {
-                info!("Starting motor calibration procedure");
-                crate::task::drive::calibration::run_motor_calibration().await;
-                info!("Motor calibration procedure completed");
-                api::send_completion(
-                    completion_requested,
-                    DriveCompletion {
-                        status: CompletionStatus::Success,
-                        telemetry: types::CompletionTelemetry::None,
-                    },
-                )
-                .await;
-            }
-            DriveCommand::RunImuCalibration(kind) => {
-                info!("Starting IMU calibration procedure");
-                crate::task::drive::calibration::run_imu_calibration(kind).await;
-                info!("IMU calibration procedure completed");
-                api::send_completion(
-                    completion_requested,
-                    DriveCompletion {
-                        status: CompletionStatus::Success,
-                        telemetry: types::CompletionTelemetry::None,
-                    },
-                )
-                .await;
-            }
         }
     }
 

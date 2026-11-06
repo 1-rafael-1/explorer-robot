@@ -76,6 +76,7 @@ impl StopLatch {
     }
 
     /// Whether the operator has asked the running Procedure to stop.
+    #[allow(dead_code)]
     #[must_use]
     pub fn is_requested(&self) -> bool {
         self.stop.is_requested()
@@ -188,6 +189,11 @@ impl Lifecycle {
     }
 
     /// Whether the operator has asked this Procedure to stop.
+    ///
+    /// Dead until ticket 09 deletes [`Lifecycle`]: the distance calibration, its
+    /// only remaining user, polls [`Lifecycle::wait_or_stop`] and checks the latch
+    /// there. The other producers observe their `Claim` instead.
+    #[allow(dead_code)]
     #[must_use]
     pub fn is_stop_requested(&self) -> bool {
         self.latch.is_requested()
@@ -228,6 +234,10 @@ impl Lifecycle {
     /// This is the whole run-to-completion success sequence, in the order the
     /// producers used before the lifecycle owned it. A family that raises only on
     /// success raises nothing, since a stop never reaches here.
+    ///
+    /// Dead until ticket 09 deletes [`Lifecycle`]: the distance calibration, its
+    /// only remaining user, raises no completion event.
+    #[allow(dead_code)]
     pub async fn complete(&self, detail: &'static str) {
         activity::complete(detail).await;
         self.release();

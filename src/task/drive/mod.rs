@@ -89,7 +89,8 @@
 //! - [`sensors::control`]: IMU and encoder start/stop helpers.
 //!
 //! ## Calibration
-//! - [`calibration`]: Motor and IMU calibration procedures.
+//! - [`calibration`]: Calibration controller and the motor, magnetometer and
+//!   distance procedures.
 
 // ── Loop orchestration ────────────────────────────────────────────────────────
 mod dispatch;
@@ -128,7 +129,7 @@ pub use sensors::data::{
 use state::DriveLoop;
 pub use types::{
     CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-    DriveQueueCompletion, DriveQueueSubmitError, ImuCalibrationKind, InterruptKind, TurnDirection,
+    DriveQueueCompletion, DriveQueueSubmitError, InterruptKind, TurnDirection,
 };
 
 /// Drive control task - coordinates motion and sensor feedback.
@@ -141,7 +142,7 @@ pub use types::{
 /// - Receives IMU feedback via channel (from IMU task); orientation is calibrated when the IMU task has loaded calibration data.
 /// - Receives interrupts via signal.
 /// - Sends motor commands to the `motor_driver` task.
-/// - Coordinates calibration procedures.
+/// - Services drive commands while the calibrations run on their own tasks.
 ///
 /// # Sensor Data Flow
 ///

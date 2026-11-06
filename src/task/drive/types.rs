@@ -32,14 +32,13 @@ pub enum ImuCalibrationKind {
 }
 
 /// Combined motor control and sensor feedback commands
+///
+/// The wrapper stays even with a single variant: the drive queue and the command
+/// envelope speak one command type.
 #[derive(Debug, Clone)]
 pub enum DriveCommand {
     /// Movement and control commands
     Drive(DriveAction),
-    /// Run motor calibration procedure
-    RunMotorCalibration,
-    /// Run IMU calibration procedure
-    RunImuCalibration(ImuCalibrationKind),
 }
 
 /// Motion control commands with associated parameters.

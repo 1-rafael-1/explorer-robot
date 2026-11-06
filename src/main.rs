@@ -269,6 +269,11 @@ fn init_testing(spawner: Spawner) {
     task::testmode::init_testing(spawner);
 }
 
+/// Initialise the calibration controller.
+fn init_calibration(spawner: Spawner) {
+    task::drive::calibration::init(spawner);
+}
+
 /// Initialise the touch UI controller, which owns the panel.
 ///
 /// The bus carries both the ST7789 display and the touch controller, each with
@@ -439,6 +444,7 @@ fn main() -> ! {
         init_imu(spawner, imu_spi, imu_cs);
         init_flash_storage(spawner, storage.flash, storage.dma);
         init_testing(spawner);
+        init_calibration(spawner);
         init_autonomous_mode(spawner);
         init_startup(spawner);
     });

@@ -50,10 +50,7 @@ use crate::{
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
-        drive::{
-            self, DriveCommand, ImuCalibrationKind,
-            calibration::{self as drive_calibration, distance::DriveOutcome},
-        },
+        drive::calibration::{self as drive_calibration, distance::DriveOutcome},
         io::panel::Panel,
         procedure::{self, Claim, ClaimKind, ScreenKind, StartOutcome},
         sensors::lidar::{self, LidarStatus},
@@ -555,19 +552,25 @@ async fn leave_room_scan() {
 
 /// Start the calibration `procedure`.
 ///
-/// The identity maps to the concrete calibration flow, and the running view takes
-/// its title and parent from that identity. Every other Procedure belongs to
+/// Motor and magnetometer calibration take the one Active Claim with
+/// [`procedure::start`], which publishes the starting activity, and hand the claim
+/// to [`drive_calibration::start`], which routes it to the controller's task.
+/// Distance still runs on its old path until ticket 06. The running view takes its
+/// title and parent from the Procedure's identity. Every other Procedure belongs to
 /// another screen and is not a calibration, so it starts nothing.
 async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
     match procedure {
-        Procedure::MotorCalibration => {
-            drive::send_drive_command(DriveCommand::RunMotorCalibration).await;
-            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
-        }
-        Procedure::MagCalibration => {
-            drive::send_drive_command(DriveCommand::RunImuCalibration(ImuCalibrationKind::Mag)).await;
-            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
-        }
+        Procedure::MotorCalibration | Procedure::MagCalibration => match procedure::start(procedure).await {
+            StartOutcome::Started(claim) => {
+                drive_calibration::start(claim, procedure).await;
+
+                let snapshot = activity::snapshot().await;
+                ui.show_status(status_view(&snapshot));
+            }
+            StartOutcome::Busy | StartOutcome::Rejected => {
+                ui.show_screen(procedure.landing_screen());
+            }
+        },
         Procedure::DistanceCalibration => start_distance_calibration(ui).await,
         Procedure::CoastAndAvoid
         | Procedure::AttemptStraight
