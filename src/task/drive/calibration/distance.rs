@@ -2,12 +2,13 @@
 //!
 //! # Flow
 //!
-//! 1. The panel's Distance entry backs up the factor in force and forces 1.0, so
-//!    the commanded distance is nominal.
+//! 1. The calibration task backs up the factor in force and forces 1.0 with
+//!    [`begin`], so the commanded distance is nominal.
 //! 2. [`run_drive_step`] counts down, drives the fixed distance, and brakes.
 //! 3. The operator measures how far the robot actually travelled and enters it on
-//!    the panel's value screen; [`commit`] turns it into the new factor, or
-//!    [`abort`] restores the backed-up one.
+//!    the panel's value screen; the UI sends the answer with [`send_decision`] and
+//!    the calibration task's [`commit`] turns it into the new factor, or [`abort`]
+//!    restores the backed-up one.
 //!
 //! Zero is a legitimate measured distance: it clamps to [`MAX_FACTOR`], the
 //! strongest correction the screen can express, and cancelling is the screen's
@@ -19,9 +20,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::info;
-use touch_ui::Procedure;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
-use super::calibration_lifecycle;
 use crate::{
     system::state::{CalibrationStatus, activity, calibration},
     task::{
@@ -30,7 +30,7 @@ use crate::{
             DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
         },
         io::flash_storage,
-        procedure::Lifecycle,
+        procedure::Claim,
     },
 };
 
@@ -58,11 +58,6 @@ const MAX_FACTOR: f32 = 10.0;
 /// sentinel is unambiguous without a second flag or a lock.
 const NO_BACKUP: u32 = u32::MAX;
 
-/// The distance calibration's lifecycle: the calibration family's stop latch, no
-/// slot, and no completion event — its flow crosses the value-entry screen, so the
-/// Panel, not the procedure, reports the finished calibration.
-const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::DistanceCalibration);
-
 /// The distance factor that was in force before the calibration started.
 static PREVIOUS_FACTOR: AtomicU32 = AtomicU32::new(NO_BACKUP);
 
@@ -77,7 +72,44 @@ pub enum DriveOutcome {
     Failed,
 }
 
+/// The operator's answer to the value-entry screen.
+///
+/// The UI sends exactly one of these once the drive step has finished; the
+/// calibration task takes it, makes the terminal call and releases the claim.
+#[derive(Clone, Copy)]
+pub enum DistanceDecision {
+    /// Store the factor computed from this measured distance.
+    Commit(i32),
+    /// Restore the factor that was in force before the run.
+    Cancel,
+}
+
+/// The value-entry screen's decision for the running calibration.
+///
+/// Capacity one: the screen sends one decision per run, and the task that owns the
+/// claim is the only receiver.
+static DECISION: Channel<CriticalSectionRawMutex, DistanceDecision, 1> = Channel::new();
+
+/// Send the value-entry screen's decision to the calibration task.
+///
+/// Called by the UI, which does not hold the claim; the task that does makes the
+/// terminal call, so the decision is the only thing that crosses.
+pub async fn send_decision(decision: DistanceDecision) {
+    DECISION.send(decision).await;
+}
+
+/// Wait for the value-entry screen's decision.
+///
+/// Called by the calibration task, which holds the claim across the screen and
+/// abandons it once the decision has been applied.
+pub(super) async fn wait_for_decision() -> DistanceDecision {
+    DECISION.receive().await
+}
+
 /// Read the current factor into the backup slot and force 1.0 for the drive.
+///
+/// The calibration task calls this before [`run_drive_step`], so the drive always
+/// runs on a nominal commanded distance whatever factor was in force.
 pub async fn begin() {
     let previous = calibration::get_distance_factor().await;
     PREVIOUS_FACTOR.store(previous.to_bits(), Ordering::Release);
@@ -142,32 +174,33 @@ fn take_previous_factor() -> Option<f32> {
     (bits != NO_BACKUP).then(|| f32::from_bits(bits))
 }
 
-/// Run the calibration's fixed-distance drive step.
+/// Run the calibration's fixed-distance drive step under `claim`.
 ///
 /// Counts down, drives [`DRIVE_DISTANCE_CM`] forward, and brakes, publishing each
-/// phase to the activity state. The step is interruptible from the panel: the
-/// Stop latches the calibration stop and interrupts the drive, and a stopped step
-/// restores the previous factor and clears the activity.
-pub async fn run_drive_step() -> DriveOutcome {
-    let _ = LIFECYCLE.start("Driving 150 cm").await;
+/// phase to the activity state through the claim. The step is interruptible from
+/// the panel: the Stop latches the claim and interrupts the drive, and a stopped
+/// step restores the previous factor and abandons the claim. On success the claim
+/// stays held, so the value screen's decision can make the terminal call.
+pub async fn run_drive_step(claim: &Claim) -> DriveOutcome {
+    claim.phase("Driving 150 cm", None).await;
 
     for second in 0..COUNTDOWN_SECONDS {
         let elapsed = usize::try_from(second).unwrap_or(0);
         let total = usize::try_from(COUNTDOWN_SECONDS).unwrap_or(1);
-        LIFECYCLE
+        claim
             .phase("Get ready", Some(activity::percent_done(elapsed, total)))
             .await;
-        if LIFECYCLE.wait_or_stop(1_000).await {
-            return stopped().await;
+        if claim.wait_or_stop(1_000).await {
+            return stopped(claim).await;
         }
     }
 
-    LIFECYCLE.phase("Driving 150 cm", None).await;
+    claim.phase("Driving 150 cm", None).await;
 
     let queue = match build_drive_queue() {
         Ok(queue) => queue,
         Err(error) => {
-            LIFECYCLE.fail(error.label()).await;
+            claim.fail(error.label()).await;
             return DriveOutcome::Failed;
         }
     };
@@ -175,39 +208,40 @@ pub async fn run_drive_step() -> DriveOutcome {
     let completion = match queue.submit().await {
         Ok(completion) => completion,
         Err(error) => {
-            LIFECYCLE.fail(error.label()).await;
+            claim.fail(error.label()).await;
             return DriveOutcome::Failed;
         }
     };
 
     match completion.status {
         CompletionStatus::Success => {}
-        CompletionStatus::Cancelled => return stopped().await,
+        CompletionStatus::Cancelled => return stopped(claim).await,
         CompletionStatus::Failed(reason) => {
             // A leg that did not reach its target cannot calibrate anything, so
             // the reason is what the operator sees instead of the value screen.
             log_completion(&completion);
-            LIFECYCLE.fail(reason).await;
+            claim.fail(reason).await;
             return DriveOutcome::Failed;
         }
     }
 
     // Brake so the robot is still while the operator measures.
     send_drive_command(DriveCommand::Drive(DriveAction::Brake)).await;
-    if LIFECYCLE.wait_or_stop(SETTLE_MS).await {
-        return stopped().await;
+    if claim.wait_or_stop(SETTLE_MS).await {
+        return stopped(claim).await;
     }
 
+    // The claim stays held: the task publishes the value screen's phase and makes
+    // the terminal call once the operator has decided.
     log_completion(&completion);
-    LIFECYCLE.phase("Enter measured distance", None).await;
     DriveOutcome::Complete
 }
 
-/// Restore the previous factor, clear the activity, and report the stop.
-async fn stopped() -> DriveOutcome {
+/// Restore the previous factor, abandon the claim, and report the stop.
+async fn stopped(claim: &Claim) -> DriveOutcome {
     info!("Distance calibration: drive step stopped");
     abort().await;
-    LIFECYCLE.abandon().await;
+    claim.abandon().await;
     DriveOutcome::Stopped
 }
 

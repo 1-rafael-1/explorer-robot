@@ -6,7 +6,7 @@
 //!
 //! # Ownership
 //!
-//! A motor or magnetometer calibration runs on a task of its own, spawned by
+//! Each calibration runs on a task of its own, spawned by
 //! [`calibration_controller`]. The caller takes the one Active Claim (ADR-0034)
 //! with [`crate::task::procedure::start`] before calling [`start`], so the claim
 //! travels with the [`CalibrationCommand`] to the controller and the task reports
@@ -14,18 +14,19 @@
 //! published, so a calibration body's first call is [`Claim::phase`], never a
 //! second claim or start.
 //!
-//! Distance calibration still runs on its old path, with [`CALIBRATION_STOP`] and
-//! [`calibration_lifecycle`], until ticket 06 moves it onto the same controller.
+//! The distance calibration holds its claim across the drive step and the value
+//! entry, because the factor is forced to 1.0 for the drive: releasing the slot
+//! before the operator's commit or cancel would let another Procedure run on that
+//! forced factor. A stop of the drive restores the factor and abandons the claim,
+//! and the value entry ends it on the commit or cancel the panel offers there.
 //!
 //! # Stopping
 //!
-//! A motor or magnetometer calibration polls its `Claim` at its wait points; the
-//! panel's Stop latches the one Active Claim through
-//! [`crate::task::procedure::stop`] and the running task cleans up and records its
-//! terminal outcome. Distance calibration is still stopped through
-//! [`request_stop`], which latches the calibration family's stop — which its drive
-//! step polls — and interrupts the drive in flight, so its fixed-distance leg
-//! stops mid-motion rather than at a step boundary.
+//! A calibration polls its `Claim` at its wait points; the panel's Stop latches the
+//! one Active Claim through [`crate::task::procedure::stop`] and the running task
+//! cleans up and records its terminal outcome. The distance calibration also drives
+//! through the drive subsystem, whose interrupt the same stop sends, so its
+//! fixed-distance leg stops mid-motion rather than at a step boundary.
 
 pub mod distance;
 pub mod imu;
@@ -36,69 +37,26 @@ use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use touch_ui::Procedure;
 
-use crate::{
-    system::event::Events,
-    task::{
-        drive::types::ImuCalibrationKind,
-        procedure::{Claim, Completion, Lifecycle, StopLatch},
-    },
+use self::distance::{DistanceDecision, DriveOutcome};
+use crate::task::{
+    drive::types::ImuCalibrationKind,
+    procedure::Claim,
+    ui::{UiEvent, send_ui_event},
 };
 
 /// A calibration the controller can spawn.
-///
-/// Ticket 06 adds `Distance` when that calibration moves onto the controller.
 #[derive(Clone, Copy)]
 pub enum CalibrationCommand {
     /// The motor (track balance) calibration.
     Motor,
     /// The magnetometer calibration.
     Mag,
+    /// The distance calibration, which holds its claim through the value entry.
+    Distance,
 }
 
 /// Spawn requests for the controller, each carrying the claim it runs under.
 static CALIBRATION_COMMAND: Channel<CriticalSectionRawMutex, (CalibrationCommand, Claim), 4> = Channel::new();
-
-/// The stop request the distance calibration polls.
-///
-/// Removed with [`calibration_lifecycle`] when distance moves onto the controller
-/// in ticket 06.
-static CALIBRATION_STOP: StopLatch = StopLatch::new();
-
-/// Request that the running distance calibration stop.
-///
-/// Latches the calibration family's stop its drive step polls, and interrupts any
-/// drive in flight — stopping that leg is not a step boundary. The motor and
-/// magnetometer calibrations observe the Active Claim instead.
-pub fn request_stop() {
-    CALIBRATION_STOP.request();
-}
-
-/// The lifecycle the distance calibration runs `procedure` under.
-///
-/// It has no single-active slot — it still runs on its own old path — and raises
-/// no completion event: its flow crosses the value-entry screen, so the Panel, not
-/// the procedure, reports the finished calibration. Only distance calls this until
-/// ticket 06 removes it with the rest of the per-family lifecycle.
-const fn calibration_lifecycle(procedure: Procedure) -> Lifecycle {
-    Lifecycle::new(
-        procedure,
-        &CALIBRATION_STOP,
-        None,
-        match procedure {
-            Procedure::DistanceCalibration => Completion::Silent,
-            _ => Completion::OnBoth(calibration_completed),
-        },
-    )
-}
-
-/// The completion event a non-distance calibration lifecycle raises.
-///
-/// The motor and magnetometer calibrations now raise it through their `Claim`, so
-/// this copy only serves [`calibration_lifecycle`]'s non-distance arm until ticket
-/// 06 deletes both.
-const fn calibration_completed() -> Events {
-    Events::CalibrationCompleted
-}
 
 /// Initialize calibration support (spawns the controller task).
 #[allow(clippy::unwrap_used)]
@@ -117,6 +75,7 @@ pub async fn start(claim: Claim, procedure: Procedure) {
     let command = match procedure {
         Procedure::MotorCalibration => CalibrationCommand::Motor,
         Procedure::MagCalibration => CalibrationCommand::Mag,
+        Procedure::DistanceCalibration => CalibrationCommand::Distance,
         _ => {
             warn!("calibration: {} is not a calibration", procedure.label());
             claim.abandon().await;
@@ -152,6 +111,14 @@ async fn calibration_controller(spawner: Spawner) {
                     claim.release();
                 }
             }
+            CalibrationCommand::Distance => {
+                if let Ok(token) = distance_calibration_task(claim) {
+                    spawner.spawn(token);
+                } else {
+                    error!("calibration: distance spawn failed");
+                    claim.release();
+                }
+            }
         }
     }
 }
@@ -172,4 +139,35 @@ async fn motor_calibration_task(claim: Claim) {
 #[embassy_executor::task]
 async fn mag_calibration_task(claim: Claim) {
     imu::run_imu_calibration(ImuCalibrationKind::Mag, &claim).await;
+}
+
+/// Distance calibration task: the fixed-distance drive, then the value entry.
+///
+/// The task owns the claim across both, so the slot stays held while the operator
+/// measures and no other Procedure can start with the forced factor of 1.0. The
+/// drive step makes its own terminal call when it stops or fails; on success the
+/// task publishes the value screen's phase, tells the UI to show it, and makes the
+/// terminal call once the operator's [`DistanceDecision`] arrives.
+#[embassy_executor::task]
+async fn distance_calibration_task(claim: Claim) {
+    distance::begin().await;
+
+    match distance::run_drive_step(&claim).await {
+        DriveOutcome::Complete => {}
+        // The step already restored the factor and abandoned the claim, or failed
+        // it with the reason on the running screen: a second terminal call here
+        // would be a stale no-op, so the task simply ends.
+        DriveOutcome::Stopped | DriveOutcome::Failed => return,
+    }
+
+    claim.phase("Enter measured distance", None).await;
+    send_ui_event(UiEvent::DistanceDriveFinished).await;
+
+    match distance::wait_for_decision().await {
+        DistanceDecision::Commit(measured_cm) => {
+            distance::commit(measured_cm).await;
+        }
+        DistanceDecision::Cancel => distance::abort().await,
+    }
+    claim.abandon().await;
 }

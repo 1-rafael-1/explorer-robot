@@ -245,6 +245,9 @@ pub struct StopRequest {
     signal: Signal<CriticalSectionRawMutex, ()>,
 }
 
+// Temporary: `StopRequest`'s only caller is the per-family `StopLatch`, which is
+// dead until ticket 09 deletes it.
+#[allow(dead_code)]
 impl StopRequest {
     /// Create an un-requested latch.
     #[must_use]

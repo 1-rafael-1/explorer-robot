@@ -10,7 +10,7 @@
 //!
 //! Idle, the task selects over three sources:
 //! 1. the [`UiEvent`] channel — lifecycle events from the orchestrator, the boot
-//!    flow, and the distance-calibration drive the UI spawns;
+//!    flow, and the calibrations;
 //! 2. a periodic tick — refreshes the running screen from the activity state and
 //!    the System Info snapshot while that screen is shown;
 //! 3. the pen-down edge — starts a gesture, which is then polled to pen-up.
@@ -50,7 +50,7 @@ use crate::{
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
-        drive::calibration::{self as drive_calibration, distance::DriveOutcome},
+        drive::calibration::{self as drive_calibration, distance::DistanceDecision},
         io::panel::Panel,
         procedure::{self, Claim, ClaimKind, ScreenKind, StartOutcome},
         sensors::lidar::{self, LidarStatus},
@@ -61,7 +61,7 @@ use crate::{
 // ── UI event channel ────────────────────────────────────────────────────────────
 
 /// Events delivered to the UI controller task from the orchestrator, the boot
-/// flow, and the UI's own distance-calibration drive task.
+/// flow, and the calibrations.
 #[derive(Debug, Clone, Copy)]
 pub enum UiEvent {
     /// Request to show the main menu (from initialisation or the boot gate).
@@ -71,8 +71,8 @@ pub enum UiEvent {
     TestingCompleted,
     /// Calibration procedure finished; the outcome is in the activity state.
     CalibrationCompleted,
-    /// The distance calibration's drive step finished or failed; the value screen
-    /// or the failure reason follows from the activity state.
+    /// The distance calibration's drive step finished; the value screen follows
+    /// from the activity state.
     DistanceDriveFinished,
 }
 
@@ -85,9 +85,6 @@ static UI_EVENT_CHANNEL: Channel<CriticalSectionRawMutex, UiEvent, 64> = Channel
 pub async fn send_ui_event(event: UiEvent) {
     UI_EVENT_CHANNEL.sender().send(event).await;
 }
-
-/// Requests that the distance calibration's drive step run.
-static DISTANCE_DRIVE_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
 
 /// Requests that the coast-and-avoid drive mode start.
 static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
@@ -158,13 +155,11 @@ const REINIT_BACKOFF_MS: u64 = 2_000;
 ///
 /// The controller owns the panel's display, touch controller, and framebuffer
 /// for the lifetime of the firmware. The helper tasks own the procedures that
-/// cannot run on the UI task without freezing the panel: the distance
-/// calibration's fixed-distance drive, and the coast-and-avoid mode's `LiDAR`
-/// enable, which may take several seconds.
+/// cannot run on the UI task without freezing the panel: the coast-and-avoid
+/// mode's `LiDAR` enable, which may take several seconds.
 #[allow(clippy::unwrap_used)]
 pub fn init_ui(spawner: Spawner, pins: PanelResources) {
     spawner.spawn(ui_task(Panel::new(pins)).unwrap());
-    spawner.spawn(distance_calibration_drive_task().unwrap());
     spawner.spawn(coast_avoid_task().unwrap());
     spawner.spawn(room_scan_task().unwrap());
 }
@@ -186,21 +181,6 @@ pub async fn ui_is_calibrating() -> bool {
 /// Request that the UI show the main menu.
 pub async fn show_main_menu() {
     send_ui_event(UiEvent::ShowMainMenu).await;
-}
-
-/// Run the distance calibration's fixed-distance drive step and report back.
-///
-/// The step is one-shot per request: the UI asks for it when the operator opens
-/// the Distance entry, and the reply arrives as a [`UiEvent`] so the UI task is
-/// never blocked while the robot drives.
-#[embassy_executor::task]
-async fn distance_calibration_drive_task() {
-    loop {
-        DISTANCE_DRIVE_REQUEST.receive().await;
-        if drive_calibration::distance::run_drive_step().await != DriveOutcome::Stopped {
-            send_ui_event(UiEvent::DistanceDriveFinished).await;
-        }
-    }
 }
 
 /// Start coast-and-avoid when the panel asks, off the UI task.
@@ -552,26 +532,28 @@ async fn leave_room_scan() {
 
 /// Start the calibration `procedure`.
 ///
-/// Motor and magnetometer calibration take the one Active Claim with
-/// [`procedure::start`], which publishes the starting activity, and hand the claim
-/// to [`drive_calibration::start`], which routes it to the controller's task.
-/// Distance still runs on its old path until ticket 06. The running view takes its
-/// title and parent from the Procedure's identity. Every other Procedure belongs to
-/// another screen and is not a calibration, so it starts nothing.
+/// Every calibration takes the one Active Claim with [`procedure::start`], which
+/// publishes the starting activity, and hands the claim to
+/// [`drive_calibration::start`], which routes it to the controller's task. Distance
+/// keeps that claim through its value-entry screen, so a second start is refused
+/// until the operator commits or cancels. The running view takes its title and
+/// parent from the Procedure's identity. Every other Procedure belongs to another
+/// screen and is not a calibration, so it starts nothing.
 async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
     match procedure {
-        Procedure::MotorCalibration | Procedure::MagCalibration => match procedure::start(procedure).await {
-            StartOutcome::Started(claim) => {
-                drive_calibration::start(claim, procedure).await;
+        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
+            match procedure::start(procedure).await {
+                StartOutcome::Started(claim) => {
+                    drive_calibration::start(claim, procedure).await;
 
-                let snapshot = activity::snapshot().await;
-                ui.show_status(status_view(&snapshot));
+                    let snapshot = activity::snapshot().await;
+                    ui.show_status(status_view(&snapshot));
+                }
+                StartOutcome::Busy | StartOutcome::Rejected => {
+                    ui.show_screen(procedure.landing_screen());
+                }
             }
-            StartOutcome::Busy | StartOutcome::Rejected => {
-                ui.show_screen(procedure.landing_screen());
-            }
-        },
-        Procedure::DistanceCalibration => start_distance_calibration(ui).await,
+        }
         Procedure::CoastAndAvoid
         | Procedure::AttemptStraight
         | Procedure::BasicMotor
@@ -607,40 +589,31 @@ async fn record_attempt_straight(value_cm: i32) {
     debug!("[ui] attempt-straight recorded {} cm", target_cm);
 }
 
-/// Back up the distance factor and start the calibration's drive step.
+/// Send the measured distance to the calibration task, which stores the factor.
 ///
-/// The step runs on its own task and reports back through the activity state and
-/// a [`UiEvent`], so the panel stays live while the robot drives.
-async fn start_distance_calibration(ui: &mut Ui) {
-    ui.show_status(StatusView::for_procedure(Procedure::DistanceCalibration, "Starting"));
-
-    drive_calibration::distance::begin().await;
-    DISTANCE_DRIVE_REQUEST.send(()).await;
-}
-
-/// Commit the factor the operator measured, and forget the calibration.
+/// The task holds the claim across the value screen and makes the terminal call, so
+/// the UI sends only the decision: it never writes the factor or clears Activity.
 async fn save_distance_calibration(measured_cm: i32) {
-    let factor = drive_calibration::distance::commit(measured_cm).await;
-    debug!("[ui] distance calibration saved: factor {}", factor);
-    activity::clear().await;
+    drive_calibration::distance::send_decision(DistanceDecision::Commit(measured_cm)).await;
 }
 
-/// Restore the factor in force before the calibration, and forget it.
+/// Tell the calibration task to restore the factor in force before the run.
+///
+/// The task restores it and abandons the claim; the UI's Cancel has already left the
+/// value screen, and nothing here touches Activity.
 async fn cancel_distance_calibration() {
-    drive_calibration::distance::abort().await;
-    activity::clear().await;
+    drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
 }
 
 /// Stop whatever the running screen is showing, and forget it.
 ///
 /// `procedure::stop` latches the stop for whichever claim holds the slot and
 /// interrupts a drive in flight; the claim's owner cleans up and records the
-/// terminal outcome. The old family stops for the calibrations and coast-and-avoid
-/// remain until tickets 06 and 08; the activity state is cleared here for now,
-/// and ticket 09 removes that once every owner records its own end state.
+/// terminal outcome. Coast-and-avoid's own stop remains until ticket 08; the
+/// activity state is cleared here for now, and ticket 09 removes that once every
+/// owner records its own end state.
 async fn stop_running() {
     procedure::stop();
-    drive_calibration::request_stop();
     coast_obstacle_avoid::stop();
     activity::clear().await;
 }
@@ -667,13 +640,22 @@ async fn hold_or_leave_calibration(ui: &mut Ui) {
     }
 }
 
-/// Show the distance value screen once the drive step has finished, or hold the
-/// step's failure reason on screen.
+/// Show the distance value screen once the drive step has finished.
+///
+/// The calibration task publishes "Enter measured distance" before it sends the
+/// event, so the snapshot is running with that phase and the value screen takes
+/// over. The guards are defensive: the event is sent only for a completed drive, so
+/// an idle snapshot means the operator left the running screen while the event was
+/// in flight — the task is still waiting on the decision and holds the claim, so it
+/// is told to cancel rather than left holding the slot.
 async fn enter_distance_entry(ui: &mut Ui) {
     let snapshot = activity::snapshot().await;
 
     if snapshot.activity == Activity::Idle {
-        // The operator stopped the step; the panel already left its screen.
+        // The panel already left and cleared Activity; the task still owns the
+        // claim and waits for the decision, so cancel it to restore the factor and
+        // release.
+        drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
         return;
     }
 

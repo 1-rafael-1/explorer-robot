@@ -61,6 +61,9 @@ pub struct StopLatch {
     stop: StopRequest,
 }
 
+// Temporary: since ticket 06 no producer uses the per-family lifecycle, so this
+// latch has no caller until ticket 09 deletes it with the rest.
+#[allow(dead_code)]
 impl StopLatch {
     /// Create an un-requested latch.
     #[must_use]
@@ -132,6 +135,9 @@ pub enum Completion {
 /// A family with a slot refuses a second Procedure while the first holds it, and
 /// releases the slot when the first ends. A family without a slot stores `None`
 /// instead, and both the claim and the release are no-ops.
+// Temporary: no producer builds a guarded slot, so `claim` goes unread until
+// ticket 09 deletes the type.
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub struct Slot {
     /// Claims the slot, reporting whether it was free.
@@ -159,6 +165,9 @@ impl Slot {
 /// family's single-active slot, and its family's completion event — and calls it
 /// around its own body. It is not a runner: the producer still owns the body and
 /// its phase words.
+// Temporary: since ticket 06 no producer builds a `Lifecycle`, so it has no caller
+// until ticket 09 deletes it with the rest.
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub struct Lifecycle {
     /// The Procedure identity being run.
@@ -171,6 +180,8 @@ pub struct Lifecycle {
     completion: Completion,
 }
 
+// Temporary: see [`Lifecycle`] — the type is dead until ticket 09 deletes it.
+#[allow(dead_code)]
 impl Lifecycle {
     /// Build the lifecycle for `procedure`.
     #[must_use]
