@@ -10,13 +10,14 @@
 //!
 //! # Lifecycle
 //!
-//! [`begin`] is the only way in and [`clear`] the only way out; the boot flow uses
-//! the `_if_idle`/`_for` variants, which act only while the activity is the one it
-//! expects. While an activity is recorded, the producer moves it along with
-//! [`set_running`], [`complete`] or [`fail`]; those are no-ops once the state is
-//! idle, so a producer that outlives the operator's Stop cannot resurrect a
-//! finished procedure. A producer records its terminal state and leaves it for the
-//! UI to show; the UI clears it when it leaves the running screen.
+//! [`begin`] is the only way in and [`clear`] the only way out. While an activity is
+//! recorded, the producer moves it along with [`set_running`], [`complete`] or
+//! [`fail`]; those are no-ops once the state is idle, so a producer that outlives
+//! the operator's Stop cannot resurrect a finished procedure. A producer records
+//! its terminal state and leaves it for the UI to show; the UI clears it when it
+//! leaves the running screen. A [`crate::task::procedure::Claim`] is what publishes
+//! an Activity today, and its generation check keeps a displaced producer's late
+//! writes away from the next one.
 //!
 //! # Lock order
 //!
@@ -150,24 +151,6 @@ pub async fn begin(activity: Activity, detail: &'static str) {
     };
 }
 
-/// Start `activity` only if nothing else is running, reporting whether it did.
-///
-/// The boot flow uses this so a test or calibration already on screen keeps it:
-/// a background load has no business replacing what the operator is watching.
-pub async fn begin_if_idle(activity: Activity, detail: &'static str) -> bool {
-    let mut state = ACTIVITY_STATE.lock().await;
-    if state.activity != Activity::Idle {
-        return false;
-    }
-    *state = Snapshot {
-        activity,
-        stage: Stage::Running,
-        detail,
-        percent: None,
-    };
-    true
-}
-
 /// Advance the phase line and percent of the running activity.
 ///
 /// A no-op when nothing is running, so a stopped producer's late updates are
@@ -180,22 +163,6 @@ pub async fn set_running(detail: &'static str, percent: Option<u8>) {
     state.stage = Stage::Running;
     state.detail = detail;
     state.percent = percent;
-}
-
-/// Advance the phase line and percent, but only while `activity` is the one
-/// running.
-///
-/// The boot flow reports through this so a test or calibration that claimed the
-/// panel after boot started is never overwritten. Reports whether it updated.
-pub async fn set_running_for(activity: Activity, detail: &'static str, percent: Option<u8>) -> bool {
-    let mut state = ACTIVITY_STATE.lock().await;
-    if state.activity != activity {
-        return false;
-    }
-    state.stage = Stage::Running;
-    state.detail = detail;
-    state.percent = percent;
-    true
 }
 
 /// Record that the running activity finished successfully.
@@ -238,24 +205,6 @@ pub async fn clear() {
         detail: "",
         percent: None,
     };
-}
-
-/// Forget the running activity, but only while `activity` is the one running.
-///
-/// The boot flow uses this so it cannot clear a test or calibration that claimed
-/// the panel after boot started. Reports whether it cleared.
-pub async fn clear_for(activity: Activity) -> bool {
-    let mut state = ACTIVITY_STATE.lock().await;
-    if state.activity != activity {
-        return false;
-    }
-    *state = Snapshot {
-        activity: Activity::Idle,
-        stage: Stage::Running,
-        detail: "",
-        percent: None,
-    };
-    true
 }
 
 /// Read a consistent snapshot under a single lock.

@@ -157,21 +157,6 @@ fn release_testmode() {
     TESTMODE_ACTIVE.store(false, Ordering::Release);
 }
 
-/// Claim the single-active test-mode slot for Room Scan.
-///
-/// Room Scan is not a test-mode task, but it holds the same slot so a test
-/// cannot start while its radar screen is open and its radar screen cannot open
-/// while a test runs. Reports whether the slot was free.
-#[must_use]
-pub fn claim_room_scan() -> bool {
-    claim_testmode()
-}
-
-/// Release the slot [`claim_room_scan`] took.
-pub fn release_room_scan() {
-    release_testmode();
-}
-
 /// Submit a built queue, mapping a build or submit failure to a short reason.
 ///
 /// The reason is meant for the running screen, so it is short and static; the

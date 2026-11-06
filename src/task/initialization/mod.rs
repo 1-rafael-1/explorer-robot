@@ -4,36 +4,42 @@
 //! the main menu.
 //!
 //! Progress is reported through [`crate::system::state::activity`] — the boot
-//! flow claims the panel while it loads and records what it found — and this
-//! module formats no display text.
+//! flow takes the one Active Claim while it loads and records what it found — and
+//! this module formats no display text. The claim is held in [`BOOT_CLAIM`] and
+//! abandoned when the main menu is ready, because boot is not a Procedure and has
+//! no Result Report. When another claim already holds the slot, boot loads
+//! silently: it never writes over, or clears, a Procedure's Activity.
 
 use defmt::info;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 
 use crate::{
-    system::state::{
-        CalibrationStatus,
-        activity::{self, Activity},
-        calibration,
-    },
+    system::state::{CalibrationStatus, calibration},
     task::{
         io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
         motor_driver::{self, MotorCommand},
+        procedure::{self, Claim, ClaimKind},
         ui,
     },
 };
 
-/// The boot flow's activity, claimed for the duration of the load.
-const BOOT: Activity = Activity::Booting;
+/// The boot flow's Active Claim, held for the duration of the calibration load.
+///
+/// `None` when another claim already held the slot, and again once boot has
+/// abandoned its own; both mean boot writes no Activity.
+static BOOT_CLAIM: Mutex<CriticalSectionRawMutex, Option<Claim>> = Mutex::new(None);
 
 /// Handle system initialization.
 pub async fn handle_initialize() {
     info!("System initializing");
 
-    // Report the load through the activity state. A test or calibration that
-    // already owns the panel keeps it: the boot flow only claims an idle screen.
-    if !activity::begin_if_idle(BOOT, "Initializing").await {
-        info!("Boot flow: panel busy, reporting progress only to the log");
+    // Take the claim if it is free. A Procedure that already owns the slot keeps
+    // it: the boot flow then reports progress only to the log.
+    let claim = procedure::claim(ClaimKind::Boot).await;
+    if claim.is_none() {
+        info!("Boot flow: another claim is held, reporting progress only to the log");
     }
+    *BOOT_CLAIM.lock().await = claim;
 
     // Request motor calibration from flash.
     info!("Requesting motor calibration from flash");
@@ -57,6 +63,17 @@ pub async fn handle_initialize() {
     .await;
 
     // Note: initialization completes when calibration data arrives via events.
+}
+
+/// Publish a boot phase through the held claim, if there is one.
+///
+/// A late event from an older boot is inert: [`Claim::phase`] is a no-op once the
+/// claim's generation no longer holds the slot.
+async fn publish_phase(detail: &'static str, percent: Option<u8>) {
+    let claim = *BOOT_CLAIM.lock().await;
+    if let Some(claim) = claim {
+        claim.phase(detail, percent).await;
+    }
 }
 
 /// Handle calibration data loaded from flash storage.
@@ -98,7 +115,7 @@ async fn load_motor_calibration(data: Option<CalibrationDataKind>) {
         )))
         .await;
 
-        activity::set_running_for(BOOT, "Calibration loaded", None).await;
+        publish_phase("Calibration loaded", None).await;
     } else {
         info!("No motor calibration found - using defaults");
 
@@ -107,7 +124,7 @@ async fn load_motor_calibration(data: Option<CalibrationDataKind>) {
             state.motor_cal_status = CalibrationStatus::NotAvailable;
         }
 
-        activity::set_running_for(BOOT, "Need calibration", None).await;
+        publish_phase("Need calibration", None).await;
     }
 }
 
@@ -126,7 +143,7 @@ async fn load_distance_calibration(data: Option<CalibrationDataKind>) {
             let mut state = calibration::CALIBRATION_STATE.lock().await;
             state.distance_cal_status = CalibrationStatus::NotAvailable;
         }
-        activity::set_running_for(BOOT, "Need calibration", None).await;
+        publish_phase("Need calibration", None).await;
     }
 }
 
@@ -167,7 +184,13 @@ async fn check_initialization_complete() {
     };
 
     if should_show_menu {
-        activity::clear_for(BOOT).await;
+        // Boot is not a Result Report: it forgets its Activity and frees the slot.
+        // Taking the claim means a repeated completion check abandons nothing.
+        let boot_claim = BOOT_CLAIM.lock().await.take();
+        if let Some(claim) = boot_claim {
+            claim.abandon().await;
+        }
+
         if !ui::ui_is_calibrating().await {
             ui::show_main_menu().await;
         }

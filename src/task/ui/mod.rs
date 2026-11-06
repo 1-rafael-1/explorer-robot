@@ -34,7 +34,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use defmt::{debug, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use touch_ui::{
     CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
@@ -55,6 +55,7 @@ use crate::{
             calibration::{self as drive_calibration, distance::DriveOutcome},
         },
         io::panel::Panel,
+        procedure::{self, Claim, ClaimKind, ScreenKind},
         sensors::lidar::{self, LidarStatus},
         testmode,
     },
@@ -108,6 +109,14 @@ static ROOM_SCAN_WANTED: AtomicBool = AtomicBool::new(false);
 /// store-and-signal that lands just before a `wait()` makes that `wait()` return
 /// immediately and no state change can be lost.
 static ROOM_SCAN_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// The Room Scan claim, held while the radar screen is open.
+///
+/// The radar is not a Procedure, so its claim publishes no Activity; it exists so
+/// a Procedure cannot start behind the radar and the radar cannot open behind a
+/// Procedure. `None` while the radar is closed, and the stored claim is the only
+/// one there is: entering again while it is held is refused by the claim slot.
+static ROOM_SCAN_CLAIM: Mutex<CriticalSectionRawMutex, Option<Claim>> = Mutex::new(None);
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 
@@ -435,7 +444,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
         // A menu entry carries its identity, so what it starts does not depend on
         // the screen it was tapped on: the item names its own screen.
         (_, Some(Hit::MenuItem(item))) => handle_menu_item(ui, item).await,
-        (Screen::RoomScan, Some(Hit::Back)) => leave_room_scan(),
+        (Screen::RoomScan, Some(Hit::Back)) => leave_room_scan().await,
         (Screen::ValueEntry(ValueFlow::DistanceCalibration), Some(Hit::Save)) => {
             save_distance_calibration(value_before).await;
         }
@@ -458,7 +467,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
 /// silent change of which procedure a tap starts.
 async fn handle_menu_item(ui: &mut Ui, item: Item) {
     match item {
-        Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui),
+        Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui).await,
         Item::Procedure(procedure) => match procedure {
             Procedure::BasicMotor
             | Procedure::Turns
@@ -498,34 +507,43 @@ async fn start_test(ui: &mut Ui, procedure: Procedure) {
     ui.show_status(status_view(&snapshot));
 }
 
-/// Enter the Room Scan screen: claim the single-active test-mode slot and enable
-/// the sensor.
+/// Enter the Room Scan screen: claim the one Active Claim and enable the sensor.
 ///
-/// The model has already navigated to the radar screen. If another test owns the
-/// slot the entry is refused and the screen leaves again, so the radar never
-/// opens alongside a running test. The intent is latched for [`room_scan_task`]
-/// to pick up, so this returns immediately and the screen shows the sensor
-/// warming.
-fn enter_room_scan(ui: &mut Ui) {
-    if !testmode::claim_room_scan() {
-        warn!("[ui] room scan refused — another test is active");
+/// The model has already navigated to the radar screen. If another claim holds the
+/// slot the entry is refused and the screen leaves again, so the radar never opens
+/// alongside a running Procedure and the `LiDAR` is left alone. The claim publishes
+/// no Activity; it is stored in [`ROOM_SCAN_CLAIM`] until the screen leaves. The
+/// intent is latched for [`room_scan_task`] to pick up, so this returns immediately
+/// and the screen shows the sensor warming.
+async fn enter_room_scan(ui: &mut Ui) {
+    let Some(claim) = procedure::claim(ClaimKind::Screen(ScreenKind::RoomScan)).await else {
+        warn!("[ui] room scan refused — another claim is held");
         let _ = ui.back();
         return;
-    }
+    };
+
+    *ROOM_SCAN_CLAIM.lock().await = Some(claim);
     ROOM_SCAN_WANTED.store(true, Ordering::Release);
     ROOM_SCAN_SIGNAL.signal(());
 }
 
-/// Leave the Room Scan screen: release the single-active slot and clear the
-/// `LiDAR` need it holds.
+/// Leave the Room Scan screen: abandon the claim and clear the `LiDAR` need it
+/// holds.
 ///
-/// The intent is latched rather than awaited, so the panel never blocks; the
-/// lifecycle task acts on it even if the leave lands while the sensor is still
-/// warming. Called on every exit path, including a failed bring-up, it clears
-/// only the need this screen actually holds, so a failed bring-up powers down
-/// nothing and cannot stop a sensor another mode owns.
-fn leave_room_scan() {
-    testmode::release_room_scan();
+/// The claim is taken from [`ROOM_SCAN_CLAIM`], so one leave releases the slot even
+/// if the screen leaves twice, and a late leave cannot free a newer claim: `abandon`
+/// checks the generation and is otherwise a no-op. The intent is latched rather
+/// than awaited, so the panel never blocks; the lifecycle task acts on it even if
+/// the leave lands while the sensor is still warming. Called on every exit path,
+/// including a failed bring-up, it clears only the need this screen actually holds,
+/// so a failed bring-up powers down nothing and cannot stop a sensor another mode
+/// owns.
+async fn leave_room_scan() {
+    let claim = ROOM_SCAN_CLAIM.lock().await.take();
+    if let Some(claim) = claim {
+        claim.abandon().await;
+    }
+
     ROOM_SCAN_WANTED.store(false, Ordering::Release);
     ROOM_SCAN_SIGNAL.signal(());
 }
