@@ -1,16 +1,23 @@
-//! Typed payload codecs and the stream-keyed dispatch (ADR-0031).
+//! Typed payload codecs and the class-keyed dispatch (ADR-0031).
 //!
 //! Each payload is a typed struct implementing [`PayloadCodec`]. The id dispatch is the exhaustive
-//! [`Stream`] match in [`decode_stream`] and [`encode_stream`]; the codecs themselves never repeat
-//! an id constant.
+//! [`Stream`] match in [`decode_stream`] and [`encode_stream`] for telemetry, and the exhaustive
+//! [`Command`] match in [`decode_command`] and [`encode_command`] for commands; the codecs
+//! themselves never repeat an id constant.
 //!
 //! Decoding borrows from the input. That matters for `ACTIVITY`, whose detail is a `&str` into the
-//! frame payload, and it means no codec allocates.
+//! frame payload, and for the catalogue page and status snapshot, and it means no codec allocates.
 
 use crate::{
     error::{CodecError, EncodeError},
-    ids::Stream,
-    payload::stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
+    ids::{Command, Stream},
+    payload::{
+        command::{
+            AckPayload, CataloguePage, DriveDistance, GetCatalogue, GetStatus, RotateBy, StartProcedure,
+            StatusSnapshot, StopMotion, StopProcedure,
+        },
+        stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
+    },
 };
 
 /// A typed payload that can be encoded into, and decoded from, a frame payload.
@@ -102,6 +109,110 @@ pub fn encode_stream(sample: &StreamSample<'_>, out: &mut [u8]) -> Result<usize,
         StreamSample::Perception(perception) => perception.encode_into(out),
         StreamSample::LidarCloud(cloud) => cloud.encode_into(out),
         StreamSample::Calibration(calibration) => calibration.encode_into(out),
+    }
+}
+
+/// One typed command payload, tagged with the command it belongs to.
+///
+/// Requests are the seven PC-to-robot payloads. Acknowledgements are the generic
+/// [`AckPayload`] for ordinary commands and the two typed query responses for `GET_CATALOGUE` and
+/// `GET_STATUS`. The borrow is used by the opaque `START_PROCEDURE` parameters, the catalogue
+/// labels and the status detail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandMessage<'a> {
+    /// A `START_PROCEDURE` request.
+    StartProcedure(StartProcedure<'a>),
+    /// A `STOP_PROCEDURE` request.
+    StopProcedure(StopProcedure),
+    /// A `DRIVE_DISTANCE` request.
+    DriveDistance(DriveDistance),
+    /// A `ROTATE_BY` request.
+    RotateBy(RotateBy),
+    /// A `STOP_MOTION` request.
+    StopMotion(StopMotion),
+    /// A `GET_CATALOGUE` request.
+    GetCatalogue(GetCatalogue),
+    /// A `GET_STATUS` request.
+    GetStatus(GetStatus),
+    /// A `GET_CATALOGUE` acknowledgement.
+    CataloguePage(CataloguePage<'a>),
+    /// A `GET_STATUS` acknowledgement.
+    StatusSnapshot(StatusSnapshot<'a>),
+    /// A generic command acknowledgement: a status plus optional result bytes.
+    Ack(AckPayload<'a>),
+}
+
+impl CommandMessage<'_> {
+    /// Returns the command this message belongs to.
+    ///
+    /// The generic [`CommandMessage::Ack`] carries no id, so it returns [`None`]; the caller pairs
+    /// it with the frame's id, which ADR-0030 already mirrors from the request.
+    #[must_use]
+    pub const fn command(&self) -> Option<Command> {
+        match self {
+            Self::StartProcedure(_) => Some(Command::StartProcedure),
+            Self::StopProcedure(_) => Some(Command::StopProcedure),
+            Self::DriveDistance(_) => Some(Command::DriveDistance),
+            Self::RotateBy(_) => Some(Command::RotateBy),
+            Self::StopMotion(_) => Some(Command::StopMotion),
+            Self::GetCatalogue(_) | Self::CataloguePage(_) => Some(Command::GetCatalogue),
+            Self::GetStatus(_) | Self::StatusSnapshot(_) => Some(Command::GetStatus),
+            Self::Ack(_) => None,
+        }
+    }
+}
+
+/// Decodes one command payload, branching on `IS_ACK` (ADR-0031).
+///
+/// A request decodes as its request type. An acknowledgement decodes as the typed response for
+/// the two query commands and as the generic [`AckPayload`] for every other command.
+///
+/// # Errors
+///
+/// Returns [`CodecError::Length`] for a structural mismatch, [`CodecError::Value`] for an
+/// out-of-range value (including an unassigned ACK status) and [`CodecError::Utf8`] for invalid
+/// text.
+pub fn decode_command(command: Command, is_ack: bool, bytes: &[u8]) -> Result<CommandMessage<'_>, CodecError> {
+    if is_ack {
+        return match command {
+            Command::GetCatalogue => CataloguePage::decode(bytes).map(CommandMessage::CataloguePage),
+            Command::GetStatus => StatusSnapshot::decode(bytes).map(CommandMessage::StatusSnapshot),
+            Command::StartProcedure
+            | Command::StopProcedure
+            | Command::DriveDistance
+            | Command::RotateBy
+            | Command::StopMotion => AckPayload::decode(bytes).map(CommandMessage::Ack),
+        };
+    }
+    match command {
+        Command::StartProcedure => StartProcedure::decode(bytes).map(CommandMessage::StartProcedure),
+        Command::StopProcedure => StopProcedure::decode(bytes).map(CommandMessage::StopProcedure),
+        Command::DriveDistance => DriveDistance::decode(bytes).map(CommandMessage::DriveDistance),
+        Command::RotateBy => RotateBy::decode(bytes).map(CommandMessage::RotateBy),
+        Command::StopMotion => StopMotion::decode(bytes).map(CommandMessage::StopMotion),
+        Command::GetCatalogue => GetCatalogue::decode(bytes).map(CommandMessage::GetCatalogue),
+        Command::GetStatus => GetStatus::decode(bytes).map(CommandMessage::GetStatus),
+    }
+}
+
+/// Encodes one typed command payload into `out`, returning the number of bytes written.
+///
+/// # Errors
+///
+/// Returns [`EncodeError::BufferTooSmall`] when `out` cannot hold the payload and
+/// [`EncodeError::Value`] when a field cannot be represented in the wire layout.
+pub fn encode_command(message: &CommandMessage<'_>, out: &mut [u8]) -> Result<usize, EncodeError> {
+    match message {
+        CommandMessage::StartProcedure(value) => value.encode_into(out),
+        CommandMessage::StopProcedure(value) => value.encode_into(out),
+        CommandMessage::DriveDistance(value) => value.encode_into(out),
+        CommandMessage::RotateBy(value) => value.encode_into(out),
+        CommandMessage::StopMotion(value) => value.encode_into(out),
+        CommandMessage::GetCatalogue(value) => value.encode_into(out),
+        CommandMessage::GetStatus(value) => value.encode_into(out),
+        CommandMessage::CataloguePage(value) => value.encode_into(out),
+        CommandMessage::StatusSnapshot(value) => value.encode_into(out),
+        CommandMessage::Ack(value) => value.encode_into(out),
     }
 }
 

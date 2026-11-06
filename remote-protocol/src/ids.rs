@@ -15,6 +15,17 @@
 //! | `0x0013` | `CAMERA_DETECTIONS` | reserved |
 //! | `0x0014` | `LOG` | reserved |
 //!
+//! Reserved command ids (never variants until implemented):
+//!
+//! | id | command | meaning |
+//! |---|---|---|
+//! | `0x0010` | `DRIVE_TO_POSE` | absolute |
+//! | `0x0011` | `DRIVE_TO_BEARING` | absolute |
+//! | `0x0012` | `SET_DIFFERENTIAL` | joystick/teleop |
+//! | `0x0013` | `GET_POSE` | reserved |
+//! | `0x0014` | `GET_MAP` | reserved |
+//! | `0x0015` | `GET_CAMERA` | reserved |
+//!
 //! `0x0007–0x000F` stay free for future core streams, and ids are never reassigned.
 
 /// A telemetry stream id (robot to PC, lossy and latest-wins).
@@ -86,6 +97,84 @@ impl Stream {
             0x0004 => Some(Self::Perception),
             0x0005 => Some(Self::LidarCloud),
             0x0006 => Some(Self::Calibration),
+            _ => None,
+        }
+    }
+}
+
+/// A command id (PC to robot, reliable and at-most-once).
+///
+/// The discriminants are the ADR-0031 wire ids. This enum is deliberately not
+/// `#[non_exhaustive]`: a new command is a reviewed change to the catalogue. Reserved command ids
+/// stay out of [`Command::ALL`] until a later minor implements them.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Command {
+    /// `START_PROCEDURE`: start a Procedure with opaque parameters.
+    StartProcedure = 0x0001,
+    /// `STOP_PROCEDURE`: stop a Procedure by id.
+    StopProcedure = 0x0002,
+    /// `DRIVE_DISTANCE`: drive a relative distance.
+    DriveDistance = 0x0003,
+    /// `ROTATE_BY`: rotate by a relative angle.
+    RotateBy = 0x0004,
+    /// `STOP_MOTION`: coast or brake immediately.
+    StopMotion = 0x0005,
+    /// `GET_CATALOGUE`: read one page of the Procedure catalogue.
+    GetCatalogue = 0x0006,
+    /// `GET_STATUS`: read one snapshot of the robot's status.
+    GetStatus = 0x0007,
+}
+
+impl Command {
+    /// Every implemented command, in wire order.
+    pub const ALL: [Self; 7] = [
+        Self::StartProcedure,
+        Self::StopProcedure,
+        Self::DriveDistance,
+        Self::RotateBy,
+        Self::StopMotion,
+        Self::GetCatalogue,
+        Self::GetStatus,
+    ];
+
+    /// The number of implemented commands.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// Returns the wire id of this command.
+    #[must_use]
+    pub const fn wire_id(self) -> u16 {
+        self as u16
+    }
+
+    /// Returns the position of this command in [`Command::ALL`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::StartProcedure => 0,
+            Self::StopProcedure => 1,
+            Self::DriveDistance => 2,
+            Self::RotateBy => 3,
+            Self::StopMotion => 4,
+            Self::GetCatalogue => 5,
+            Self::GetStatus => 6,
+        }
+    }
+
+    /// Builds a command from its wire id, returning [`None`] for an unimplemented or reserved id.
+    ///
+    /// The match is exhaustive over the implemented variants; every other id is unknown to this
+    /// version of the protocol and is answered with `UNKNOWN_ID`.
+    #[must_use]
+    pub const fn from_wire(id: u16) -> Option<Self> {
+        match id {
+            0x0001 => Some(Self::StartProcedure),
+            0x0002 => Some(Self::StopProcedure),
+            0x0003 => Some(Self::DriveDistance),
+            0x0004 => Some(Self::RotateBy),
+            0x0005 => Some(Self::StopMotion),
+            0x0006 => Some(Self::GetCatalogue),
+            0x0007 => Some(Self::GetStatus),
             _ => None,
         }
     }

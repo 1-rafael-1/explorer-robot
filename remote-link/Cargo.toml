@@ -20,3 +20,7 @@ workspace = true
 [[test]]
 name = "streams"
 required-features = ["std"]
+
+[[test]]
+name = "commands"
+required-features = ["std"]

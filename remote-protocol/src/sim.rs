@@ -10,10 +10,11 @@
 use std::{collections::VecDeque, vec::Vec};
 
 use crate::{
-    codec::{StreamSample, decode_stream},
-    frame::{Class, Direction, Seq},
-    ids::Stream,
-    parser::RobotToPcParser,
+    PROTOCOL_MAJOR,
+    codec::{CommandMessage, StreamSample, decode_command, decode_stream, encode_command},
+    frame::{Class, Direction, Flags, Frame, Seq},
+    ids::{Command, Stream},
+    parser::{MAX_PC_TO_ROBOT_FRAME, RobotToPcParser},
 };
 
 /// The baud the simulated remote assumes; both directions derive a 50 ms timeout from it.
@@ -187,19 +188,26 @@ impl Wire {
     }
 }
 
-/// A daemon-shaped peer that decodes robot-to-PC telemetry from a [`Wire`].
+/// A daemon-shaped peer that decodes robot-to-PC telemetry from, and sends commands to, a
+/// [`Wire`].
 ///
-/// This ticket needs the receive half only: feed the wire's robot-to-PC bytes through the real
-/// [`RobotToPcParser`] and read back the typed samples. Later tickets extend the same type with
-/// `HELLO`/`PING`, commands, events and `THROTTLE`; the receive path here already ignores every
-/// non-stream class, so it stays valid as those are added.
+/// Feed the wire's robot-to-PC bytes through the real [`RobotToPcParser`] and read back the typed
+/// samples and command ACKs. [`FakeRemote::send_command`] encodes a request with the real codecs
+/// and the next sequence number, so a test exercises the same bytes the daemon would put on the
+/// wire. Later tickets extend the same type with `HELLO`/`PING`, events and `THROTTLE`.
 pub struct FakeRemote {
     /// The real robot-to-PC parser, so the simulated path exercises the committed state machine.
     parser: RobotToPcParser,
     /// Received stream frames in arrival order, each payload copied out of the parser.
     received: Vec<(Stream, Seq, Vec<u8>)>,
+    /// Received command ACKs in arrival order, each payload copied out of the parser.
+    received_acks: Vec<(Command, Seq, Vec<u8>)>,
     /// Unknown stream ids seen so far; they are ignored, never decoded.
     unknown_streams: u32,
+    /// Unknown command ids seen in ACKs; they are ignored, never decoded.
+    unknown_acks: u32,
+    /// The next command sequence; commands start at 1 and zero is never sent.
+    command_seq: u16,
 }
 
 impl FakeRemote {
@@ -209,7 +217,10 @@ impl FakeRemote {
         Self {
             parser: RobotToPcParser::new(Direction::RobotToPc, SIM_BAUD),
             received: Vec::new(),
+            received_acks: Vec::new(),
             unknown_streams: 0,
+            unknown_acks: 0,
+            command_seq: 1,
         }
     }
 
@@ -223,24 +234,79 @@ impl FakeRemote {
     /// Feeds raw robot-to-PC bytes through the real parser and returns how many stream frames
     /// completed.
     ///
-    /// Unknown stream ids are counted and ignored. Non-stream classes are ignored until a later
-    /// ticket implements them.
+    /// Unknown stream ids are counted and ignored. Command frames carrying `IS_ACK` are copied
+    /// into the ACK log; every other non-stream class is ignored until a later ticket implements
+    /// it.
     pub fn feed(&mut self, bytes: &[u8], now_ms: u32) -> usize {
         let before = self.received.len();
         let received = &mut self.received;
+        let received_acks = &mut self.received_acks;
         let mut unknown = 0u32;
-        self.parser.feed(bytes, now_ms, |frame| {
-            if frame.header.class != Class::Stream {
-                return;
+        let mut unknown_acks = 0u32;
+        self.parser.feed(bytes, now_ms, |frame| match frame.header.class {
+            Class::Stream => {
+                let Some(stream) = Stream::from_wire(frame.header.id) else {
+                    unknown = unknown.saturating_add(1);
+                    return;
+                };
+                received.push((stream, frame.header.seq, frame.payload.to_vec()));
             }
-            let Some(stream) = Stream::from_wire(frame.header.id) else {
-                unknown = unknown.saturating_add(1);
-                return;
-            };
-            received.push((stream, frame.header.seq, frame.payload.to_vec()));
+            Class::Command => {
+                if !frame.header.flags.contains(Flags::IS_ACK) {
+                    return;
+                }
+                let Some(command) = Command::from_wire(frame.header.id) else {
+                    unknown_acks = unknown_acks.saturating_add(1);
+                    return;
+                };
+                received_acks.push((command, frame.header.seq, frame.payload.to_vec()));
+            }
+            Class::Event | Class::Control => {}
         });
         self.unknown_streams = self.unknown_streams.saturating_add(unknown);
+        self.unknown_acks = self.unknown_acks.saturating_add(unknown_acks);
         self.received.len() - before
+    }
+
+    /// Encodes `command` with `payload` and sends it to the robot with `ACK_REQUESTED`.
+    ///
+    /// The sequence number starts at 1 and advances on every send, so a test never has to invent
+    /// one. Returns the sequence used, or [`None`] if the payload does not fit the frame.
+    pub fn send_command(&mut self, wire: &mut Wire, command: Command, payload: &[u8]) -> Option<Seq> {
+        let seq = Seq::new(self.command_seq);
+        if !self.send_command_frame(wire, command.wire_id(), seq, Flags::ACK_REQUESTED, payload) {
+            return None;
+        }
+        let next = self.command_seq.wrapping_add(1);
+        self.command_seq = if next == 0 { 1 } else { next };
+        Some(seq)
+    }
+
+    /// Encodes a typed request message and sends it with the next sequence number.
+    ///
+    /// The generic [`CommandMessage::Ack`] variant carries no id and is rejected.
+    pub fn send_command_message(&mut self, wire: &mut Wire, message: &CommandMessage<'_>) -> Option<Seq> {
+        let command = message.command()?;
+        let mut payload = [0u8; MAX_PC_TO_ROBOT_FRAME];
+        let written = encode_command(message, &mut payload).ok()?;
+        self.send_command(wire, command, &payload[..written])
+    }
+
+    /// Sends one command frame with an explicit id, sequence and flags.
+    ///
+    /// This is the escape hatch for duplicate sequences, unknown ids and malformed flag
+    /// combinations; it does not touch the automatic sequence counter. Returns `false` when the
+    /// frame cannot be encoded.
+    pub fn send_command_frame(&mut self, wire: &mut Wire, id: u16, seq: Seq, flags: Flags, payload: &[u8]) -> bool {
+        let Ok(frame) = Frame::new(PROTOCOL_MAJOR, Class::Command, flags, id, seq, payload) else {
+            return false;
+        };
+        let mut bytes = [0u8; MAX_PC_TO_ROBOT_FRAME];
+        let Ok(written) = frame.encode_into(&mut bytes) else {
+            return false;
+        };
+        wire.send(Direction::PcToRobot, &bytes[..written]);
+        true
     }
 
     /// Returns every received stream frame in arrival order with its decoded sample.
@@ -286,6 +352,60 @@ impl FakeRemote {
     #[must_use]
     pub const fn unknown_streams(&self) -> u32 {
         self.unknown_streams
+    }
+
+    /// Returns every received command ACK in arrival order with its decoded message.
+    ///
+    /// An ACK whose payload the codec rejects is skipped, mirroring [`FakeRemote::streams`].
+    pub fn acks(&self) -> impl Iterator<Item = (Command, Seq, CommandMessage<'_>)> + '_ {
+        self.received_acks.iter().filter_map(|(command, seq, payload)| {
+            decode_command(*command, true, payload)
+                .ok()
+                .map(|message| (*command, *seq, message))
+        })
+    }
+
+    /// Returns the most recently received command ACK, if any survived decoding.
+    #[must_use]
+    pub fn last_ack(&self) -> Option<(Command, Seq, CommandMessage<'_>)> {
+        self.acks().last()
+    }
+
+    /// Returns the status of the most recent generic ACK, if there is one.
+    ///
+    /// The two query responses carry a typed payload instead of a status byte and return [`None`].
+    #[must_use]
+    pub fn last_ack_status(&self) -> Option<crate::frame::Status> {
+        match self.last_ack()?.2 {
+            CommandMessage::Ack(ack) => Some(ack.status),
+            CommandMessage::StartProcedure(_)
+            | CommandMessage::StopProcedure(_)
+            | CommandMessage::DriveDistance(_)
+            | CommandMessage::RotateBy(_)
+            | CommandMessage::StopMotion(_)
+            | CommandMessage::GetCatalogue(_)
+            | CommandMessage::GetStatus(_)
+            | CommandMessage::CataloguePage(_)
+            | CommandMessage::StatusSnapshot(_) => None,
+        }
+    }
+
+    /// Returns how many command ACKs have been received.
+    #[must_use]
+    pub const fn ack_count(&self) -> usize {
+        self.received_acks.len()
+    }
+
+    /// Returns how many unknown command ids have been ignored in ACKs.
+    #[must_use]
+    pub const fn unknown_acks(&self) -> u32 {
+        self.unknown_acks
+    }
+
+    /// Returns the next command sequence number the remote will use.
+    #[must_use]
+    pub const fn next_command_seq(&self) -> u16 {
+        self.command_seq
     }
 }
 
