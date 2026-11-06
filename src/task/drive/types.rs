@@ -69,6 +69,19 @@ pub enum DriveAction {
         /// Target speed magnitude (0-100).
         speed: u8,
     },
+    /// Drive at a speed and hold a heading until interrupted.
+    ///
+    /// This is the straight controller without a target: there is no distance
+    /// to reach, no ramp-down and no successful completion. It ends `Cancelled`
+    /// on any drive interrupt, or `Failed` on a stall, encoder timeout/loss or
+    /// IMU loss.
+    #[allow(dead_code)]
+    DriveContinuous {
+        /// Drive direction (forward or backward).
+        direction: DriveDirection,
+        /// Speed magnitude (0-100).
+        speed: u8,
+    },
     /// Active electrical braking.
     ///
     /// Completion is reported only after encoder counts settle.

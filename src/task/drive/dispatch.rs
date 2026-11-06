@@ -123,6 +123,10 @@ impl DriveLoop {
                 self.handle_drive_distance(kind, direction, speed, completion_requested)
                     .await;
             }
+            DriveAction::DriveContinuous { direction, speed } => {
+                self.handle_drive_continuous(direction, speed, completion_requested)
+                    .await;
+            }
             DriveAction::Coast => {
                 self.handle_coast(completion_requested).await;
             }
@@ -152,7 +156,10 @@ impl DriveLoop {
             return;
         }
         match action {
-            DriveAction::Differential { .. } | DriveAction::RotateExact { .. } | DriveAction::DriveDistance { .. } => {
+            DriveAction::Differential { .. }
+            | DriveAction::RotateExact { .. }
+            | DriveAction::DriveDistance { .. }
+            | DriveAction::DriveContinuous { .. } => {
                 motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
                 self.standby_enabled = false;
                 Timer::after(Duration::from_millis(100)).await;
@@ -198,6 +205,16 @@ impl DriveLoop {
         if let Some(intent) = DistanceDriveState::init(kind, direction, speed, completion_requested).await {
             self.active_intent = Some(intent);
         }
+    }
+
+    /// Handle a `DriveContinuous` command — delegates to `distance::init_continuous()`.
+    async fn handle_drive_continuous(
+        &mut self,
+        direction: types::DriveDirection,
+        speed: u8,
+        completion_requested: bool,
+    ) {
+        self.active_intent = Some(DistanceDriveState::init_continuous(direction, speed, completion_requested).await);
     }
 
     /// Handle a `Coast` command.
@@ -351,7 +368,10 @@ pub(super) async fn execute_intent_teardown(teardown: IntentTeardown) {
 const fn action_requires_imu(action: &DriveAction) -> bool {
     matches!(
         action,
-        DriveAction::Differential { .. } | DriveAction::DriveDistance { .. } | DriveAction::RotateExact { .. }
+        DriveAction::Differential { .. }
+            | DriveAction::DriveDistance { .. }
+            | DriveAction::DriveContinuous { .. }
+            | DriveAction::RotateExact { .. }
     )
 }
 

@@ -52,6 +52,13 @@ pub(super) enum ActiveIntent {
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
+    /// Active continuous drive intent: a speed and heading held until interrupted.
+    DriveContinuous {
+        /// Straight controller state (encoder progress, heading hold).
+        state: DistanceDriveState,
+        /// Whether this intent should emit a completion event when finished.
+        completion_requested: bool,
+    },
     /// Active idle intent with a fixed duration.
     Idle {
         /// Duration to remain idle (milliseconds).
@@ -93,7 +100,9 @@ impl ActiveIntent {
     pub(super) const fn teardown(&self) -> super::types::IntentTeardown {
         match self {
             Self::RotateExact { .. } => super::types::IntentTeardown::RotationImu,
-            Self::DriveDistance { .. } => super::types::IntentTeardown::DistanceImuAndMotors,
+            Self::DriveDistance { .. } | Self::DriveContinuous { .. } => {
+                super::types::IntentTeardown::DistanceImuAndMotors
+            }
             Self::Idle { .. } => super::types::IntentTeardown::None,
             Self::BrakeCoast { .. } => super::types::IntentTeardown::EncoderSettle,
         }
@@ -106,6 +115,9 @@ impl ActiveIntent {
                 completion_requested, ..
             }
             | Self::DriveDistance {
+                completion_requested, ..
+            }
+            | Self::DriveContinuous {
                 completion_requested, ..
             }
             | Self::Idle {
@@ -144,7 +156,11 @@ impl ActiveIntent {
                     duration_ms,
                 }
             }
-            Self::Idle { .. } | Self::BrakeCoast { .. } => super::types::CompletionTelemetry::None,
+            // A continuous drive has no target and no success telemetry, so an
+            // interrupt reports none rather than overloading `DriveDistance`.
+            Self::DriveContinuous { .. } | Self::Idle { .. } | Self::BrakeCoast { .. } => {
+                super::types::CompletionTelemetry::None
+            }
         }
     }
 }
