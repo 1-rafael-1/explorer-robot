@@ -47,15 +47,21 @@ const SETTLE_MS: u64 = 500;
 
 /// Spawn the straight drive test task via the controller.
 ///
-/// The caller's claim travels with the task; a spawn that fails releases it so a
-/// dead task does not hold the slot.
-pub(super) fn spawn(spawner: Spawner, claim: Claim) {
-    if let Ok(token) = straight_drive_test_task(claim) {
-        spawner.spawn(token);
-    } else {
-        error!("straight: spawn failed");
-        claim.release();
-    }
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    straight_drive_test_task(claim).map_or_else(
+        |_| {
+            error!("straight: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// Straight drive test task: runs both legs, then reports the claim's terminal
@@ -99,7 +105,13 @@ async fn run_straight_drive_test(claim: &Claim) -> bool {
             .await;
 
         match submit(build_leg(*direction)).await {
-            Ok(completion) => report_leg(&completion),
+            Ok(completion) => {
+                report_leg(&completion);
+                // A cancelled leg is a stop, not a completed leg.
+                if completion.status == CompletionStatus::Cancelled || claim.is_stop_requested() {
+                    return false;
+                }
+            }
             Err(reason) => {
                 claim.fail(reason).await;
                 return false;
@@ -109,7 +121,11 @@ async fn run_straight_drive_test(claim: &Claim) -> bool {
         // Brake, then let the robot settle before the operator's next leg or the
         // measurement. The settle is a queue step so a Stop can cancel it.
         match submit(build_settle()).await {
-            Ok(_) => {}
+            Ok(completion) => {
+                if completion.status == CompletionStatus::Cancelled || claim.is_stop_requested() {
+                    return false;
+                }
+            }
             Err(reason) => {
                 claim.fail(reason).await;
                 return false;
@@ -118,7 +134,7 @@ async fn run_straight_drive_test(claim: &Claim) -> bool {
     }
 
     send_drive_command(DriveCommand::Drive(DriveAction::Coast)).await;
-    true
+    !claim.is_stop_requested()
 }
 
 /// Build one leg's queue: the straight drive alone, so its telemetry is the

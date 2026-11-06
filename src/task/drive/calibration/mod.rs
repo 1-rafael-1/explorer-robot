@@ -88,37 +88,50 @@ pub async fn start(claim: Claim, procedure: Procedure) {
 
 /// Controller task that spawns a calibration task per request.
 ///
-/// A spawn that fails releases the claim so a dead task does not leave the slot
-/// held; the task itself releases only through its terminal call.
+/// A spawn that fails abandons the claim so a dead task does not leave the slot
+/// held or the starting Activity on screen; the task itself releases only through
+/// its terminal call.
 #[embassy_executor::task]
 async fn calibration_controller(spawner: Spawner) {
     loop {
         let (command, claim) = CALIBRATION_COMMAND.receive().await;
-        match command {
-            CalibrationCommand::Motor => {
-                if let Ok(token) = motor_calibration_task(claim) {
-                    spawner.spawn(token);
-                } else {
+        let task_started = match command {
+            CalibrationCommand::Motor => motor_calibration_task(claim).map_or_else(
+                |_| {
                     error!("calibration: motor spawn failed");
-                    claim.release();
-                }
-            }
-            CalibrationCommand::Mag => {
-                if let Ok(token) = mag_calibration_task(claim) {
+                    false
+                },
+                |token| {
                     spawner.spawn(token);
-                } else {
+                    true
+                },
+            ),
+            CalibrationCommand::Mag => mag_calibration_task(claim).map_or_else(
+                |_| {
                     error!("calibration: mag spawn failed");
-                    claim.release();
-                }
-            }
-            CalibrationCommand::Distance => {
-                if let Ok(token) = distance_calibration_task(claim) {
+                    false
+                },
+                |token| {
                     spawner.spawn(token);
-                } else {
+                    true
+                },
+            ),
+            CalibrationCommand::Distance => distance_calibration_task(claim).map_or_else(
+                |_| {
                     error!("calibration: distance spawn failed");
-                    claim.release();
-                }
-            }
+                    false
+                },
+                |token| {
+                    spawner.spawn(token);
+                    true
+                },
+            ),
+        };
+
+        if !task_started {
+            // A task slot was unavailable: no body will run, so clear the starting
+            // Activity and release the claim rather than leave it held.
+            claim.abandon().await;
         }
     }
 }
@@ -163,11 +176,12 @@ async fn distance_calibration_task(claim: Claim) {
     claim.phase("Enter measured distance", None).await;
     send_ui_event(UiEvent::DistanceDriveFinished).await;
 
-    match distance::wait_for_decision().await {
-        DistanceDecision::Commit(measured_cm) => {
+    match distance::wait_for_decision_or_stop(&claim).await {
+        Some(DistanceDecision::Commit(measured_cm)) => {
             distance::commit(measured_cm).await;
         }
-        DistanceDecision::Cancel => distance::abort().await,
+        // A cancel or a stop both restore the factor the run overrode.
+        Some(DistanceDecision::Cancel) | None => distance::abort().await,
     }
     claim.abandon().await;
 }

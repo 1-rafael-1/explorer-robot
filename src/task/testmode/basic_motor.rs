@@ -77,15 +77,21 @@ const LEGS: [Leg; 4] = [
 
 /// Spawn the basic motor test task via the controller.
 ///
-/// The caller's claim travels with the task; a spawn that fails releases it so a
-/// dead task does not hold the slot.
-pub(super) fn spawn(spawner: Spawner, claim: Claim) {
-    if let Ok(token) = basic_motor_test_task(claim) {
-        spawner.spawn(token);
-    } else {
-        error!("basic-motor: spawn failed");
-        claim.release();
-    }
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    basic_motor_test_task(claim).map_or_else(
+        |_| {
+            error!("basic-motor: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// Basic motor test mode runner.

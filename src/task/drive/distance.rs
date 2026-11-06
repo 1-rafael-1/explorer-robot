@@ -106,9 +106,6 @@ const STRAIGHT_IMU_CORRECTION_SCALE: f32 = 0.15;
 /// Stall timeout during distance driving (milliseconds).
 const STALL_TIMEOUT_MS: u64 = 1500;
 
-/// Commanded distance for a continuous drive: unbounded, so it never completes.
-const UNBOUNDED_DISTANCE_CM: f32 = f32::INFINITY;
-
 // ── Encoder delta helpers (previously in drift/math) ───────────────────────
 
 /// 16-bit counter delta with wraparound handling.
@@ -311,24 +308,18 @@ impl DistanceDriveState {
 
     /// Create a continuous drive state: the straight controller with no target.
     ///
-    /// Built through [`Self::new`] so it shares the straight controller's
-    /// geometry and distance calibration factor; with no distance to travel,
-    /// the factor only converts an unbounded target, so there is nothing to
-    /// reach and nothing to ramp down for.
+    /// Built through [`Self::new`] so it shares the straight controller's geometry
+    /// and distance calibration factor. The nominal distance is zero because
+    /// [`DistanceMode::Continuous`] never consults the target or the progress
+    /// ratios: it holds the commanded speed until an interrupt arrives.
     pub(super) fn new_continuous(direction: types::DriveDirection, base_speed: u8, calibration_factor: f32) -> Self {
         let mut state = Self::new(
-            types::DriveDistanceKind::Straight {
-                distance_cm: UNBOUNDED_DISTANCE_CM,
-            },
+            types::DriveDistanceKind::Straight { distance_cm: 0.0 },
             direction,
             base_speed,
             calibration_factor,
         );
         state.mode = DistanceMode::Continuous;
-        // A straight drive's ratios are unity; the unbounded target makes the
-        // ratio computation `inf / inf`, so reset it explicitly.
-        state.left_ratio = 1.0;
-        state.right_ratio = 1.0;
         state
     }
 

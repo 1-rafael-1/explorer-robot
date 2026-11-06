@@ -169,6 +169,12 @@ async fn run(claim: &Claim) -> Outcome {
     let mut turn_clockwise = true;
 
     loop {
+        // A stop may land while no queue is in flight (between legs, or just after
+        // the task is spawned). The latch, not the drive interrupt, is the authority.
+        if claim.is_stop_requested() {
+            return Outcome::Stopped;
+        }
+
         // Pre-flight: only clear ground starts a forward leg, and starting one
         // resets the blocked counter.
         if !blocked_ahead() {
@@ -182,6 +188,9 @@ async fn run(claim: &Claim) -> Outcome {
 
         // Avoidance: keep manoeuvring until the pre-flight is clear.
         loop {
+            if claim.is_stop_requested() {
+                return Outcome::Stopped;
+            }
             if blocked_manoeuvres >= BLOCKED_MANOEUVRE_LIMIT {
                 return Outcome::Failed("Blocked");
             }
@@ -209,10 +218,25 @@ async fn run(claim: &Claim) -> Outcome {
 
 /// Run the forward leg and classify how it ended.
 async fn run_forward(claim: &Claim) -> ForwardOutcome {
+    if claim.is_stop_requested() {
+        return ForwardOutcome::Stopped;
+    }
+
     info!("coast-avoid: driving forward");
 
     match submit_queue(build_forward()).await {
-        Err(reason) => ForwardOutcome::Failed(reason),
+        Err(reason) => {
+            if claim.is_stop_requested() {
+                ForwardOutcome::Stopped
+            } else {
+                ForwardOutcome::Failed(reason)
+            }
+        }
+        Ok(_completion) if claim.is_stop_requested() => {
+            // A stop can latch while the queue is resolving without the queue
+            // seeing an interrupt (for example, just as it completes).
+            ForwardOutcome::Stopped
+        }
         Ok(completion) => match completion.status {
             CompletionStatus::Cancelled => {
                 if claim.is_stop_requested() {
@@ -237,6 +261,10 @@ async fn run_forward(claim: &Claim) -> ForwardOutcome {
 
 /// Run one avoidance manoeuvre and classify how it ended.
 async fn run_manoeuvre(claim: &Claim, clockwise: bool) -> ManoeuvreOutcome {
+    if claim.is_stop_requested() {
+        return ManoeuvreOutcome::Stopped;
+    }
+
     let degrees = random_turn_angle();
     let direction = if clockwise {
         RotationDirection::Clockwise
@@ -251,7 +279,14 @@ async fn run_manoeuvre(claim: &Claim, clockwise: bool) -> ManoeuvreOutcome {
     );
 
     match submit_queue(build_manoeuvre(f32::from(degrees), direction)).await {
-        Err(reason) => ManoeuvreOutcome::Failed(reason),
+        Err(reason) => {
+            if claim.is_stop_requested() {
+                ManoeuvreOutcome::Stopped
+            } else {
+                ManoeuvreOutcome::Failed(reason)
+            }
+        }
+        Ok(_completion) if claim.is_stop_requested() => ManoeuvreOutcome::Stopped,
         Ok(completion) => match completion.status {
             CompletionStatus::Success => ManoeuvreOutcome::Attempted,
             CompletionStatus::Cancelled => {

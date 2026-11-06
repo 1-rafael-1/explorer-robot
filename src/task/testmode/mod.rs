@@ -111,13 +111,20 @@ pub(super) const fn status_label(status: &CompletionStatus) -> &'static str {
 async fn testmode_controller(spawner: Spawner) {
     loop {
         let (command, claim) = TESTMODE_COMMAND.receive().await;
-        match command {
+        let task_started = match command {
             TestCommand::Turns => turns::spawn(spawner, claim),
             TestCommand::StraightDrive => straight_drive::spawn(spawner, claim),
             TestCommand::ArcDrive => arc_drive::spawn(spawner, claim),
             TestCommand::Imu => imu_9axis::spawn(spawner, claim),
             TestCommand::Imu6 => imu_6axis::spawn(spawner, claim),
             TestCommand::BasicMotor => basic_motor::spawn(spawner, claim),
+        };
+
+        if !task_started {
+            // A task slot was unavailable: the test will never run, so clear the
+            // starting Activity and release the claim instead of leaving the
+            // running screen up with no owner.
+            claim.abandon().await;
         }
     }
 }

@@ -27,13 +27,18 @@ const LOG_EVERY_TICKS: u32 = 50;
 ///
 /// The caller's claim travels with the task; a spawn that fails releases it so a
 /// dead task does not hold the slot.
-pub(super) fn spawn(spawner: Spawner, claim: Claim) {
-    if let Ok(token) = imu6_test_task(claim) {
-        spawner.spawn(token);
-    } else {
-        error!("imu6: spawn failed");
-        claim.release();
-    }
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    imu6_test_task(claim).map_or_else(
+        |_| {
+            error!("imu6: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// IMU 6-axis test task: streams readings until stopped.

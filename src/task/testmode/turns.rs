@@ -72,15 +72,21 @@ const STAGES: [TurnStage; 4] = [
 
 /// Spawn the turns test task via the controller.
 ///
-/// The caller's claim travels with the task; a spawn that fails releases it so a
-/// dead task does not hold the slot.
-pub(super) fn spawn(spawner: Spawner, claim: Claim) {
-    if let Ok(token) = turns_test_task(claim) {
-        spawner.spawn(token);
-    } else {
-        error!("turns: spawn failed");
-        claim.release();
-    }
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    turns_test_task(claim).map_or_else(
+        |_| {
+            error!("turns: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// Turns test task: runs the stages, then reports the claim's terminal outcome.
@@ -118,7 +124,13 @@ async fn run_turns_test(claim: &Claim) -> bool {
             .await;
 
         match submit(build_turn_queue(stage.speed)).await {
-            Ok(completion) => report_turn(&completion),
+            Ok(completion) => {
+                report_turn(&completion);
+                // A cancelled queue is a stop, not a completed stage.
+                if completion.status == CompletionStatus::Cancelled || claim.is_stop_requested() {
+                    return false;
+                }
+            }
             Err(reason) => {
                 claim.fail(reason).await;
                 return false;
@@ -130,9 +142,9 @@ async fn run_turns_test(claim: &Claim) -> bool {
         send_drive_command(DriveCommand::Drive(DriveAction::Coast)).await;
     }
 
-    // Leave the robot settled with the last telemetry in the log.
-    let _ = claim.wait_or_stop(SETTLE_MS).await;
-    true
+    // Leave the robot settled with the last telemetry in the log. A stop during
+    // the settle is still a stop, not a completed test.
+    !claim.wait_or_stop(SETTLE_MS).await
 }
 
 /// Build one stage's queue: the turn alone, so its telemetry is the queue's last

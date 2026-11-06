@@ -42,15 +42,21 @@ const COUNTDOWN_MS: u64 = 10_000;
 
 /// Spawn the arc drive test task via the controller.
 ///
-/// The caller's claim travels with the task; a spawn that fails releases it so a
-/// dead task does not hold the slot.
-pub(super) fn spawn(spawner: Spawner, claim: Claim) {
-    if let Ok(token) = arc_drive_test_task(claim) {
-        spawner.spawn(token);
-    } else {
-        error!("arc: spawn failed");
-        claim.release();
-    }
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    arc_drive_test_task(claim).map_or_else(
+        |_| {
+            error!("arc: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// Arc drive test task: drives the circle, then reports the claim's terminal
@@ -84,13 +90,16 @@ async fn run_arc_drive_test(claim: &Claim) -> bool {
     info!("arc: curve circle 360° at radius 1 m");
 
     match submit(build_arc_queue()).await {
-        Ok(completion) => report_arc(&completion),
+        Ok(completion) => {
+            report_arc(&completion);
+            // A cancelled arc is a stop, not a completed test.
+            !(completion.status == CompletionStatus::Cancelled || claim.is_stop_requested())
+        }
         Err(reason) => {
             claim.fail(reason).await;
-            return false;
+            false
         }
     }
-    true
 }
 
 /// Build the queue: one 360° arc, so its telemetry is the queue's last step.

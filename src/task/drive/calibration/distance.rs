@@ -20,6 +20,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::info;
+use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
 use crate::{
@@ -84,6 +85,9 @@ pub enum DistanceDecision {
     Cancel,
 }
 
+/// How long the task waits for a decision before re-checking the stop latch.
+const DECISION_POLL_MS: u64 = 1_000;
+
 /// The value-entry screen's decision for the running calibration.
 ///
 /// Capacity one: the screen sends one decision per run, and the task that owns the
@@ -98,12 +102,22 @@ pub async fn send_decision(decision: DistanceDecision) {
     DECISION.send(decision).await;
 }
 
-/// Wait for the value-entry screen's decision.
+/// Wait for the value-entry screen's decision or a stop.
 ///
-/// Called by the calibration task, which holds the claim across the screen and
-/// abandons it once the decision has been applied.
-pub(super) async fn wait_for_decision() -> DistanceDecision {
-    DECISION.receive().await
+/// Called by the calibration task, which holds the claim across the screen. A stop
+/// returns `None` so the task can restore the previous factor and abandon the
+/// claim; the latch is re-checked between decision polls.
+pub(super) async fn wait_for_decision_or_stop(claim: &Claim) -> Option<DistanceDecision> {
+    loop {
+        if claim.is_stop_requested() {
+            return None;
+        }
+        match select(DECISION.receive(), claim.wait_or_stop(DECISION_POLL_MS)).await {
+            Either::First(decision) => return Some(decision),
+            Either::Second(true) => return None,
+            Either::Second(false) => {}
+        }
+    }
 }
 
 /// Read the current factor into the backup slot and force 1.0 for the drive.
