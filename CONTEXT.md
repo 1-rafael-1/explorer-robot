@@ -125,6 +125,7 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 - **Drift Compensation** — Encoder-based correction that equalizes left/right track speeds to prevent veering. Handled by higher-level intents (distance, rotation) via IMU heading correction and encoder feedback.
 - **Ramp-Down** — Progressive speed reduction as a distance or rotation command approaches its target. Prevents overshoot.
 - **Voltage Compensation** — Scales PWM duty cycle to maintain 6V effective motor voltage as battery drains: `compensation = 6.0 / battery_voltage`.
+- **Continuous Drive** — A drive intent that commands a speed and holds a heading until interrupted. It has no distance target, no ramp-down and no successful completion: it ends `Cancelled` on an operator stop or an obstacle/floor-drop brake, or `Failed` on stall, encoder loss or IMU loss. Used by **Coast-and-Avoid**'s forward phase.
 
 ### Drive Subsystem Internals
 
@@ -181,6 +182,7 @@ Lock order (documented in each module): **power → calibration → perception �
 ## Autonomous Modes
 
 - **Coast-and-Avoid** — Drive forward until the obstacle flag signals detection. Brake, back up, random-angle turn (±45°–180° via nanorand), resume forward. The flag comes from the LiDAR's Front Sector test; the mode reads only the pre-computed boolean, and refuses to run if the LiDAR cannot be enabled. Simple, reliable.
+- **Avoidance Maneuver** — **Coast-and-Avoid**'s response to an obstacle or floor drop: brake, back up a fixed distance, then turn a random angle. It is one closed-loop drive queue, not a sequence of raw motor commands.
 - **Attempt Straight Line** — User sets target distance (100–1000 cm). The LiDAR point cloud is analyzed for navigable gaps; the widest gap within the forward cone (±60°) is chosen. The robot rotates toward the gap center, drives a leg, and repeats. IMU heading used for drift correction. Completes when target distance is reached or no forward path exists. *(Deferred — UI integration pending.)*
 
 ### Gap Analysis
