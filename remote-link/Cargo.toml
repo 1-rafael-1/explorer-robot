@@ -11,7 +11,12 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 std = ["remote-protocol/std"]
 
 [dependencies]
+heapless = "0.9"
 remote-protocol = { path = "../remote-protocol", version = "1" }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "streams"
+required-features = ["std"]

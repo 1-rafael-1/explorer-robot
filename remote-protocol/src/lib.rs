@@ -16,19 +16,24 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod codec;
 pub mod crc;
 pub mod error;
 pub mod frame;
+pub mod ids;
 pub mod parser;
+pub mod payload;
 #[cfg(feature = "std")]
 pub mod sim;
 
+pub use codec::{PayloadCodec, StreamSample, decode_stream, encode_stream};
 pub use crc::{Crc16, crc16};
 pub use error::{CodecError, EncodeError, FrameError};
 pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
+pub use ids::{Caps, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
 #[cfg(feature = "std")]
-pub use sim::{Faults, Wire};
+pub use sim::{FakeRemote, Faults, Wire};
 
 /// The wire major version carried in every frame header.
 pub const PROTOCOL_MAJOR: u8 = 1;

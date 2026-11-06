@@ -19,7 +19,15 @@ name = "frame"
 required-features = ["std"]
 
 [[test]]
+name = "ids"
+required-features = ["std"]
+
+[[test]]
 name = "parser"
+required-features = ["std"]
+
+[[test]]
+name = "streams"
 required-features = ["std"]
 
 [lints]

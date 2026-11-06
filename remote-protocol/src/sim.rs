@@ -9,7 +9,15 @@
 
 use std::{collections::VecDeque, vec::Vec};
 
-use crate::frame::Direction;
+use crate::{
+    codec::{StreamSample, decode_stream},
+    frame::{Class, Direction, Seq},
+    ids::Stream,
+    parser::RobotToPcParser,
+};
+
+/// The baud the simulated remote assumes; both directions derive a 50 ms timeout from it.
+const SIM_BAUD: u32 = 921_600;
 
 /// The replacement seed used when the caller supplies zero, so the generator never sticks.
 const FALLBACK_SEED: u32 = 0x9E37_79B9;
@@ -176,5 +184,113 @@ impl Wire {
     #[must_use]
     pub fn take(&mut self, direction: Direction) -> Vec<u8> {
         self.queues[slot(direction)].drain(..).collect()
+    }
+}
+
+/// A daemon-shaped peer that decodes robot-to-PC telemetry from a [`Wire`].
+///
+/// This ticket needs the receive half only: feed the wire's robot-to-PC bytes through the real
+/// [`RobotToPcParser`] and read back the typed samples. Later tickets extend the same type with
+/// `HELLO`/`PING`, commands, events and `THROTTLE`; the receive path here already ignores every
+/// non-stream class, so it stays valid as those are added.
+pub struct FakeRemote {
+    /// The real robot-to-PC parser, so the simulated path exercises the committed state machine.
+    parser: RobotToPcParser,
+    /// Received stream frames in arrival order, each payload copied out of the parser.
+    received: Vec<(Stream, Seq, Vec<u8>)>,
+    /// Unknown stream ids seen so far; they are ignored, never decoded.
+    unknown_streams: u32,
+}
+
+impl FakeRemote {
+    /// Creates a remote with an empty receive state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            parser: RobotToPcParser::new(Direction::RobotToPc, SIM_BAUD),
+            received: Vec::new(),
+            unknown_streams: 0,
+        }
+    }
+
+    /// Drains the wire's robot-to-PC queue and returns how many stream frames it decoded.
+    pub fn receive(&mut self, wire: &mut Wire) -> usize {
+        let now_ms = wire.now_ms();
+        let bytes = wire.take(Direction::RobotToPc);
+        self.feed(&bytes, now_ms)
+    }
+
+    /// Feeds raw robot-to-PC bytes through the real parser and returns how many stream frames
+    /// completed.
+    ///
+    /// Unknown stream ids are counted and ignored. Non-stream classes are ignored until a later
+    /// ticket implements them.
+    pub fn feed(&mut self, bytes: &[u8], now_ms: u32) -> usize {
+        let before = self.received.len();
+        let received = &mut self.received;
+        let mut unknown = 0u32;
+        self.parser.feed(bytes, now_ms, |frame| {
+            if frame.header.class != Class::Stream {
+                return;
+            }
+            let Some(stream) = Stream::from_wire(frame.header.id) else {
+                unknown = unknown.saturating_add(1);
+                return;
+            };
+            received.push((stream, frame.header.seq, frame.payload.to_vec()));
+        });
+        self.unknown_streams = self.unknown_streams.saturating_add(unknown);
+        self.received.len() - before
+    }
+
+    /// Returns every received stream frame in arrival order with its decoded sample.
+    ///
+    /// A frame whose payload the codec rejects is skipped; the codec tests cover malformed input
+    /// directly, and a valid sender never produces one.
+    pub fn streams(&self) -> impl Iterator<Item = (Stream, Seq, StreamSample<'_>)> + '_ {
+        self.received.iter().filter_map(|(stream, seq, payload)| {
+            decode_stream(*stream, payload)
+                .ok()
+                .map(|sample| (*stream, *seq, sample))
+        })
+    }
+
+    /// Returns the decoded samples only, in arrival order.
+    pub fn samples(&self) -> impl Iterator<Item = StreamSample<'_>> + '_ {
+        self.streams().map(|(_, _, sample)| sample)
+    }
+
+    /// Returns the most recently received sample of `stream`, if any survived decoding.
+    #[must_use]
+    pub fn last_sample(&self, stream: Stream) -> Option<StreamSample<'_>> {
+        self.received
+            .iter()
+            .rev()
+            .find(|(received_stream, _, _)| *received_stream == stream)
+            .and_then(|(received_stream, _, payload)| decode_stream(*received_stream, payload).ok())
+    }
+
+    /// Returns how many stream frames have been received.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.received.len()
+    }
+
+    /// Returns `true` when no stream frame has been received.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.received.is_empty()
+    }
+
+    /// Returns how many unknown stream ids have been ignored.
+    #[must_use]
+    pub const fn unknown_streams(&self) -> u32 {
+        self.unknown_streams
+    }
+}
+
+impl Default for FakeRemote {
+    fn default() -> Self {
+        Self::new()
     }
 }
