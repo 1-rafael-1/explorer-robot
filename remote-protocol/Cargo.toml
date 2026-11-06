@@ -34,5 +34,9 @@ required-features = ["std"]
 name = "commands"
 required-features = ["std"]
 
+[[test]]
+name = "retry"
+required-features = ["std"]
+
 [lints]
 workspace = true

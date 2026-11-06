@@ -23,6 +23,7 @@ pub mod frame;
 pub mod ids;
 pub mod parser;
 pub mod payload;
+pub mod reliability;
 #[cfg(feature = "std")]
 pub mod sim;
 
@@ -34,6 +35,7 @@ pub use error::{CodecError, EncodeError, FrameError};
 pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
 pub use ids::{Caps, Command, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
+pub use reliability::{AckOutcome, AckTracker, RetryPolicy};
 #[cfg(feature = "std")]
 pub use sim::{FakeRemote, Faults, Wire};
 
