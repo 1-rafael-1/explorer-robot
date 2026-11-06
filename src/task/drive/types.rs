@@ -74,7 +74,6 @@ pub enum DriveAction {
     /// to reach, no ramp-down and no successful completion. It ends `Cancelled`
     /// on any drive interrupt, or `Failed` on a stall, encoder timeout/loss or
     /// IMU loss.
-    #[allow(dead_code)]
     DriveContinuous {
         /// Drive direction (forward or backward).
         direction: DriveDirection,

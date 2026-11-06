@@ -18,6 +18,11 @@
 //! Uses `LiDAR` point cloud gap analysis for navigation — `gap_analysis::analyze_gaps`
 //! operates on a [`lidar_cloud::Cloud`] to find navigable gaps within the forward cone.
 //! IMU drift correction and odometry provide per-leg heading and position tracking.
+//!
+//! Nothing starts this mode today: the autonomous-mode controller was removed and
+//! the task has no spawner. When it is revived it must take the one Active Claim
+//! from [`crate::task::procedure`]; the private `ACTIVE` flag below is dead code,
+//! not a second authority.
 
 // this entire module is deferred — waiting for LiDAR and rangefinder implementation
 #![allow(dead_code)]
@@ -25,14 +30,13 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::info;
-use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 
 use crate::{
     system::state::{calibration, perception},
     task::{
-        autonomous_mode::{self, gap_analysis},
+        autonomous_mode::gap_analysis,
         drive::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, DriveQueueSubmitError, send_drive_command,
@@ -45,6 +49,9 @@ use crate::{
 // ── Active flag ───────────────────────────────────────────────────────────────
 
 /// Set while the attempt-straight-line loop is running.
+///
+/// Nothing sets this today — the mode has no starter — so it is not an authority.
+/// A revived mode must take the one Active Claim instead of flipping this flag.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ── Display state ─────────────────────────────────────────────────────────────
@@ -131,29 +138,6 @@ enum State {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-
-/// Spawn the attempt-straight-line autonomous task.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner, target_distance_cm: u16) {
-    spawner.spawn(attempt_straight_line_task(target_distance_cm).unwrap());
-}
-
-/// Request a graceful stop of the mode.
-pub fn stop() {
-    ACTIVE.store(false, Ordering::Relaxed);
-}
-
-/// Activate the attempt-straight-line autonomous mode.
-pub async fn start(target_distance_cm: u16) -> bool {
-    if !autonomous_mode::request_start(autonomous_mode::AutonomousCommand::AttemptStraightLine { target_distance_cm })
-        .await
-    {
-        return false;
-    }
-
-    ACTIVE.store(true, Ordering::Relaxed);
-    true
-}
 
 /// Minimum target distance (cm).
 pub const fn target_min_cm() -> u16 {
@@ -414,7 +398,6 @@ async fn finish(label: &'static str) {
     }
     send_drive_command(DriveCommand::Drive(DriveAction::Brake)).await;
     Timer::after(Duration::from_millis(200)).await;
-    autonomous_mode::release_autonomous_mode();
 
     // Wait for the user to dismiss by pressing the encoder button.
     while ACTIVE.load(Ordering::Relaxed) {

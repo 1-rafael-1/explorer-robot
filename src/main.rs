@@ -1,8 +1,8 @@
 //! explorer-robot v3 firmware entry point
 //!
 //! Core0 hosts orchestrator, motor driver, encoders, battery monitor,
-//! RGB LED, panel (TFT + touch), VL53L0X stub, flash storage, UI, testmode,
-//! autonomous mode controller, and startup.
+//! RGB LED, panel (TFT + touch), VL53L0X stub, flash storage, UI, testmode and
+//! startup.
 //!
 //! Core1 hosts the real COIN-D6 `LiDAR` driver task, powered on demand.
 
@@ -282,11 +282,6 @@ fn init_ui(spawner: Spawner, panel_pins: PanelResources) {
     task::ui::init_ui(spawner, panel_pins);
 }
 
-/// Initialise the autonomous mode controller (coast-and-avoid etc.).
-fn init_autonomous_mode(spawner: Spawner) {
-    task::autonomous_mode::init_autonomous_mode(spawner);
-}
-
 /// Initialise the dedicated SPI0 bus and chip-select for the IMU.
 ///
 /// Returns the SPI bus and CS pin for passing to [`init_imu`].
@@ -445,7 +440,6 @@ fn main() -> ! {
         init_flash_storage(spawner, storage.flash, storage.dma);
         init_testing(spawner);
         init_calibration(spawner);
-        init_autonomous_mode(spawner);
         init_startup(spawner);
     });
 }

@@ -478,7 +478,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
             record_attempt_straight(value_before).await;
         }
         (Screen::Status, Some(Hit::Back)) => activity::clear().await,
-        (Screen::Status, Some(Hit::Stop)) => stop_running().await,
+        (Screen::Status, Some(Hit::Stop)) => stop_running(),
         _ => {}
     }
 }
@@ -666,15 +666,14 @@ async fn cancel_distance_calibration() {
     drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
 }
 
-/// Stop whatever the running screen is showing, and forget it.
+/// Stop whatever the running screen is showing.
 ///
 /// `procedure::stop` latches the stop for whichever claim holds the slot and
-/// interrupts a drive in flight; the claim's owner observes the latch, cleans up
-/// and records the terminal outcome. Clearing the activity here is a temporary
-/// bridge: ticket 09 lets every owner record its own end state.
-async fn stop_running() {
+/// interrupts a drive in flight. The claim's owner observes the latch, cleans up
+/// and records the terminal outcome — `abandon` for a normal stop or `fail` for a
+/// failsafe — so nothing here clears the Activity.
+fn stop_running() {
     procedure::stop();
-    activity::clear().await;
 }
 
 /// React to a finished calibration: leave a completed one, hold a failed one's

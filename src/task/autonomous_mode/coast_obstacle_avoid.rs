@@ -31,8 +31,8 @@
 //! only cancellation authority: a stop makes the in-flight queue resolve
 //! `Cancelled`, and the mode then brakes, disables the `LiDAR` and releases the
 //! claim with [`Claim::abandon`]. A failure records its reason with
-//! [`Claim::fail`] instead. The mode never requests or releases the autonomous-mode
-//! controller, which remains reserved for the deferred Attempt Straight mode.
+//! [`Claim::fail`] instead. The mode never requests or releases any other
+//! controller: the one Active Claim is the only authority.
 //!
 //! The obstacle decision reads perception's lock-free flag, which the `LiDAR` task
 //! drives through the Front Sector test in the `lidar-cloud` crate (half-angle and
