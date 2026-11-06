@@ -18,5 +18,9 @@ required-features = ["std"]
 name = "frame"
 required-features = ["std"]
 
+[[test]]
+name = "parser"
+required-features = ["std"]
+
 [lints]
 workspace = true

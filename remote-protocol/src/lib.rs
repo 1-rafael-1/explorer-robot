@@ -13,13 +13,22 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 pub mod crc;
 pub mod error;
 pub mod frame;
+pub mod parser;
+#[cfg(feature = "std")]
+pub mod sim;
 
 pub use crc::{Crc16, crc16};
 pub use error::{CodecError, EncodeError, FrameError};
 pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
+pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
+#[cfg(feature = "std")]
+pub use sim::{Faults, Wire};
 
 /// The wire major version carried in every frame header.
 pub const PROTOCOL_MAJOR: u8 = 1;
