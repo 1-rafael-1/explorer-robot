@@ -793,6 +793,7 @@ name = "explorer-robot"
 version = "0.1.0"
 dependencies = [
  "assign-resources",
+ "claim-slot",
  "coin-d6",
  "cortex-m-rt",
  "critical-section",
