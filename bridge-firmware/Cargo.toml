@@ -1,7 +1,8 @@
 [workspace]
 # A workspace of its own: this crate targets `riscv32imc-unknown-none-elf` and
 # relies on `.cargo/config.toml` here for its target and runner, which the
-# robot's workspace cannot provide.
+# robot's workspace cannot provide. The root package stays a member implicitly.
+members = ["bridge-core"]
 
 [package]
 edition      = "2024"

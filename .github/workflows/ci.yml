@@ -125,6 +125,15 @@ jobs:
       - name: Run clippy (bin target only)
         run: cargo clippy -- -D warnings
 
+      # The pump rules are host-tested behind `bridge-core`'s `std` feature. The explicit host
+      # target overrides this workspace's RISC-V default; `rust-src` above supplies the
+      # `build-std` crates for that target too.
+      - name: Test bridge-core (host)
+        run: cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Run clippy (bridge-core, host)
+        run: cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings
+
   # The host workspace: the daemon, `bridge-net` and their host tests.
   remote:
     runs-on: ubuntu-latest
