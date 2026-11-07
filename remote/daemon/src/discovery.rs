@@ -240,6 +240,11 @@ impl Discovery {
                         let Ok(beacon) = Beacon::decode(&buffer[..len]) else {
                             continue;
                         };
+                        // ADR-0037: the Beacon's major lets a daemon filter a future layout rather
+                        // than misparse it. Ignore it entirely: do not cache and do not connect.
+                        if beacon.major != remote_protocol::PROTOCOL_MAJOR {
+                            continue;
+                        }
                         let entry = BeaconEntry {
                             device_id: beacon.device_id,
                             name: beacon.name,

@@ -14,7 +14,7 @@ use std::time::Duration;
 use bridge_net::{
     error::DecodeError,
     identity::Identity,
-    preamble::{self, DenyReason, HEADER_LEN, MAGIC, MAX_PAYLOAD_LEN, Message, NONCE_LEN, Received},
+    preamble::{self, DenyReason, HEADER_LEN, MAX_PAYLOAD_LEN, Message, NONCE_LEN, Received},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -176,18 +176,12 @@ where
 {
     let mut frame = [0u8; HEADER_LEN + MAX_PAYLOAD_LEN];
     stream.read_exact(&mut frame[..HEADER_LEN]).await?;
-    if frame[..MAGIC.len()] != MAGIC {
-        return Err(HandshakeError::Decode(DecodeError::BadMagic));
-    }
-    let length = usize::from(u16::from_le_bytes([frame[6], frame[7]]));
-    if length > MAX_PAYLOAD_LEN {
-        return Err(HandshakeError::Decode(DecodeError::Length {
-            expected: MAX_PAYLOAD_LEN,
-            got: length,
-        }));
-    }
-    stream.read_exact(&mut frame[HEADER_LEN..HEADER_LEN + length]).await?;
-    match preamble::try_decode(&frame[..HEADER_LEN + length]) {
+    // The framing offsets belong to `bridge-net`; a complete header always announces a length.
+    let Some(total) = preamble::frame_len(&frame[..HEADER_LEN]).map_err(HandshakeError::Decode)? else {
+        return Err(HandshakeError::Closed);
+    };
+    stream.read_exact(&mut frame[HEADER_LEN..total]).await?;
+    match preamble::try_decode(&frame[..total]) {
         Ok(Some(received)) => Ok(received),
         Ok(None) => Err(HandshakeError::Closed),
         Err(error) => Err(HandshakeError::Decode(error)),

@@ -145,6 +145,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `robot-stub` depends on `serialport`, which links libudev on Linux.
+      - name: Install libudev build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@1.96.0
         with:

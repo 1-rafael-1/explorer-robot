@@ -4,6 +4,7 @@
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use axum::{
@@ -43,6 +44,12 @@ const INVALID_MESSAGE: &str = "invalid message";
 
 /// The close reason for a binary frame.
 const TEXT_ONLY: &str = "text frames only";
+
+/// How long one frame send may make no write progress before the socket is closed (ADR-0039).
+///
+/// A connection that stops reading must not wedge its writer for ever: after two seconds with no
+/// progress the session returns, which drops the socket and disconnects the relay app.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Rejects a cross-origin upgrade before the WebSocket is accepted, then hands the socket to
 /// [`session`].
@@ -302,10 +309,16 @@ fn parse_client(text: &str) -> Result<Option<ClientMessage>, ()> {
     }
 }
 
-/// Serialises and sends one server message.
+/// Serialises and sends one server message, bounded by ADR-0039's write-progress timeout.
+///
+/// A timeout is reported as an error; every caller returns, dropping the WebSocket and the
+/// [`RelayConnection`] guard (which calls `disconnect_app`). That is the ADR's "closed" outcome.
 async fn send(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), ()> {
     let text = serde_json::to_string(message).map_err(|_| ())?;
-    socket.send(Message::Text(text.into())).await.map_err(|_| ())
+    match time::timeout(WRITE_TIMEOUT, socket.send(Message::Text(text.into()))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => Err(()),
+    }
 }
 
 /// Sends a close frame; the peer's own close handshake is best-effort.

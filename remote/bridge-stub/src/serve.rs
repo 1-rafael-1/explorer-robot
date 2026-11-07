@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use bridge_net::preamble as net_preamble;
+use bridge_net::{beacon::LINK_MAJOR, preamble as net_preamble};
 use remote_protocol::{
     AckOutcome, AckTracker, Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event,
     Flags as LinkFlags, Frame, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodec, Ping, PingAck,
@@ -198,6 +198,7 @@ fn accept_connections(
 /// Broadcasts the scenario's Beacon until the stop signal.
 fn broadcast_beacons(socket: &UdpSocket, scenario: &Arc<Scenario>, link_port: u16, shutdown: &Arc<AtomicBool>) {
     let beacon = Beacon {
+        major: LINK_MAJOR,
         device_id: scenario.identity.device_id,
         name: scenario.identity.name,
         tcp_port: scenario.beacon.tcp_port.unwrap_or(link_port),

@@ -100,22 +100,35 @@ fn per_device_tokens_and_the_manual_default_round_trip() {
     assert_eq!(reopened.token_for(None), Some(String::from("manual-token")));
 }
 
-/// A discovered device falls back to the manual default until it has a token of its own.
+/// A discovered device never borrows the manual default; it needs a token of its own.
 #[test]
-fn a_discovered_device_falls_back_to_the_manual_default() {
+fn a_discovered_device_never_uses_the_manual_default() {
     let dir = must(tempfile::tempdir(), "temp dir");
     let store = open(&dir);
     must(store.set_token(None, "manual-token"), "manual token");
     assert_eq!(
         store.token_for(Some(first_device())),
-        Some(String::from("manual-token")),
-        "a LAN-only pair lands in default_token before a device is named"
+        None,
+        "default_token is scoped to manual endpoints"
     );
     must(store.set_token(Some(first_device()), "device-token"), "device token");
     assert_eq!(
         store.token_for(Some(first_device())),
         Some(String::from("device-token")),
         "the device's own token wins"
+    );
+}
+
+/// A manual endpoint keeps the `default_token` fallback.
+#[test]
+fn a_manual_endpoint_uses_the_default_token() {
+    let dir = must(tempfile::tempdir(), "temp dir");
+    let store = open(&dir);
+    must(store.set_token(None, "manual-token"), "manual token");
+    assert_eq!(
+        store.token_for(None),
+        Some(String::from("manual-token")),
+        "a manual endpoint has no device id and uses default_token"
     );
 }
 
@@ -187,6 +200,38 @@ fn the_gate_uses_the_last_device_and_pair_stores_it() {
 
     let reopened = open(&dir);
     assert_eq!(reopened.token(), Some(String::from("re-paired")));
+}
+
+/// The app gate never leaks the manual default onto a discovered device.
+#[test]
+fn the_gate_does_not_leak_the_manual_default_onto_a_discovered_device() {
+    let dir = must(tempfile::tempdir(), "temp dir");
+    let store = open(&dir);
+    must(store.set_token(None, "manual-token"), "manual token");
+    must(
+        store.set_last(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 41), 9000)),
+            Some(first_device()),
+        ),
+        "last device",
+    );
+    assert_eq!(
+        store.token(),
+        None,
+        "a discovered device without its own token requires pairing"
+    );
+
+    must(store.set_token(Some(first_device()), "device-token"), "device token");
+    assert_eq!(store.token(), Some(String::from("device-token")));
+}
+
+/// The app gate uses the default token when no discovered device is known (manual endpoint).
+#[test]
+fn the_gate_uses_the_manual_default_without_a_discovered_device() {
+    let dir = must(tempfile::tempdir(), "temp dir");
+    let store = open(&dir);
+    must(store.set_token(None, "manual-token"), "manual token");
+    assert_eq!(store.token(), Some(String::from("manual-token")));
 }
 
 /// A missing file is an empty store, not an error, and the gate answers `None`.

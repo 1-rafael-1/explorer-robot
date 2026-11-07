@@ -55,6 +55,47 @@ fn a_frozen_app_stops_a_manual_drive_the_daemon_started() {
     assert!(relay.poll_link(2_002).is_none(), "freezing sends exactly one stop");
 }
 
+/// The freeze fires two seconds after the last heartbeat, not four: ticking during the liveness
+/// window must not advance the deadline.
+#[test]
+fn the_freeze_fires_two_seconds_after_the_last_heartbeat() {
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+    let _ = relay.on_activity(
+        &activity(MANUAL_DRIVE_ID, ActivityStage::Running, Some(0), "manual"),
+        10,
+    );
+    start_manual_drive(&mut relay, app, 20);
+    assert!(relay.wants_ping());
+
+    let mut frozen_at = None;
+    for now_ms in (1_900..=2_100).step_by(50) {
+        relay.tick(now_ms);
+        if frozen_at.is_none() && !relay.wants_ping() {
+            frozen_at = Some(now_ms);
+        }
+    }
+
+    let frozen_at = must(frozen_at, "the freeze fires by 2.1 s");
+    assert!(
+        frozen_at > 2_000 && frozen_at <= 2_100,
+        "the freeze is measured from the last heartbeat (0 ms), not a refreshed tick: {frozen_at}"
+    );
+    assert_eq!(relay.apps_live(), 0, "PING stops at the two-second mark");
+    let stop = must(relay.poll_link(frozen_at), "conditional stop");
+    assert_eq!(stop.command, Command::StopMotion);
+    assert_eq!(
+        stop.message,
+        CommandMessage::StopMotion(StopMotion {
+            brake: StopMotion::BRAKE,
+        })
+    );
+    assert!(
+        relay.poll_link(frozen_at + 50).is_none(),
+        "the conditional stop fires exactly once"
+    );
+}
+
 /// A frozen app never stops panel-originated work.
 #[test]
 fn a_frozen_app_never_stops_panel_work() {

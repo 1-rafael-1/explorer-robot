@@ -19,21 +19,12 @@ pub const AUTH_REFUSAL: Duration = Duration::from_mins(1);
 
 /// Compares a stored token with a candidate without an early exit.
 ///
-/// The length difference is folded into the accumulator first, so a different-length candidate
-/// still walks the longer of the two strings. `black_box` keeps the optimiser from turning the
-/// fold into a short-circuiting comparison (the same shape as `bridge-core`'s proof comparison).
+/// The primitive is `bridge-net`'s shared [`bridge_net::constant_time_eq`], so the app gate and the
+/// preamble's proof check cannot drift into different comparison shapes. The length difference is
+/// folded in first, and the optimiser barrier stays inside that one implementation.
 #[must_use]
 pub fn tokens_match(stored: &str, candidate: &str) -> bool {
-    let stored = stored.as_bytes();
-    let candidate = candidate.as_bytes();
-    let mut difference = stored.len() ^ candidate.len();
-    let longest = stored.len().max(candidate.len());
-    for index in 0..longest {
-        let left = stored.get(index).copied().unwrap_or(0);
-        let right = candidate.get(index).copied().unwrap_or(0);
-        difference |= usize::from(left ^ right);
-    }
-    core::hint::black_box(difference) == 0
+    bridge_net::constant_time_eq(stored.as_bytes(), candidate.as_bytes())
 }
 
 /// One peer address's failed attempts and refusal window.

@@ -41,6 +41,7 @@ fn must_ok<T, E: std::fmt::Debug>(result: Result<T, E>, what: &str) -> T {
 fn the_beacon_pins_the_adr_wire_layout() {
     let identity = identity();
     let beacon = Beacon {
+        major: beacon::LINK_MAJOR,
         device_id: identity.device_id,
         name: identity.name,
         tcp_port: 9_000,
@@ -52,6 +53,7 @@ fn the_beacon_pins_the_adr_wire_layout() {
     assert_eq!(written, beacon::ENCODED_LEN);
     assert_eq!(&bytes[..4], b"EXPR", "the magic is EXPR");
     assert_eq!(bytes[4], beacon::LINK_MAJOR, "the major is the Link Protocol's");
+    assert_eq!(Beacon::decode(&bytes), Ok(beacon), "byte 4 is decoded as the major");
     assert_eq!(&bytes[5..11], b"dev001", "the device id follows the major");
     assert_eq!(
         &bytes[11..27],
@@ -76,6 +78,7 @@ fn the_beacon_round_trips() {
     let identity = identity();
     for tcp_port in [9_000u16, beacon::PORTAL_ONLY] {
         let beacon = Beacon {
+            major: beacon::LINK_MAJOR,
             device_id: identity.device_id,
             name: identity.name,
             tcp_port,
@@ -93,6 +96,7 @@ fn reserved_flag_bits_are_ignored() {
     let mut bytes = [0u8; beacon::ENCODED_LEN];
     let identity = identity();
     let beacon = Beacon {
+        major: beacon::LINK_MAJOR,
         device_id: identity.device_id,
         name: identity.name,
         tcp_port: 9_000,
@@ -114,12 +118,32 @@ fn reserved_flag_bits_are_ignored() {
     );
 }
 
+/// The major byte round-trips unchanged, including a value a future daemon must filter.
+#[test]
+fn the_major_round_trips() {
+    let identity = identity();
+    for major in [beacon::LINK_MAJOR, beacon::LINK_MAJOR.wrapping_add(1), 0] {
+        let beacon = Beacon {
+            major,
+            device_id: identity.device_id,
+            name: identity.name,
+            tcp_port: 9_000,
+            flags: identity.flags,
+        };
+        let mut bytes = [0u8; beacon::ENCODED_LEN];
+        assert!(beacon.encode_into(&mut bytes).is_ok());
+        assert_eq!(bytes[4], major, "the major is byte 4");
+        assert_eq!(Beacon::decode(&bytes), Ok(beacon));
+    }
+}
+
 /// A short datagram or a bad magic is rejected, and trailing bytes are ignored.
 #[test]
 fn malformed_datagrams_are_rejected() {
     let mut bytes = [0u8; beacon::ENCODED_LEN];
     let identity = identity();
     let beacon = Beacon {
+        major: beacon::LINK_MAJOR,
         device_id: identity.device_id,
         name: identity.name,
         tcp_port: 9_000,

@@ -24,10 +24,6 @@
 //! counter-clockwise positive, so every degree value is negated once at this boundary (ADR-0038,
 //! ADR-0039). Unknown wire values become `null`, never a sentinel.
 
-// The link adapter hands every decoded wire payload to the relay by reference for one uniform
-// call shape, including the small `Copy` payloads; clippy's size heuristic does not apply here.
-#![allow(clippy::trivially_copy_pass_by_ref)]
-
 use std::collections::{BTreeMap, VecDeque};
 
 use remote_protocol::{
@@ -307,8 +303,12 @@ pub struct Relay {
     claim: Option<DaemonClaim>,
     /// Whether the app-frozen timer has fired for the current silence.
     frozen: bool,
-    /// When an app was last live; the app-frozen timer measures from here.
-    last_live_ms: u64,
+    /// The last app heartbeat (or connection) time; the app-frozen timer measures from here.
+    ///
+    /// [`Relay::tick`] never advances this: a tick only observes liveness. Refreshing it on every
+    /// tick while the liveness window is still open would delay the freeze to roughly four seconds
+    /// after the last heartbeat.
+    last_heartbeat_ms: u64,
     /// Whether any app was live at the last connection change or [`Relay::tick`].
     app_live: bool,
     /// The latest app-facing connection state, shared by every tab (latest wins).
@@ -338,7 +338,7 @@ impl Relay {
             queue: VecDeque::new(),
             claim: None,
             frozen: false,
-            last_live_ms: 0,
+            last_heartbeat_ms: 0,
             app_live: false,
             connection: None,
             connection_seq: 0,
@@ -365,7 +365,7 @@ impl Relay {
             },
         );
         self.app_live = true;
-        self.last_live_ms = now_ms;
+        self.last_heartbeat_ms = now_ms;
         if self.frozen {
             self.frozen = false;
             for state in self.apps.values_mut() {
@@ -381,7 +381,7 @@ impl Relay {
             return;
         };
         if self.apps.is_empty() {
-            self.last_live_ms = self.last_live_ms.max(removed.last_heartbeat_ms);
+            self.last_heartbeat_ms = self.last_heartbeat_ms.max(removed.last_heartbeat_ms);
         }
         self.app_live = self.apps.values().any(|state| state.alive);
     }
@@ -405,7 +405,7 @@ impl Relay {
             flight.last_sent_ms = now_ms;
         }
         if self.apps.is_empty() {
-            self.last_live_ms = now_ms;
+            self.last_heartbeat_ms = now_ms;
         }
     }
 
@@ -933,7 +933,7 @@ impl Relay {
         state.last_heartbeat_ms = now_ms;
         state.alive = true;
         self.app_live = true;
-        self.last_live_ms = now_ms;
+        self.last_heartbeat_ms = now_ms;
         if self.frozen {
             self.frozen = false;
             for state in self.apps.values_mut() {
@@ -956,7 +956,6 @@ impl Relay {
 
         if any_alive {
             self.app_live = true;
-            self.last_live_ms = now_ms;
             if self.frozen {
                 self.frozen = false;
                 for state in self.apps.values_mut() {
@@ -965,7 +964,7 @@ impl Relay {
             }
         } else {
             self.app_live = false;
-            if !self.frozen && now_ms.saturating_sub(self.last_live_ms) > APP_LIVENESS_MS {
+            if !self.frozen && now_ms.saturating_sub(self.last_heartbeat_ms) > APP_LIVENESS_MS {
                 self.freeze();
             }
         }
@@ -1353,6 +1352,10 @@ const fn perception_value(perception: WirePerception) -> StreamValue {
 }
 
 /// Builds the app-facing Calibration value from the wire statuses.
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "it keeps the same by-reference call shape as the other stream converters"
+)]
 const fn calibration_value(calibration: &Calibration) -> StreamValue {
     StreamValue::Calibration {
         motor: wire_calibration_status(calibration.motor),

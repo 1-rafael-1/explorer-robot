@@ -31,6 +31,10 @@ pub const PORTAL_ONLY: u16 = 0;
 pub const FLAG_PROVISIONED: u8 = 1 << 0;
 
 /// Flag bit 1: the robot link is ready.
+///
+/// Pinned meaning: a valid Link Protocol frame arrived from the robot within the last 5 seconds,
+/// so the Beacon never claims a silent robot is ready. The Bridge clears the bit when that window
+/// expires; the daemon may still try to connect, but must not read the flag as a liveness promise.
 pub const FLAG_LINK_READY: u8 = 1 << 1;
 
 /// Flag bit 2: the Bridge is in Setup Mode and still reachable on the station interface.
@@ -42,6 +46,11 @@ pub const ENCODED_LEN: usize = 4 + 1 + 6 + Name::ENCODED_LEN + 2 + 1;
 /// One Discovery Beacon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Beacon {
+    /// The Link Protocol major advertised in the datagram's byte 4.
+    ///
+    /// A daemon compares this with its own `PROTOCOL_MAJOR` and ignores a mismatch rather than
+    /// misparse a future layout (ADR-0037).
+    pub major: u8,
     /// The MAC-derived device id.
     pub device_id: DeviceId,
     /// The display name.
@@ -63,7 +72,7 @@ impl Beacon {
             return Err(EncodeError::BufferTooSmall);
         }
         out[..4].copy_from_slice(&MAGIC);
-        out[4] = LINK_MAJOR;
+        out[4] = self.major;
         out[5..11].copy_from_slice(&self.device_id.bytes());
         out[11..11 + Name::ENCODED_LEN].copy_from_slice(&self.name.padded());
         out[27..29].copy_from_slice(&self.tcp_port.to_le_bytes());
@@ -92,6 +101,7 @@ impl Beacon {
         let mut name = [0u8; Name::ENCODED_LEN];
         name.copy_from_slice(&bytes[11..27]);
         Ok(Self {
+            major: bytes[4],
             device_id: DeviceId::new(device_id),
             name: Name::from_wire(name)?,
             tcp_port: u16::from_le_bytes([bytes[27], bytes[28]]),

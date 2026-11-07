@@ -345,6 +345,26 @@ pub fn encode_into(major: u8, message: &Message, out: &mut [u8]) -> Result<usize
 ///
 /// Returns [`DecodeError`] when the framing or the payload does not follow the layout.
 pub fn try_decode(bytes: &[u8]) -> Result<Option<Received>, DecodeError> {
+    let Some(total) = frame_len(bytes)? else {
+        return Ok(None);
+    };
+    if bytes.len() < total {
+        return Ok(None);
+    }
+    decode_complete(bytes).map(Some)
+}
+
+/// Returns the total framed length announced by a header, or `Ok(None)` while the header is
+/// incomplete.
+///
+/// This is the one place the framing's offset layout is read. A transport that needs to know how
+/// many payload bytes follow a header uses it rather than decoding the magic and length itself.
+///
+/// # Errors
+///
+/// Returns [`DecodeError::BadMagic`] for a bad magic prefix and [`DecodeError::Length`] for a
+/// payload length beyond [`MAX_PAYLOAD_LEN`].
+pub fn frame_len(bytes: &[u8]) -> Result<Option<usize>, DecodeError> {
     if bytes.len() < HEADER_LEN {
         if bytes.len() >= MAGIC.len() && bytes[..MAGIC.len()] != MAGIC {
             return Err(DecodeError::BadMagic);
@@ -361,10 +381,7 @@ pub fn try_decode(bytes: &[u8]) -> Result<Option<Received>, DecodeError> {
             got: len,
         });
     }
-    if bytes.len() < HEADER_LEN + len {
-        return Ok(None);
-    }
-    decode_complete(bytes).map(Some)
+    Ok(Some(HEADER_LEN + len))
 }
 
 /// Computes the Bridge's proof (ADR-0039): the label, both nonces and the served identity.
@@ -395,11 +412,7 @@ pub fn client_proof(token: &[u8], client_nonce: &[u8; NONCE_LEN], bridge_nonce: 
 /// Compares two proofs without short-circuiting on the first differing byte.
 #[must_use]
 pub fn proofs_match(expected: &[u8; PROOF_LEN], actual: &[u8; PROOF_LEN]) -> bool {
-    expected
-        .iter()
-        .zip(actual.iter())
-        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
-        == 0
+    crate::constant_time_eq(expected, actual)
 }
 
 /// HMAC-SHA256 of `parts` under `key`.

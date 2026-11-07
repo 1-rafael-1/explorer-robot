@@ -36,9 +36,10 @@ fn name(text: &str) -> Name {
     must_some(Name::new(text), "name")
 }
 
-/// Builds a Beacon with the default identity flags.
+/// Builds a Beacon at the current major with the default identity flags.
 fn beacon(device: [u8; 6], text: &str, tcp_port: u16, flags: Flags) -> Beacon {
     Beacon {
+        major: beacon::LINK_MAJOR,
         device_id: DeviceId::new(device),
         name: name(text),
         tcp_port,
@@ -259,6 +260,47 @@ async fn a_stale_beacon_is_forgotten() {
         Choice::None,
         "three missed Beacons at the 3 s interval expire the cache entry"
     );
+
+    handle.stop();
+    handle.wait().await;
+}
+
+/// A Beacon from a different Link Protocol major is ignored, not cached or connected to.
+#[tokio::test]
+async fn a_beacon_with_a_mismatched_major_is_ignored() {
+    let (discovery, sender) = bind(None);
+    let (handle, addr) = spawn(discovery);
+    let mut wrong = beacon(FIRST, "Explorer-AAAA", 9000, Flags::PROVISIONED);
+    wrong.major = beacon::LINK_MAJOR.wrapping_add(1);
+    send(&sender, addr, wrong);
+
+    // Give the listener time to receive the datagram, then prove it left no cache entry.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        handle.choose(clock::now_ms()),
+        Choice::None,
+        "a mismatched-major Beacon is not selectable"
+    );
+    assert!(handle.entries(clock::now_ms()).is_empty(), "it is not cached");
+
+    // A matching-major Beacon from the same robot is accepted, so filtering keeps listening.
+    send(&sender, addr, beacon(FIRST, "Explorer-AAAA", 9000, Flags::PROVISIONED));
+    let (entry, _) = selected(wait_choice(&handle, |choice| matches!(choice, Choice::Beacon { .. })).await);
+    assert_eq!(entry.device_id, DeviceId::new(FIRST));
+
+    handle.stop();
+    handle.wait().await;
+}
+
+/// A Beacon with the current major is accepted and selectable.
+#[tokio::test]
+async fn a_beacon_with_the_matching_major_is_accepted() {
+    let (discovery, sender) = bind(None);
+    let (handle, addr) = spawn(discovery);
+    send(&sender, addr, beacon(FIRST, "Explorer-AAAA", 9000, Flags::PROVISIONED));
+
+    let (entry, _) = selected(wait_choice(&handle, |choice| matches!(choice, Choice::Beacon { .. })).await);
+    assert_eq!(entry.device_id, DeviceId::new(FIRST));
 
     handle.stop();
     handle.wait().await;

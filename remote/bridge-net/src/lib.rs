@@ -17,3 +17,21 @@ pub mod error;
 pub mod identity;
 pub mod ports;
 pub mod preamble;
+
+/// Compares two byte strings without an early exit on the first difference.
+///
+/// The loop always visits the longer of the two inputs, folding a length difference into the
+/// accumulator first, so a caller's timing does not reveal *where* a secret differs. The length
+/// itself is treated as public. [`core::hint::black_box`] keeps the optimiser from realising the
+/// fold is a comparison and converting it back into a short-circuiting one.
+#[must_use]
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = u8::from(left.len() != right.len());
+    let longest = left.len().max(right.len());
+    for index in 0..longest {
+        let a = left.get(index).copied().unwrap_or(0);
+        let b = right.get(index).copied().unwrap_or(0);
+        difference |= a ^ b;
+    }
+    core::hint::black_box(difference) == 0
+}

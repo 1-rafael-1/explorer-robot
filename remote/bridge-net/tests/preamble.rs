@@ -122,7 +122,7 @@ fn accept_is_empty() {
     );
 }
 
-/// A partial frame waits for more bytes rather than erroring.
+/// A partial frame waits for more bytes rather than erroring, and the header helper agrees.
 #[test]
 fn partial_frames_wait() {
     let bytes = encode(&Message::ClientHello {
@@ -134,7 +134,30 @@ fn partial_frames_wait() {
             Ok(None),
             "a {prefix}-byte prefix is not a complete frame"
         );
+        if prefix < HEADER_LEN {
+            assert_eq!(
+                preamble::frame_len(&bytes[..prefix]),
+                Ok(None),
+                "a {prefix}-byte header announces no length"
+            );
+        }
     }
+    assert_eq!(
+        preamble::frame_len(&bytes[..HEADER_LEN]),
+        Ok(Some(bytes.len())),
+        "a complete header announces the whole frame"
+    );
+}
+
+/// The shared primitive matches only identical bytes, including a length mismatch.
+#[test]
+fn constant_time_eq_matches_only_identical_bytes() {
+    assert!(bridge_net::constant_time_eq(b"", b""));
+    assert!(bridge_net::constant_time_eq(b"pairing-token", b"pairing-token"));
+    assert!(!bridge_net::constant_time_eq(b"pairing-token", b"pairing-tokeN"));
+    assert!(!bridge_net::constant_time_eq(b"abc", b"abcd"));
+    assert!(!bridge_net::constant_time_eq(b"abcd", b"abc"));
+    assert!(!bridge_net::constant_time_eq(b"", b"a"));
 }
 
 /// A bad magic, an unknown type and an oversized length are rejected.

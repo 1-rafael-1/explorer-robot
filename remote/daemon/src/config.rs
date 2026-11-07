@@ -175,24 +175,18 @@ impl Store {
         self.lock().clone()
     }
 
-    /// Returns the token for `device`, or the manual `default_token` for `None`.
+    /// Returns a discovered device's own token, or the manual `default_token` for `None`.
     ///
-    /// In v1 (one robot) a discovered device falls back to the manual `default_token` when no
-    /// per-device token is stored. That matters for a LAN-only first pairing: the app sends `pair`
-    /// before discovery has named a device, so the code lands in `default_token` and must still
-    /// open the one robot the Beacon later names. A device's own token always wins.
+    /// `default_token` is scoped to manual `host:port` endpoints. A discovered device has no
+    /// fallback: when it has no token of its own this returns `None`, so the daemon surfaces
+    /// `pairing_required` instead of attempting a preamble with a token paired to something else.
+    /// A device's own token always wins for its own device id.
     #[must_use]
     pub fn token_for(&self, device: Option<DeviceId>) -> Option<String> {
         let state = self.lock();
         device.map_or_else(
             || state.default_token.clone(),
-            |device| {
-                state
-                    .devices
-                    .get(&hex(device))
-                    .and_then(|record| record.token.clone())
-                    .or_else(|| state.default_token.clone())
-            },
+            |device| state.devices.get(&hex(device)).and_then(|record| record.token.clone()),
         )
     }
 
@@ -294,27 +288,26 @@ impl Store {
 impl TokenGate for Store {
     /// Returns the token the LAN app gate compares against.
     ///
-    /// The last-used device's token wins, then the manual `default_token`, then the only stored
-    /// device token. Several ambiguous device tokens answer `None`, because the app cannot name a
-    /// device in its `auth` message.
+    /// With a discovered device (`last_device`) only that device's own token is valid; the manual
+    /// `default_token` is never reused for it, so an unpaired robot answers `None` and the app
+    /// takes its pairing path. Without a discovered device the manual `default_token` applies, and
+    /// a single stored device token is the last fallback. Several ambiguous device tokens answer
+    /// `None`, because the app cannot name a device in its `auth` message.
     fn token(&self) -> Option<String> {
         let state = self.lock();
-        let last_token = state
-            .last_device
-            .as_deref()
-            .and_then(unhex)
-            .map(DeviceId::new)
-            .and_then(|device| state.devices.get(&hex(device)).and_then(|record| record.token.clone()));
-        let default = state.default_token.clone();
+        let last_device = state.last_device.as_deref().and_then(unhex).map(DeviceId::new);
+        if let Some(device) = last_device {
+            return state.devices.get(&hex(device)).and_then(|record| record.token.clone());
+        }
+        if state.default_token.is_some() {
+            return state.default_token.clone();
+        }
         let device_tokens: Vec<String> = state
             .devices
             .values()
             .filter_map(|record| record.token.clone())
             .collect();
         drop(state);
-        if let Some(token) = last_token.or(default) {
-            return Some(token);
-        }
         match device_tokens.as_slice() {
             [only] => Some(only.clone()),
             _ => None,

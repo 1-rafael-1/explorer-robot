@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 pub use bridge_net::preamble::{
     AUTH_DEADLINE_MS, BRIDGE_PROOF_LABEL, CLIENT_PROOF_LABEL, DenyReason, HEADER_LEN, Kind, MAGIC, MAJOR,
     MAX_PAYLOAD_LEN, MINOR, Message, NONCE_LEN, PROOF_LEN, Received, bridge_proof, client_proof, encode_into,
-    proofs_match, try_decode,
+    frame_len, proofs_match, try_decode,
 };
 
 use crate::error::DecodeError;
@@ -36,22 +36,19 @@ pub fn write_message<W: Write>(w: &mut W, major: u8, message: &Message) -> std::
 pub fn read_message<R: Read>(reader: &mut R) -> std::io::Result<Received> {
     let mut buffer = [0u8; HEADER_LEN + MAX_PAYLOAD_LEN];
     reader.read_exact(&mut buffer[..HEADER_LEN])?;
-    if buffer[..MAGIC.len()] != MAGIC {
-        return Err(invalid_data(DecodeError::BadMagic));
-    }
-    let len = usize::from(u16::from_le_bytes([buffer[6], buffer[7]]));
-    if len > MAX_PAYLOAD_LEN {
+    // The framing offsets belong to `bridge-net`; a complete header always announces a length.
+    let Some(total) = frame_len(&buffer[..HEADER_LEN]).map_err(invalid_data)? else {
         return Err(invalid_data(DecodeError::Length {
-            expected: MAX_PAYLOAD_LEN,
-            got: len,
+            expected: HEADER_LEN,
+            got: HEADER_LEN,
         }));
-    }
-    reader.read_exact(&mut buffer[HEADER_LEN..HEADER_LEN + len])?;
-    match try_decode(&buffer[..HEADER_LEN + len]) {
+    };
+    reader.read_exact(&mut buffer[HEADER_LEN..total])?;
+    match try_decode(&buffer[..total]) {
         Ok(Some(received)) => Ok(received),
         Ok(None) => Err(invalid_data(DecodeError::Length {
-            expected: HEADER_LEN + len,
-            got: HEADER_LEN + len,
+            expected: total,
+            got: total,
         })),
         Err(error) => Err(invalid_data(error)),
     }

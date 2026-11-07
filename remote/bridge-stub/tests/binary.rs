@@ -71,8 +71,26 @@ fn the_binary_prints_its_usage() -> Result<(), BenchError> {
 }
 
 /// The binary serves a preamble a real client can complete, standalone.
+///
+/// The port is chosen by binding and releasing it, so a parallel test process can steal it in the
+/// gap; each attempt therefore uses fresh ports and is retried a few times before failing.
 #[test]
 fn the_binary_serves_a_preamble() -> Result<(), BenchError> {
+    let mut last = None;
+    for _ in 0..4 {
+        match serve_once() {
+            Ok(identity) => {
+                assert_eq!(identity.name.as_str(), "Explorer-STUB");
+                return Ok(());
+            }
+            Err(error) => last = Some(error),
+        }
+    }
+    Err(last.unwrap_or_else(|| BenchError::Io(String::from("the binary never served a preamble"))))
+}
+
+/// One spawn-and-connect attempt on freshly chosen loopback ports.
+fn serve_once() -> Result<bridge_stub::Identity, BenchError> {
     let port = free_tcp_port()?;
     let beacon_port = free_udp_port()?;
     let args = vec![
@@ -87,10 +105,9 @@ fn the_binary_serves_a_preamble() -> Result<(), BenchError> {
     let guard = KillOnDrop(child);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let (_client, identity) = connect_until(addr, Duration::from_secs(15))?;
-    assert_eq!(identity.name.as_str(), "Explorer-STUB");
+    let (_client, identity) = connect_until(addr, Duration::from_secs(10))?;
     drop(guard);
-    Ok(())
+    Ok(identity)
 }
 
 /// Tries the handshake until the binary's listener is up, within `timeout`.
