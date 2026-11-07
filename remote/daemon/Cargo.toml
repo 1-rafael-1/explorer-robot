@@ -10,5 +10,9 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 remote-protocol = { path = "../../remote-protocol", version = "1" }
 bridge-net = { path = "../bridge-net", version = "1" }
 
+# The App Boundary's JSON schema (ADR-0038): the relay serialises, the app adapter deserialises.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [lints]
 workspace = true
