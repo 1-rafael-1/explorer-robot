@@ -1,5 +1,5 @@
 [workspace]
-members = ["bridge-net", "daemon"]
+members = ["bridge-net", "bridge-stub", "daemon", "robot-stub"]
 resolver = "3"
 
 # Mirrors the robot workspace's clippy table (ADR-0040): there is no cross-workspace lint

@@ -1,0 +1,18 @@
+[package]
+name = "robot-stub"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The robot's bench persona: the real LinkCore behind a serial port, with load and fault personas."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[dependencies]
+remote-link = { path = "../../remote-link", version = "0.1", features = ["std"] }
+remote-protocol = { path = "../../remote-protocol", version = "1", features = ["std"] }
+
+# The bench binary's real serial port (ADR-0033's 921600 8N1). The library never depends on it;
+# only `src/main.rs` does.
+serialport = "4"
+
+[lints]
+workspace = true
