@@ -57,7 +57,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
     uart::{
         Config as UartConfig, RxConfig, TxError, Uart, UartTx,
-        uhci::{RxConfig as UhciRxConfig, Uhci, UhciRx},
+        uhci::{RxConfig as UhciRxConfig, TxConfig as UhciTxConfig, Uhci, UhciRx},
     },
 };
 use esp_println as _;
@@ -278,6 +278,16 @@ async fn main(spawner: Spawner) -> ! {
     let mut uhci = Uhci::new(uart, peripherals.UHCI0, peripherals.DMA_CH0);
     if let Err(error) = uhci.apply_rx_config(&UhciRxConfig::default().with_chunk_limit(DMA_RX_CHUNK as u16)) {
         warn!("uart: UHCI RX configuration rejected: {:?}", error);
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+        }
+    }
+    // `Uhci::new` clears CONF0, which disables both EOF modes. Without the idle EOF the DMA only
+    // hands a packet back once `pkt_thres` (128 B) is reached, so a short or intermittent Link
+    // frame would sit in the DMA until the next burst filled the packet. The idle EOF ends a
+    // partial packet when the line goes quiet, which is what the robot's baseline traffic needs.
+    if let Err(error) = uhci.apply_tx_config(&UhciTxConfig::default()) {
+        warn!("uart: UHCI EOF configuration rejected: {:?}", error);
         loop {
             Timer::after(Duration::from_secs(60)).await;
         }
