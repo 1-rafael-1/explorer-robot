@@ -108,6 +108,11 @@ const UART_RX_PIN: u8 = 7;
 const DMA_RX_BUFFER: usize = 4096;
 const DMA_RX_CHUNK: usize = 128;
 
+/// How long a done-but-silent DMA has to stay silent before it is counted as a stall. The idle
+/// EOF makes `is_done` fire at packet boundaries, so a transfer that is merely idle between
+/// packets must not be mistaken for an exhausted descriptor ring.
+const DMA_STALL_AFTER: Duration = Duration::from_secs(1);
+
 /// The robot-bound frame queue. ADR-0033 budgets 1 KiB; four worst-case PC-to-robot frames fit.
 const UART_TX_QUEUE_CAPACITY: usize = 4;
 
@@ -881,25 +886,22 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
         }
     };
 
-    let mut stalled = false;
+    // `is_done()` is the DMA's `SuccessfulEof`, and with the idle EOF enabled it also fires at
+    // every packet boundary, so it is not by itself a stall. A stall is the transfer reporting
+    // done while no data arrives for a whole second: an idle-EOF boundary yields data within
+    // milliseconds, whereas a genuinely exhausted descriptor ring stays silent.
+    let mut done_since: Option<Instant> = None;
+    let mut stall_counted = false;
 
     loop {
-        // `is_done` becomes true only when the descriptor ring is exhausted and DMA has stopped;
-        // normal flow keeps recycling descriptors and stays false.
-        if transfer.is_done() {
-            if !stalled {
-                UART_DMA_STALLS.fetch_add(1, Ordering::Relaxed);
-                warn!("uart dma: descriptor ring exhausted; DMA stopped");
-                stalled = true;
-            }
-        } else {
-            stalled = false;
-        }
+        let done = transfer.is_done();
 
         let total = {
             let data = transfer.peek();
             let total = data.len();
             if total > 0 {
+                done_since = None;
+                stall_counted = false;
                 UART_RX_BYTES.fetch_add(u32::try_from(total).unwrap_or(u32::MAX), Ordering::Relaxed);
 
                 let now = now_ms();
@@ -926,6 +928,27 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
         };
 
         if total == 0 {
+            if done {
+                let since = match done_since {
+                    Some(since) => since,
+                    None => {
+                        let now = Instant::now();
+                        done_since = Some(now);
+                        now
+                    }
+                };
+                if !stall_counted && Instant::now().duration_since(since) >= DMA_STALL_AFTER {
+                    UART_DMA_STALLS.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        "uart dma: done with no data for {}s; the descriptor ring may be exhausted",
+                        DMA_STALL_AFTER.as_secs()
+                    );
+                    stall_counted = true;
+                }
+            } else {
+                done_since = None;
+                stall_counted = false;
+            }
             Timer::after(Duration::from_millis(1)).await;
             continue;
         }
