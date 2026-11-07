@@ -28,17 +28,23 @@ pub mod reliability;
 pub mod sim;
 
 pub use codec::{
-    CommandMessage, PayloadCodec, StreamSample, decode_command, decode_stream, encode_command, encode_stream,
+    CommandMessage, EventMessage, PayloadCodec, StreamSample, decode_command, decode_event, decode_stream,
+    encode_command, encode_event, encode_stream,
 };
 pub use crc::{Crc16, crc16};
 pub use error::{CodecError, EncodeError, FrameError};
 pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
-pub use ids::{Caps, Command, Control, ProcedureId, Stream};
+pub use ids::{Caps, Command, Control, Event, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
-pub use payload::control::{
-    Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack,
+pub use payload::{
+    control::{Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack},
+    event::{
+        CalibrationKind, CalibrationLoadStatus, CalibrationLoaded, CompletionStatus, DriveDistanceCompleted,
+        EVENT_DETAIL_MAX, EVENT_PAYLOAD_MAX, EventAck, EventOverflow, FloorDrop, OBSTACLE_SOURCE_LIDAR, Obstacle,
+        ProcedureCompleted, RotateCompleted,
+    },
 };
-pub use reliability::{AckOutcome, AckTracker, RetryPolicy};
+pub use reliability::{AckOutcome, AckTracker, ReplayWindow, RetryPolicy};
 #[cfg(feature = "std")]
 pub use sim::{FakeRemote, Faults, Wire};
 

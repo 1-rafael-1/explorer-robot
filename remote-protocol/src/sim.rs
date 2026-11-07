@@ -11,11 +11,15 @@ use std::{collections::VecDeque, vec::Vec};
 
 use crate::{
     PROTOCOL_MAJOR,
-    codec::{CommandMessage, PayloadCodec, StreamSample, decode_command, decode_stream, encode_command},
-    frame::{Class, Direction, Flags, Frame, Seq},
-    ids::{Caps, Command, Control, Stream},
+    codec::{
+        CommandMessage, EventMessage, PayloadCodec, StreamSample, decode_command, decode_event, decode_stream,
+        encode_command,
+    },
+    frame::{Class, Direction, Flags, Frame, Seq, Status},
+    ids::{Caps, Command, Control, Event, Stream},
     parser::{MAX_PC_TO_ROBOT_FRAME, RobotToPcParser},
     payload::control::{HelloAck, PingAck, RateEntry, encode_hello},
+    reliability::ReplayWindow,
 };
 
 /// The baud the simulated remote assumes; both directions derive a 50 ms timeout from it.
@@ -193,10 +197,10 @@ impl Wire {
 /// frames to, a [`Wire`].
 ///
 /// Feed the wire's robot-to-PC bytes through the real [`RobotToPcParser`] and read back the typed
-/// samples, command ACKs and control replies. [`FakeRemote::send_command`] and
+/// samples, events, command ACKs and control replies. [`FakeRemote::send_command`] and
 /// [`FakeRemote::send_hello`] encode a request with the real codecs and the next sequence number,
-/// so a test exercises the same bytes the daemon would put on the wire. Events and `THROTTLE`
-/// arrive with later tickets.
+/// so a test exercises the same bytes the daemon would put on the wire. Events are acknowledged
+/// automatically and deduplicated with the shared [`ReplayWindow`].
 pub struct FakeRemote {
     /// The real robot-to-PC parser, so the simulated path exercises the committed state machine.
     parser: RobotToPcParser,
@@ -218,6 +222,22 @@ pub struct FakeRemote {
     command_seq: u16,
     /// The next control sequence; control frames start at 1 and zero is never sent.
     control_seq: u16,
+    /// The Boot Id most recently observed in a `HELLO_ACK`; scopes the event replay window.
+    boot_id: Option<u32>,
+    /// The event replay window keyed by `(boot_id, seq)`.
+    event_window: ReplayWindow,
+    /// Received event frames in arrival order, each payload copied out of the parser.
+    received_events: Vec<(Event, Seq, Vec<u8>)>,
+    /// Event retransmissions ignored by the replay window so far.
+    event_duplicates: u32,
+    /// Unknown or reserved event ids seen so far; they are ignored, never decoded.
+    unknown_events: u32,
+    /// Event ACKs waiting to be written to the wire.
+    pending_event_acks: Vec<(u16, Seq)>,
+    /// Event ACKs already written to the wire, with the status they carried.
+    sent_event_acks: Vec<(Seq, Status)>,
+    /// The status the peer reports in every event ACK.
+    event_ack_status: Status,
 }
 
 impl FakeRemote {
@@ -235,31 +255,71 @@ impl FakeRemote {
             unknown_controls: 0,
             command_seq: 1,
             control_seq: 1,
+            boot_id: None,
+            event_window: ReplayWindow::new(),
+            received_events: Vec::new(),
+            event_duplicates: 0,
+            unknown_events: 0,
+            pending_event_acks: Vec::new(),
+            sent_event_acks: Vec::new(),
+            event_ack_status: Status::Ok,
         }
     }
 
-    /// Drains the wire's robot-to-PC queue and returns how many stream frames it decoded.
+    /// Drains the wire's robot-to-PC queue, returns how many stream frames it decoded, and writes
+    /// an ACK for every event it saw back to the wire.
     pub fn receive(&mut self, wire: &mut Wire) -> usize {
         let now_ms = wire.now_ms();
         let bytes = wire.take(Direction::RobotToPc);
-        self.feed(&bytes, now_ms)
+        let decoded = self.feed(&bytes, now_ms);
+        self.flush_event_acks(wire);
+        decoded
+    }
+
+    /// Writes the event ACKs collected by [`FakeRemote::feed`] to the wire.
+    ///
+    /// [`FakeRemote::receive`] calls this automatically; a caller that feeds bytes directly must
+    /// call it once the robot-to-PC bytes have been consumed.
+    pub fn flush_event_acks(&mut self, wire: &mut Wire) {
+        let status = self.event_ack_status;
+        let acks = std::mem::take(&mut self.pending_event_acks);
+        for (id, seq) in acks {
+            let payload = [status.bits()];
+            let Ok(frame) = Frame::new(PROTOCOL_MAJOR, Class::Event, Flags::IS_ACK, id, seq, &payload) else {
+                continue;
+            };
+            let mut bytes = [0u8; MAX_PC_TO_ROBOT_FRAME];
+            let Ok(written) = frame.encode_into(&mut bytes) else {
+                continue;
+            };
+            wire.send(Direction::PcToRobot, &bytes[..written]);
+            self.sent_event_acks.push((seq, status));
+        }
     }
 
     /// Feeds raw robot-to-PC bytes through the real parser and returns how many stream frames
     /// completed.
     ///
-    /// Unknown stream ids are counted and ignored. Command frames carrying `IS_ACK` are copied
-    /// into the ACK log; every other non-stream class is ignored until a later ticket implements
-    /// it.
+    /// Unknown stream and event ids are counted and ignored. Command frames carrying `IS_ACK` are
+    /// copied into the ACK log. Event frames are deduplicated by `(boot_id, seq)`; a duplicate is
+    /// counted and not recorded again, but it is still acknowledged so a lost ACK is repaired.
+    /// Every other non-stream class is ignored until a later ticket implements it.
     pub fn feed(&mut self, bytes: &[u8], now_ms: u32) -> usize {
         let before = self.received.len();
         let received = &mut self.received;
         let received_acks = &mut self.received_acks;
         let received_hello_acks = &mut self.received_hello_acks;
         let received_ping_acks = &mut self.received_ping_acks;
+        let received_events = &mut self.received_events;
+        let event_window = &mut self.event_window;
+        let pending_event_acks = &mut self.pending_event_acks;
+        let mut current_boot = self.boot_id.unwrap_or(0);
+        let mut new_boot_id = None;
+        let mut duplicates = 0u32;
         let mut unknown = 0u32;
         let mut unknown_acks = 0u32;
         let mut unknown_controls = 0u32;
+        let mut unknown_events = 0u32;
         self.parser.feed(bytes, now_ms, |frame| match frame.header.class {
             Class::Stream => {
                 let Some(stream) = Stream::from_wire(frame.header.id) else {
@@ -283,8 +343,14 @@ impl FakeRemote {
                     return;
                 }
                 match Control::from_wire(frame.header.id) {
-                    Some(Control::Hello) if HelloAck::decode(frame.payload).is_ok() => {
-                        received_hello_acks.push((frame.header.seq, frame.payload.to_vec()));
+                    Some(Control::Hello) => {
+                        if let Ok(ack) = HelloAck::decode(frame.payload) {
+                            current_boot = ack.boot_id;
+                            new_boot_id = Some(ack.boot_id);
+                            received_hello_acks.push((frame.header.seq, frame.payload.to_vec()));
+                        } else {
+                            unknown_controls = unknown_controls.saturating_add(1);
+                        }
                     }
                     Some(Control::Ping) if PingAck::decode(frame.payload).is_ok() => {
                         received_ping_acks.push((frame.header.seq, frame.payload.to_vec()));
@@ -292,11 +358,31 @@ impl FakeRemote {
                     _ => unknown_controls = unknown_controls.saturating_add(1),
                 }
             }
-            Class::Event => {}
+            Class::Event => {
+                if frame.header.flags.contains(Flags::IS_ACK) {
+                    return;
+                }
+                let Some(event) = Event::from_wire(frame.header.id) else {
+                    unknown_events = unknown_events.saturating_add(1);
+                    return;
+                };
+                let seq = frame.header.seq;
+                if event_window.accept(current_boot, seq) {
+                    received_events.push((event, seq, frame.payload.to_vec()));
+                } else {
+                    duplicates = duplicates.saturating_add(1);
+                }
+                pending_event_acks.push((frame.header.id, seq));
+            }
         });
+        if new_boot_id.is_some() {
+            self.boot_id = new_boot_id;
+        }
         self.unknown_streams = self.unknown_streams.saturating_add(unknown);
         self.unknown_acks = self.unknown_acks.saturating_add(unknown_acks);
         self.unknown_controls = self.unknown_controls.saturating_add(unknown_controls);
+        self.unknown_events = self.unknown_events.saturating_add(unknown_events);
+        self.event_duplicates = self.event_duplicates.saturating_add(duplicates);
         self.received.len() - before
     }
 
@@ -518,6 +604,76 @@ impl FakeRemote {
     #[must_use]
     pub const fn next_control_seq(&self) -> u16 {
         self.control_seq
+    }
+
+    /// Returns every accepted event frame in arrival order with its decoded payload.
+    ///
+    /// A retransmission ignored by the replay window is absent. A frame whose payload the codec
+    /// rejects is skipped, mirroring [`FakeRemote::streams`].
+    pub fn events(&self) -> impl Iterator<Item = (Event, Seq, EventMessage<'_>)> + '_ {
+        self.received_events.iter().filter_map(|(event, seq, payload)| {
+            decode_event(*event, false, payload)
+                .ok()
+                .map(|message| (*event, *seq, message))
+        })
+    }
+
+    /// Returns the most recently accepted event, if any survived decoding.
+    #[must_use]
+    pub fn last_event(&self) -> Option<(Event, Seq, EventMessage<'_>)> {
+        self.events().last()
+    }
+
+    /// Returns how many distinct event frames were accepted.
+    #[must_use]
+    pub const fn received_event_count(&self) -> usize {
+        self.received_events.len()
+    }
+
+    /// Returns how many event retransmissions the replay window ignored.
+    #[must_use]
+    pub const fn event_duplicates(&self) -> u32 {
+        self.event_duplicates
+    }
+
+    /// Returns how many unknown or reserved event ids were ignored.
+    #[must_use]
+    pub const fn unknown_events(&self) -> u32 {
+        self.unknown_events
+    }
+
+    /// Returns every event ACK written to the wire, with the status it carried.
+    pub fn event_acks(&self) -> impl Iterator<Item = (Seq, Status)> + '_ {
+        self.sent_event_acks.iter().copied()
+    }
+
+    /// Returns the most recent event ACK written to the wire, if any.
+    #[must_use]
+    pub fn last_event_ack(&self) -> Option<(Seq, Status)> {
+        self.sent_event_acks.last().copied()
+    }
+
+    /// Returns how many event ACKs have been written to the wire.
+    #[must_use]
+    pub const fn event_ack_count(&self) -> usize {
+        self.sent_event_acks.len()
+    }
+
+    /// Returns the Boot Id most recently observed in a `HELLO_ACK`.
+    #[must_use]
+    pub const fn boot_id(&self) -> Option<u32> {
+        self.boot_id
+    }
+
+    /// Returns the status the peer reports in every event ACK.
+    #[must_use]
+    pub const fn event_ack_status(&self) -> Status {
+        self.event_ack_status
+    }
+
+    /// Sets the status the peer reports in every event ACK.
+    pub const fn set_event_ack_status(&mut self, status: Status) {
+        self.event_ack_status = status;
     }
 }
 

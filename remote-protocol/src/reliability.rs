@@ -22,6 +22,10 @@
 //! A Boot Id change is not a retry trigger. It discards the in-flight command and yields
 //! [`AckOutcome::DiscardedOnBootChange`]; the caller reconciles by querying robot state and never
 //! blindly re-sends a volatile command such as `DRIVE_DISTANCE` or `ROTATE_BY` (ADR-0031).
+//!
+//! [`ReplayWindow`] is the peer-side event mechanism: events are at-least-once, so the receiver
+//! ignores a `(boot_id, seq)` it has already seen. It is bounded and allocation-free, and a new
+//! Boot Id starts a clean window.
 
 use crate::frame::Seq;
 
@@ -344,5 +348,113 @@ impl AckTracker {
             awaiting_outcome: transmissions >= self.policy.attempts(),
         };
         AckOutcome::Retransmit { seq, boot_id }
+    }
+}
+
+/// A bounded replay window that deduplicates events keyed by `(boot_id, seq)`.
+///
+/// Events are at-least-once: the robot retransmits until the peer ACKs, so the peer sees the same
+/// sequence more than once when an ACK is lost. A retransmit of an already-seen `(boot_id, seq)`
+/// is ignored; a new Boot Id starts a clean window because sequences restart at zero.
+///
+/// The window holds the last [`ReplayWindow::CAPACITY`] accepted sequences in a ring. It is fixed
+/// size and allocates nothing. A window this small is sufficient because a sender retries at most
+/// five times before it stops, so a sequence older than 64 accepted events is outside any live
+/// retransmission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayWindow {
+    /// The Boot Id the window currently belongs to, if any sequence has been observed.
+    boot_id: Option<u32>,
+    /// The accepted sequences in insertion order; only `seqs[..len]` is meaningful.
+    seqs: [u16; Self::CAPACITY],
+    /// The number of accepted sequences, capped at [`ReplayWindow::CAPACITY`].
+    len: usize,
+    /// The slot the next sequence overwrites once the window is full.
+    next: usize,
+}
+
+impl ReplayWindow {
+    /// The number of remembered sequences.
+    pub const CAPACITY: usize = 64;
+
+    /// Creates an empty window that has not observed a Boot Id yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            boot_id: None,
+            seqs: [0; Self::CAPACITY],
+            len: 0,
+            next: 0,
+        }
+    }
+
+    /// Returns the Boot Id the window belongs to, or [`None`] before the first sequence.
+    #[must_use]
+    pub const fn boot_id(&self) -> Option<u32> {
+        self.boot_id
+    }
+
+    /// Returns the number of remembered sequences.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when no sequence is remembered.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns `true` when `(boot_id, seq)` is already in the window.
+    ///
+    /// A different Boot Id is never a duplicate: it belongs to a window that has not started.
+    #[must_use]
+    pub fn contains(&self, boot_id: u32, seq: Seq) -> bool {
+        self.boot_id == Some(boot_id) && self.seqs[..self.len].contains(&seq.get())
+    }
+
+    /// Starts a clean window when `boot_id` differs from the current one.
+    ///
+    /// Returns `true` when the window was reset. Observing the same Boot Id is a no-op.
+    pub fn observe_boot_id(&mut self, boot_id: u32) -> bool {
+        if self.boot_id == Some(boot_id) {
+            return false;
+        }
+        self.boot_id = Some(boot_id);
+        self.len = 0;
+        self.next = 0;
+        true
+    }
+
+    /// Records `(boot_id, seq)` and returns `true` when it is new.
+    ///
+    /// A Boot Id change clears the window first. A sequence already present returns `false` and
+    /// changes nothing; a new sequence evicts the oldest one once the window is full.
+    pub fn accept(&mut self, boot_id: u32, seq: Seq) -> bool {
+        self.observe_boot_id(boot_id);
+        if self.seqs[..self.len].contains(&seq.get()) {
+            return false;
+        }
+        if self.len < Self::CAPACITY {
+            self.seqs[self.len] = seq.get();
+            self.len += 1;
+        } else {
+            self.seqs[self.next] = seq.get();
+            self.next = (self.next + 1) % Self::CAPACITY;
+        }
+        true
+    }
+
+    /// Forgets every sequence while keeping the current Boot Id.
+    pub const fn clear(&mut self) {
+        self.len = 0;
+        self.next = 0;
+    }
+}
+
+impl Default for ReplayWindow {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -7,10 +7,11 @@
 //! survive a round trip unchanged.
 //!
 //! Streams live in [`stream`]; commands and their query responses live in [`command`]; the
-//! session control payloads live in [`control`].
+//! reliable events live in [`event`]; the session control payloads live in [`control`].
 
 pub mod command;
 pub mod control;
+pub mod event;
 pub mod stream;
 
 pub use command::{
@@ -18,6 +19,11 @@ pub use command::{
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,
 };
 pub use control::{Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack};
+pub use event::{
+    CalibrationKind, CalibrationLoadStatus, CalibrationLoaded, CompletionStatus, DriveDistanceCompleted,
+    EVENT_DETAIL_MAX, EVENT_PAYLOAD_MAX, EventAck, EventOverflow, FloorDrop, OBSTACLE_SOURCE_LIDAR, Obstacle,
+    ProcedureCompleted, RotateCompleted,
+};
 pub use stream::{
     Activity, ActivityStage, Calibration, CalibrationStatus, LidarCloud, Motion, Perception, PerceptionFlags, Power,
 };

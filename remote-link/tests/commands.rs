@@ -725,7 +725,10 @@ fn arbitrary_command_frames_never_panic() {
         };
         core.on_rx(&frame, 0);
 
-        let polled = core.poll().map(|Inbound::Command(request)| request.seq.get());
+        let polled = core.poll().and_then(|inbound| match inbound {
+            Inbound::Command(request) => Some(request.seq.get()),
+            Inbound::EventAck(_) => None,
+        });
         if let Some(seq) = polled {
             let _ = core.ack_command(seq, Status::Ok, &[]);
         }

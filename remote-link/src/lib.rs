@@ -7,12 +7,14 @@
 //! This crate is `no_std` and allocates nothing. The `std` feature exists only for host tests and
 //! for the simulated link in `remote-protocol`.
 //!
-//! This ticket lands the stream half, the two-phase command seam, and the Session handshake, lease
-//! and Peer/Deadman. Commands are accepted one at a time: [`LinkCore::poll`] yields a structurally
-//! valid, known, same-major, in-order command and the firmware answers it with
-//! [`LinkCore::ack_command`] before polling again. Auto-ACKs for unknown ids, malformed payloads,
-//! bad flags, version mismatches and stale sequences never reach the firmware. `HELLO` and `PING`
-//! are answered inside the core; events and throttle application arrive in later tickets.
+//! This ticket lands the stream half, the two-phase command seam, the Session handshake, lease and
+//! Peer/Deadman, and the reliable event ring. Commands are accepted one at a time:
+//! [`LinkCore::poll`] yields a structurally valid, known, same-major, in-order command and the
+//! firmware answers it with [`LinkCore::ack_command`] before polling again. Auto-ACKs for unknown
+//! ids, malformed payloads, bad flags, version mismatches and stale sequences never reach the
+//! firmware. `HELLO` and `PING` are answered inside the core. Events are sequenced per Boot Id,
+//! retransmitted until the peer ACKs them and reported honestly on ring overflow; throttle
+//! application arrives in a later ticket.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -21,16 +23,20 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+mod events;
 pub mod timing;
 
+use events::EventRing;
+pub use events::{EventAckNotice, Publish};
 use remote_protocol::{
-    Caps, Class, Command, CommandMessage, Control, Direction, EncodeError, Flags, Frame, PROTOCOL_MAJOR,
-    PROTOCOL_MINOR, Seq, Status,
+    Caps, Class, Command, CommandMessage, Control, Direction, EncodeError, Event, EventMessage, Flags, Frame,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status,
     codec::{PayloadCodec, StreamSample, decode_command},
     ids::Stream,
     parser::PcToRobotParser,
     payload::{
         control::{Hello, HelloAck, Ping, PingAck, RateEntry, RateFlags, encode_hello_ack},
+        event::EventAck,
         stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
     },
 };
@@ -91,12 +97,13 @@ pub struct CommandRequest<'a> {
 
 /// A message the firmware must handle, yielded one at a time by [`LinkCore::poll`].
 ///
-/// Later tickets add event acknowledgements and control replies as further variants; the enum is
-/// the stable seam between the link and the firmware.
+/// The enum is the stable seam between the link and the firmware.
 #[derive(Debug)]
 pub enum Inbound<'a> {
     /// A structurally valid command that the firmware validates, dispatches and acknowledges.
     Command(CommandRequest<'a>),
+    /// The peer acknowledged one of the events published earlier.
+    EventAck(EventAckNotice),
 }
 
 /// The latest encoded payload of each stream.
@@ -464,6 +471,11 @@ impl PeerTracker {
         }
     }
 
+    /// Returns `true` while the peer is attached and its lease is live.
+    const fn is_live(&self) -> bool {
+        matches!(self.state, PeerState::PeerLive)
+    }
+
     /// Fires the one-shot edge at the Deadman threshold and expires the lease.
     ///
     /// A frame is always processed before this runs, so a reconnect renews the timestamp first and
@@ -696,6 +708,8 @@ pub struct LinkCore {
     peers: PeerTracker,
     /// Outbound `HELLO_ACK` and `PING` replies.
     controls: ControlState,
+    /// The encoded event ring and its retransmission schedule.
+    events: EventRing,
 }
 
 impl LinkCore {
@@ -717,6 +731,7 @@ impl LinkCore {
             session: SessionState::new(),
             peers: PeerTracker::new(),
             controls: ControlState::new(),
+            events: EventRing::new(&config, boot_id),
         }
     }
 
@@ -811,16 +826,54 @@ impl LinkCore {
         self.set_pending(sample.stream(), stored);
     }
 
-    /// Yields the one accepted command, if any, for the firmware to validate and dispatch.
+    /// Publishes one event into the encoded ring.
     ///
-    /// The returned value borrows the core's inbound slot, so it must be dropped before the next
-    /// call. Nothing is yielded while an earlier polled command is unacknowledged: the firmware
-    /// must call [`LinkCore::ack_command`] first.
+    /// Never blocks and never allocates. The event is sequenced immediately; a full ring drops its
+    /// oldest entry and counts the loss, and the count is reported by a synthesised
+    /// `EVENT_OVERFLOW` as soon as a slot is free. Nothing is transmitted until
+    /// [`LinkCore::next_frame`] runs while a peer is attached, so an expired lease simply leaves
+    /// the entry queued.
+    pub fn publish_event(&mut self, message: &EventMessage<'_>, now_ms: u64) -> Publish {
+        self.events.publish(message, now_ms)
+    }
+
+    /// Returns how many events are in the ring, retrying or exhausted.
+    #[must_use]
+    pub fn pending_events(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Returns how many events the ring has dropped since the last `EVENT_OVERFLOW` was queued.
+    #[must_use]
+    pub const fn dropped_events(&self) -> u16 {
+        self.events.dropped()
+    }
+
+    /// Returns how many queued events have exhausted their schedule and await an ACK.
+    #[must_use]
+    pub fn exhausted_events(&self) -> usize {
+        self.events.exhausted()
+    }
+
+    /// Iterates over the queued `(seq, event)` pairs, oldest first.
+    pub fn queued_events(&self) -> impl Iterator<Item = (Seq, Event)> + '_ {
+        self.events.iter()
+    }
+
+    /// Yields the one accepted command, or one buffered event ACK, if any.
+    ///
+    /// A command takes priority; nothing is yielded while an earlier polled command is
+    /// unacknowledged, because the firmware must call [`LinkCore::ack_command`] first. An
+    /// [`Inbound::EventAck`] borrows nothing and exists only so the firmware can log the peer's
+    /// diagnostic status: the matching ring entry is already retired.
     pub fn poll(&mut self) -> Option<Inbound<'_>> {
-        let state = &mut self.commands;
-        if state.pending.is_some() || !state.ready {
+        if self.commands.pending.is_some() {
             return None;
         }
+        if !self.commands.ready {
+            return self.events.pop_ack().map(Inbound::EventAck);
+        }
+        let state = &mut self.commands;
         let slot = &state.inbound;
         let Ok(message) = decode_command(slot.command, false, &slot.bytes[..slot.len]) else {
             // `on_rx` already validated the payload; this branch is unreachable but never panics.
@@ -885,10 +938,11 @@ impl LinkCore {
 
     /// Emits the next frame into `out`, returning the number of bytes written.
     ///
-    /// Control replies and ACKs take priority over streams. The queued `HELLO_ACK`/`PING` replies
-    /// go first, then the buffered auto-ACKs, then the stored command ACK, then the pending streams
-    /// in round-robin order. A frame that does not fit returns [`None`] without consuming the
-    /// pending payload or advancing its sequence.
+    /// Priority is control before events before streams. The queued `HELLO_ACK`/`PING` replies go
+    /// first, then the buffered auto-ACKs and the stored command ACK, then one ready event. Events
+    /// are emitted only while the peer's lease is live. Pending streams follow in round-robin order.
+    /// A frame that does not fit returns [`None`] without consuming the pending payload or
+    /// advancing its sequence.
     pub fn next_frame(&mut self, out: &mut [u8]) -> Option<usize> {
         if let Some(written) = self.controls.pop(out) {
             return Some(written);
@@ -897,6 +951,11 @@ impl LinkCore {
             return Some(written);
         }
         if let Some(written) = self.commands.pop_stored_ack(out) {
+            return Some(written);
+        }
+        if self.peers.is_live()
+            && let Some(written) = self.events.next_frame(out)
+        {
             return Some(written);
         }
         self.next_stream_frame(out)
@@ -928,13 +987,15 @@ impl LinkCore {
         None
     }
 
-    /// Advances the lease and Deadman timers to `now_ms`.
+    /// Advances the lease, Deadman and event retry timers to `now_ms`.
     ///
     /// A frame is processed before the tick, so a reconnect on the same epoch renews
     /// `last_peer_frame` first and this call sees no silence. The one-shot edge fires at exactly
     /// the Deadman threshold and the peer returns to [`PeerState::NoPeer`] at the lease timeout.
-    pub const fn tick(&mut self, now_ms: u64) {
+    /// Event schedules are only advanced while the lease is live.
+    pub fn tick(&mut self, now_ms: u64) {
         self.peers.tick(now_ms, &self.config);
+        self.events.tick(now_ms, self.peers.is_live());
     }
 
     /// Returns the current peer state.
@@ -963,9 +1024,13 @@ impl LinkCore {
     ///
     /// A command frame is validated and copied into the single inbound slot; a malformed, unknown,
     /// bad-flagged or stale command is auto-ACKed and never yielded. Unknown stream ids are counted
-    /// and ignored. Any valid frame, including one for a mismatched major, renews the lease.
+    /// and ignored. An event ACK retires the matching ring entry and queues a typed notice for
+    /// [`LinkCore::poll`]. Any valid frame, including one for a mismatched major, renews the lease.
+    /// The first frame after an expired lease re-attaches the peer and re-arms every surviving
+    /// event's retry schedule.
     pub fn on_rx(&mut self, bytes: &[u8], now_ms: u64) {
         let now = u32::try_from(now_ms).unwrap_or(u32::MAX);
+        let was_live = self.peers.is_live();
         let Self {
             config,
             boot_id,
@@ -974,6 +1039,7 @@ impl LinkCore {
             session,
             peers,
             controls,
+            events,
             unknown_streams,
             ..
         } = self;
@@ -993,11 +1059,25 @@ impl LinkCore {
                     }
                 }
                 Class::Command => commands.on_frame(frame, session.mismatch),
-                Class::Event => {}
+                Class::Event => {
+                    if session.mismatch || !frame.header.flags.contains(Flags::IS_ACK) {
+                        return;
+                    }
+                    let Some(event) = Event::from_wire(frame.header.id) else {
+                        return;
+                    };
+                    let Ok(ack) = EventAck::decode(frame.payload) else {
+                        return;
+                    };
+                    events.on_ack(event, frame.header.seq, ack.status);
+                }
                 Class::Control => handle_control(config, *boot_id, session, controls, commands, frame),
             }
         });
         *unknown_streams = unknown_streams.saturating_add(unknown);
+        if !was_live && peers.is_live() {
+            events.rearm(now_ms);
+        }
     }
 
     /// Encodes and stores an `ACTIVITY` payload, whose encoded length varies with the detail.

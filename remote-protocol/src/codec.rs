@@ -10,11 +10,15 @@
 
 use crate::{
     error::{CodecError, EncodeError},
-    ids::{Command, Stream},
+    ids::{Command, Event, Stream},
     payload::{
         command::{
             AckPayload, CataloguePage, DriveDistance, GetCatalogue, GetStatus, RotateBy, StartProcedure,
             StatusSnapshot, StopMotion, StopProcedure,
+        },
+        event::{
+            CalibrationLoaded, DriveDistanceCompleted, EventAck, EventOverflow, FloorDrop, Obstacle,
+            ProcedureCompleted, RotateCompleted,
         },
         stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
     },
@@ -213,6 +217,108 @@ pub fn encode_command(message: &CommandMessage<'_>, out: &mut [u8]) -> Result<us
         CommandMessage::CataloguePage(value) => value.encode_into(out),
         CommandMessage::StatusSnapshot(value) => value.encode_into(out),
         CommandMessage::Ack(value) => value.encode_into(out),
+    }
+}
+
+/// Returns the longest prefix of `text` that fits in `max` bytes without splitting a character.
+pub(crate) fn truncate_utf8(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// One typed event payload, tagged with the event it belongs to.
+///
+/// The two drive completions and the Procedure completion borrow their detail from the payload on
+/// decode. The generic [`EventMessage::Ack`] is the peer's acknowledgement and carries the shared
+/// diagnostic status rather than an event id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventMessage<'a> {
+    /// An `OBSTACLE` event.
+    Obstacle(Obstacle),
+    /// A `FLOOR_DROP` event.
+    FloorDrop(FloorDrop),
+    /// A `PROCEDURE_COMPLETED` event.
+    ProcedureCompleted(ProcedureCompleted<'a>),
+    /// A `DRIVE_DISTANCE_COMPLETED` event.
+    DriveDistanceCompleted(DriveDistanceCompleted<'a>),
+    /// A `ROTATE_COMPLETED` event.
+    RotateCompleted(RotateCompleted<'a>),
+    /// A `CALIBRATION_LOADED` event.
+    CalibrationLoaded(CalibrationLoaded),
+    /// An `EVENT_OVERFLOW` event.
+    EventOverflow(EventOverflow),
+    /// An acknowledgement of an event.
+    Ack(EventAck),
+}
+
+impl EventMessage<'_> {
+    /// Returns the event this message belongs to.
+    ///
+    /// The generic [`EventMessage::Ack`] mirrors the frame's id rather than carrying one, so it
+    /// returns [`None`].
+    #[must_use]
+    pub const fn event(&self) -> Option<Event> {
+        match self {
+            Self::Obstacle(_) => Some(Event::Obstacle),
+            Self::FloorDrop(_) => Some(Event::FloorDrop),
+            Self::ProcedureCompleted(_) => Some(Event::ProcedureCompleted),
+            Self::DriveDistanceCompleted(_) => Some(Event::DriveDistanceCompleted),
+            Self::RotateCompleted(_) => Some(Event::RotateCompleted),
+            Self::CalibrationLoaded(_) => Some(Event::CalibrationLoaded),
+            Self::EventOverflow(_) => Some(Event::EventOverflow),
+            Self::Ack(_) => None,
+        }
+    }
+}
+
+/// Decodes one event payload, branching on `IS_ACK` (ADR-0031).
+///
+/// An event decodes as its payload type. An acknowledgement decodes as the shared [`EventAck`].
+///
+/// # Errors
+///
+/// Returns [`CodecError::Length`] for a structural mismatch, [`CodecError::Value`] for an
+/// out-of-range value (including an unassigned completion status or ACK status) and
+/// [`CodecError::Utf8`] for invalid text.
+pub fn decode_event(event: Event, is_ack: bool, bytes: &[u8]) -> Result<EventMessage<'_>, CodecError> {
+    if is_ack {
+        return EventAck::decode(bytes).map(EventMessage::Ack);
+    }
+    match event {
+        Event::Obstacle => Obstacle::decode(bytes).map(EventMessage::Obstacle),
+        Event::FloorDrop => FloorDrop::decode(bytes).map(EventMessage::FloorDrop),
+        Event::ProcedureCompleted => ProcedureCompleted::decode(bytes).map(EventMessage::ProcedureCompleted),
+        Event::DriveDistanceCompleted => {
+            DriveDistanceCompleted::decode(bytes).map(EventMessage::DriveDistanceCompleted)
+        }
+        Event::RotateCompleted => RotateCompleted::decode(bytes).map(EventMessage::RotateCompleted),
+        Event::CalibrationLoaded => CalibrationLoaded::decode(bytes).map(EventMessage::CalibrationLoaded),
+        Event::EventOverflow => EventOverflow::decode(bytes).map(EventMessage::EventOverflow),
+    }
+}
+
+/// Encodes one typed event payload into `out`, returning the number of bytes written.
+///
+/// # Errors
+///
+/// Returns [`EncodeError::BufferTooSmall`] when `out` cannot hold the payload and
+/// [`EncodeError::Value`] when a field cannot be represented in the wire layout.
+pub fn encode_event(message: &EventMessage<'_>, out: &mut [u8]) -> Result<usize, EncodeError> {
+    match message {
+        EventMessage::Obstacle(value) => value.encode_into(out),
+        EventMessage::FloorDrop(value) => value.encode_into(out),
+        EventMessage::ProcedureCompleted(value) => value.encode_into(out),
+        EventMessage::DriveDistanceCompleted(value) => value.encode_into(out),
+        EventMessage::RotateCompleted(value) => value.encode_into(out),
+        EventMessage::CalibrationLoaded(value) => value.encode_into(out),
+        EventMessage::EventOverflow(value) => value.encode_into(out),
+        EventMessage::Ack(value) => value.encode_into(out),
     }
 }
 

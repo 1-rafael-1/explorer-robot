@@ -42,5 +42,9 @@ required-features = ["std"]
 name = "retry"
 required-features = ["std"]
 
+[[test]]
+name = "events"
+required-features = ["std"]
+
 [lints]
 workspace = true

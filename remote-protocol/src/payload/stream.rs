@@ -13,7 +13,7 @@
 //! latest-wins slots are sized against.
 
 use crate::{
-    codec::{PayloadCodec, read_u16_le, write_u16_le},
+    codec::{PayloadCodec, read_u16_le, truncate_utf8, write_u16_le},
     error::{CodecError, EncodeError},
     ids::ProcedureId,
 };
@@ -199,18 +199,6 @@ impl<'a> PayloadCodec<'a> for Activity<'a> {
         out[5..needed].copy_from_slice(detail.as_bytes());
         Ok(needed)
     }
-}
-
-/// Returns the longest prefix of `text` that fits in `max` bytes without splitting a character.
-fn truncate_utf8(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        return text;
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 /// A `PERCEPTION` sample: the obstacle and floor-drop flags.

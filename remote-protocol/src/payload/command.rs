@@ -19,7 +19,7 @@
 //! sentinels.
 
 use crate::{
-    codec::{PayloadCodec, read_u16_le, write_u16_le},
+    codec::{PayloadCodec, read_u16_le, truncate_utf8, write_u16_le},
     error::{CodecError, EncodeError},
     frame::Status,
     ids::ProcedureId,
@@ -427,18 +427,6 @@ pub struct CatalogueEntry<'a> {
 impl CatalogueEntry<'_> {
     /// The largest encoded entry length, including the longest allowed label.
     pub const ENCODED_LEN: usize = 4 + CATALOGUE_LABEL_MAX;
-}
-
-/// Returns the longest prefix of `text` that fits in `max` bytes without splitting a character.
-fn truncate_utf8(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        return text;
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 /// Decodes one entry from the start of `bytes`, returning it and its encoded length.

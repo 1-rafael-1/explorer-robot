@@ -26,6 +26,13 @@
 //! | `0x0014` | `GET_MAP` | reserved |
 //! | `0x0015` | `GET_CAMERA` | reserved |
 //!
+//! Reserved event ids (never variants until implemented):
+//!
+//! | id | event | meaning |
+//! |---|---|---|
+//! | `0x0008–0x000F` | — | low battery, map and landmark updates |
+//!
+//! Ids are namespaced by class, so a stream, command, event and control may each use `0x0001`.
 //! `0x0007–0x000F` stay free for future core streams, and ids are never reassigned.
 
 /// A telemetry stream id (robot to PC, lossy and latest-wins).
@@ -234,6 +241,84 @@ impl Control {
             0x0002 => Some(Self::Ping),
             0x0003 => Some(Self::Throttle),
             0x0004 => Some(Self::BridgeControl),
+            _ => None,
+        }
+    }
+}
+
+/// An event id (robot to PC, reliable and at-least-once).
+///
+/// The discriminants are the ADR-0031 wire ids. This enum is deliberately not
+/// `#[non_exhaustive]`: a new event is a reviewed change to the catalogue. The reserved event ids
+/// stay out of [`Event::ALL`] until a later minor implements them.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Event {
+    /// `OBSTACLE`: the obstacle flag changed.
+    Obstacle = 0x0001,
+    /// `FLOOR_DROP`: the floor-drop flag changed.
+    FloorDrop = 0x0002,
+    /// `PROCEDURE_COMPLETED`: a Procedure reached a terminal outcome.
+    ProcedureCompleted = 0x0003,
+    /// `DRIVE_DISTANCE_COMPLETED`: a `DRIVE_DISTANCE` command finished.
+    DriveDistanceCompleted = 0x0004,
+    /// `ROTATE_COMPLETED`: a `ROTATE_BY` command finished.
+    RotateCompleted = 0x0005,
+    /// `CALIBRATION_LOADED`: a boot-time calibration load finished.
+    CalibrationLoaded = 0x0006,
+    /// `EVENT_OVERFLOW`: the event ring dropped one or more events.
+    EventOverflow = 0x0007,
+}
+
+impl Event {
+    /// Every implemented event, in wire order.
+    pub const ALL: [Self; 7] = [
+        Self::Obstacle,
+        Self::FloorDrop,
+        Self::ProcedureCompleted,
+        Self::DriveDistanceCompleted,
+        Self::RotateCompleted,
+        Self::CalibrationLoaded,
+        Self::EventOverflow,
+    ];
+
+    /// The number of implemented events.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// Returns the wire id of this event.
+    #[must_use]
+    pub const fn wire_id(self) -> u16 {
+        self as u16
+    }
+
+    /// Returns the position of this event in [`Event::ALL`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Obstacle => 0,
+            Self::FloorDrop => 1,
+            Self::ProcedureCompleted => 2,
+            Self::DriveDistanceCompleted => 3,
+            Self::RotateCompleted => 4,
+            Self::CalibrationLoaded => 5,
+            Self::EventOverflow => 6,
+        }
+    }
+
+    /// Builds an event from its wire id, returning [`None`] for an unimplemented or reserved id.
+    ///
+    /// The match is exhaustive over the implemented variants; every other id is unknown to this
+    /// version of the protocol and is ignored by the receiver.
+    #[must_use]
+    pub const fn from_wire(id: u16) -> Option<Self> {
+        match id {
+            0x0001 => Some(Self::Obstacle),
+            0x0002 => Some(Self::FloorDrop),
+            0x0003 => Some(Self::ProcedureCompleted),
+            0x0004 => Some(Self::DriveDistanceCompleted),
+            0x0005 => Some(Self::RotateCompleted),
+            0x0006 => Some(Self::CalibrationLoaded),
+            0x0007 => Some(Self::EventOverflow),
             _ => None,
         }
     }

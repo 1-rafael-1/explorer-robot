@@ -49,7 +49,10 @@ pub const EVENT_RETRY_FACTOR: u32 = 2;
 /// The event retry delay cap.
 pub const EVENT_RETRY_CAP_MS: u64 = 2_000;
 
-/// The number of event attempts before the event is discarded.
+/// The number of event attempts before the sender stops retrying.
+///
+/// The event stays in the ring, so a later re-attach gives it a fresh schedule; it is never
+/// silently discarded after exhaustion.
 pub const EVENT_ATTEMPTS: u8 = 5;
 
 /// The number of entries in the event ring.
@@ -109,6 +112,9 @@ pub struct Config {
     /// The number of event attempts.
     pub event_attempts: u8,
     /// The number of entries in the event ring.
+    ///
+    /// The ring's backing array is [`EVENT_RING`] entries; a host test may set this lower to shrink
+    /// the usable capacity, but it can never exceed the compile-time bound.
     pub event_ring: usize,
     /// The interval at which an active `THROTTLE` hint is repeated.
     pub throttle_repeat_ms: u64,

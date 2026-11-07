@@ -28,3 +28,7 @@ required-features = ["std"]
 [[test]]
 name = "session"
 required-features = ["std"]
+
+[[test]]
+name = "events"
+required-features = ["std"]
