@@ -357,7 +357,9 @@ impl Link {
     ///
     /// Ticket 13 can also drive this future directly when it needs to own the task.
     pub async fn run(self, mut stop: watch::Receiver<bool>, states: watch::Sender<LinkState>) -> LinkState {
-        let started = Instant::now();
+        // The app adapter stamps its relay updates from the same process origin, so the relay's
+        // liveness and command timers compare like values across the two adapters (ADR-0039).
+        let started = crate::clock::origin();
         let mut backoff = Backoff::new();
         Self::publish(&states, LinkState::Starting);
         loop {

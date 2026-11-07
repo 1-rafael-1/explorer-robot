@@ -26,10 +26,16 @@ tokio = { version = "1", features = [
 ] }
 # The once-per-process Session epoch (ADR-0039) and the handshake's client nonce (ADR-0037).
 getrandom = "0.3"
+# The app boundary's HTTP server and the `/ws` upgrade (ADR-0039).
+axum = { version = "0.8", features = ["ws"] }
+# The compile-time embed of `remote/app`, with a disk override for `--assets` (ADR-0039).
+include_dir = "0.7"
 
 [dev-dependencies]
 # The TCP/preamble seam's other end: the Bridge Stub's in-process listener (ticket 09).
 bridge-stub = { path = "../bridge-stub" }
+futures-util = "0.3"
+tokio-tungstenite = "0.30"
 
 [lints]
 workspace = true
