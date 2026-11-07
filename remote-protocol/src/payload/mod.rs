@@ -18,7 +18,10 @@ pub use command::{
     AckPayload, CatalogueEntries, CatalogueEntry, CatalogueFlags, CataloguePage, DriveDistance, GetCatalogue,
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,
 };
-pub use control::{Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack};
+pub use control::{
+    Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, Throttle, ThrottleAction, encode_hello,
+    encode_hello_ack,
+};
 pub use event::{
     CalibrationKind, CalibrationLoadStatus, CalibrationLoaded, CompletionStatus, DriveDistanceCompleted,
     EVENT_DETAIL_MAX, EVENT_PAYLOAD_MAX, EventAck, EventOverflow, FloorDrop, OBSTACLE_SOURCE_LIDAR, Obstacle,

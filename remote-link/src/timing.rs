@@ -68,8 +68,8 @@ pub const FRAME_TIMEOUT_MS: u32 = 50;
 ///
 /// The values follow ADR-0031: `POWER` and `CALIBRATION` report on change at least every 5 s,
 /// `MOTION` idles at 1 Hz, and `ACTIVITY` reports at 1 Hz while `PERCEPTION` and `LIDAR_CLOUD`
-/// run at 10 Hz. A Session's Requested Rate overrides these once ticket 08 applies it; until then
-/// they are only what `HELLO_ACK` advertises.
+/// run at 10 Hz. A Session's Requested Rate overrides these while a session is active; when the
+/// `HELLO` omits a stream, these are the baseline the emission schedule falls back to.
 pub const DEFAULT_RATES_CHZ: [u16; Stream::COUNT] = [
     20,    // POWER: 5 s heartbeat
     100,   // MOTION: 1 Hz idle
@@ -77,6 +77,20 @@ pub const DEFAULT_RATES_CHZ: [u16; Stream::COUNT] = [
     1_000, // PERCEPTION: 10 Hz
     1_000, // LIDAR_CLOUD: 10 Hz
     20,    // CALIBRATION: 5 s heartbeat
+];
+
+/// The robot's heartbeat cadence per stream, in milliseconds, indexed by [`Stream::index`].
+///
+/// An unchanged sample is not retransmitted before its heartbeat. The values follow ADR-0031:
+/// `POWER` and `CALIBRATION` report on change at least every 5 s, `ACTIVITY` and `MOTION` every
+/// 1 s, and `PERCEPTION` and `LIDAR_CLOUD` every 100 ms.
+pub const DEFAULT_HEARTBEAT_MS: [u64; Stream::COUNT] = [
+    5_000, // POWER
+    1_000, // MOTION
+    1_000, // ACTIVITY
+    100,   // PERCEPTION
+    100,   // LIDAR_CLOUD
+    5_000, // CALIBRATION
 ];
 
 /// The timing values `LinkCore` runs with.
@@ -127,6 +141,11 @@ pub struct Config {
     /// A host test overrides this to make `HELLO_ACK` deterministic; the firmware leaves it at
     /// [`DEFAULT_RATES_CHZ`].
     pub default_rates_chz: [u16; Stream::COUNT],
+    /// The heartbeat cadence per stream, in milliseconds, indexed by [`Stream::index`].
+    ///
+    /// An unchanged sample is not retransmitted before its heartbeat. The firmware leaves this at
+    /// [`DEFAULT_HEARTBEAT_MS`]; a host test compresses time by overriding it.
+    pub heartbeat_ms: [u64; Stream::COUNT],
 }
 
 impl Config {
@@ -150,6 +169,7 @@ impl Config {
         frame_timeout_ms: FRAME_TIMEOUT_MS,
         robot_caps: Caps::from_bits(0),
         default_rates_chz: DEFAULT_RATES_CHZ,
+        heartbeat_ms: DEFAULT_HEARTBEAT_MS,
     };
 }
 

@@ -8,13 +8,15 @@
 //! for the simulated link in `remote-protocol`.
 //!
 //! This ticket lands the stream half, the two-phase command seam, the Session handshake, lease and
-//! Peer/Deadman, and the reliable event ring. Commands are accepted one at a time:
-//! [`LinkCore::poll`] yields a structurally valid, known, same-major, in-order command and the
-//! firmware answers it with [`LinkCore::ack_command`] before polling again. Auto-ACKs for unknown
-//! ids, malformed payloads, bad flags, version mismatches and stale sequences never reach the
-//! firmware. `HELLO` and `PING` are answered inside the core. Events are sequenced per Boot Id,
-//! retransmitted until the peer ACKs them and reported honestly on ring overflow; throttle
-//! application arrives in a later ticket.
+//! Peer/Deadman, the reliable event ring, and the throttle/rate emission schedule. Commands are
+//! accepted one at a time: [`LinkCore::poll`] yields a structurally valid, known, same-major,
+//! in-order command and the firmware answers it with [`LinkCore::ack_command`] before polling
+//! again. Auto-ACKs for unknown ids, malformed payloads, bad flags, version mismatches and stale
+//! sequences never reach the firmware. `HELLO` and `PING` are answered inside the core. Events are
+//! sequenced per Boot Id, retransmitted until the peer ACKs them and reported honestly on ring
+//! overflow. Telemetry is emitted only when a sample is due under the most restrictive of the
+//! firmware's request, the Session's Requested Rate (or the baseline) and the active `THROTTLE`
+//! hints, with an on-change/heartbeat rule.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -30,12 +32,12 @@ use events::EventRing;
 pub use events::{EventAckNotice, Publish};
 use remote_protocol::{
     Caps, Class, Command, CommandMessage, Control, Direction, EncodeError, Event, EventMessage, Flags, Frame,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
     codec::{PayloadCodec, StreamSample, decode_command},
     ids::Stream,
     parser::PcToRobotParser,
     payload::{
-        control::{Hello, HelloAck, Ping, PingAck, RateEntry, RateFlags, encode_hello_ack},
+        control::{Hello, HelloAck, Ping, PingAck, RateEntry, RateFlags, Throttle as ThrottleHint, encode_hello_ack},
         event::EventAck,
         stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
     },
@@ -149,6 +151,47 @@ impl StreamSlots {
             Stream::Calibration => &self.calibration,
         }
     }
+}
+
+/// The emission schedule of one stream's latest-wins slot.
+#[derive(Clone, Copy, Debug, Default)]
+struct StreamSchedule {
+    /// Whether the stored sample differs from the one most recently emitted.
+    changed: bool,
+    /// The time the stored sample was most recently emitted, or [`None`] before the first send.
+    last_emit_ms: Option<u64>,
+    /// The fingerprint of the payload most recently emitted.
+    last_emitted_hash: u32,
+}
+
+impl StreamSchedule {
+    /// Creates a schedule for a stream that has never emitted.
+    const fn new() -> Self {
+        Self {
+            changed: false,
+            last_emit_ms: None,
+            last_emitted_hash: 0,
+        }
+    }
+}
+
+/// Returns a deterministic 32-bit fingerprint of an encoded payload.
+///
+/// The schedule uses it to notice that a publish reproduces the sample that was last emitted, so
+/// an unchanged sample waits for its heartbeat instead of being resent immediately. A collision
+/// would only defer a change until the heartbeat; it never emits early.
+fn payload_fingerprint(bytes: &[u8]) -> u32 {
+    /// The FNV-1a 32-bit offset basis.
+    const OFFSET_BASIS: u32 = 0x811C_9DC5;
+    /// The FNV-1a 32-bit prime.
+    const PRIME: u32 = 0x0100_0193;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 /// The single accepted command's copied payload and metadata.
@@ -568,10 +611,11 @@ impl ControlState {
     }
 }
 
-/// Handles one inbound control frame.
+/// Handles one inbound `HELLO` or `PING` control frame.
 ///
-/// `HELLO` and `PING` are the only controls the robot answers; an unimplemented id, an inbound
-/// ACK and any control while the peer's major is mismatched are ignored.
+/// `HELLO` and `PING` are the only controls the robot answers; an inbound ACK is ignored. An
+/// unimplemented id and any control while the peer's major is mismatched are ignored. `THROTTLE`
+/// is applied by [`LinkCore::on_rx`] before this runs because it has no reply.
 fn handle_control(
     config: &Config,
     boot_id: u32,
@@ -580,17 +624,22 @@ fn handle_control(
     commands: &mut CommandState,
     frame: Frame<'_>,
 ) {
-    if frame.header.flags.contains(Flags::IS_ACK) {
-        return;
-    }
     let Some(control) = Control::from_wire(frame.header.id) else {
         return;
     };
     let seq = frame.header.seq.get();
     match control {
-        Control::Hello => handle_hello(config, boot_id, session, controls, commands, frame.payload, seq),
+        Control::Hello => {
+            if frame.header.flags.contains(Flags::IS_ACK) {
+                return;
+            }
+            handle_hello(config, boot_id, session, controls, commands, frame.payload, seq);
+        }
         Control::Ping => {
-            if session.mismatch || Ping::decode(frame.payload).is_err() {
+            if session.mismatch || frame.header.flags.contains(Flags::IS_ACK) {
+                return;
+            }
+            if Ping::decode(frame.payload).is_err() {
                 return;
             }
             let mut payload = [0u8; PingAck::ENCODED_LEN];
@@ -692,10 +741,14 @@ pub struct LinkCore {
     parser: PcToRobotParser,
     /// The latest-wins encoded payload slots.
     slots: StreamSlots,
+    /// The per-stream emission schedule, indexed by [`Stream::index`].
+    schedule: [StreamSchedule; Stream::COUNT],
+    /// The firmware's preferred rate ceiling per stream in centi-Hz; zero means no extra ceiling.
+    firmware_rate_chz: [u16; Stream::COUNT],
     /// One sequence counter per stream, incremented when a frame is emitted.
     sequences: [u16; Stream::COUNT],
-    /// The pending bitmap, indexed by [`Stream::index`].
-    pending: u8,
+    /// The bitmap of streams with a valid sample, indexed by [`Stream::index`].
+    has_sample: u8,
     /// The stream index to try first on the next emission, for round-robin fairness.
     cursor: usize,
     /// The number of unknown inbound stream ids ignored so far.
@@ -710,12 +763,19 @@ pub struct LinkCore {
     controls: ControlState,
     /// The encoded event ring and its retransmission schedule.
     events: EventRing,
+    /// The merged advisory `THROTTLE` hints.
+    throttle: Throttle,
+    /// The number of malformed `THROTTLE` payloads ignored so far.
+    invalid_throttles: u32,
+    /// The most recent time observed through [`LinkCore::publish_stream`], [`LinkCore::tick`] or
+    /// [`LinkCore::on_rx`].
+    now_ms: u64,
 }
 
 impl LinkCore {
     /// Creates a link core with `config`, the firmware's `boot_id` and the current time.
     #[must_use]
-    pub fn new(config: Config, boot_id: u32, _now_ms: u64) -> Self {
+    pub fn new(config: Config, boot_id: u32, now_ms: u64) -> Self {
         let mut parser = PcToRobotParser::new(Direction::PcToRobot, timing::BAUD);
         parser.set_timeout_ms(config.frame_timeout_ms);
         Self {
@@ -723,8 +783,10 @@ impl LinkCore {
             boot_id,
             parser,
             slots: StreamSlots::new(),
+            schedule: [StreamSchedule::new(); Stream::COUNT],
+            firmware_rate_chz: [0; Stream::COUNT],
             sequences: [0; Stream::COUNT],
-            pending: 0,
+            has_sample: 0,
             cursor: 0,
             unknown_streams: 0,
             commands: CommandState::new(),
@@ -732,6 +794,9 @@ impl LinkCore {
             peers: PeerTracker::new(),
             controls: ControlState::new(),
             events: EventRing::new(&config, boot_id),
+            throttle: Throttle::new(),
+            invalid_throttles: 0,
+            now_ms,
         }
     }
 
@@ -805,12 +870,28 @@ impl LinkCore {
         self.unknown_streams
     }
 
+    /// Returns how many malformed `THROTTLE` payloads have been ignored.
+    ///
+    /// A malformed hint is dropped without touching the schedule; the peer's next hint or the
+    /// hint's own repetition repairs the state.
+    #[must_use]
+    pub const fn invalid_throttles(&self) -> u32 {
+        self.invalid_throttles
+    }
+
     /// Publishes one telemetry sample into its per-stream latest-wins slot.
     ///
     /// The sample is encoded immediately; a newer publish replaces the pending one, so there is no
-    /// queue and a coalesced sample is never retransmitted. `requested_rate` and `now_ms` are
-    /// accepted for ticket 08's emission schedule and ignored until then.
-    pub fn publish_stream(&mut self, sample: &StreamSample<'_>, _requested_rate: u32, _now_ms: u64) {
+    /// queue and a coalesced sample is never retransmitted. The schedule records whether the
+    /// encoded payload differs from the sample most recently emitted, which is what lets an
+    /// unchanged sample wait for its heartbeat.
+    ///
+    /// `requested_rate` is the firmware's preferred ceiling in centi-Hz. A non-zero value takes
+    /// part in the most-restrictive merge with the Session's Requested Rate (or the configured
+    /// baseline) and the active `Throttle`; zero means the firmware has no preference.
+    pub fn publish_stream(&mut self, sample: &StreamSample<'_>, requested_rate: u32, now_ms: u64) {
+        self.now_ms = now_ms;
+        let stream = sample.stream();
         let stored = match sample {
             StreamSample::Power(power) => store_fixed(&mut self.slots.power, |out| power.encode_into(out)),
             StreamSample::Motion(motion) => store_fixed(&mut self.slots.motion, |out| motion.encode_into(out)),
@@ -823,7 +904,19 @@ impl LinkCore {
                 store_fixed(&mut self.slots.calibration, |out| calibration.encode_into(out))
             }
         };
-        self.set_pending(sample.stream(), stored);
+        self.set_has_sample(stream, stored);
+        if !stored {
+            return;
+        }
+
+        let index = stream.index();
+        self.firmware_rate_chz[index] = u16::try_from(requested_rate).unwrap_or(u16::MAX);
+        let fingerprint = payload_fingerprint(self.slots.payload(stream));
+        let schedule = &mut self.schedule[index];
+        schedule.changed = match schedule.last_emit_ms {
+            Some(_) => fingerprint != schedule.last_emitted_hash,
+            None => true,
+        };
     }
 
     /// Publishes one event into the encoded ring.
@@ -940,7 +1033,8 @@ impl LinkCore {
     ///
     /// Priority is control before events before streams. The queued `HELLO_ACK`/`PING` replies go
     /// first, then the buffered auto-ACKs and the stored command ACK, then one ready event. Events
-    /// are emitted only while the peer's lease is live. Pending streams follow in round-robin order.
+    /// are emitted only while the peer's lease is live. Streams follow in round-robin order, but
+    /// only a stream whose sample is due at the most recent observed time is emitted.
     /// A frame that does not fit returns [`None`] without consuming the pending payload or
     /// advancing its sequence.
     pub fn next_frame(&mut self, out: &mut [u8]) -> Option<usize> {
@@ -961,39 +1055,102 @@ impl LinkCore {
         self.next_stream_frame(out)
     }
 
-    /// Emits the next pending stream frame, round-robin between the slots.
+    /// Emits the next due stream frame, round-robin between the slots.
     fn next_stream_frame(&mut self, out: &mut [u8]) -> Option<usize> {
         for offset in 0..Stream::COUNT {
             let index = (self.cursor + offset) % Stream::COUNT;
-            if self.pending & (1u8 << index) == 0 {
+            if !self.stream_due(index) {
                 continue;
             }
             let stream = Stream::ALL[index];
-            let frame = Frame::new(
-                PROTOCOL_MAJOR,
-                Class::Stream,
-                Flags::default(),
-                stream.wire_id(),
-                Seq::new(self.sequences[index]),
-                self.slots.payload(stream),
-            )
-            .ok()?;
-            let written = frame.encode_into(out).ok()?;
+            let written = {
+                let payload = self.slots.payload(stream);
+                let frame = Frame::new(
+                    PROTOCOL_MAJOR,
+                    Class::Stream,
+                    Flags::default(),
+                    stream.wire_id(),
+                    Seq::new(self.sequences[index]),
+                    payload,
+                )
+                .ok()?;
+                frame.encode_into(out).ok()?
+            };
+            let fingerprint = payload_fingerprint(self.slots.payload(stream));
             self.sequences[index] = self.sequences[index].wrapping_add(1);
-            self.pending &= !(1u8 << index);
+            let schedule = &mut self.schedule[index];
+            schedule.last_emit_ms = Some(self.now_ms);
+            schedule.last_emitted_hash = fingerprint;
+            schedule.changed = false;
             self.cursor = (index + 1) % Stream::COUNT;
             return Some(written);
         }
         None
     }
 
-    /// Advances the lease, Deadman and event retry timers to `now_ms`.
+    /// Returns `true` when the sample in `index`'s slot is due for emission at `now_ms`.
+    ///
+    /// A changed sample waits for the effective rate's minimum spacing. An unchanged sample waits
+    /// for its heartbeat as well, so a steady stream still refreshes the peer. A sample that has
+    /// never been emitted is due immediately.
+    fn stream_due(&self, index: usize) -> bool {
+        if self.has_sample & (1u8 << index) == 0 {
+            return false;
+        }
+        let Some(base) = self.emission_rate_chz(index) else {
+            return false;
+        };
+        let stream = Stream::ALL[index];
+        let rate = match self.throttle.effective(stream, self.now_ms) {
+            ThrottleState::Paused => return false,
+            ThrottleState::Limited(limit) => base.min(limit),
+            ThrottleState::Unrestricted => base,
+        };
+        if rate == 0 {
+            return false;
+        }
+        let min_spacing_ms = 10_000u64.div_ceil(u64::from(rate));
+        let schedule = &self.schedule[index];
+        let Some(last_emit_ms) = schedule.last_emit_ms else {
+            return true;
+        };
+        let elapsed_ms = self.now_ms.saturating_sub(last_emit_ms);
+        let wait_ms = if schedule.changed {
+            min_spacing_ms
+        } else {
+            min_spacing_ms.max(self.config.heartbeat_ms[index])
+        };
+        elapsed_ms >= wait_ms
+    }
+
+    /// Returns the most restrictive of the firmware's request, the HELLO Requested Rate (or the
+    /// configured baseline when the Session omitted the stream).
+    ///
+    /// [`None`] means the Session disabled the stream, so it is suppressed entirely.
+    fn emission_rate_chz(&self, index: usize) -> Option<u16> {
+        let base = if self.session.requested_present[index] {
+            if !self.session.requested_enabled[index] {
+                return None;
+            }
+            self.session.requested_rate[index]
+        } else {
+            self.config.default_rates_chz[index]
+        };
+        let firmware = self.firmware_rate_chz[index];
+        Some(if firmware == 0 { base } else { base.min(firmware) })
+    }
+
+    /// Advances the lease, Deadman, event retry timers and `THROTTLE` expiry to `now_ms`.
     ///
     /// A frame is processed before the tick, so a reconnect on the same epoch renews
     /// `last_peer_frame` first and this call sees no silence. The one-shot edge fires at exactly
     /// the Deadman threshold and the peer returns to [`PeerState::NoPeer`] at the lease timeout.
-    /// Event schedules are only advanced while the lease is live.
+    /// Event schedules are only advanced while the lease is live. Expired `THROTTLE` hints are
+    /// forgotten here, so emission reverts to the Requested Rate or the baseline; it never
+    /// reverts to zero.
     pub fn tick(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
+        self.throttle.tick(now_ms);
         self.peers.tick(now_ms, &self.config);
         self.events.tick(now_ms, self.peers.is_live());
     }
@@ -1029,6 +1186,8 @@ impl LinkCore {
     /// The first frame after an expired lease re-attaches the peer and re-arms every surviving
     /// event's retry schedule.
     pub fn on_rx(&mut self, bytes: &[u8], now_ms: u64) {
+        self.now_ms = now_ms;
+        self.throttle.tick(now_ms);
         let now = u32::try_from(now_ms).unwrap_or(u32::MAX);
         let was_live = self.peers.is_live();
         let Self {
@@ -1041,6 +1200,8 @@ impl LinkCore {
             controls,
             events,
             unknown_streams,
+            throttle,
+            invalid_throttles,
             ..
         } = self;
         let config: &Config = config;
@@ -1071,7 +1232,21 @@ impl LinkCore {
                     };
                     events.on_ack(event, frame.header.seq, ack.status);
                 }
-                Class::Control => handle_control(config, *boot_id, session, controls, commands, frame),
+                Class::Control => {
+                    if frame.header.id == Control::Throttle.wire_id() {
+                        if session.mismatch {
+                            return;
+                        }
+                        // THROTTLE has no ACK, so IS_ACK is ignored rather than rejecting it.
+                        let Ok(hint) = ThrottleHint::decode(frame.payload) else {
+                            *invalid_throttles = (*invalid_throttles).saturating_add(1);
+                            return;
+                        };
+                        let _ = throttle.apply(&hint, now_ms);
+                    } else {
+                        handle_control(config, *boot_id, session, controls, commands, frame);
+                    }
+                }
             }
         });
         *unknown_streams = unknown_streams.saturating_add(unknown);
@@ -1091,13 +1266,13 @@ impl LinkCore {
         }
     }
 
-    /// Sets or clears `stream`'s pending bit after a publish attempt.
-    const fn set_pending(&mut self, stream: Stream, pending: bool) {
+    /// Sets or clears `stream`'s "has a sample" bit after a publish attempt.
+    const fn set_has_sample(&mut self, stream: Stream, has_sample: bool) {
         let bit = 1u8 << stream.index();
-        if pending {
-            self.pending |= bit;
+        if has_sample {
+            self.has_sample |= bit;
         } else {
-            self.pending &= !bit;
+            self.has_sample &= !bit;
         }
     }
 }

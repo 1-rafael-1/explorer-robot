@@ -1,11 +1,12 @@
-//! Typed payloads for the control frames `HELLO`, `HELLO_ACK` and `PING` (ADR-0030, ADR-0031).
+//! Typed payloads for the control frames `HELLO`, `HELLO_ACK`, `PING` and `THROTTLE` (ADR-0030,
+//! ADR-0031).
 //!
 //! The layouts are little-endian and the rate-entry list is variable-length; it is bounded only
 //! by the 256-byte PC-to-robot cap. Decoding borrows the entries from the input, so no codec
 //! allocates.
 //!
-//! `THROTTLE` and `BRIDGE_CONTROL` are part of the [`Control`](crate::ids::Control) vocabulary but
-//! their payload codecs arrive with later tickets.
+//! `BRIDGE_CONTROL` is part of the [`Control`](crate::ids::Control) vocabulary but its payload
+//! codec arrives with a later ticket. `THROTTLE` has no acknowledgement.
 //!
 //! | payload | layout |
 //! |---|---|
@@ -13,6 +14,7 @@
 //! | `HELLO_ACK` | `major u8`, `minor u8`, `caps u32`, `boot_id u32`, `status u8`, entries |
 //! | `PING` | empty |
 //! | `PING_ACK` | `status u8` |
+//! | `THROTTLE` | `stream_id u16`, `action u8`, `rate_chz u16`, `ttl_ms u16` |
 //!
 //! Each rate entry is `stream_id u16`, `rate_chz u16`, `flags u8`.
 
@@ -432,6 +434,111 @@ impl<'a> PayloadCodec<'a> for PingAck {
             return Err(EncodeError::BufferTooSmall);
         }
         out[0] = self.status.bits();
+        Ok(Self::ENCODED_LEN)
+    }
+}
+
+/// The action of a `THROTTLE` hint (ADR-0030).
+///
+/// The discriminants are the wire values. A `SET_RATE` with a zero rate is not a request to emit
+/// at zero: the receiver treats it as the most restrictive state, a pause.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ThrottleAction {
+    /// `SET_RATE`: set a maximum rate in centi-Hz for the hint's lifetime.
+    SetRate = 0,
+    /// `PAUSE`: stop emission for the hint's lifetime.
+    Pause = 1,
+    /// `RESUME`: clear a pause immediately.
+    Resume = 2,
+}
+
+impl ThrottleAction {
+    /// Every action in wire order.
+    pub const ALL: [Self; 3] = [Self::SetRate, Self::Pause, Self::Resume];
+
+    /// Returns the wire value.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self as u8
+    }
+
+    /// Builds an action from its wire value, returning [`None`] for an unassigned value.
+    #[must_use]
+    pub const fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::SetRate),
+            1 => Some(Self::Pause),
+            2 => Some(Self::Resume),
+            _ => None,
+        }
+    }
+}
+
+/// A `THROTTLE` hint: an advisory per-stream rate or pause with a time-to-live.
+///
+/// The hint is never acknowledged. `stream_id` addresses one stream or, with
+/// [`Throttle::ALL_STREAMS`], every stream. `rate_chz` is a maximum in centi-Hz and is only
+/// meaningful for [`ThrottleAction::SetRate`]; `ttl_ms` is a lifetime in milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Throttle {
+    /// The stream id, or [`Throttle::ALL_STREAMS`] for every stream.
+    pub stream_id: u16,
+    /// The action to apply.
+    pub action: ThrottleAction,
+    /// The maximum rate in centi-Hz; zero means the most restrictive state (a pause).
+    pub rate_chz: u16,
+    /// The lifetime of the hint in milliseconds.
+    pub ttl_ms: u16,
+}
+
+impl Throttle {
+    /// The encoded payload length in bytes.
+    pub const ENCODED_LEN: usize = 7;
+
+    /// The stream id that addresses every stream.
+    pub const ALL_STREAMS: u16 = 0xFFFF;
+
+    /// Builds a hint for one stream or every stream.
+    #[must_use]
+    pub const fn new(stream_id: u16, action: ThrottleAction, rate_chz: u16, ttl_ms: u16) -> Self {
+        Self {
+            stream_id,
+            action,
+            rate_chz,
+            ttl_ms,
+        }
+    }
+
+    /// Builds a hint that addresses every stream.
+    #[must_use]
+    pub const fn all(action: ThrottleAction, rate_chz: u16, ttl_ms: u16) -> Self {
+        Self::new(Self::ALL_STREAMS, action, rate_chz, ttl_ms)
+    }
+}
+
+impl<'a> PayloadCodec<'a> for Throttle {
+    fn decode(bytes: &'a [u8]) -> Result<Self, CodecError> {
+        if bytes.len() != Self::ENCODED_LEN {
+            return Err(CodecError::Length);
+        }
+        let action = ThrottleAction::from_wire(bytes[2]).ok_or(CodecError::Value)?;
+        Ok(Self {
+            stream_id: read_u16_le(bytes, 0),
+            action,
+            rate_chz: read_u16_le(bytes, 3),
+            ttl_ms: read_u16_le(bytes, 5),
+        })
+    }
+
+    fn encode_into(&self, out: &mut [u8]) -> Result<usize, EncodeError> {
+        if out.len() < Self::ENCODED_LEN {
+            return Err(EncodeError::BufferTooSmall);
+        }
+        write_u16_le(out, 0, self.stream_id);
+        out[2] = self.action.bits();
+        write_u16_le(out, 3, self.rate_chz);
+        write_u16_le(out, 5, self.ttl_ms);
         Ok(Self::ENCODED_LEN)
     }
 }

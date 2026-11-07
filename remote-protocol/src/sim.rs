@@ -18,7 +18,7 @@ use crate::{
     frame::{Class, Direction, Flags, Frame, Seq, Status},
     ids::{Caps, Command, Control, Event, Stream},
     parser::{MAX_PC_TO_ROBOT_FRAME, RobotToPcParser},
-    payload::control::{HelloAck, PingAck, RateEntry, encode_hello},
+    payload::control::{HelloAck, PingAck, RateEntry, Throttle, ThrottleAction, encode_hello},
     reliability::ReplayWindow,
 };
 
@@ -546,6 +546,25 @@ impl FakeRemote {
     /// Sends a `PING` request with the next control sequence number.
     pub fn send_ping(&mut self, wire: &mut Wire) -> Option<Seq> {
         self.send_control(wire, Control::Ping, &[])
+    }
+
+    /// Sends a `THROTTLE` hint with the next control sequence number.
+    ///
+    /// `stream_id` is a stream id or [`Throttle::ALL_STREAMS`] for every stream. `ttl_ms` is the
+    /// hint's lifetime in milliseconds. A hint is never acknowledged, so a valid call produces no
+    /// reply. Returns the sequence used, or [`None`] when the payload cannot be encoded.
+    pub fn send_throttle(
+        &mut self,
+        wire: &mut Wire,
+        stream_id: u16,
+        action: ThrottleAction,
+        rate_chz: u16,
+        ttl_ms: u16,
+    ) -> Option<Seq> {
+        let hint = Throttle::new(stream_id, action, rate_chz, ttl_ms);
+        let mut payload = [0u8; Throttle::ENCODED_LEN];
+        let written = hint.encode_into(&mut payload).ok()?;
+        self.send_control(wire, Control::Throttle, &payload[..written])
     }
 
     /// Encodes and sends one control frame, returning the sequence used.

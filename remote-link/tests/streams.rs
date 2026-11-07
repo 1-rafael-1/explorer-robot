@@ -32,10 +32,10 @@ fn emit(core: &mut LinkCore, sample: &StreamSample<'_>) -> Option<Vec<u8>> {
     Some(buffer[..written].to_vec())
 }
 
-/// Publishes `sample`, emits one frame and returns its sequence number.
-fn emit_sequence(core: &mut LinkCore, sample: &StreamSample<'_>) -> Option<u16> {
+/// Publishes `sample` at `now_ms`, emits one frame and returns its sequence number.
+fn emit_sequence(core: &mut LinkCore, sample: &StreamSample<'_>, now_ms: u64) -> Option<u16> {
     let mut buffer = [0u8; MAX_ROBOT_TO_PC_FRAME];
-    core.publish_stream(sample, 0, 0);
+    core.publish_stream(sample, 0, now_ms);
     let written = core.next_frame(&mut buffer)?;
     let frame = Frame::decode(&buffer[..written], Direction::RobotToPc).ok()?;
     Some(frame.header.seq.get())
@@ -161,11 +161,12 @@ fn per_stream_sequences_increment_on_emission() {
     });
     let motion = StreamSample::Motion(Motion { left: 1, right: 1 });
 
-    assert_eq!(emit_sequence(&mut core, &power), Some(0), "first POWER");
-    assert_eq!(emit_sequence(&mut core, &power), Some(1), "second POWER");
-    assert_eq!(emit_sequence(&mut core, &power), Some(2), "third POWER");
+    // An unchanged sample waits for its heartbeat (5 s for POWER), so advance time between sends.
+    assert_eq!(emit_sequence(&mut core, &power, 0), Some(0), "first POWER");
+    assert_eq!(emit_sequence(&mut core, &power, 5_000), Some(1), "second POWER");
+    assert_eq!(emit_sequence(&mut core, &power, 10_000), Some(2), "third POWER");
     assert_eq!(
-        emit_sequence(&mut core, &motion),
+        emit_sequence(&mut core, &motion, 10_000),
         Some(0),
         "MOTION must have its own counter"
     );

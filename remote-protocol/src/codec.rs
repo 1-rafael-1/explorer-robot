@@ -10,12 +10,13 @@
 
 use crate::{
     error::{CodecError, EncodeError},
-    ids::{Command, Event, Stream},
+    ids::{Command, Control, Event, Stream},
     payload::{
         command::{
             AckPayload, CataloguePage, DriveDistance, GetCatalogue, GetStatus, RotateBy, StartProcedure,
             StatusSnapshot, StopMotion, StopProcedure,
         },
+        control::{Hello, HelloAck, Ping, PingAck, Throttle},
         event::{
             CalibrationLoaded, DriveDistanceCompleted, EventAck, EventOverflow, FloorDrop, Obstacle,
             ProcedureCompleted, RotateCompleted,
@@ -319,6 +320,75 @@ pub fn encode_event(message: &EventMessage<'_>, out: &mut [u8]) -> Result<usize,
         EventMessage::CalibrationLoaded(value) => value.encode_into(out),
         EventMessage::EventOverflow(value) => value.encode_into(out),
         EventMessage::Ack(value) => value.encode_into(out),
+    }
+}
+
+/// One typed control payload, tagged with the control message it belongs to.
+///
+/// `HELLO` and `PING` branch on `IS_ACK`; `THROTTLE` has no acknowledgement, so it is the same
+/// type in both directions and [`decode_control`] ignores `IS_ACK` for it. `BRIDGE_CONTROL` has no
+/// payload codec in this version and is not represented here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlMessage<'a> {
+    /// A `HELLO` request.
+    Hello(Hello<'a>),
+    /// A `HELLO_ACK` acknowledgement.
+    HelloAck(HelloAck<'a>),
+    /// A `PING` request.
+    Ping(Ping),
+    /// A `PING` acknowledgement.
+    PingAck(PingAck),
+    /// A `THROTTLE` hint.
+    Throttle(Throttle),
+}
+
+impl ControlMessage<'_> {
+    /// Returns the control id this message belongs to.
+    #[must_use]
+    pub const fn control(&self) -> Control {
+        match self {
+            Self::Hello(_) | Self::HelloAck(_) => Control::Hello,
+            Self::Ping(_) | Self::PingAck(_) => Control::Ping,
+            Self::Throttle(_) => Control::Throttle,
+        }
+    }
+}
+
+/// Decodes one control payload, branching on `IS_ACK` for the two acknowledged controls.
+///
+/// `THROTTLE` is decoded identically whether or not `IS_ACK` is set, because it has no
+/// acknowledgement. `BRIDGE_CONTROL` has no codec in this version and reports
+/// [`CodecError::Length`].
+///
+/// # Errors
+///
+/// Returns [`CodecError::Length`] for a structural mismatch, [`CodecError::Value`] for an
+/// out-of-range value (including an unassigned `THROTTLE` action or ACK status) and
+/// [`CodecError::Utf8`] for invalid text.
+pub fn decode_control(control: Control, is_ack: bool, bytes: &[u8]) -> Result<ControlMessage<'_>, CodecError> {
+    match control {
+        Control::Hello if is_ack => HelloAck::decode(bytes).map(ControlMessage::HelloAck),
+        Control::Hello => Hello::decode(bytes).map(ControlMessage::Hello),
+        Control::Ping if is_ack => PingAck::decode(bytes).map(ControlMessage::PingAck),
+        Control::Ping => Ping::decode(bytes).map(ControlMessage::Ping),
+        Control::Throttle => Throttle::decode(bytes).map(ControlMessage::Throttle),
+        Control::BridgeControl => Err(CodecError::Length),
+    }
+}
+
+/// Encodes one typed control payload into `out`, returning the number of bytes written.
+///
+/// # Errors
+///
+/// Returns [`EncodeError::BufferTooSmall`] when `out` cannot hold the payload and
+/// [`EncodeError::Value`] when a field cannot be represented in the wire layout.
+pub fn encode_control(message: &ControlMessage<'_>, out: &mut [u8]) -> Result<usize, EncodeError> {
+    match message {
+        ControlMessage::Hello(value) => value.encode_into(out),
+        ControlMessage::HelloAck(value) => value.encode_into(out),
+        ControlMessage::Ping(value) => value.encode_into(out),
+        ControlMessage::PingAck(value) => value.encode_into(out),
+        ControlMessage::Throttle(value) => value.encode_into(out),
     }
 }
 
