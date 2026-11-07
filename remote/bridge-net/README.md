@@ -23,9 +23,9 @@ interface:
 
 Flags are `PROVISIONED` (bit 0), `LINK_READY` (bit 1) and `SETUP_MODE` (bit 2); reserved bits
 are cleared on decode. `LINK_READY` has a pinned meaning: a valid Link Protocol frame arrived
-from the robot within the last **5 seconds**, so the Beacon never claims a silent robot is
-ready. A `tcp_port` of **0** (`beacon::PORTAL_ONLY`) advertises a portal-only Bridge and is
-treated as Setup Mode.
+from the robot within the last **5 seconds** (`beacon::LINK_READY_WINDOW_MS`), so the Beacon never
+claims a silent robot is ready. A `tcp_port` of **0** (`beacon::PORTAL_ONLY`) advertises a
+portal-only Bridge and is treated as Setup Mode.
 
 `Beacon { major, device_id, name, tcp_port, flags }` encodes with `encode_into` and decodes
 with `decode`; trailing bytes are ignored so a later minor can extend the datagram.

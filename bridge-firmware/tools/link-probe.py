@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """A dependency-free Link Protocol client for the Bridge bench.
 
-The probe connects to the Bridge's raw TCP listener, sends one valid ``HELLO`` control frame,
-and prints every robot frame it receives (streams, events, commands and controls) while counting
-them. It is the ticket-04 "TCP client": a successful run shows a full ``HELLO``/``HELLO_ACK``
-round trip through the Bridge and the Robot Stub.
+The probe connects to the Bridge's Link listener, completes the `bridge-net` HMAC preamble
+(status: the Bridge admits exactly one authenticated client), sends one valid ``HELLO`` control
+frame, and prints every robot frame it receives (streams, events, commands and controls) while
+counting them. It is the ticket-04 "TCP client", now behind the ticket-05 gate.
 
 Usage:
     python3 tools/link-probe.py 192.168.1.42
@@ -12,10 +12,19 @@ Usage:
     python3 tools/link-probe.py 192.168.1.42 --count 100
     python3 tools/link-probe.py 192.168.1.42 --loopback   # GPIO6↔GPIO7 jumper, no robot
 
+The pairing token is the text the firmware compiled in as `BRIDGE_BENCH_TOKEN` (its UTF-8 bytes
+are the HMAC key). Put it on the command line or export it; never pass it as an argv flag.
+
+```sh
+BRIDGE_BENCH_TOKEN='bench05' python3 tools/link-probe.py 192.168.1.42
+python3 tools/link-probe.py 192.168.1.42 --token-file ~/.config/explorer-bench-token
+```
+
 Exit status:
     0  a ``HELLO_ACK`` was decoded and the requested count (if any) was reached;
        with ``--loopback``, the ``HELLO`` was sent (the evidence is on the Bridge)
-    1  the idle timeout expired, the peer closed, or the expected frame did not arrive
+    1  the preamble was denied, the idle timeout expired, the peer closed, or the expected
+       frame did not arrive
 
 With UART1's TX and RX jumpered instead of wired to a robot, the Bridge forwards the probe's
 ``HELLO`` out of the UART and the jumper returns it. The router then **ignores** it by design: a
@@ -38,6 +47,8 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Final
+
+from bridge_preamble import PreambleError, load_token, perform_preamble
 
 MAGIC: Final = b"\xA5\x5A"
 HEADER_LEN: Final = 12
@@ -337,6 +348,18 @@ def run(args: argparse.Namespace) -> int:
     started = time.monotonic()
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.settimeout(5.0)
+        try:
+            identity = perform_preamble(sock, load_token(args.token_file, args.token_env))
+        except PreambleError as error:
+            print(f"link-probe: preamble failed: {error}", file=sys.stderr)
+            return 1
+        print(
+            f"link-probe: authenticated device={identity['device_id']} "
+            f"name={identity['name']!r} flags=0x{identity['flags']:02x}",
+            flush=True,
+        )
+
         # Short socket timeouts keep the duration and idle checks responsive.
         sock.settimeout(min(0.5, args.timeout))
         try:
@@ -480,6 +503,16 @@ def main() -> int:
         "--loopback",
         action="store_true",
         help="accept the echoed HELLO as success (GPIO6↔GPIO7 jumper instead of a robot)",
+    )
+    parser.add_argument(
+        "--token-file",
+        default=None,
+        help="read the pairing token from this file instead of the environment",
+    )
+    parser.add_argument(
+        "--token-env",
+        default="BRIDGE_BENCH_TOKEN",
+        help="the environment variable holding the token (default: BRIDGE_BENCH_TOKEN)",
     )
     args = parser.parse_args()
 

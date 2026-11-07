@@ -164,6 +164,12 @@ fn malformed_datagrams_are_rejected() {
     assert_eq!(Beacon::decode(&extended), Ok(beacon), "trailing bytes are ignored");
 }
 
+/// Pins the link-ready window that gives `FLAG_LINK_READY` its meaning (ADR-0037).
+#[test]
+fn the_link_ready_window_is_five_seconds() {
+    assert_eq!(beacon::LINK_READY_WINDOW_MS, 5_000);
+}
+
 /// A name that is not UTF-8 on the wire is rejected, and the helpers pad and trim correctly.
 #[test]
 fn the_name_helpers_pad_trim_and_validate() {

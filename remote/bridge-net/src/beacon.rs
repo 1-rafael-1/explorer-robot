@@ -32,10 +32,18 @@ pub const FLAG_PROVISIONED: u8 = 1 << 0;
 
 /// Flag bit 1: the robot link is ready.
 ///
-/// Pinned meaning: a valid Link Protocol frame arrived from the robot within the last 5 seconds,
-/// so the Beacon never claims a silent robot is ready. The Bridge clears the bit when that window
-/// expires; the daemon may still try to connect, but must not read the flag as a liveness promise.
+/// Pinned meaning: a valid Link Protocol frame arrived from the robot within the last
+/// [`LINK_READY_WINDOW_MS`] milliseconds, so the Beacon never claims a silent robot is ready. The
+/// Bridge clears the bit when that window expires; the daemon may still try to connect, but must
+/// not read the flag as a liveness promise.
 pub const FLAG_LINK_READY: u8 = 1 << 1;
+
+/// How long a robot frame keeps [`FLAG_LINK_READY`] set, in milliseconds (ADR-0037's 5 s).
+///
+/// This is the flag's whole definition: one valid Link Protocol frame from the robot starts the
+/// window, and the flag is false once the newest valid frame is older than this. It is a shared
+/// constant so the Bridge's flag source and the daemon's reading of it cannot drift.
+pub const LINK_READY_WINDOW_MS: u64 = 5_000;
 
 /// Flag bit 2: the Bridge is in Setup Mode and still reachable on the station interface.
 pub const FLAG_SETUP_MODE: u8 = 1 << 2;

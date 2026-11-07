@@ -7,53 +7,74 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 04 — the Bridge firmware skeleton.
+//! Ticket 05 — the network edge.
 //!
-//! This is the first end-to-end tracer bullet on the C3: a station-only build that drains the
-//! robot-facing UART with UHCI RX DMA, feeds the bytes through `remote-protocol`'s parser into
-//! `bridge-core`'s pump, and forwards frames over a raw TCP listener bound to the station
-//! interface. There is no provisioning, no Discovery Beacon and no authentication yet.
+//! The Bridge is the trust boundary for the robot (ADR-0037): the `bridge-net` HMAC preamble
+//! completes before a single Link Protocol byte crosses, exactly one authenticated client holds the
+//! slot, failed proofs are rate-limited by `bridge-core`'s gate, and the Discovery Beacon is
+//! broadcast on the station interface every 3 s with the pinned flags.
 //!
 //! ## Wiring
 //!
 //! UART1 runs at ADR-0033's 921600 8N1 with **TX = GPIO6** and **RX = GPIO7**. Connect those two
 //! pins, through a 3.3 V USB-TTL adapter, to the Robot Stub's serial port. The C3's USB connector
-//! stays the flashing and `defmt` console.
+//! stays the flashing and `defmt` console. A GPIO6↔GPIO7 jumper loops the UART back for bench
+//! runs without an adapter; a valid robot-side frame then sets the Beacon's link-ready flag.
 //!
 //! ## Credentials
 //!
 //! The station credentials are compile-time inputs so the binary contains no secret at rest:
 //!
 //! ```text
-//! BRIDGE_STA_SSID=... BRIDGE_STA_PASSWORD=... cargo build --release
+//! BRIDGE_STA_SSID=... BRIDGE_STA_PASSWORD=... BRIDGE_BENCH_TOKEN=... cargo build --release
 //! ```
 //!
-//! With neither set, or with either left as `CHANGE_ME`, the firmware still runs the UART and the
-//! pump, but it logs a clear warning and never attempts to associate.
+//! With neither station variable set, or with either left as `CHANGE_ME`, the firmware still runs
+//! the UART, the pump and the Beacon task, but it logs a clear warning and never attempts to
+//! associate.
 //!
-//! ## The ticket-05 placeholder
+//! ## The bench token (TODO(ticket 07))
 //!
-//! A TCP connection is admitted with a zero proof: both the presented proof and the expected
-//! proof are `[0u8; 32]`, so the gate accepts immediately. That keeps the gate, the single-client
-//! slot and the deadline paths wired while the `bridge-net` HMAC preamble waits for ticket 05.
-//! **This is not authentication.**
+//! Ticket 07 owns the credential record and mints the 60-bit pairing token. Until then the HMAC key
+//! is the **UTF-8 bytes of `BRIDGE_BENCH_TOKEN`**, compiled in exactly like the station
+//! credentials. The daemon stores the same text and passes the string's bytes to `bridge-net`, so
+//! both sides agree: the token is its text, never a decoded form of it. With the variable unset,
+//! every client is denied rather than admitted, and the firmware logs it.
+//!
+//! ## The Beacon flags
+//!
+//! `provisioned` is false until ticket 07 stores a record; `setup_mode` is false while the firmware
+//! is station-only; `tcp_port` is the Link listener's port while it is up; and `link-ready` is
+//! `bridge_net::beacon::FLAG_LINK_READY`'s pinned meaning — a valid Link Protocol frame from the
+//! robot within `beacon::LINK_READY_WINDOW_MS`.
 
 use core::cell::RefCell;
 
 use bridge_core::{
     BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome, Seq, TimerEvent,
 };
-use bridge_net::{ports::LINK_TCP_DEFAULT, preamble::PROOF_LEN};
+use bridge_net::{
+    beacon::{self, Beacon},
+    identity::{DeviceId, Flags as IdentityFlags, Identity, Name},
+    ports::{BEACON_UDP, LINK_TCP_DEFAULT},
+    preamble::{self, DenyReason, HEADER_LEN, MAX_PAYLOAD_LEN, Message, NONCE_LEN, Received},
+};
 use critical_section::Mutex;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_net::{Runner, Stack, StackResources, tcp::TcpSocket};
+use embassy_net::{
+    Ipv4Address, Runner, Stack, StackResources,
+    tcp::TcpSocket,
+    udp::{PacketMetadata, UdpSocket},
+};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use esp_backtrace as _;
 use esp_hal::{
     Async,
     clock::CpuClock,
     dma_rx_stream_buffer,
+    efuse::{InterfaceMacAddress, interface_mac_address},
+    rng::Rng,
     timer::timg::TimerGroup,
     uart::{
         Config as UartConfig, RxConfig, TxError, Uart, UartTx,
@@ -66,7 +87,7 @@ use esp_radio::wifi::{
     scan::ScanConfig, sta::StationConfig,
 };
 use heapless::spsc::Queue;
-use portable_atomic::{AtomicU32, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use remote_protocol::{
     Control, ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PcToRobotParser,
     RobotToPcParser, ThrottleHint, encode_control,
@@ -91,6 +112,16 @@ const STA_SSID: &str = match option_env!("BRIDGE_STA_SSID") {
 const STA_PASSWORD: &str = match option_env!("BRIDGE_STA_PASSWORD") {
     Some(value) => value,
     None => "CHANGE_ME",
+};
+
+/// The bench pairing token: the HMAC key's UTF-8 bytes (see the module docs).
+///
+/// TODO(ticket 07): replace this build-time input with the credential record's minted token. The
+/// daemon stores the same text and passes its bytes to `bridge-net`, so the encoding is the token
+/// text itself, never a decoded form. An empty value denies every client.
+const BENCH_TOKEN: &str = match option_env!("BRIDGE_BENCH_TOKEN") {
+    Some(value) => value,
+    None => "",
 };
 
 /// ADR-0033's shared baud: all three projects run 921600 8N1.
@@ -126,6 +157,32 @@ const CLIENT_READ_CHUNK: usize = 1024;
 /// How often the client loop drains the pump when no bytes arrive.
 const CLIENT_POLL: Duration = Duration::from_millis(10);
 
+/// The whole preamble's budget: `bridge-net`'s pinned 5 s (ADR-0037).
+const AUTH_DEADLINE: Duration = Duration::from_millis(preamble::AUTH_DEADLINE_MS);
+
+/// The largest framed preamble message: the header plus the challenge's payload.
+const PREAMBLE_BUFFER: usize = HEADER_LEN + MAX_PAYLOAD_LEN;
+
+/// How long a socket flush may take while a verdict is delivered or a socket is recycled.
+const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long a worker lets its FIN reach the peer before forcing the socket back to `Closed` for
+/// the next accept.
+const CLOSE_SETTLE: Duration = Duration::from_millis(100);
+
+/// The `DENY(busy)` retry hint (ADR-0039's 4 s default).
+const BUSY_RETRY_MS: u32 = 4_000;
+
+/// The refusal window, surfaced as the `unauthorized` retry hint when the gate is rate-limiting.
+const REFUSAL_RETRY_MS: u32 = 60_000;
+
+/// `LAST_ROBOT_FRAME_MS`'s "never" sentinel.
+const NO_ROBOT_FRAME: u32 = u32::MAX;
+
+/// The Beacon socket's buffers: one metadata slot each, larger than the datagram so a later minor
+/// can extend it.
+const BEACON_SOCKET_BUFFER: usize = 64;
+
 /// The status-line cadence, matching the spike.
 const STATUS_PERIOD: Duration = Duration::from_secs(10);
 
@@ -149,8 +206,32 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 // Statics
 // ---------------------------------------------------------------------------------------------
 
-/// One station stack is enough: the Beacon and the portal are tickets 06 and 07.
-static STA_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+/// The station stack's socket pool: DHCP, the Beacon's UDP socket and the three TCP workers.
+static STA_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
+
+/// Whether the station is associated and holds an address; the Beacon is sent only then.
+static STATION_UP: AtomicBool = AtomicBool::new(false);
+
+/// When the last valid Link Protocol frame arrived from the robot, in `now_ms`'s scale.
+static LAST_ROBOT_FRAME_MS: AtomicU32 = AtomicU32::new(NO_ROBOT_FRAME);
+
+/// The efuse station MAC's six bytes, read once at boot and served in the identity.
+static DEVICE_ID: Mutex<RefCell<[u8; 6]>> = Mutex::new(RefCell::new([0; 6]));
+
+/// The Beacon's UDP receive metadata and buffer (received datagrams are discarded).
+static BEACON_RX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static BEACON_RX_BUFFER: StaticCell<[u8; BEACON_SOCKET_BUFFER]> = StaticCell::new();
+/// The Beacon's UDP transmit metadata and buffer.
+static BEACON_TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static BEACON_TX_BUFFER: StaticCell<[u8; BEACON_SOCKET_BUFFER]> = StaticCell::new();
+
+/// Each connection worker owns its socket buffers for the firmware's lifetime.
+static CLIENT_RX_0: StaticCell<[u8; TCP_RX_BUFFER]> = StaticCell::new();
+static CLIENT_RX_1: StaticCell<[u8; TCP_RX_BUFFER]> = StaticCell::new();
+static CLIENT_RX_2: StaticCell<[u8; TCP_RX_BUFFER]> = StaticCell::new();
+static CLIENT_TX_0: StaticCell<[u8; TCP_TX_BUFFER]> = StaticCell::new();
+static CLIENT_TX_1: StaticCell<[u8; TCP_TX_BUFFER]> = StaticCell::new();
+static CLIENT_TX_2: StaticCell<[u8; TCP_TX_BUFFER]> = StaticCell::new();
 
 /// The pump is long-lived state and larger than any task's future, so it lives in a static.
 static PUMP: Mutex<RefCell<BridgePump>> = Mutex::new(RefCell::new(BridgePump::new()));
@@ -170,6 +251,16 @@ fn with_pump<R>(action: impl FnOnce(&mut BridgePump) -> R) -> R {
 /// Runs `action` with the robot-bound frame queue borrowed inside a critical section.
 fn with_uart_queue<R>(action: impl FnOnce(&mut Queue<UartFrame, UART_TX_QUEUE_CAPACITY>) -> R) -> R {
     critical_section::with(|cs| action(&mut UART_TX_QUEUE.borrow(cs).borrow_mut()))
+}
+
+/// Runs `action` with the efuse station MAC borrowed inside a critical section.
+fn with_device_id<R>(action: impl FnOnce(&[u8; 6]) -> R) -> R {
+    critical_section::with(|cs| action(&DEVICE_ID.borrow(cs).borrow()))
+}
+
+/// Stores the efuse station MAC once at boot.
+fn store_device_id(bytes: [u8; 6]) {
+    critical_section::with(|cs| *DEVICE_ID.borrow(cs).borrow_mut() = bytes);
 }
 
 /// Spawns a task, logging the failure instead of panicking on a pool exhaustion.
@@ -204,6 +295,16 @@ static RING_DISCARDED_ON_CLOSE: AtomicU32 = AtomicU32::new(0);
 static RING_ENCODE_ERRORS: AtomicU32 = AtomicU32::new(0);
 static THROTTLE_SEQ: AtomicU32 = AtomicU32::new(0);
 static STATION_RECONNECTS: AtomicU32 = AtomicU32::new(0);
+static AUTH_ACCEPTED: AtomicU32 = AtomicU32::new(0);
+static AUTH_REJECTED: AtomicU32 = AtomicU32::new(0);
+static AUTH_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+static AUTH_SUPERSEDED: AtomicU32 = AtomicU32::new(0);
+static AUTH_FAILED: AtomicU32 = AtomicU32::new(0);
+static DENIED_BUSY: AtomicU32 = AtomicU32::new(0);
+static DENIED_REFUSED: AtomicU32 = AtomicU32::new(0);
+static DENIED_VERSION: AtomicU32 = AtomicU32::new(0);
+static BEACONS_SENT: AtomicU32 = AtomicU32::new(0);
+static BEACON_SEND_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 // ---------------------------------------------------------------------------------------------
 // Entry point
@@ -223,9 +324,32 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
+    let mac = interface_mac_address(InterfaceMacAddress::Station);
+    let mut device_id = [0u8; 6];
+    device_id.copy_from_slice(mac.as_bytes());
+    store_device_id(device_id);
+
     info!(
-        "bridge firmware: ticket 04 skeleton, station-only, no auth, no Beacon; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
-        UART_BAUD, UART_TX_PIN, UART_RX_PIN
+        "bridge firmware: ticket 05 network edge, station-only, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
+        beacon::INTERVAL_MS,
+        UART_BAUD,
+        UART_TX_PIN,
+        UART_RX_PIN
+    );
+    info!(
+        "bridge identity: device_id={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} name={} token={}",
+        device_id[0],
+        device_id[1],
+        device_id[2],
+        device_id[3],
+        device_id[4],
+        device_id[5],
+        bridge_name().as_str(),
+        if bench_token().is_some() {
+            "configured"
+        } else {
+            "MISSING"
+        }
     );
 
     // -- Radio -------------------------------------------------------------------------------
@@ -307,9 +431,39 @@ async fn main(spawner: Spawner) -> ! {
     spawn_or_warn(&spawner, uart_rx_dma_task(uhci_rx), "UART RX DMA");
     spawn_or_warn(&spawner, uart_tx_task(uhci_tx.uart_tx), "UART TX");
 
-    // -- Station-only TCP listener -----------------------------------------------------------
+    // -- Station-only network edge -----------------------------------------------------------
 
-    spawn_or_warn(&spawner, tcp_task(station_stack), "TCP");
+    if bench_token().is_none() {
+        warn!("tcp: BRIDGE_BENCH_TOKEN is unset; every preamble will be denied (TODO ticket 07)");
+    }
+
+    let client_rx_0: &'static mut [u8] = CLIENT_RX_0.init([0u8; TCP_RX_BUFFER]);
+    let client_rx_1: &'static mut [u8] = CLIENT_RX_1.init([0u8; TCP_RX_BUFFER]);
+    let client_rx_2: &'static mut [u8] = CLIENT_RX_2.init([0u8; TCP_RX_BUFFER]);
+    let client_tx_0: &'static mut [u8] = CLIENT_TX_0.init([0u8; TCP_TX_BUFFER]);
+    let client_tx_1: &'static mut [u8] = CLIENT_TX_1.init([0u8; TCP_TX_BUFFER]);
+    let client_tx_2: &'static mut [u8] = CLIENT_TX_2.init([0u8; TCP_TX_BUFFER]);
+
+    spawn_or_warn(&spawner, beacon_task(station_stack), "Beacon");
+    info!(
+        "tcp: listening on port {} (station interface only, three preamble workers)",
+        LINK_TCP_DEFAULT
+    );
+    spawn_or_warn(
+        &spawner,
+        client_task(station_stack, client_rx_0, client_tx_0),
+        "TCP client 0",
+    );
+    spawn_or_warn(
+        &spawner,
+        client_task(station_stack, client_rx_1, client_tx_1),
+        "TCP client 1",
+    );
+    spawn_or_warn(
+        &spawner,
+        client_task(station_stack, client_rx_2, client_tx_2),
+        "TCP client 2",
+    );
 
     // -- Supervisory loop --------------------------------------------------------------------
 
@@ -392,6 +546,12 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
+        // The Beacon is only honest while the station is associated and holds an address.
+        STATION_UP.store(
+            station_connected && station_stack.config_v4().is_some(),
+            Ordering::Relaxed,
+        );
+
         // -- Status line ---------------------------------------------------------------------
 
         if now >= next_status {
@@ -423,7 +583,7 @@ async fn main(spawner: Spawner) -> ! {
                 });
 
             info!(
-                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={}",
+                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={}",
                 now.duration_since(started).as_secs(),
                 rssi,
                 uart_rx,
@@ -453,6 +613,17 @@ async fn main(spawner: Spawner) -> ! {
                 RING_ENCODE_ERRORS.load(Ordering::Relaxed),
                 UART_TX_QUEUE_DROPS.load(Ordering::Relaxed),
                 STATION_RECONNECTS.load(Ordering::Relaxed),
+                AUTH_ACCEPTED.load(Ordering::Relaxed),
+                AUTH_REJECTED.load(Ordering::Relaxed),
+                AUTH_TIMEOUTS.load(Ordering::Relaxed),
+                AUTH_SUPERSEDED.load(Ordering::Relaxed),
+                AUTH_FAILED.load(Ordering::Relaxed),
+                DENIED_BUSY.load(Ordering::Relaxed),
+                DENIED_REFUSED.load(Ordering::Relaxed),
+                DENIED_VERSION.load(Ordering::Relaxed),
+                BEACONS_SENT.load(Ordering::Relaxed),
+                BEACON_SEND_ERRORS.load(Ordering::Relaxed),
+                link_ready(),
             );
 
             last_uart_rx = uart_rx;
@@ -568,147 +739,453 @@ async fn net_task(mut runner: Runner<'static, Interface>) {
     runner.run().await;
 }
 
-/// The one-client Link Protocol listener, bound to the station interface only.
+/// One Link Protocol connection worker: accept, run the `bridge-net` preamble, then serve.
 ///
-/// One connection is accepted at a time. The five-second authentication deadline, the refusal
-/// window and the supersede rule are already in `bridge-core`; ticket 05 replaces the placeholder
-/// proof below with the `bridge-net` preamble, which is also where an unauthenticated connection
-/// stops blocking a new one.
+/// Several workers run at once. Only one can hold an authenticated client (the gate refuses the
+/// rest with `busy`), but an unauthenticated attempt never occupies the slot another client needs:
+/// a newer connection supersedes it, and a free worker is always accepting. The five-second
+/// deadline, the refusal window and the supersede rule all live in `bridge-core`'s gate; this
+/// function only performs the `bridge-net` exchange the gate admits.
 #[allow(
     clippy::large_stack_frames,
-    reason = "the task owns the socket buffers' references, the parsers and a 1 KiB frame buffer"
+    reason = "the task owns a socket, a parser and a 1 KiB frame buffer for its lifetime"
 )]
-#[embassy_executor::task]
-async fn tcp_task(stack: Stack<'static>) {
-    let mut rx_buffer = alloc::vec![0u8; TCP_RX_BUFFER];
-    let mut tx_buffer = alloc::vec![0u8; TCP_TX_BUFFER];
+#[embassy_executor::task(pool_size = 3)]
+async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buffer: &'static mut [u8]) {
+    let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
     let mut client_buffer = alloc::vec![0u8; CLIENT_READ_CHUNK];
     let mut parser = PcToRobotParser::new(Direction::PcToRobot, UART_BAUD);
 
     loop {
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer[..], &mut tx_buffer[..]);
         socket.set_timeout(Some(SOCKET_TIMEOUT));
-
-        info!("tcp: listening on port {} (station interface only)", LINK_TCP_DEFAULT);
         if socket.accept(LINK_TCP_DEFAULT).await.is_err() {
             Timer::after(Duration::from_secs(1)).await;
             continue;
         }
         TCP_ACCEPTS.fetch_add(1, Ordering::Relaxed);
 
-        let now = now_ms();
-        let connection = match with_pump(|pump| pump.connect(now)) {
+        let connection = match with_pump(|pump| pump.connect(now_ms())) {
             ConnectOutcome::Challenge { connection } => connection,
             ConnectOutcome::Busy => {
-                warn!("tcp: another authenticated client holds the slot; refusing");
-                socket.close();
-                Timer::after(Duration::from_millis(200)).await;
+                DENIED_BUSY.fetch_add(1, Ordering::Relaxed);
+                warn!("tcp: another authenticated client holds the slot; denying busy");
+                deny_and_finish(&mut socket, DenyReason::Busy, Some(BUSY_RETRY_MS)).await;
                 continue;
             }
             ConnectOutcome::Refused { until_ms } => {
-                warn!("tcp: the gate refuses connections until {}", until_ms);
-                socket.close();
-                Timer::after(Duration::from_secs(1)).await;
+                DENIED_REFUSED.fetch_add(1, Ordering::Relaxed);
+                warn!("tcp: the gate refuses connections until {}; denying", until_ms);
+                deny_and_finish(&mut socket, DenyReason::Unauthorized, Some(REFUSAL_RETRY_MS)).await;
                 continue;
             }
         };
 
-        // TODO(ticket 05): replace the zero proof with the bridge-net preamble's proof.
-        let placeholder = Proof::from_bytes([0u8; PROOF_LEN]);
-        let outcome = with_pump(|pump| pump.authenticate(connection, placeholder, &placeholder, now));
-        match outcome {
-            ProofOutcome::Accepted => {
-                info!(
-                    "tcp: client {} accepted with the ticket-05 placeholder proof",
-                    connection
-                );
+        let Some(token) = bench_token() else {
+            warn!("tcp: BRIDGE_BENCH_TOKEN is unset; denying the connection (TODO ticket 07)");
+            with_pump(|pump| pump.disconnect(connection));
+            deny_and_finish(&mut socket, DenyReason::Unauthorized, None).await;
+            continue;
+        };
+
+        match run_preamble(&mut socket, connection, token).await {
+            PreambleOutcome::Accepted => {
+                AUTH_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+                info!("tcp: client {} authenticated", connection);
+                // A previous client may have left a partial candidate in the parser; discard it so
+                // its bytes cannot be glued to this client's first frame.
+                parser.reset();
+                serve_client(&mut socket, &mut parser, &mut client_buffer, connection).await;
             }
-            ProofOutcome::Rejected { failures } => {
-                warn!("tcp: placeholder proof rejected ({} failures)", failures);
+            PreambleOutcome::Rejected => {
+                AUTH_REJECTED.fetch_add(1, Ordering::Relaxed);
                 with_pump(|pump| pump.disconnect(connection));
-                socket.close();
-                Timer::after(Duration::from_millis(200)).await;
-                continue;
             }
-            ProofOutcome::Refused { until_ms, failures } => {
-                warn!("tcp: proof refused until {} after {} failures", until_ms, failures);
-                socket.close();
-                Timer::after(Duration::from_secs(1)).await;
-                continue;
+            PreambleOutcome::Refused => {
+                AUTH_REJECTED.fetch_add(1, Ordering::Relaxed);
             }
-            ProofOutcome::DeadlineExpired => {
-                warn!("tcp: authentication deadline expired");
+            PreambleOutcome::Version => {
+                DENIED_VERSION.fetch_add(1, Ordering::Relaxed);
                 with_pump(|pump| pump.disconnect(connection));
-                socket.close();
-                continue;
             }
-            ProofOutcome::Superseded => {
-                warn!("tcp: connection was superseded before it authenticated");
-                socket.close();
-                continue;
+            PreambleOutcome::TimedOut => {
+                AUTH_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+                with_pump(|pump| pump.disconnect(connection));
+            }
+            PreambleOutcome::Superseded => {
+                AUTH_SUPERSEDED.fetch_add(1, Ordering::Relaxed);
+            }
+            PreambleOutcome::Failed => {
+                AUTH_FAILED.fetch_add(1, Ordering::Relaxed);
+                with_pump(|pump| pump.disconnect(connection));
             }
         }
 
-        // A previous client may have left a partial candidate in the parser; discard it so its
-        // bytes cannot be glued to this client's first frame.
-        parser.reset();
+        finish_socket(&mut socket).await;
+    }
+}
 
-        loop {
-            if !drain_to_socket(&mut socket).await {
-                info!("tcp: socket write failed; closing the client");
+/// Serves an authenticated client until its socket fails or closes.
+async fn serve_client(
+    socket: &mut TcpSocket<'_>,
+    parser: &mut PcToRobotParser,
+    client_buffer: &mut [u8],
+    connection: u32,
+) {
+    loop {
+        if !drain_to_socket(socket).await {
+            info!("tcp: socket write failed; closing the client");
+            break;
+        }
+
+        // Poll here as well as in the supervisory loop: ring pressure builds while a client is
+        // attached, and this loop runs every `CLIENT_POLL`.
+        emit_throttle(now_ms());
+
+        match with_timeout(CLIENT_POLL, socket.read(client_buffer)).await {
+            Ok(Ok(0)) => {
+                info!("tcp: client closed");
                 break;
             }
-
-            // Poll here as well as in the supervisory loop: ring pressure builds while a client
-            // is attached, and this loop runs every `CLIENT_POLL`.
-            emit_throttle(now_ms());
-
-            match with_timeout(CLIENT_POLL, socket.read(&mut client_buffer[..])).await {
-                Ok(Ok(0)) => {
-                    info!("tcp: client closed");
-                    break;
-                }
-                Ok(Ok(read)) => {
-                    TCP_RX_BYTES.fetch_add(u32::try_from(read).unwrap_or(u32::MAX), Ordering::Relaxed);
-                    let now = now_ms();
-                    parser.feed(&client_buffer[..read], now, |frame| {
-                        match with_pump(|pump| pump.on_client_frame(&frame)) {
-                            Decision::ForwardToRobot => forward_to_robot(&frame),
-                            Decision::DroppedBridgeControl => {
-                                warn!("tcp: BRIDGE_CONTROL from the client dropped and counted");
-                            }
-                            _ => {}
+            Ok(Ok(read)) => {
+                TCP_RX_BYTES.fetch_add(u32::try_from(read).unwrap_or(u32::MAX), Ordering::Relaxed);
+                let now = now_ms();
+                parser.feed(&client_buffer[..read], now, |frame| {
+                    match with_pump(|pump| pump.on_client_frame(&frame)) {
+                        Decision::ForwardToRobot => forward_to_robot(&frame),
+                        Decision::DroppedBridgeControl => {
+                            warn!("tcp: BRIDGE_CONTROL from the client dropped and counted");
                         }
-                    });
-                    CLIENT_CRC_FAILURES.store(parser.crc_failures(), Ordering::Relaxed);
-                    CLIENT_RESYNCS.store(parser.resyncs(), Ordering::Relaxed);
+                        _ => {}
+                    }
+                });
+                CLIENT_CRC_FAILURES.store(parser.crc_failures(), Ordering::Relaxed);
+                CLIENT_RESYNCS.store(parser.resyncs(), Ordering::Relaxed);
+            }
+            Ok(Err(_)) => {
+                TCP_READ_ERRORS.fetch_add(1, Ordering::Relaxed);
+                info!("tcp: socket read failed; closing the client");
+                break;
+            }
+            Err(_) => {}
+        }
+    }
+
+    // A closing client leaves the ring as state, not history. Drop what it never read, and count
+    // it: a reliable entry must never disappear silently.
+    let discarded = with_pump(|pump| {
+        let mut count = 0u32;
+        pump.drain(|_| count = count.wrapping_add(1));
+        count
+    });
+    if discarded > 0 {
+        RING_DISCARDED_ON_CLOSE.fetch_add(discarded, Ordering::Relaxed);
+        warn!("tcp: {} client-bound entries discarded at disconnect", discarded);
+    }
+
+    with_pump(|pump| {
+        pump.disconnect(connection);
+    });
+}
+
+/// The `bridge-net` preamble's outcome, as the worker reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreambleOutcome {
+    /// `ACCEPT` was written; the Link Protocol starts.
+    Accepted,
+    /// The proof did not match; `DENY(unauthorized)` was written.
+    Rejected,
+    /// This failure reached the rate limit; `DENY(unauthorized)` was written.
+    Refused,
+    /// The peer's preamble major did not match; `DENY(version)` was written.
+    Version,
+    /// The five-second deadline expired first.
+    TimedOut,
+    /// A newer connection superseded this attempt.
+    Superseded,
+    /// The exchange ended without a verdict (closed, malformed or unwritable).
+    Failed,
+}
+
+/// Runs the whole preamble under the pinned five-second deadline.
+async fn run_preamble(socket: &mut TcpSocket<'_>, connection: u32, token: &[u8]) -> PreambleOutcome {
+    match with_timeout(AUTH_DEADLINE, preamble_exchange(socket, connection, token)).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            warn!("tcp: connection {} exceeded the authentication deadline", connection);
+            PreambleOutcome::TimedOut
+        }
+    }
+}
+
+/// The unbounded preamble exchange; [`run_preamble`] imposes the deadline.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the HMAC-SHA256 proof state and the identity value live in this future"
+)]
+async fn preamble_exchange(socket: &mut TcpSocket<'_>, connection: u32, token: &[u8]) -> PreambleOutcome {
+    let Ok(received) = read_message(socket).await else {
+        return PreambleOutcome::Failed;
+    };
+    if received.major != preamble::MAJOR {
+        warn!(
+            "tcp: client preamble major {} is not {}",
+            received.major,
+            preamble::MAJOR
+        );
+        send_deny(socket, DenyReason::Version, None).await;
+        return PreambleOutcome::Version;
+    }
+    let Message::ClientHello { nonce: client_nonce } = received.message else {
+        warn!("tcp: the first preamble message was not CLIENT_HELLO");
+        return PreambleOutcome::Failed;
+    };
+
+    let mut bridge_nonce = [0u8; NONCE_LEN];
+    Rng::new().read(&mut bridge_nonce);
+    let identity = identity_now();
+    let bridge_proof = preamble::bridge_proof(token, &client_nonce, &bridge_nonce, &identity);
+    if write_message(
+        socket,
+        &Message::BridgeChallenge {
+            bridge_proof,
+            bridge_nonce,
+            identity,
+        },
+    )
+    .await
+    .is_err()
+    {
+        return PreambleOutcome::Failed;
+    }
+
+    let Ok(received) = read_message(socket).await else {
+        return PreambleOutcome::Failed;
+    };
+    let Message::ClientAuth { proof } = received.message else {
+        warn!("tcp: the second preamble message was not CLIENT_AUTH");
+        return PreambleOutcome::Failed;
+    };
+
+    let expected = preamble::client_proof(token, &client_nonce, &bridge_nonce);
+    match with_pump(|pump| {
+        pump.authenticate(
+            connection,
+            Proof::from_bytes(proof),
+            &Proof::from_bytes(expected),
+            now_ms(),
+        )
+    }) {
+        ProofOutcome::Accepted => {
+            if write_message(socket, &Message::Accept).await.is_err() {
+                return PreambleOutcome::Failed;
+            }
+            if with_timeout(FLUSH_TIMEOUT, socket.flush()).await.is_err() {
+                return PreambleOutcome::Failed;
+            }
+            PreambleOutcome::Accepted
+        }
+        ProofOutcome::Rejected { failures } => {
+            warn!("tcp: proof rejected ({} failures in the window)", failures);
+            send_deny(socket, DenyReason::Unauthorized, None).await;
+            PreambleOutcome::Rejected
+        }
+        ProofOutcome::Refused { until_ms, failures } => {
+            warn!(
+                "tcp: failed proofs reached the limit ({}); refusing until {}",
+                failures, until_ms
+            );
+            send_deny(socket, DenyReason::Unauthorized, Some(REFUSAL_RETRY_MS)).await;
+            PreambleOutcome::Refused
+        }
+        ProofOutcome::DeadlineExpired => PreambleOutcome::TimedOut,
+        ProofOutcome::Superseded => PreambleOutcome::Superseded,
+    }
+}
+
+/// Reads one complete framed preamble message without over-reading into Link traffic.
+async fn read_message(socket: &mut TcpSocket<'_>) -> Result<Received, ()> {
+    let mut frame = [0u8; PREAMBLE_BUFFER];
+    read_exact(socket, &mut frame[..HEADER_LEN]).await?;
+    // The framing offsets belong to `bridge-net`; a complete header always announces a length.
+    let Some(total) = preamble::frame_len(&frame[..HEADER_LEN]).map_err(|_| ())? else {
+        return Err(());
+    };
+    if total > PREAMBLE_BUFFER {
+        return Err(());
+    }
+    read_exact(socket, &mut frame[HEADER_LEN..total]).await?;
+    match preamble::try_decode(&frame[..total]) {
+        Ok(Some(received)) => Ok(received),
+        Ok(None) | Err(_) => Err(()),
+    }
+}
+
+/// Reads exactly `buffer.len()` socket bytes.
+async fn read_exact(socket: &mut TcpSocket<'_>, buffer: &mut [u8]) -> Result<(), ()> {
+    let mut read = 0;
+    while read < buffer.len() {
+        match socket.read(&mut buffer[read..]).await {
+            Ok(0) | Err(_) => return Err(()),
+            Ok(count) => read += count,
+        }
+    }
+    Ok(())
+}
+
+/// Encodes and writes one framed preamble message.
+async fn write_message(socket: &mut TcpSocket<'_>, message: &Message) -> Result<(), ()> {
+    let mut buffer = [0u8; PREAMBLE_BUFFER];
+    let Ok(len) = preamble::encode_into(preamble::MAJOR, message, &mut buffer) else {
+        return Err(());
+    };
+    if write_socket_all(socket, &buffer[..len]).await {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Writes a `DENY` verdict and flushes it before the caller finishes the socket.
+async fn send_deny(socket: &mut TcpSocket<'_>, reason: DenyReason, retry_ms: Option<u32>) {
+    let message = Message::Deny { reason, retry_ms };
+    if write_message(socket, &message).await.is_err() {
+        return;
+    }
+    let _ = with_timeout(FLUSH_TIMEOUT, socket.flush()).await;
+}
+
+/// Sends a `DENY` verdict and recycles the socket for the worker's next accept.
+async fn deny_and_finish(socket: &mut TcpSocket<'_>, reason: DenyReason, retry_ms: Option<u32>) {
+    send_deny(socket, reason, retry_ms).await;
+    finish_socket(socket).await;
+}
+
+/// Closes the connection with a FIN, then forces the socket back to `Closed` for reuse.
+async fn finish_socket(socket: &mut TcpSocket<'_>) {
+    let _ = with_timeout(FLUSH_TIMEOUT, socket.flush()).await;
+    // A graceful FIN lets the peer observe the close (the silent-deadline case) instead of
+    // waiting for its own timeout. The short settle gives the stack a poll to send it; `abort`
+    // then forces `Closed` so this worker can accept again.
+    socket.close();
+    Timer::after(CLOSE_SETTLE).await;
+    let _ = with_timeout(FLUSH_TIMEOUT, socket.flush()).await;
+    socket.abort();
+}
+
+/// Broadcasts the Discovery Beacon every [`beacon::INTERVAL_MS`] while the station is up.
+///
+/// The flags come from the same helpers the challenge serves, so the Beacon and the preamble can
+/// never describe the Bridge differently. `tcp_port` is the Link listener's port: portal-only zero
+/// belongs to ticket 06.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the task owns the UDP socket and the encoded datagram"
+)]
+#[embassy_executor::task]
+async fn beacon_task(stack: Stack<'static>) {
+    let mut socket = UdpSocket::new(
+        stack,
+        BEACON_RX_META.init([PacketMetadata::EMPTY; 1]),
+        BEACON_RX_BUFFER.init([0u8; BEACON_SOCKET_BUFFER]),
+        BEACON_TX_META.init([PacketMetadata::EMPTY; 1]),
+        BEACON_TX_BUFFER.init([0u8; BEACON_SOCKET_BUFFER]),
+    );
+    if socket.bind(BEACON_UDP).is_err() {
+        warn!("beacon: could not bind UDP port {}", BEACON_UDP);
+        return;
+    }
+    info!(
+        "beacon: broadcasting on UDP {} every {}ms",
+        BEACON_UDP,
+        beacon::INTERVAL_MS
+    );
+
+    let mut bytes = [0u8; beacon::ENCODED_LEN];
+    loop {
+        if STATION_UP.load(Ordering::Relaxed) {
+            let beacon = Beacon {
+                major: beacon::LINK_MAJOR,
+                device_id: device_id(),
+                name: bridge_name(),
+                tcp_port: LINK_TCP_DEFAULT,
+                flags: flags_now(),
+            };
+            match beacon.encode_into(&mut bytes) {
+                Ok(len) => {
+                    match socket
+                        .send_to(&bytes[..len], (Ipv4Address::BROADCAST, BEACON_UDP))
+                        .await
+                    {
+                        Ok(()) => {
+                            BEACONS_SENT.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            BEACON_SEND_ERRORS.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
                 }
-                Ok(Err(_)) => {
-                    TCP_READ_ERRORS.fetch_add(1, Ordering::Relaxed);
-                    info!("tcp: socket read failed; closing the client");
-                    break;
-                }
-                Err(_) => {}
+                Err(_) => warn!("beacon: the datagram did not encode"),
             }
         }
+        Timer::after(Duration::from_millis(beacon::INTERVAL_MS)).await;
+    }
+}
 
-        // A closing client leaves the ring as state, not history. Drop what it never read, and
-        // count it: a reliable entry must never disappear silently.
-        let discarded = with_pump(|pump| {
-            let mut count = 0u32;
-            pump.drain(|_| count = count.wrapping_add(1));
-            count
-        });
-        if discarded > 0 {
-            RING_DISCARDED_ON_CLOSE.fetch_add(discarded, Ordering::Relaxed);
-            warn!("tcp: {} client-bound entries discarded at disconnect", discarded);
-        }
+// ---------------------------------------------------------------------------------------------
+// Identity and Beacon flags
+// ---------------------------------------------------------------------------------------------
 
-        with_pump(|pump| {
-            pump.disconnect(connection);
-        });
-        socket.close();
-        Timer::after(Duration::from_millis(100)).await;
+/// Returns the bench token's bytes, or `None` when no token was compiled in.
+fn bench_token() -> Option<&'static [u8]> {
+    if BENCH_TOKEN.is_empty() {
+        None
+    } else {
+        Some(BENCH_TOKEN.as_bytes())
+    }
+}
+
+/// Returns the efuse station MAC's device id.
+fn device_id() -> DeviceId {
+    with_device_id(|bytes| DeviceId::new(*bytes))
+}
+
+/// Returns the display name, `Explorer-XXXX` from the device id's last two bytes.
+fn bridge_name() -> Name {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let bytes = device_id().bytes();
+    let mut padded = [0u8; Name::ENCODED_LEN];
+    padded[..9].copy_from_slice(b"Explorer-");
+    padded[9] = HEX[usize::from(bytes[4] >> 4)];
+    padded[10] = HEX[usize::from(bytes[4] & 0x0F)];
+    padded[11] = HEX[usize::from(bytes[5] >> 4)];
+    padded[12] = HEX[usize::from(bytes[5] & 0x0F)];
+    Name::from_padded(padded)
+}
+
+/// Returns whether a valid Link Protocol frame arrived from the robot inside the pinned window.
+fn link_ready() -> bool {
+    let last = LAST_ROBOT_FRAME_MS.load(Ordering::Relaxed);
+    last != NO_ROBOT_FRAME && now_ms().wrapping_sub(last) < beacon::LINK_READY_WINDOW_MS as u32
+}
+
+/// Returns the flags the Beacon and the challenge serve.
+///
+/// Provisioned stays false until ticket 07 stores a credential record; setup-mode stays false while
+/// the firmware is station-only (ticket 06 adds APSTA).
+fn flags_now() -> IdentityFlags {
+    let mut flags = IdentityFlags::default();
+    if link_ready() {
+        flags |= IdentityFlags::LINK_READY;
+    }
+    flags
+}
+
+/// Returns the identity served in the challenge and advertised in the Beacon.
+fn identity_now() -> Identity {
+    Identity {
+        device_id: device_id(),
+        name: bridge_name(),
+        flags: flags_now(),
     }
 }
 
@@ -907,6 +1384,9 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
                 let now = now_ms();
                 let mut frames = 0u32;
                 parser.feed(data, now, |frame| {
+                    // A frame only reaches this callback after the parser accepted its envelope and
+                    // CRC, so it is the Beacon's pinned "valid Link Protocol frame from the robot".
+                    LAST_ROBOT_FRAME_MS.store(now, Ordering::Relaxed);
                     frames = frames.wrapping_add(1);
                     match with_pump(|pump| pump.on_robot_frame(&frame)) {
                         Decision::DroppedFull => warn!("pump: ring full; dropped a robot frame"),
