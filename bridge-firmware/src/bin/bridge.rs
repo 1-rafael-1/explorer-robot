@@ -7,7 +7,7 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 06 — Setup Mode and the portal, on top of ticket 05's network edge.
+//! Ticket 07 — the persisted credential record and the Setup Mode lifecycle.
 //!
 //! The Bridge is the trust boundary for the robot (ADR-0037): the `bridge-net` HMAC preamble
 //! completes before a single Link Protocol byte crosses, exactly one authenticated client holds the
@@ -22,8 +22,11 @@
 //! minutes, or about 30 s after a stable station association. In APSTA the station Beacon carries
 //! `setup_mode` and `tcp_port = 0`; in AP-only there is no station Beacon.
 //!
-//! Ticket 06 keeps credentials in RAM only. Ticket 07 owns the versioned record, the pairing token
-//! and the panel's `BRIDGE_CONTROL` actions; the portal's submit path is the seam it will fill.
+//! Ticket 07 stores the station credentials and the 60-bit pairing token in one versioned,
+//! CRC-checked record on the `bridge_data` partition, written with `sequential-storage` through
+//! `esp-storage`. A missing or unusable record fails closed into Setup Mode; a reflash of the app
+//! leaves the partition alone; the portal's submit path and the panel's `BRIDGE_CONTROL` actions
+//! are the record's write points.
 //!
 //! ## Wiring
 //!
@@ -32,39 +35,35 @@
 //! stays the flashing and `defmt` console. A GPIO6↔GPIO7 jumper loops the UART back for bench
 //! runs without an adapter; a valid robot-side frame then sets the Beacon's link-ready flag.
 //!
-//! ## Credentials
+//! ## Provisioning and the pairing token
 //!
-//! The station credentials are compile-time inputs so the binary contains no secret at rest:
+//! There is no compile-time credential. A blank or erased data partition boots unprovisioned: the
+//! Bridge mints a 60-bit token from the hardware TRNG (`Rng` alone is not cryptographic before the
+//! radio is up), stores it in a token-only record, and raises the setup AP. Credentials submitted
+//! through the portal are written to the same record and survive a reset, a power cycle and a
+//! reflash of the bootloader, partition table and app. `espflash erase-flash` (or a partition-table
+//! change that moves `bridge_data`) loses the record, which the magic, version and CRC make safe.
 //!
-//! ```text
-//! BRIDGE_STA_SSID=... BRIDGE_STA_PASSWORD=... BRIDGE_BENCH_TOKEN=... cargo build --release
-//! ```
-//!
-//! With neither station variable set, or with either left as `CHANGE_ME`, the Bridge boots
-//! unprovisioned and raises the setup AP. The portal can then supply credentials for the running
-//! boot; they are not persisted (ticket 07).
-//!
-//! ## The bench token (TODO(ticket 07))
-//!
-//! Ticket 07 owns the credential record and mints the 60-bit pairing token. Until then the HMAC key
-//! is the **UTF-8 bytes of `BRIDGE_BENCH_TOKEN`**, compiled in exactly like the station
-//! credentials. The daemon stores the same text and passes the string's bytes to `bridge-net`, so
-//! both sides agree: the token is its text, never a decoded form of it. With the variable unset,
-//! every client is denied rather than admitted, and the firmware logs it.
+//! The token is displayed as twelve unambiguous base32 characters in three groups of four. Those
+//! twelve characters' bytes are the HMAC key, with no decoding step; the panel's `BRIDGE_CONTROL`
+//! action 1 shows it and action 2 rotates it. The bridge `README.md` documents the partition table
+//! and the explicit `espflash` set.
 //!
 //! ## The Beacon flags
 //!
-//! `provisioned` is false until ticket 07 stores a record; `setup_mode` is false while the firmware
-//! is station-only; `tcp_port` is the Link listener's port while it is up; and `link-ready` is
-//! `bridge_net::beacon::FLAG_LINK_READY`'s pinned meaning — a valid Link Protocol frame from the
-//! robot within `beacon::LINK_READY_WINDOW_MS`.
+//! `provisioned` means a usable record with a station credential pair; `setup_mode` is false while
+//! the firmware is station-only; `tcp_port` is the Link listener's port while it is up; and
+//! `link-ready` is `bridge_net::beacon::FLAG_LINK_READY`'s pinned meaning — a valid Link Protocol
+//! frame from the robot within `beacon::LINK_READY_WINDOW_MS`.
 
 use core::cell::RefCell;
 
 use bridge_core::{
-    BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome, Seq, TimerEvent, dhcp,
-    dns,
+    BridgeControlRequest, BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome,
+    Seq, TimerEvent, dhcp, dns,
+    pairing::{self, GROUPED_LEN, write_grouped},
     portal::{self, Credentials, ScanCache, Status},
+    record::{self, CredentialRecord},
     setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow},
 };
 use bridge_net::{
@@ -75,21 +74,26 @@ use bridge_net::{
 };
 use critical_section::Mutex;
 use defmt::{info, warn};
+use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_executor::Spawner;
 use embassy_net::{
     Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4,
     tcp::TcpSocket,
     udp::{PacketMetadata, UdpSocket},
 };
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex as AsyncMutex};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embedded_storage::nor_flash::{
+    ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
+};
 use esp_backtrace as _;
+use esp_bootloader_esp_idf::partitions::read_partition_table;
 use esp_hal::{
     Async,
     clock::CpuClock,
     dma_rx_stream_buffer,
     efuse::{InterfaceMacAddress, interface_mac_address},
-    rng::Rng,
+    rng::{Rng, Trng, TrngSource},
     timer::timg::TimerGroup,
     uart::{
         Config as UartConfig, RxConfig, TxError, Uart, UartTx,
@@ -105,8 +109,13 @@ use esp_radio::wifi::{
 use heapless::spsc::Queue;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use remote_protocol::{
-    Control, ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PcToRobotParser,
-    RobotToPcParser, ThrottleHint, encode_control,
+    BridgeControlAction, BridgeControlReply, Control, ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME,
+    MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PcToRobotParser, RobotToPcParser, SetupCredentials,
+    ThrottleHint, encode_bridge_control_ack, encode_control,
+};
+use sequential_storage::{
+    cache::NoCache,
+    map::{Key, MapConfig, MapStorage, SerializationError, Value},
 };
 use static_cell::StaticCell;
 
@@ -118,27 +127,17 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Compile-time inputs and bench constants
 // ---------------------------------------------------------------------------------------------
 
-/// The station SSID. Pass `BRIDGE_STA_SSID` at build time.
-const STA_SSID: &str = match option_env!("BRIDGE_STA_SSID") {
-    Some(value) => value,
-    None => "CHANGE_ME",
-};
+/// The dedicated data partition's label in `partitions.csv` (ADR-0036).
+const DATA_PARTITION_LABEL: &str = "bridge_data";
 
-/// The station password. Pass `BRIDGE_STA_PASSWORD` at build time; it is never logged.
-const STA_PASSWORD: &str = match option_env!("BRIDGE_STA_PASSWORD") {
-    Some(value) => value,
-    None => "CHANGE_ME",
-};
+/// The partition table's read buffer. The custom table has four partitions plus the MD5 entry,
+/// so 256 bytes (eight entries) covers it and leaves room for three more without a boot-time
+/// stack frame that the firmware's `large_stack_frames` gate rejects.
+const PARTITION_TABLE_LEN: usize = 256;
 
-/// The bench pairing token: the HMAC key's UTF-8 bytes (see the module docs).
-///
-/// TODO(ticket 07): replace this build-time input with the credential record's minted token. The
-/// daemon stores the same text and passes its bytes to `bridge-net`, so the encoding is the token
-/// text itself, never a decoded form. An empty value denies every client.
-const BENCH_TOKEN: &str = match option_env!("BRIDGE_BENCH_TOKEN") {
-    Some(value) => value,
-    None => "",
-};
+/// The `sequential-storage` scratch buffer: the one-byte key plus the longest record, rounded up
+/// to the flash word size.
+const RECORD_SCRATCH: usize = 128;
 
 /// ADR-0033's shared baud: all three projects run 921600 8N1.
 const UART_BAUD: u32 = 921_600;
@@ -159,6 +158,10 @@ const DMA_RX_CHUNK: usize = 128;
 /// EOF makes `is_done` fire at packet boundaries, so a transfer that is merely idle between
 /// packets must not be mistaken for an exhausted descriptor ring.
 const DMA_STALL_AFTER: Duration = Duration::from_secs(1);
+
+/// How many `BRIDGE_CONTROL` requests one DMA burst may queue for the UART task. The panel sends
+/// one at a time; the slack covers a frame split across chunks and a retry.
+const PANEL_REQUEST_QUEUE: usize = 4;
 
 /// The robot-bound frame queue. ADR-0033 budgets 1 KiB; four worst-case PC-to-robot frames fit.
 const UART_TX_QUEUE_CAPACITY: usize = 4;
@@ -291,8 +294,27 @@ static PORTAL_STATUS: Mutex<RefCell<Status>> = Mutex::new(RefCell::new(Status::U
 /// The best-of-N scan list, written by the supervisory loop and read by the HTTP workers.
 static SCAN_CACHE: Mutex<RefCell<ScanCache>> = Mutex::new(RefCell::new(ScanCache::new()));
 
-/// Portal actions queued for the supervisory loop, which owns the radio controller.
+/// The portal actions queued for the supervisory loop, which owns the radio controller.
 static PORTAL_COMMANDS: Channel<CriticalSectionRawMutex, PortalCommand, PORTAL_COMMAND_QUEUE> = Channel::new();
+
+/// A panel action queued for the supervisory loop, which owns the radio and the RAM credentials.
+/// The record write itself happens in the UART task, before the acknowledgement.
+#[derive(Clone, Copy, Debug)]
+enum PanelCommand {
+    /// Clear the RAM credentials and raise Setup Mode; the record is already token-only.
+    Forget,
+}
+
+/// The panel actions queued for the supervisory loop.
+static PANEL_COMMANDS: Channel<CriticalSectionRawMutex, PanelCommand, PORTAL_COMMAND_QUEUE> = Channel::new();
+
+/// The pairing token's twelve base32 characters, or `None` when the TRNG could not mint one.
+/// The characters' bytes are the HMAC key (ADR-0037), so there is no decode step.
+static PAIRING_TOKEN: Mutex<RefCell<Option<[u8; pairing::CODE_LEN]>>> = Mutex::new(RefCell::new(None));
+
+/// The record's flash map, shared by the boot/portal/panel writers. The async mutex is held only
+/// for one short flash operation, never across a station join or a scan.
+static CREDENTIAL_STORE: AsyncMutex<CriticalSectionRawMutex, Option<CredentialStore>> = AsyncMutex::new(None);
 
 /// Whether the station is associated and holds an address; the Beacon is sent only then.
 static STATION_UP: AtomicBool = AtomicBool::new(false);
@@ -474,15 +496,66 @@ async fn main(spawner: Spawner) -> ! {
     let (ap_ssid_bytes, ap_ssid_len) = setup_ssid();
     let ap_ssid = Ssid::try_from(&ap_ssid_bytes[..ap_ssid_len]).unwrap_or_default();
 
+    // -- Credential record -------------------------------------------------------------------
+    // The TRNG source stays alive for the firmware's lifetime: the token is minted before any
+    // association (ADR-0037), and the panel can rotate it later. The SAR ADC is unavailable while
+    // it lives, which is acceptable: nothing else in the Bridge uses it.
+    let _entropy_source = TrngSource::new(peripherals.RNG, peripherals.ADC1);
+    let store = open_record_store(peripherals.FLASH);
+    let loaded = {
+        let mut guard = CREDENTIAL_STORE.lock().await;
+        *guard = store;
+        match guard.as_mut() {
+            Some(store) => store.load().await,
+            None => LoadOutcome::Missing,
+        }
+    };
+    let (mut record, may_overwrite) = match loaded {
+        LoadOutcome::Record(record) => (Some(record), true),
+        LoadOutcome::Missing | LoadOutcome::Unusable => (None, true),
+        // A read fault is not evidence that the record is bad: fail closed for this boot but leave
+        // the flash alone, so a transient busy/IO error cannot destroy a valid pair.
+        LoadOutcome::ReadFailed => (None, false),
+    };
+    if record.is_none() {
+        match mint_token() {
+            Some(token) => {
+                if may_overwrite {
+                    let fresh = CredentialRecord::token_only(token);
+                    if persist_token_only(token, "the minted token").await {
+                        info!("record: minted a pairing token into the data partition");
+                    }
+                    record = Some(fresh);
+                } else {
+                    warn!("record: the read failed; using an unpersisted token for this boot");
+                    record = Some(CredentialRecord::token_only(token));
+                }
+            }
+            None => warn!("record: the TRNG did not mint a token; every client will be denied"),
+        }
+    }
+    if let Some(token) = record.as_ref().map(|record| record.token) {
+        store_pairing_token(token);
+    }
+
+    let mut grouped_token = [0u8; GROUPED_LEN];
+    let token_text = match record.as_ref() {
+        Some(record) => {
+            write_grouped(&record.token, &mut grouped_token);
+            core::str::from_utf8(&grouped_token).unwrap_or("?")
+        }
+        None => "MISSING",
+    };
+
     info!(
-        "bridge firmware: ticket 06 setup portal, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
+        "bridge firmware: ticket 07 credential record, setup portal, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
         beacon::INTERVAL_MS,
         UART_BAUD,
         UART_TX_PIN,
         UART_RX_PIN
     );
     info!(
-        "bridge identity: device_id={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} name={} token={}",
+        "bridge identity: device_id={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} name={} pairing_code={}",
         device_id[0],
         device_id[1],
         device_id[2],
@@ -490,11 +563,7 @@ async fn main(spawner: Spawner) -> ! {
         device_id[4],
         device_id[5],
         bridge_name().as_str(),
-        if bench_token().is_some() {
-            "configured"
-        } else {
-            "MISSING"
-        }
+        token_text
     );
 
     // -- Radio -------------------------------------------------------------------------------
@@ -516,11 +585,11 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    let mut credentials = initial_credentials();
+    let mut credentials = record.and_then(|record| record.credentials);
     let mut station_config = credentials.as_ref().and_then(station_config_from);
     let provisioned = station_config.is_some();
     if credentials.is_some() && station_config.is_none() {
-        warn!("sta: the build-time credentials do not form a usable station config");
+        warn!("sta: the stored credentials do not form a usable station config");
         credentials = None;
     }
     PROVISIONED.store(provisioned, Ordering::Relaxed);
@@ -629,8 +698,8 @@ async fn main(spawner: Spawner) -> ! {
 
     // -- Station network edge ----------------------------------------------------------------
 
-    if bench_token().is_none() {
-        warn!("tcp: BRIDGE_BENCH_TOKEN is unset; every preamble will be denied (TODO ticket 07)");
+    if pairing_token().is_none() {
+        warn!("tcp: no pairing token; every preamble will be denied");
     }
 
     let client_rx_0: &'static mut [u8] = CLIENT_RX_0.init([0u8; TCP_RX_BUFFER]);
@@ -733,6 +802,15 @@ async fn main(spawner: Spawner) -> ! {
                         set_portal_status(Status::Failed);
                         continue;
                     };
+                    // The record is the source of truth: persist before joining, and fail closed
+                    // when it cannot be written rather than reporting a provisioning that a reset
+                    // would lose. The token is read inside the store lock, so a concurrent
+                    // rotation cannot be overwritten.
+                    if !persist_credentials(new_credentials).await {
+                        warn!("portal: the credential record could not be written");
+                        set_portal_status(Status::Failed);
+                        continue;
+                    }
                     info!(
                         "portal: joining ssid={} while the AP stays up",
                         core::str::from_utf8(new_credentials.ssid()).unwrap_or("?")
@@ -766,6 +844,16 @@ async fn main(spawner: Spawner) -> ! {
                     PORTAL_PROVISIONS.fetch_add(1, Ordering::Relaxed);
                 }
                 PortalCommand::Forget => {
+                    // The portal's Forget keeps the pairing code (ADR-0037 assigns the token clear
+                    // to the panel's action 0); it clears only the network.
+                    match pairing_token() {
+                        Some(token) => {
+                            if persist_token_only(token, "the cleared credentials").await {
+                                info!("portal: the cleared record was stored");
+                            }
+                        }
+                        None => warn!("portal: no pairing token to keep in the cleared record"),
+                    }
                     credentials = None;
                     station_config = None;
                     PROVISIONED.store(false, Ordering::Relaxed);
@@ -787,6 +875,32 @@ async fn main(spawner: Spawner) -> ! {
                     info!("portal: forgot the network; the setup AP stays up");
                 }
             }
+        }
+
+        // -- Panel commands ------------------------------------------------------------------
+        // The UART task already acknowledged the request and persisted the token-only record; this
+        // loop clears the RAM credentials and raises the window, because it owns the radio. The
+        // panel's two-second control timeout never waits on a join attempt.
+        while let Ok(PanelCommand::Forget) = PANEL_COMMANDS.try_receive() {
+            credentials = None;
+            station_config = None;
+            PROVISIONED.store(false, Ordering::Relaxed);
+            if controller.is_connected() {
+                let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
+            }
+            station_connected = false;
+            backoff = MIN_BACKOFF;
+            next_station_attempt = Instant::now();
+            join_failed = false;
+            if let Some(event) = setup.forget(now_ms, false) {
+                apply_setup_parked(&mut controller, &ap_config);
+                radio_mode = RadioMode::ApStation;
+                next_scan_at = Instant::now();
+                log_setup_event(event);
+            }
+            SETUP_OPEN.store(true, Ordering::Relaxed);
+            set_portal_status(Status::Unprovisioned);
+            info!("panel: forgot the network and raised Setup Mode");
         }
 
         // The pump's clock-driven transitions: an authentication deadline and the refusal window.
@@ -1049,40 +1163,6 @@ enum JoinOutcome {
     Failed,
 }
 
-/// Returns whether usable build-time credentials were supplied.
-fn credentials_present() -> bool {
-    !STA_SSID.is_empty() && STA_SSID != "CHANGE_ME" && !STA_PASSWORD.is_empty() && STA_PASSWORD != "CHANGE_ME"
-}
-
-/// Returns the build-time credentials as the portal's fixed-size form, or `None`.
-fn initial_credentials() -> Option<Credentials> {
-    if !credentials_present() {
-        return None;
-    }
-    credentials_from(STA_SSID.as_bytes(), STA_PASSWORD.as_bytes())
-}
-
-/// Copies a credential pair into the portal's fixed-size form, validating the WPA2-PSK lengths.
-fn credentials_from(ssid: &[u8], passphrase: &[u8]) -> Option<Credentials> {
-    if ssid.is_empty() || ssid.len() > portal::MAX_SSID_BYTES {
-        return None;
-    }
-    if passphrase.len() < portal::MIN_PASSPHRASE_BYTES || passphrase.len() > portal::MAX_PASSPHRASE_BYTES {
-        return None;
-    }
-    let mut credentials = Credentials {
-        ssid: [0u8; portal::MAX_SSID_BYTES],
-        ssid_len: 0,
-        passphrase: [0u8; portal::MAX_PASSPHRASE_BYTES],
-        passphrase_len: 0,
-    };
-    credentials.ssid[..ssid.len()].copy_from_slice(ssid);
-    credentials.ssid_len = u8::try_from(ssid.len()).ok()?;
-    credentials.passphrase[..passphrase.len()].copy_from_slice(passphrase);
-    credentials.passphrase_len = u8::try_from(passphrase.len()).ok()?;
-    Some(credentials)
-}
-
 /// Builds a station configuration from a credential pair, or `None` when the radio rejects it.
 #[allow(
     clippy::large_stack_frames,
@@ -1147,7 +1227,7 @@ fn apply_station(controller: &mut WifiController<'_>, station: &StationConfig) -
 /// Builds the parked station config: a real SSID/password pair for an absent network. The radio
 /// is never asked to connect to it; it exists so the controller stays in APSTA.
 fn parked_station_config() -> Option<StationConfig> {
-    credentials_from(PARKED_STATION_SSID.as_bytes(), PARKED_STATION_PASSWORD.as_bytes())
+    Credentials::from_slices(PARKED_STATION_SSID.as_bytes(), PARKED_STATION_PASSWORD.as_bytes())
         .and_then(|credentials| station_config_from(&credentials))
 }
 
@@ -1215,6 +1295,424 @@ fn raise_reason(reason: RaiseReason) -> &'static str {
         RaiseReason::PanelRequest => "panel request",
         RaiseReason::Forgotten => "forgotten",
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Credential record storage (ADR-0036)
+// ---------------------------------------------------------------------------------------------
+
+/// The one record's key on the data partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RecordKey {
+    /// The sole record: station credentials plus the pairing token.
+    Credential,
+}
+
+impl Key for RecordKey {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        if buffer.is_empty() {
+            return Err(SerializationError::BufferTooSmall);
+        }
+        buffer[0] = 0;
+        Ok(1)
+    }
+
+    fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+        match buffer.first() {
+            Some(0) => Ok((Self::Credential, 1)),
+            Some(_) => Err(SerializationError::InvalidFormat),
+            None => Err(SerializationError::BufferTooSmall),
+        }
+    }
+}
+
+/// The raw bytes `sequential-storage` keeps for the record.
+///
+/// The record's own codec decides validity; this wrapper only carries the bytes so the boot log
+/// can name the exact rejection (`wrong magic`, `bad crc`, …) instead of `InvalidFormat`.
+struct StoredRecord {
+    /// The encoded record, zero-padded after [`StoredRecord::len`].
+    bytes: [u8; record::MAX_ENCODED_LEN],
+    /// The number of valid bytes.
+    len: usize,
+}
+
+impl StoredRecord {
+    /// Wraps an encoded record.
+    const fn new(bytes: [u8; record::MAX_ENCODED_LEN], len: usize) -> Self {
+        Self { bytes, len }
+    }
+}
+
+impl Value<'_> for StoredRecord {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        if buffer.len() < self.len {
+            return Err(SerializationError::BufferTooSmall);
+        }
+        buffer[..self.len].copy_from_slice(&self.bytes[..self.len]);
+        Ok(self.len)
+    }
+
+    fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+        if buffer.len() > record::MAX_ENCODED_LEN {
+            return Err(SerializationError::InvalidFormat);
+        }
+        let mut bytes = [0u8; record::MAX_ENCODED_LEN];
+        bytes[..buffer.len()].copy_from_slice(buffer);
+        Ok((Self::new(bytes, buffer.len()), buffer.len()))
+    }
+}
+
+/// The data partition's view of the flash, as the sync `NorFlash` traits.
+///
+/// `esp-storage` is blocking and `sequential-storage` is async; `BlockingAsync` bridges the two.
+/// The adapter owns the flash so `MapStorage` can own the adapter without a self-reference.
+struct PartitionFlash {
+    /// The chip-wide flash handle.
+    flash: esp_storage::FlashStorage<'static>,
+    /// The partition's offset from the flash base.
+    base: u32,
+    /// The partition's length in bytes.
+    len: u32,
+}
+
+impl PartitionFlash {
+    /// Creates a view of `base..base + len`.
+    const fn new(flash: esp_storage::FlashStorage<'static>, base: u32, len: u32) -> Self {
+        Self { flash, base, len }
+    }
+
+    /// Returns whether `offset..offset + len` lies inside the partition.
+    fn contains(&self, offset: u32, len: usize) -> bool {
+        let Ok(width) = u32::try_from(len) else {
+            return false;
+        };
+        offset.checked_add(width).is_some_and(|end| end <= self.len)
+    }
+}
+
+/// The partition adapter's error.
+#[derive(Debug)]
+enum PartitionFlashError {
+    /// The underlying flash rejected the access.
+    Io,
+    /// The access left the partition.
+    OutOfBounds,
+}
+
+impl NorFlashError for PartitionFlashError {
+    fn kind(&self) -> NorFlashErrorKind {
+        match self {
+            Self::Io => NorFlashErrorKind::Other,
+            Self::OutOfBounds => NorFlashErrorKind::OutOfBounds,
+        }
+    }
+}
+
+impl ErrorType for PartitionFlash {
+    type Error = PartitionFlashError;
+}
+
+impl ReadNorFlash for PartitionFlash {
+    const READ_SIZE: usize = 4;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        if !self.contains(offset, bytes.len()) {
+            return Err(PartitionFlashError::OutOfBounds);
+        }
+        self.flash
+            .read_nor(self.base + offset, bytes)
+            .map_err(|_| PartitionFlashError::Io)
+    }
+
+    fn capacity(&self) -> usize {
+        usize::try_from(self.len).unwrap_or(usize::MAX)
+    }
+}
+
+impl NorFlash for PartitionFlash {
+    const WRITE_SIZE: usize = 4;
+    const ERASE_SIZE: usize = esp_storage::FlashStorage::SECTOR_SIZE as usize;
+
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        if !self.contains(offset, bytes.len()) {
+            return Err(PartitionFlashError::OutOfBounds);
+        }
+        self.flash
+            .write_nor(self.base + offset, bytes)
+            .map_err(|_| PartitionFlashError::Io)
+    }
+
+    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        let Ok(width) = usize::try_from(to.saturating_sub(from)) else {
+            return Err(PartitionFlashError::OutOfBounds);
+        };
+        if from > to || !self.contains(from, width) {
+            return Err(PartitionFlashError::OutOfBounds);
+        }
+        self.flash
+            .erase(self.base + from, self.base + to)
+            .map_err(|_| PartitionFlashError::Io)
+    }
+}
+
+impl MultiwriteNorFlash for PartitionFlash {}
+
+/// The typed `sequential-storage` map over the data partition.
+type RecordStorage = MapStorage<RecordKey, BlockingAsync<PartitionFlash>, NoCache>;
+
+/// What a boot read found on the data partition.
+#[derive(Clone, Copy, Debug)]
+enum LoadOutcome {
+    /// A valid record.
+    Record(CredentialRecord),
+    /// No record key on the partition.
+    Missing,
+    /// The item exists but is not a valid record; the log names the reason.
+    Unusable,
+    /// The flash read failed. The record may still be valid, so the boot must not overwrite it.
+    ReadFailed,
+}
+
+/// The persisted credential record and its flash map.
+struct CredentialStore {
+    /// The map over the `bridge_data` partition.
+    storage: RecordStorage,
+}
+
+impl CredentialStore {
+    /// Reads the record for the boot decision.
+    ///
+    /// Every record failure is deliberate: the caller mints a fresh token and fails closed into
+    /// Setup Mode. A *read* failure is different: it is not evidence that the record is bad, so the
+    /// caller must not overwrite it.
+    #[allow(
+        clippy::large_stack_frames,
+        reason = "the 128-byte scratch buffer and the decoded record live in this future"
+    )]
+    async fn load(&mut self) -> LoadOutcome {
+        let mut scratch = [0u8; RECORD_SCRATCH];
+        match self
+            .storage
+            .fetch_item::<StoredRecord>(&mut scratch, &RecordKey::Credential)
+            .await
+        {
+            Ok(Some(stored)) => match CredentialRecord::decode(&stored.bytes[..stored.len]) {
+                Ok(record) => {
+                    info!(
+                        "record: loaded (provisioned={} pairing_code={})",
+                        record.provisioned(),
+                        record.token_str()
+                    );
+                    LoadOutcome::Record(record)
+                }
+                Err(error) => {
+                    warn!(
+                        "record: unusable ({}); treating the Bridge as unprovisioned",
+                        error.label()
+                    );
+                    LoadOutcome::Unusable
+                }
+            },
+            Ok(None) => {
+                info!("record: none on the data partition");
+                LoadOutcome::Missing
+            }
+            Err(error) => {
+                warn!(
+                    "record: read failed; treating the Bridge as unprovisioned: {}",
+                    defmt::Debug2Format(&error)
+                );
+                LoadOutcome::ReadFailed
+            }
+        }
+    }
+
+    /// Reads the record silently, for an update already holding the store lock.
+    ///
+    /// Returns `Err(())` on a flash read fault so an update can abort instead of overwriting a
+    /// record it could not read. A missing or corrupt record is `Ok(None)`.
+    #[allow(
+        clippy::large_stack_frames,
+        reason = "the 128-byte scratch buffer and the decoded record live in this future"
+    )]
+    async fn current(&mut self) -> Result<Option<CredentialRecord>, ()> {
+        let mut scratch = [0u8; RECORD_SCRATCH];
+        match self
+            .storage
+            .fetch_item::<StoredRecord>(&mut scratch, &RecordKey::Credential)
+            .await
+        {
+            Ok(Some(stored)) => Ok(CredentialRecord::decode(&stored.bytes[..stored.len]).ok()),
+            Ok(None) => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Writes the record, returning whether it reached the flash.
+    #[allow(
+        clippy::large_stack_frames,
+        reason = "the encoded record and the 128-byte scratch buffer live in this future"
+    )]
+    async fn save(&mut self, record: &CredentialRecord) -> bool {
+        let mut encoded = [0u8; record::MAX_ENCODED_LEN];
+        let len = match record.encode_into(&mut encoded) {
+            Ok(len) => len,
+            Err(error) => {
+                warn!("record: cannot encode ({}); not stored", error.label());
+                return false;
+            }
+        };
+        let stored = StoredRecord::new(encoded, len);
+        let mut scratch = [0u8; RECORD_SCRATCH];
+        match self
+            .storage
+            .store_item(&mut scratch, &RecordKey::Credential, &stored)
+            .await
+        {
+            Ok(()) => {
+                info!("record: stored (provisioned={} bytes={})", record.provisioned(), len);
+                true
+            }
+            Err(error) => {
+                warn!("record: write failed: {}", defmt::Debug2Format(&error));
+                false
+            }
+        }
+    }
+}
+
+/// Writes an already-built record through a store guard.
+async fn save_locked(store: &mut CredentialStore, record: &CredentialRecord, context: &'static str) -> bool {
+    if store.save(record).await {
+        true
+    } else {
+        warn!("record: {} could not be written; it is RAM-only", context);
+        false
+    }
+}
+
+/// Writes a token-only record, clearing the network while keeping a usable code.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the record and the borrowed store guard live in this future"
+)]
+async fn persist_token_only(token: [u8; pairing::CODE_LEN], context: &'static str) -> bool {
+    let record = CredentialRecord::token_only(token);
+    let mut guard = CREDENTIAL_STORE.lock().await;
+    match guard.as_mut() {
+        Some(store) => save_locked(store, &record, context).await,
+        None => {
+            warn!("record: no data partition; {} is RAM-only", context);
+            false
+        }
+    }
+}
+
+/// Writes a provisioned record, taking the token from the record itself so a concurrent token
+/// rotation cannot be overwritten with a stale copy.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the record and the borrowed store guard live in this future"
+)]
+async fn persist_credentials(credentials: Credentials) -> bool {
+    let mut guard = CREDENTIAL_STORE.lock().await;
+    let Some(store) = guard.as_mut() else {
+        warn!("record: no data partition; the credentials are RAM-only");
+        return false;
+    };
+    let token = match store.current().await {
+        Ok(Some(record)) => record.token,
+        Ok(None) => match pairing_token() {
+            Some(token) => token,
+            None => {
+                warn!("record: no pairing token; the credentials were not stored");
+                return false;
+            }
+        },
+        Err(()) => {
+            warn!("record: the read failed; the credentials were not overwritten");
+            return false;
+        }
+    };
+    let record = CredentialRecord {
+        credentials: Some(credentials),
+        token,
+    };
+    save_locked(store, &record, "the credentials").await
+}
+
+/// Writes the current credentials with a new token, reading the credentials inside the lock.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the record and the borrowed store guard live in this future"
+)]
+async fn persist_rotated(token: [u8; pairing::CODE_LEN]) -> bool {
+    let mut guard = CREDENTIAL_STORE.lock().await;
+    let Some(store) = guard.as_mut() else {
+        warn!("record: no data partition; the rotated token is RAM-only");
+        return false;
+    };
+    let credentials = match store.current().await {
+        Ok(Some(record)) => record.credentials,
+        Ok(None) => None,
+        Err(()) => {
+            warn!("record: the read failed; the token was not rotated");
+            return false;
+        }
+    };
+    let record = CredentialRecord { credentials, token };
+    save_locked(store, &record, "the rotated token").await
+}
+
+/// Finds the `bridge_data` partition and opens the record store over it.
+///
+/// Returns `None` when the table is unreadable or the partition is absent, which is what a board
+/// flashed without the custom table looks like. The Bridge still boots; it just cannot persist.
+fn open_record_store(flash: esp_hal::peripherals::FLASH<'static>) -> Option<CredentialStore> {
+    let mut flash = esp_storage::FlashStorage::new(flash);
+    let mut table_buffer = [0u8; PARTITION_TABLE_LEN];
+    let table = match read_partition_table(&mut flash, &mut table_buffer) {
+        Ok(table) => table,
+        Err(error) => {
+            warn!(
+                "record: the partition table is unreadable: {}",
+                defmt::Debug2Format(&error)
+            );
+            return None;
+        }
+    };
+
+    let Some(partition) = table.iter().find(|entry| entry.label_as_str() == DATA_PARTITION_LABEL) else {
+        warn!(
+            "record: no {} partition; flash the custom partition table from bridge-firmware/partitions.csv",
+            DATA_PARTITION_LABEL
+        );
+        return None;
+    };
+    if partition.len() < 2 * esp_storage::FlashStorage::SECTOR_SIZE {
+        warn!(
+            "record: {} is {} bytes; sequential-storage needs at least two sectors",
+            DATA_PARTITION_LABEL,
+            partition.len()
+        );
+        return None;
+    }
+
+    info!(
+        "record: partition {} at {:#x} ({} bytes)",
+        partition.label_as_str(),
+        partition.offset(),
+        partition.len()
+    );
+    let base = partition.offset();
+    let len = partition.len();
+    let storage = MapStorage::new(
+        BlockingAsync::new(PartitionFlash::new(flash, base, len)),
+        MapConfig::new(0..len),
+        NoCache::new(),
+    );
+    Some(CredentialStore { storage })
 }
 
 /// Doubles the reconnect backoff, capped at [`MAX_BACKOFF`].
@@ -1625,14 +2123,14 @@ async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buf
             }
         };
 
-        let Some(token) = bench_token() else {
-            warn!("tcp: BRIDGE_BENCH_TOKEN is unset; denying the connection (TODO ticket 07)");
+        let Some(token) = pairing_token() else {
+            warn!("tcp: no pairing token; denying the connection");
             with_pump(|pump| pump.disconnect(connection));
             deny_and_finish(&mut socket, DenyReason::Unauthorized, None).await;
             continue;
         };
 
-        match run_preamble(&mut socket, connection, token).await {
+        match run_preamble(&mut socket, connection, &token).await {
             PreambleOutcome::Accepted => {
                 AUTH_ACCEPTED.fetch_add(1, Ordering::Relaxed);
                 info!("tcp: client {} authenticated", connection);
@@ -1677,6 +2175,13 @@ async fn serve_client(
     connection: u32,
 ) {
     loop {
+        // A rotated pairing code disconnects the authenticated connection from the supervisory
+        // loop; observe it here so the socket closes instead of serving the old token's session.
+        if with_pump(|pump| pump.authenticated_connection()) != Some(connection) {
+            info!("tcp: authentication revoked; closing the client");
+            break;
+        }
+
         if !drain_to_socket(socket).await {
             info!("tcp: socket write failed; closing the client");
             break;
@@ -1987,13 +2492,32 @@ async fn beacon_task(stack: Stack<'static>) {
 // Identity and Beacon flags
 // ---------------------------------------------------------------------------------------------
 
-/// Returns the bench token's bytes, or `None` when no token was compiled in.
-fn bench_token() -> Option<&'static [u8]> {
-    if BENCH_TOKEN.is_empty() {
-        None
-    } else {
-        Some(BENCH_TOKEN.as_bytes())
-    }
+/// Returns the pairing token, or `None` when the TRNG could not mint one.
+fn pairing_token() -> Option<[u8; pairing::CODE_LEN]> {
+    critical_section::with(|cs| *PAIRING_TOKEN.borrow(cs).borrow())
+}
+
+/// Stores the pairing token for the preamble and the panel's replies.
+fn store_pairing_token(token: [u8; pairing::CODE_LEN]) {
+    critical_section::with(|cs| *PAIRING_TOKEN.borrow(cs).borrow_mut() = Some(token));
+}
+
+/// Mints a 60-bit pairing token from the hardware TRNG (ADR-0037).
+///
+/// `Rng` alone is not cryptographic before the radio is up, so this path requires the
+/// [`TrngSource`] the caller keeps alive. The eight TRNG bytes are reduced to 60 bits by
+/// [`pairing::encode`].
+fn mint_token() -> Option<[u8; pairing::CODE_LEN]> {
+    let trng = match Trng::try_new() {
+        Ok(trng) => trng,
+        Err(_) => {
+            warn!("rng: the TRNG source is not active; refusing to mint a token");
+            return None;
+        }
+    };
+    let mut bytes = [0u8; 8];
+    trng.read(&mut bytes);
+    Some(pairing::encode(u64::from_be_bytes(bytes)))
 }
 
 /// Returns the efuse station MAC's device id.
@@ -2022,9 +2546,8 @@ fn link_ready() -> bool {
 
 /// Returns the flags the Beacon and the challenge serve.
 ///
-/// `provisioned` is whether a usable credential pair exists (ticket 07 replaces the RAM stand-in
-/// with the record); `setup_mode` is the bounded window, which is only observable on the station
-/// Beacon in APSTA.
+/// `provisioned` is whether the credential record stores a usable station credential pair;
+/// `setup_mode` is the bounded window, which is only observable on the station Beacon in APSTA.
 fn flags_now() -> IdentityFlags {
     let mut flags = IdentityFlags::default();
     if PROVISIONED.load(Ordering::Relaxed) {
@@ -2159,6 +2682,164 @@ fn enqueue_encoded(frame: &Frame<'_>) {
     }
 }
 
+/// Encodes a `BRIDGE_CONTROL` acknowledgement and queues it for the robot.
+///
+/// The reply's `Seq` echoes the request's, and the flag is `IS_ACK` alone: the acknowledgement
+/// must not ask for another acknowledgement (ADR-0036's control rule, ADR-0037's revocation).
+fn enqueue_bridge_ack(seq: Seq, reply: &BridgeControlReply<'_>) {
+    let mut payload = [0u8; 96];
+    let Ok(len) = encode_bridge_control_ack(reply, &mut payload) else {
+        warn!("uart tx: could not encode the BRIDGE_CONTROL acknowledgement");
+        return;
+    };
+    let Ok(frame) = Frame::new(
+        PROTOCOL_MAJOR,
+        Class::Control,
+        Flags::IS_ACK,
+        Control::BridgeControl.wire_id(),
+        seq,
+        &payload[..len],
+    ) else {
+        warn!("uart tx: could not build the BRIDGE_CONTROL acknowledgement");
+        return;
+    };
+    enqueue_encoded(&frame);
+}
+
+/// Answers one robot-side `BRIDGE_CONTROL` request from the UART task.
+///
+/// Answers one robot-side `BRIDGE_CONTROL` request from the UART task.
+///
+/// The record write, the acknowledgement and the token change happen here, before the reply, so
+/// the panel is never told a change succeeded when the flash still holds the old record. The
+/// supervisory loop only clears the RAM credentials and raises the window for action 0, which keeps
+/// the panel's two-second control timeout independent of a station join or a scan.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the record and the persistence future live in the UART task's panel path"
+)]
+async fn handle_panel_request(request: BridgeControlRequest) {
+    match request.action {
+        BridgeControlAction::ForgetNetwork => {
+            // ADR-0037 (amended for ticket 07): action 0 clears the network and rotates the token
+            // rather than leaving the slot empty. The record is written before the RAM key changes
+            // and before the acknowledgement; a failed write keeps the old code live and reports
+            // `Internal`. The window is still raised, because the panel asked for the recovery
+            // surface.
+            let minted = mint_token();
+            let persisted = match minted.or_else(pairing_token) {
+                Some(token) => persist_token_only(token, "the cleared record").await,
+                None => {
+                    warn!("panel: no pairing token; the record cannot be cleared");
+                    false
+                }
+            };
+            if persisted && let Some(token) = minted {
+                store_pairing_token(token);
+            }
+            let queued = queue_panel_command(PanelCommand::Forget);
+            let status = if persisted && minted.is_some() && queued {
+                remote_protocol::Status::Ok
+            } else {
+                remote_protocol::Status::Internal
+            };
+            let (ssid_bytes, ssid_len) = setup_ssid();
+            let ssid = core::str::from_utf8(&ssid_bytes[..ssid_len]).unwrap_or("");
+            enqueue_bridge_ack(
+                request.seq,
+                &BridgeControlReply::Setup(SetupCredentials {
+                    status,
+                    ssid,
+                    passphrase: AP_PASSWORD,
+                }),
+            );
+            disconnect_current_session();
+            info!("panel: forgot the network; acknowledging with the setup identity");
+        }
+        BridgeControlAction::ShowPairingCode => {
+            let current = pairing_token();
+            let code = current.unwrap_or([b'0'; pairing::CODE_LEN]);
+            let code = core::str::from_utf8(&code).unwrap_or("");
+            let status = if current.is_some() {
+                remote_protocol::Status::Ok
+            } else {
+                remote_protocol::Status::Internal
+            };
+            enqueue_bridge_ack(
+                request.seq,
+                &BridgeControlReply::PairingCode(PairingCode { status, code }),
+            );
+            info!("panel: showed the pairing code");
+        }
+        BridgeControlAction::RotatePairingCode => {
+            let Some(token) = mint_token() else {
+                warn!("panel: the TRNG did not mint a token; refusing the rotation");
+                let current = pairing_token().unwrap_or([b'0'; pairing::CODE_LEN]);
+                let code = core::str::from_utf8(&current).unwrap_or("");
+                enqueue_bridge_ack(
+                    request.seq,
+                    &BridgeControlReply::PairingCode(PairingCode {
+                        status: remote_protocol::Status::Internal,
+                        code,
+                    }),
+                );
+                return;
+            };
+            if persist_rotated(token).await {
+                // The record is durable, so the new key becomes live and the old session ends.
+                store_pairing_token(token);
+                let code = core::str::from_utf8(&token).unwrap_or("");
+                enqueue_bridge_ack(
+                    request.seq,
+                    &BridgeControlReply::PairingCode(PairingCode {
+                        status: remote_protocol::Status::Ok,
+                        code,
+                    }),
+                );
+                disconnect_current_session();
+                info!("panel: rotated the pairing code");
+            } else {
+                // The write failed: nothing changed durably, so the old code stays live and the
+                // session is left alone. The panel sees `Internal` and can retry.
+                let current = pairing_token().unwrap_or([b'0'; pairing::CODE_LEN]);
+                let code = core::str::from_utf8(&current).unwrap_or("");
+                enqueue_bridge_ack(
+                    request.seq,
+                    &BridgeControlReply::PairingCode(PairingCode {
+                        status: remote_protocol::Status::Internal,
+                        code,
+                    }),
+                );
+                info!("panel: the rotation did not reach the flash; the old code stays active");
+            }
+        }
+    }
+}
+
+/// Drops the current connection, authenticated or still proving the old token.
+fn disconnect_current_session() {
+    if let Some(connection) = with_pump(|pump| pump.current_connection()) {
+        with_pump(|pump| {
+            pump.disconnect(connection);
+        });
+        info!("tcp: panel action dropped connection {}", connection);
+    }
+}
+
+/// Queues a panel action for the supervisory loop's record and radio work.
+/// Queues a panel action for the supervisory loop's radio work.
+///
+/// Returns false when the queue is full; the caller then reports `Internal`, because the window
+/// may not be raised promptly.
+fn queue_panel_command(command: PanelCommand) -> bool {
+    if PANEL_COMMANDS.try_send(command).is_err() {
+        warn!("panel: the command queue is full; the window raise is delayed");
+        false
+    } else {
+        true
+    }
+}
+
 /// Writes the whole slice; `write` may accept only part of the socket's transmit buffer.
 async fn write_socket_all(socket: &mut TcpSocket<'_>, data: &[u8]) -> bool {
     let mut written = 0;
@@ -2242,6 +2923,7 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
 
                 let now = now_ms();
                 let mut frames = 0u32;
+                let mut pending: [Option<BridgeControlRequest>; PANEL_REQUEST_QUEUE] = [None; PANEL_REQUEST_QUEUE];
                 parser.feed(data, now, |frame| {
                     // A frame only reaches this callback after the parser accepted its envelope and
                     // CRC, so it is the Beacon's pinned "valid Link Protocol frame from the robot".
@@ -2249,14 +2931,32 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
                     frames = frames.wrapping_add(1);
                     match with_pump(|pump| pump.on_robot_frame(&frame)) {
                         Decision::DroppedFull => warn!("pump: ring full; dropped a robot frame"),
-                        Decision::BridgeControl(request) => info!(
-                            "pump: robot BRIDGE_CONTROL action={} seq={} consumed (ticket 06/07 handoff)",
-                            request.action.bits(),
-                            request.seq.get()
-                        ),
+                        Decision::BridgeControl(request) => {
+                            info!(
+                                "pump: robot BRIDGE_CONTROL action={} seq={}",
+                                request.action.bits(),
+                                request.seq.get()
+                            );
+                            if let Some(slot) = pending.iter_mut().find(|slot| slot.is_none()) {
+                                *slot = Some(request);
+                            } else {
+                                warn!("pump: too many BRIDGE_CONTROL frames in one DMA burst; dropped one");
+                            }
+                        }
                         _ => {}
                     }
                 });
+
+                // The acknowledgement and the record write happen outside the parser callback,
+                // once the DMA slice is fully parsed. Consume the slice first so the descriptors
+                // can refill while the flash write runs; the stream buffer is then not holding a
+                // whole record write's worth of incoming robot traffic.
+                let _ = transfer.consume(total);
+                for slot in &mut pending {
+                    if let Some(request) = slot.take() {
+                        handle_panel_request(request).await;
+                    }
+                }
 
                 UART_RX_FRAMES.fetch_add(frames, Ordering::Relaxed);
                 UART_CRC_FAILURES.store(parser.crc_failures(), Ordering::Relaxed);
@@ -2289,11 +2989,7 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
                 stall_counted = false;
             }
             Timer::after(Duration::from_millis(1)).await;
-            continue;
         }
-
-        // The parser has finished with the slice; consuming it lets the DMA descriptors recycle.
-        let _ = transfer.consume(total);
     }
 }
 

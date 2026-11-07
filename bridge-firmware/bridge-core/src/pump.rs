@@ -97,6 +97,15 @@ impl BridgePump {
         self.auth.authenticated_connection()
     }
 
+    /// Returns the current connection's id, whether or not it is authenticated.
+    ///
+    /// A rotation disconnects the current connection, so this is the id the supervisory loop
+    /// closes when the pairing code changes.
+    #[must_use]
+    pub const fn current_connection(&self) -> Option<u32> {
+        self.auth.current_connection()
+    }
+
     /// Handles one frame parsed from the robot-facing UART.
     ///
     /// `BRIDGE_CONTROL` is consumed whether or not a client is attached. Everything else that is

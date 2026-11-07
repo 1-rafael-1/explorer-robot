@@ -131,6 +131,20 @@ The portal also offers "New pairing code" while the setup AP is up, so a code se
 can be revoked without touching the home network. No revocation needs a reflash, and none needs the
 PC.
 
+**Amendment (2026-11-07, ticket 07).** Action 0 clears the token by **rotating** it in the same
+step rather than leaving the slot empty. The requirement is that the old code stops working and
+the network is forgotten; a token must also exist at all times so no unauthenticated window opens,
+and a later `BRIDGE_CONTROL` action 1 can show the new code without a reboot. The record therefore
+becomes a token-only record with a freshly minted token. This supersedes the table's "clears the
+network **and** the token" wording only in how the clear is represented: the old token is invalid
+immediately **when the record write succeeds**. If the write fails, the acknowledgement is
+`Internal`, the old code stays live, and the change is RAM-only; a TRNG failure clears the network
+but cannot rotate the code, which is also reported as `Internal`. Action 2 follows the same rule:
+the new token is persisted before it is acknowledged and before the live session is closed, and a
+failed write leaves the old code and session in place. The portal's "New pairing code" action
+remains unimplemented; ticket 07 ships the panel's action 2, and the portal page's route set is
+unchanged from the spec's Setup Mode section.
+
 *The trust boundary.*
 
 The boundary is the home LAN behind WPA2/WPA3, plus one pairing token per robot. Anyone holding both

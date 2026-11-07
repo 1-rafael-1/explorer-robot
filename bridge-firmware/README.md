@@ -8,7 +8,7 @@ It currently holds two binaries:
 
 | binary | purpose |
 |---|---|
-| `bridge` | the ticket-06 network edge and Setup Mode: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, and the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal |
+| `bridge` | the ticket-07 firmware: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, the persisted credential record and pairing token, the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal, and the panel's `BRIDGE_CONTROL` actions |
 | `stack-soak` | the ticket-09 language spike, kept as the regression soak: APSTA, a UART loopback and a TCP echo |
 
 `bridge-core` is the host-testable pump crate the `bridge` binary wires to the HAL (see
@@ -38,66 +38,83 @@ robot-side `HELLO` without `IS_ACK` is not a legal robot frame).
 Both directions run **921600 8N1**, the baud ADR-0033 fixes for the robot, the Bridge and the
 daemon.
 
-## Build-time credentials and the bench token
+## The credential record and the pairing token
 
-The `bridge` binary takes its station credentials and its ticket-05 bench pairing token from the
-environment at compile time, so the image contains no secret at rest:
+The `bridge` binary has no compile-time station credential. Provisioning is the setup portal's
+job; the result is one versioned, CRC-checked record on a dedicated data partition:
 
-```sh
-cd bridge-firmware
-BRIDGE_STA_SSID='your-ssid' BRIDGE_STA_PASSWORD='your-passphrase' \
-    BRIDGE_BENCH_TOKEN='your-bench-token' cargo build --release --bin bridge
+```text
+magic, version, flags, ssid_len, ssid, pass_len, passphrase, token[12], crc16
 ```
 
-With neither station variable set, or with either left at `CHANGE_ME`, the Bridge boots
-**unprovisioned** and raises Setup Mode: the AP-only-equivalent portal comes up at `192.168.4.1`,
-and credentials submitted through the page join the station for this boot only. Ticket 07 owns the
-persisted record; ticket 06 keeps the submitted pair in RAM.
+`bridge-core::record` owns the layout and the CRC, so the codec is host-tested; the firmware owns
+the `sequential-storage` map over `esp-storage` through a small partition adapter. The record's
+CRC is the Link Protocol's CRC-16/CCITT-FALSE, reused rather than inventing a second checksum.
+
+A blank or erased partition boots **unprovisioned**: the Bridge mints a 60-bit token from the
+hardware TRNG (`TrngSource` plus `Trng`; a bare `Rng` is not cryptographic before the radio is up)
+and stores a token-only record. The twelve characters in three groups of four are the HMAC key
+verbatim; the alphabet omits `I`, `L`, `O` and `U` so the code is unambiguous when read from the
+panel. The boot banner prints it as `pairing_code=XXXX-XXXX-XXXX`.
+
+Only a record with a station credential pair sets the Beacon's `provisioned` bit. A missing
+record, wrong magic, wrong version, bad CRC, bad flags, bad credential lengths or a token outside
+the alphabet all mean unprovisioned, and the Bridge fails closed into Setup Mode instead of
+misreading a changed layout.
 
 The setup AP is `ExplorerRobot-XXXX` (uppercase hex of the AP interface MAC's last two bytes),
 WPA2-PSK `explorer-setup`, at most two clients, on `192.168.4.1/24` with a two-address DHCP pool.
 `scan_async` returns `Other` in AP-only mode on this beta, so the unprovisioned window runs APSTA
 with a parked station config that is never connected; the portal is still the only served surface.
 
-`BRIDGE_BENCH_TOKEN` is a **temporary build-time stand-in** for ticket 07's credential record. Its
-**UTF-8 bytes are the HMAC key**: the daemon stores the same text in its config (`default_token`
-for a manual endpoint, or the per-device token) and passes the string's bytes, and the bench
-probes read the text from the environment or a file. Ticket 07 will mint a 60-bit token displayed
-as twelve base32 characters; those twelve characters' bytes are then the key, with no decoding
-step. With no token compiled in, every client is denied and the firmware logs it.
-
 `esp-radio` 1.0.0-beta.1 exposes only `Wpa2Personal`, so a WPA3-only or PMF-required access point
 cannot be joined yet. The startup scan logs each BSS's advertised auth mode, which settles that
 before any credentials are tried.
 
-The bench flow puts the values on the build command itself, together with the flash:
+## The partition table
+
+`partitions.csv` is the ESP-IDF table the firmware expects:
+
+| partition | type | offset | size |
+|---|---|---:|---:|
+| `nvs` | data/nvs | `0x9000` | 24 KiB |
+| `phy_init` | data/phy | `0xF000` | 4 KiB |
+| `factory` | app/factory | `0x10000` | 3 MiB |
+| `bridge_data` | data/undefined | `0x310000` | 16 KiB |
+
+`bridge_data` is deliberately `undefined` (data subtype `0x06`), not a custom `0x40` subtype:
+`espflash` and `esp-bootloader-esp-idf` both reject `0x40` at parse or lookup time. The runtime
+finds the partition by its label, so moving it is a one-line change here plus a re-provision.
+
+The table is flashed as an **explicit set**. `espflash flash` writes the bootloader, this table and
+the app, and leaves `bridge_data` alone: credentials and the pairing token survive a normal
+firmware update. `espflash erase-flash`, or moving `bridge_data`, loses the record — which the
+version and CRC make safe (the Bridge fails closed into Setup Mode and mints a new token).
+
+## Flash and monitor
+
+The repository's runner in `.cargo/config.toml` now passes the custom table, so `cargo run --bin
+bridge` flashes the same explicit set. The equivalent direct command is:
 
 ```sh
 cd bridge-firmware
 touch src/bin/bridge.rs
-
-BRIDGE_STA_SSID='your-ssid' \
-BRIDGE_STA_PASSWORD='your-passphrase' \
-BRIDGE_BENCH_TOKEN='bench05' \
 cargo build --release --bin bridge && \
 espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
+    --partition-table partitions.csv --partition-table-offset 0x8000 \
     target/riscv32imc-unknown-none-elf/release/bridge
 ```
 
-The variables only need to reach `cargo build`; `espflash` uses the built image. The `touch`
-forces a rebuild so a changed credential or token is definitely baked in. This leaves the values
-in shell history; if that matters, use `read -r -s BRIDGE_STA_PASSWORD; export BRIDGE_STA_PASSWORD`
-(or the same for the token) before the build instead. A later `cargo build` from a shell without
-the variables silently rebuilds with `CHANGE_ME`/empty values, so check the boot banner's
-`token=` field and the station warning.
+`--partition-table` makes `espflash` write the bootloader, the table and the app; it does not
+write `bridge_data`, so the record survives the next flash. If `espflash` reports every section
+`Skipped! (checksum matches)`, it does not reset the chip; run `espflash reset` or change the build
+before testing, or the 10-minute window will already be running.
 
-## Flash and monitor
-
-The repository's runner is `espflash flash --monitor --chip esp32c3 --log-format defmt`. The
-end-to-end sequence, with the exact boot lines and probe output to expect, is
-[Bench acceptance run](#bench-acceptance-run-ticket-05) (the network edge) and
-[Bench acceptance run (ticket 06)](#bench-acceptance-run-ticket-06) (Setup Mode). The command above flashes and attaches
-the monitor in one go; `Ctrl-C` ends the monitor and frees `/dev/ttyACM0`.
+The end-to-end sequences, with the exact boot lines and probe output to expect, are
+[Bench acceptance run](#bench-acceptance-run-ticket-05) (the network edge),
+[Bench acceptance run (ticket 06)](#bench-acceptance-run-ticket-06) (Setup Mode) and
+[Bench acceptance run (ticket 07)](#bench-acceptance-run-ticket-07) (the record and token).
+`Ctrl-C` ends the monitor and frees `/dev/ttyACM0`.
 
 The monitor resets the board, so the boot banner and the association lines appear after it
 attaches. It holds the serial port, so stop it before the next flash.
@@ -106,6 +123,10 @@ The console prints the boot banner, the association/scan lines, the station addr
 completes, and a status line every ten seconds.
 
 ## Bench acceptance run (ticket 05)
+
+> **Historical.** Ticket 07 removed the `BRIDGE_STA_SSID`/`BRIDGE_STA_PASSWORD`/
+> `BRIDGE_BENCH_TOKEN` build inputs. The commands below are the ticket-05 record; use the
+> [ticket-07 flow](#bench-acceptance-run-ticket-07) for the current image.
 
 This is the flow that passed on 2026-11-07: C3 at `192.168.0.138`, token `bench05`, the
 GPIO6↔GPIO7 jumper installed, and a WPA2 station. Replace the address with the one the Bridge
@@ -227,6 +248,10 @@ matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags
 
 ## Bench acceptance run (ticket 06)
 
+> **Historical.** Ticket 07 removed the build-time credentials this run used to boot provisioned.
+> The portal flow is unchanged; use the [ticket-07 flow](#bench-acceptance-run-ticket-07) for the
+> current flash command and the record's boot lines.
+
 This is the flow that passed on 2026-11-07. It deliberately builds **without** station
 credentials, so the Bridge boots unprovisioned and raises Setup Mode. The flashed image had no
 token either; Setup Mode does not use it.
@@ -322,6 +347,112 @@ beacon from=192.168.x.y device=… name='Explorer-…' major=1 tcp_port=9000 fla
   RAM (~31.3 KiB)**; the app partition reported 13.75% of 4 MB. The RAM is mostly the two HTTP
   workers' static request/response/TCP buffers.
 
+## Bench acceptance run (ticket 07)
+
+This is the record and token lifecycle. It needs no station credentials; the portal's successful
+provisioning step is the owner's, because the home SSID and passphrase are never written down.
+The Robot Stub's `BRIDGE_CONTROL` item additionally needs the USB-TTL adapter, which is not on the
+bench (see the note at the end).
+
+### Build, flash and boot
+
+```sh
+cd bridge-firmware
+touch src/bin/bridge.rs
+cargo build --release --bin bridge && \
+espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
+    --partition-table partitions.csv --partition-table-offset 0x8000 \
+    target/riscv32imc-unknown-none-elf/release/bridge
+```
+
+On a blank (or deliberately erased) `bridge_data` the first boot mints the token:
+
+```text
+[INFO ] record: partition bridge_data at 0x310000 (16384 bytes)
+[INFO ] record: none on the data partition
+[INFO ] record: stored (provisioned=false bytes=22)
+[INFO ] record: minted a pairing token into the data partition
+[INFO ] bridge identity: device_id=… name=Explorer-XXXX pairing_code=XXXX-XXXX-XXXX
+[INFO ] setup: window opened (unprovisioned)
+[INFO ] ap: setup ssid=ExplorerRobot-XXXX password=explorer-setup channel=1 max_clients=2 address=192.168.4.1/24
+```
+
+The token is twelve characters written as three groups of four. Those twelve characters' bytes
+are the HMAC key the daemon stores; there is no decoding step. The record is a 22-byte token-only
+record until credentials are submitted.
+
+### The persistence matrix
+
+```sh
+# 1. reset: the same token loads again
+espflash reset --chip esp32c3 --port /dev/ttyACM0
+# expect: record: loaded (provisioned=false pairing_code=XXXX-XXXX-XXXX)
+
+# 2. reflash the app and table: the record is outside them and survives
+espflash flash --chip esp32c3 --port /dev/ttyACM0 \
+    --partition-table partitions.csv --partition-table-offset 0x8000 \
+    target/riscv32imc-unknown-none-elf/release/bridge
+# expect the same pairing_code on the next boot
+
+# 3. lose the record: fail closed, mint a new token
+espflash erase-parts --chip esp32c3 --port /dev/ttyACM0 \
+    --partition-table partitions.csv --after no-reset bridge_data
+# next boot: record: none -> stored -> minted ..., with a new pairing_code
+```
+
+`espflash erase-flash` is the same case at whole-chip scope: the app is gone too, so reflash the
+table and app, and the blank `bridge_data` mints afresh. Moving `bridge_data` in `partitions.csv`
+has the same effect because the runtime finds it by label.
+
+### Provisioning through the portal (owner)
+
+Join `ExplorerRobot-XXXX` with `explorer-setup`, load `http://192.168.4.1/`, submit the home
+SSID/passphrase, and expect `record: stored (provisioned=true bytes=…)` before the join. After the
+30 s stable close, `espflash reset` boots **without** a setup window:
+
+```text
+[INFO ] record: loaded (provisioned=true pairing_code=XXXX-XXXX-XXXX)
+[INFO ] wifi: station mode
+[INFO ] sta: associated ssid=… channel=…
+```
+
+The Beacon then carries `tcp_port=9000 flags=0x01 (provisioned)`. A reset, a power cycle and a
+reflash all preserve the pair; `espflash erase-parts … bridge_data` returns to unprovisioned.
+
+### The Robot Stub's `BRIDGE_CONTROL` actions (blocked)
+
+With the USB-TTL adapter on UART1 (`/dev/ttyUSB0`), the panel path is:
+
+```sh
+cd remote
+cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona bridge-control --action 0
+cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona bridge-control --action 1
+cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona bridge-control --action 2
+```
+
+Expect, on the stub:
+
+```text
+robot-stub: BRIDGE_CONTROL action 0 seq 1 replied: Setup { status: Ok, ssid: "ExplorerRobot-XXXX", passphrase: "explorer-setup" }
+robot-stub: BRIDGE_CONTROL action 1 seq 1 replied: PairingCode { status: Ok, code: "XXXXXXXXXXXX" }
+robot-stub: BRIDGE_CONTROL action 2 seq 1 replied: PairingCode { status: Ok, code: "YYYYYYYYYYYY" }
+```
+
+On the Bridge: `pump: robot BRIDGE_CONTROL action=… seq=…`, then
+`panel: forgot the network; acknowledging with the setup identity` and `panel: forgot the network
+and raised Setup Mode` (action 0), `panel: showed the pairing code` (action 1) or `panel: rotated
+the pairing code` (action 2). Action 0 rotates the token, persists a token-only record and
+acknowledges with the setup credentials; the loop then raises the window. Action 2 persists the
+new token before acknowledging and, only on success, drops the live session (`tcp: panel action
+dropped connection …`). A `Status::Internal` reply means the write failed (or, for action 0, the
+window raise could not be queued): the change is RAM-only, and a failed action 2 leaves the old
+code and session live.
+
+**Blocked on the bench:** no 3.3 V USB-TTL adapter is present, so this last item is not observed
+on hardware yet. The wire contract is covered by `remote/robot-stub/tests/bridge_control.rs` and
+`remote-link`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
+remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueue).
+
 ## Running the Robot Stub against it
 
 The stub lives in the host `remote` workspace and opens the USB-TTL adapter at 921600 8N1:
@@ -337,6 +468,12 @@ For the worst-case load (every stream at the ADR-0033 10 Hz tick, events and con
 cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona worst-case
 ```
 
+For the panel's `BRIDGE_CONTROL` actions (one request at start-up, then the reply or timeout):
+
+```sh
+cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona bridge-control --action 0
+```
+
 The stub prints its peer state every five seconds. The Bridge's status line is the other half of
 the observation.
 
@@ -350,12 +487,12 @@ at once, so an unauthenticated connection is superseded and never blocks a new o
 
 The Bridge also broadcasts the Discovery Beacon every 3 s on the station interface, on UDP 9001:
 
-| flag | source in ticket 05 |
+| flag | source |
 |---|---|
-| `provisioned` | false; ticket 07 adds the credential record |
+| `provisioned` | a credential record with a usable station credential pair (ticket 07); a token-only record is not provisioned |
 | `link-ready` | a valid Link Protocol frame from the robot in the last 5 s (`beacon::LINK_READY_WINDOW_MS`) |
-| `setup_mode` | false; station-only until ticket 06 adds APSTA |
-| `tcp_port` | the Link listener's port (9000); portal-only zero belongs to ticket 06 |
+| `setup_mode` | the bounded window is open (ticket 06) |
+| `tcp_port` | the Link listener's port (9000); zero while Setup Mode advertises the portal only |
 
 The identity served in the challenge is the same one the Beacon advertises: the efuse station
 MAC as the device id, and `Explorer-XXXX` (the MAC's last two bytes) as the name.
@@ -370,11 +507,12 @@ python3 tools/beacon-watch.py --count 3
 ### The authentication matrix
 
 `tools/auth-probe.py` runs the bench matrix with a dependency-free `bridge-net` client
-(`tools/bridge_preamble.py`). Put the token on the command line, never in argv as a flag:
+(`tools/bridge_preamble.py`). Pass the token in the environment, never as a flag:
 
 ```sh
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/auth-probe.py 192.168.1.42
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/auth-probe.py 192.168.1.42 --mode busy
+# The boot banner prints XXXX-XXXX-XXXX; the key is those twelve characters without separators.
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/auth-probe.py 192.168.1.42
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/auth-probe.py 192.168.1.42 --mode busy
 ```
 
 Modes are `valid`, `wrong`, `silent`, `supersede`, `busy`, `ratelimit` and the default `matrix`.
@@ -394,22 +532,23 @@ challenge and the Beacon serve. There is no token flag on the daemon CLI (ADR-00
 `bridge-net` preamble, connects to the Bridge's listener, sends a valid `HELLO` (control id 1, with
 one enabled Requested Rate per stream) and decodes every robot frame it receives.
 
-The pairing token comes from `BRIDGE_BENCH_TOKEN` (its UTF-8 bytes are the HMAC key); set it
-inline on the command or export it. It is never a command-line flag, so it does not land in the
-process arguments.
+The pairing token is the twelve characters the Bridge prints at boot as `XXXX-XXXX-XXXX` (or the
+panel shows through `BRIDGE_CONTROL` action 1). Those twelve characters' bytes are the HMAC key,
+with the separators removed and no decoding step. Pass it in the environment; it is never a
+command-line flag, so it does not land in the process arguments.
 
 ```sh
 # One HELLO/HELLO_ACK round trip, then a five-second idle timeout.
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/link-probe.py 192.168.1.42
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42
 
 # A sixty-second observation of the baseline or worst-case persona.
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/link-probe.py 192.168.1.42 --duration 60 --quiet
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --duration 60 --quiet
 
 # Stop after one hundred decoded frames.
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/link-probe.py 192.168.1.42 --count 100 --quiet
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --count 100 --quiet
 
 # No robot: GPIO6 and GPIO7 jumpered together instead of wired to a USB-TTL adapter.
-BRIDGE_BENCH_TOKEN='bench05' python3 tools/link-probe.py 192.168.1.42 --loopback
+BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --loopback
 ```
 
 With the jumper, the Bridge forwards the probe's `HELLO` out of UART1 and the jumper returns it. The
@@ -521,7 +660,17 @@ cargo build --release
 cargo clippy -- -D warnings
 cargo +nightly fmt --all -- --check
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
+espflash partition-table partitions.csv
 ```
+
+`bridge-core` has 156 host tests: the pre-existing pump/window/DHCP/DNS/portal suites plus 7
+`pairing` tests (length, alphabet, bit mapping, grouping) and 12 `record` tests (round trips and
+every fail-closed case: magic, version, CRC, length, flags, token, credentials). `bridge-net`
+keeps its 18.
+
+`espflash partition-table` parses the CSV and prints the four partitions; the `factory` app has
+3 MiB, and the current image uses about 18.7% of it. The record adds roughly 21 KiB of flash over
+ticket 06.
 
 `cargo build --release` must link both `bridge` and `stack-soak` for
 `riscv32imc-unknown-none-elf`:
@@ -549,6 +698,12 @@ ruff check tools/bridge_preamble.py tools/link-probe.py tools/auth-probe.py tool
 - **The stub opens but the Bridge sees nothing.** Confirm the adapter is on `/dev/ttyUSB*`, not
   `/dev/ttyACM0`; confirm TX↔RX are crossed (GPIO6 to the adapter's RX, GPIO7 to its TX); confirm
   both ends are at 921600 8N1 and share ground.
+- **Record lines are absent or say `no data partition`.** The board was flashed without the custom
+  table. Flash again with `--partition-table partitions.csv --partition-table-offset 0x8000`; the
+  boot log must show `record: partition bridge_data at 0x310000`.
+- **A reflash re-provisioned the Bridge.** That is only possible after a partition erase or a table
+  change. A normal `espflash flash` writes the bootloader, table and app only; check that
+  `bridge_data` still points at `0x310000`.
 - **`dma_stalls` rises.** On a quiet bench line the ticket-04 "done-and-silent for 1 s" rule
 ticks once; if `uart_drop=0`, `crc=0` and `good` rises, nothing was lost. Under real robot load,
 suspect the Wi-Fi stack holding the DMA task longer than the descriptor ring can absorb. Check the

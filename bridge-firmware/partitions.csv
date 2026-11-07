@@ -1,0 +1,12 @@
+# The Bridge's ESP-IDF partition table (ticket 07, ADR-0036).
+#
+# Flash it as an explicit set: bootloader, this table and the app. `espflash flash` writes exactly
+# those three segments and leaves `bridge_data` alone, so credentials survive a firmware update.
+# `espflash erase-flash`, or moving `bridge_data` in this file, loses the record; the version and
+# CRC make that safe (the Bridge fails closed into Setup Mode).
+#
+# Name,Type,SubType,Offset,Size,Flags
+nvs,data,nvs,0x9000,0x6000,
+phy_init,data,phy,0xF000,0x1000,
+factory,app,factory,0x10000,0x300000,
+bridge_data,data,undefined,0x310000,0x4000,

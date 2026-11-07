@@ -37,6 +37,13 @@ bridge-net = { path = "../remote/bridge-net", version = "1" }
 bridge-core = { path = "bridge-core", version = "0.1.0" }
 
 esp-hal = { version = "~1.2.2", features = ["defmt", "esp32c3", "unstable"] }
+# The credential record's flash: `esp-storage`'s defaults keep the critical-section lock that
+# guards the flash while Wi-Fi interrupts can run. `embedded-storage` supplies the sync NorFlash
+# traits the partition adapter implements, and `sequential-storage` is the repo's record pattern.
+esp-storage            = { version = "0.10.0", features = ["defmt", "esp32c3"] }
+embedded-storage       = "0.3.1"
+embassy-embedded-hal   = "0.6.0"
+sequential-storage     = "7.1.0"
 
 esp-rtos = { version = "0.4.0", features = [
   "defmt",

@@ -10,7 +10,8 @@
 //! - the watermark to `THROTTLE` decisions ([`flow`]),
 //! - the single-client authentication gate ([`auth`]),
 //! - the bounded Setup Mode window ([`setup`]),
-//! - the portal's DHCP, DNS and HTTP/HTML codecs ([`dhcp`], [`dns`], [`portal`]).
+//! - the portal's DHCP, DNS and HTTP/HTML codecs ([`dhcp`], [`dns`], [`portal`]),
+//! - the credential record and the pairing token ([`record`], [`pairing`]).
 //!
 //! [`pump`] composes them into the frame-level decisions the binary wires to its HAL. Enable the
 //! `std` feature only for host tests; it is a no-op on `no_std` targets so `--all-features` stays
@@ -28,8 +29,10 @@ pub mod coalescing;
 pub mod dhcp;
 pub mod dns;
 pub mod flow;
+pub mod pairing;
 pub mod portal;
 pub mod pump;
+pub mod record;
 pub mod routing;
 pub mod setup;
 
@@ -37,6 +40,7 @@ pub use auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent};
 pub use coalescing::{Entry, EntryKind, PushError, PushOutcome, Ring};
 pub use flow::WatermarkPolicy;
 pub use pump::{BridgePump, Decision};
-pub use remote_protocol::{Class, Direction, Flags, Frame, Seq, Status};
+pub use record::{CredentialRecord, RecordError};
+pub use remote_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
 pub use routing::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
 pub use setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow};

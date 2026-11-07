@@ -2,7 +2,9 @@
 include = ["esp-config.toml"]
 
 [target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c3 --log-format defmt"
+# The same explicit flash set the README documents: bootloader, the custom table and the app. The
+# data partition is deliberately not written, so the credential record survives `cargo run`.
+runner = "espflash flash --monitor --chip esp32c3 --log-format defmt --partition-table partitions.csv --partition-table-offset 0x8000"
 
 [build]
 rustflags = [

@@ -87,6 +87,42 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// Builds a credential pair from raw slices, returning `None` outside the WPA2-PSK range.
+    ///
+    /// The portal's form parser, the firmware's parked station config and the credential record
+    /// all construct pairs through here, so the encoding of a length and its field cannot drift.
+    #[must_use]
+    pub fn from_slices(ssid: &[u8], passphrase: &[u8]) -> Option<Self> {
+        if ssid.is_empty() || ssid.len() > MAX_SSID_BYTES {
+            return None;
+        }
+        if !(MIN_PASSPHRASE_BYTES..=MAX_PASSPHRASE_BYTES).contains(&passphrase.len()) {
+            return None;
+        }
+        let mut credentials = Self {
+            ssid: [0u8; MAX_SSID_BYTES],
+            ssid_len: 0,
+            passphrase: [0u8; MAX_PASSPHRASE_BYTES],
+            passphrase_len: 0,
+        };
+        credentials.ssid[..ssid.len()].copy_from_slice(ssid);
+        credentials.ssid_len = u8::try_from(ssid.len()).ok()?;
+        credentials.passphrase[..passphrase.len()].copy_from_slice(passphrase);
+        credentials.passphrase_len = u8::try_from(passphrase.len()).ok()?;
+        Some(credentials)
+    }
+
+    /// Returns whether the raw stored lengths form a usable WPA2-PSK pair.
+    ///
+    /// The portal and the credential record share this rule, so the form and the stored layout
+    /// cannot disagree about what a valid pair is.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        let ssid_len = usize::from(self.ssid_len);
+        let pass_len = usize::from(self.passphrase_len);
+        (1..=MAX_SSID_BYTES).contains(&ssid_len) && (MIN_PASSPHRASE_BYTES..=MAX_PASSPHRASE_BYTES).contains(&pass_len)
+    }
+
     /// Borrows the `SSID` bytes.
     #[must_use]
     pub fn ssid(&self) -> &[u8] {

@@ -52,3 +52,11 @@ required-features = ["std"]
 [[test]]
 name = "portal"
 required-features = ["std"]
+
+[[test]]
+name = "pairing"
+required-features = ["std"]
+
+[[test]]
+name = "record"
+required-features = ["std"]

@@ -3,8 +3,9 @@
 The Bridge's HAL-agnostic rules, proven on the host without the C3. The crate is `no_std`,
 allocation-free and I/O-free: it owns no UART, socket, radio or clock. The firmware parses frames
 with `remote-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
-what is dropped and when to ask the robot to slow down. It also owns the Setup Mode protocol that
-needs no HAL: the bounded window and the DHCP, DNS and portal codecs.
+what is dropped and when to ask the robot to slow down. It also owns the Setup Mode protocol and
+the credential record's codec, which need no HAL: the bounded window, the DHCP, DNS and portal
+codecs, the versioned record and the pairing-code alphabet.
 
 This is the crate behind the spec's claim that "the risky forwarding rules are provable without
 the hardware". Its test suite runs on `x86_64-unknown-linux-gnu` behind the `std` feature, and the
@@ -45,6 +46,23 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
   (strongest RSSI per SSID), the status text, and the one-page HTML with inline CSS and the
   `fetch('/status')` poll. All writers take a caller buffer.
 
+## The credential record and the pairing token (ticket 07)
+
+- **`record`** — the versioned, CRC-checked credential record (ADR-0036): magic `BRID`,
+  version 1, flags, the station SSID and passphrase, the twelve-character pairing token and a
+  CRC-16/CCITT-FALSE (the Link Protocol's CRC). `CredentialRecord::encode_into`/`decode` are the
+  whole contract: a missing record, wrong magic, wrong version, bad CRC, bad flags, a credential
+  length outside the WPA2-PSK range or a token outside the alphabet is an error the firmware turns
+  into **unprovisioned** (fail closed into Setup Mode). A token-only record is valid and
+  unprovisioned.
+- **`pairing`** — the 60-bit pairing token as twelve unambiguous base32 characters (`0-9`, `A-Z`
+  without `I`, `L`, `O`, `U`). `encode` masks a caller word to 60 bits and writes twelve characters
+  most-significant chunk first; `write_grouped` renders `XXXX-XXXX-XXXX`. The characters' bytes are
+  the HMAC key, so there is no decode step.
+
+The firmware implements the `sequential-storage` `Value`/`Key` glue and the `esp-storage`
+partition adapter; neither appears here, so the codec stays host-testable.
+
 ## Public API map
 
 `BridgePump`:
@@ -56,7 +74,7 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
 | `authenticate(connection, proof, expected, now_ms) -> ProofOutcome` | present a proof |
 | `tick(now_ms) -> Option<TimerEvent>` | expire the authentication deadline or the refusal window |
 | `disconnect(connection) -> bool` | drop the current connection |
-| `is_authenticated()` / `authenticated_connection()` | observe the gate |
+| `is_authenticated()` / `authenticated_connection()` / `current_connection()` | observe the gate (the last includes an in-flight authentication) |
 | `on_robot_frame(&Frame) -> Decision` | route one UART-side frame |
 | `on_client_frame(&Frame) -> Decision` | route one client-side frame |
 | `poll_throttle(now_ms) -> Option<ThrottleHint>` | observe ring occupancy and return a hint |
