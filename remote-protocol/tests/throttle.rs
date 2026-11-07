@@ -243,6 +243,46 @@ fn a_zero_rate_is_a_pause_that_expires() {
     );
 }
 
+/// Every live hint is retained: a later looser hint cannot erase a stricter one on the same stream.
+#[test]
+fn several_live_hints_merge_to_the_most_restrictive() {
+    let mut throttle = Throttle::new();
+    assert!(throttle.apply(
+        &hint(ThrottleHint::ALL_STREAMS, ThrottleAction::SetRate, 500, 10_000),
+        0
+    ));
+    assert!(throttle.apply(&hint(Stream::Power.wire_id(), ThrottleAction::SetRate, 100, 10_000), 0));
+
+    // A second, looser hint on the same stream must not win over the live 100 centi-Hz one.
+    assert!(throttle.apply(
+        &hint(Stream::Power.wire_id(), ThrottleAction::SetRate, 1_000, 10_000),
+        10
+    ));
+    assert_eq!(
+        throttle.effective(Stream::Power, 10),
+        ThrottleState::Limited(100),
+        "the stricter live per-stream hint still wins"
+    );
+    assert_eq!(
+        throttle.effective(Stream::Motion, 10),
+        ThrottleState::Limited(500),
+        "the global hint still bounds a stream with no per-stream hint"
+    );
+
+    // A later stricter hint wins immediately.
+    assert!(throttle.apply(&hint(Stream::Power.wire_id(), ThrottleAction::SetRate, 50, 10_000), 20));
+    assert_eq!(throttle.effective(Stream::Power, 20), ThrottleState::Limited(50));
+
+    // A pause outranks every rate, and its expiry falls back to the live strictest rate.
+    assert!(throttle.apply(&hint(Stream::Power.wire_id(), ThrottleAction::Pause, 0, 100), 30));
+    assert_eq!(throttle.effective(Stream::Power, 30), ThrottleState::Paused);
+    assert_eq!(
+        throttle.effective(Stream::Power, 130),
+        ThrottleState::Limited(50),
+        "after the pause expires the strictest rate is still 50"
+    );
+}
+
 /// An unknown stream id is ignored and a zero TTL has no effect.
 #[test]
 fn unknown_ids_and_zero_ttls_are_ignored() {

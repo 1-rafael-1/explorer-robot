@@ -31,8 +31,8 @@ pub mod timing;
 use events::EventRing;
 pub use events::{EventAckNotice, Publish};
 use remote_protocol::{
-    Caps, Class, CodecError, Command, CommandMessage, Control, Direction, EncodeError, Event, EventMessage, Flags,
-    Frame, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
+    Caps, Class, CodecError, Command, CommandMessage, CommandVerdict, CommandWindow, Control, Direction, EncodeError,
+    Event, EventMessage, Flags, Frame, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
     codec::{PayloadCodec, StreamSample, decode_command},
     ids::Stream,
     parser::PcToRobotParser,
@@ -311,10 +311,8 @@ struct AutoAck {
 ///
 /// Grouped so `on_rx` can borrow the parser and this state as disjoint fields of [`LinkCore`].
 struct CommandState {
-    /// The session epoch; a reset restarts command dedupe. Zero until `HELLO` lands.
-    epoch: u32,
-    /// The last accepted command sequence; commands start at 1 because this starts at 0.
-    last_seq: u16,
+    /// The wrap-safe command sequence and epoch (ADR-0041).
+    window: CommandWindow,
     /// The last status the firmware returned.
     last_status: Status,
     /// The single accepted command payload.
@@ -335,8 +333,7 @@ impl CommandState {
     /// Creates an empty command state for epoch zero.
     const fn new() -> Self {
         Self {
-            epoch: 0,
-            last_seq: 0,
+            window: CommandWindow::new(),
             last_status: Status::Ok,
             inbound: InboundSlot::empty(),
             ready: false,
@@ -385,8 +382,7 @@ impl CommandState {
 
     /// Resets command dedupe for a new Session epoch.
     fn reset_epoch(&mut self, epoch: u32) {
-        self.epoch = epoch;
-        self.last_seq = 0;
+        self.window.reset_epoch(epoch);
         self.last_status = Status::Ok;
         self.inbound = InboundSlot::empty();
         self.ready = false;
@@ -398,28 +394,33 @@ impl CommandState {
 
     /// Applies the dedupe rules to a structurally valid command.
     fn accept(&mut self, command: Command, seq: u16, flags: Flags, payload: &[u8], ack_requested: bool) {
-        if seq == self.last_seq.wrapping_add(1) {
-            // Only one command may be in the slot, and the firmware answers a polled command
-            // before the next one is accepted. A conforming peer stops and waits anyway.
-            if self.ready || self.pending.is_some() {
-                return;
+        let epoch = self.window.epoch();
+        match self.window.classify(epoch, Seq::new(seq)) {
+            CommandVerdict::Accept => {
+                // Only one command may be in the slot, and the firmware answers a polled command
+                // before the next one is accepted. A conforming peer stops and waits anyway.
+                if self.ready || self.pending.is_some() {
+                    return;
+                }
+                let len = payload.len().min(COMMAND_PAYLOAD_BYTES);
+                self.inbound.command = command;
+                self.inbound.seq = seq;
+                self.inbound.flags = flags;
+                self.inbound.len = len;
+                self.inbound.bytes[..len].copy_from_slice(&payload[..len]);
+                self.ready = true;
+                self.window.advance(Seq::new(seq));
             }
-            let len = payload.len().min(COMMAND_PAYLOAD_BYTES);
-            self.inbound.command = command;
-            self.inbound.seq = seq;
-            self.inbound.flags = flags;
-            self.inbound.len = len;
-            self.inbound.bytes[..len].copy_from_slice(&payload[..len]);
-            self.ready = true;
-            self.last_seq = seq;
-        } else if seq == self.last_seq {
-            // A duplicate never executes again. Before `ack_command` there is no stored ACK yet;
-            // the outstanding ACK answers the retry when it arrives.
-            if self.stored.valid && self.stored.seq == seq && ack_requested {
-                self.stored_pending = true;
+            CommandVerdict::Duplicate => {
+                // A duplicate never executes again. Before `ack_command` there is no stored ACK
+                // yet; the outstanding ACK answers the retry when it arrives.
+                if self.stored.valid && self.stored.seq == seq && ack_requested {
+                    self.stored_pending = true;
+                }
             }
-        } else {
-            self.auto_ack(command.wire_id(), seq, Status::Stale, ack_requested);
+            CommandVerdict::Stale => {
+                self.auto_ack(command.wire_id(), seq, Status::Stale, ack_requested);
+            }
         }
     }
 
@@ -536,14 +537,15 @@ impl PeerTracker {
     }
 
     /// Records one valid PC-to-robot frame and attaches on the first frame of the period.
+    ///
+    /// Every valid frame re-arms the Deadman. A reconnect inside the 5 s lease keeps the peer
+    /// `PeerLive`, so the latch cannot rely on a `NoPeer → PeerLive` transition: each new silence
+    /// period after a frame must be able to raise one `peer_lost` edge.
     const fn on_frame(&mut self, now_ms: u64) {
         self.last_frame_ms = Some(now_ms);
-        match self.state {
-            PeerState::NoPeer => {
-                self.state = PeerState::PeerLive;
-                self.deadman_fired = false;
-            }
-            PeerState::PeerLive => {}
+        self.deadman_fired = false;
+        if matches!(self.state, PeerState::NoPeer) {
+            self.state = PeerState::PeerLive;
         }
     }
 
@@ -986,7 +988,9 @@ impl LinkCore {
     #[must_use]
     pub fn new(config: Config, boot_id: u32, now_ms: u64) -> Self {
         let mut parser = PcToRobotParser::new(Direction::PcToRobot, timing::BAUD);
-        parser.set_timeout_ms(config.frame_timeout_ms);
+        if let Some(timeout_ms) = config.frame_timeout_ms {
+            parser.set_timeout_ms(timeout_ms);
+        }
         Self {
             config,
             boot_id,
@@ -1025,7 +1029,7 @@ impl LinkCore {
     /// Returns the current command-dedupe epoch. Zero until a `HELLO` establishes one.
     #[must_use]
     pub const fn epoch(&self) -> u32 {
-        self.commands.epoch
+        self.commands.window.epoch()
     }
 
     /// Returns the capabilities both peers supported in the most recent `HELLO`.
@@ -1065,7 +1069,7 @@ impl LinkCore {
     /// Returns the last accepted command sequence.
     #[must_use]
     pub const fn last_seq(&self) -> u16 {
-        self.commands.last_seq
+        self.commands.window.last_seq()
     }
 
     /// Returns the last status the firmware returned for a command.
@@ -1353,7 +1357,7 @@ impl LinkCore {
         if rate == 0 {
             return false;
         }
-        let min_spacing_ms = 10_000u64.div_ceil(u64::from(rate));
+        let min_spacing_ms = 100_000u64.div_ceil(u64::from(rate));
         let schedule = &self.schedule[index];
         let Some(last_emit_ms) = schedule.last_emit_ms else {
             return true;
@@ -1454,6 +1458,15 @@ impl LinkCore {
         let config: &Config = config;
         let mut unknown = 0u32;
         parser.feed(bytes, now, |frame| {
+            // ADR-0030: `FRAGMENT` is reserved and v1 rejects it for every class. A command is
+            // still processed far enough to auto-ACK `BAD_FLAGS`; every other class is ignored.
+            if frame.header.flags.contains(Flags::FRAGMENT) {
+                if frame.header.class == Class::Command {
+                    peers.on_frame(now_ms);
+                    commands.on_frame(frame, session.mismatch);
+                }
+                return;
+            }
             // Any valid PC-to-robot frame renews the lease and re-attaches the peer before the
             // next tick is evaluated.
             peers.on_frame(now_ms);

@@ -433,6 +433,73 @@ fn a_reconnect_before_the_tick_does_not_fire() {
     assert!(core.take_peer_lost(), "2000 ms after the reconnect");
 }
 
+/// A reconnect inside the lease re-arms the Deadman, so a second silence raises a second edge.
+#[test]
+fn a_reconnect_inside_the_lease_rearms_the_deadman() {
+    let (mut core, mut wire, mut remote) = harness();
+    let Some(_) = remote.send_ping(&mut wire) else {
+        return;
+    };
+    feed_at(&mut core, &mut wire, 0);
+    assert_eq!(core.peer(), PeerState::PeerLive);
+
+    core.tick(2_000);
+    assert!(core.take_peer_lost(), "the first silence fires");
+    assert!(!core.take_peer_lost(), "the edge is one-shot within a silence");
+
+    // Reconnect at 3 s, still inside the 5 s lease: the peer never leaves PeerLive.
+    let Some(_) = remote.send_ping(&mut wire) else {
+        return;
+    };
+    feed_at(&mut core, &mut wire, 3_000);
+    assert_eq!(core.peer(), PeerState::PeerLive, "the lease never expired");
+
+    core.tick(4_999);
+    assert!(!core.take_peer_lost(), "1999 ms after the reconnect");
+    core.tick(5_000);
+    assert!(
+        core.take_peer_lost(),
+        "a second silence after the reconnect fires again"
+    );
+    assert_eq!(core.peer(), PeerState::PeerLive, "the lease is still live");
+}
+
+/// Encodes a fragment-flagged frame for the inbound gate tests.
+fn fragment_frame(class: Class, id: u16, seq: u16, payload: &[u8]) -> Option<Vec<u8>> {
+    let frame = Frame::new(PROTOCOL_MAJOR, class, Flags::FRAGMENT, id, Seq::new(seq), payload).ok()?;
+    let mut buffer = [0u8; MAX_PC_TO_ROBOT_FRAME];
+    let written = frame.encode_into(&mut buffer).ok()?;
+    Some(buffer[..written].to_vec())
+}
+
+/// A `FRAGMENT` control frame is ignored: no reply, no attach and no handshake side effect.
+#[test]
+fn fragment_flagged_control_frames_are_ignored() {
+    let (mut core, mut wire, _remote) = harness();
+    let Some(ping) = fragment_frame(Class::Control, Control::Ping.wire_id(), 5, &[]) else {
+        return;
+    };
+    wire.send(Direction::PcToRobot, &ping);
+    feed_at(&mut core, &mut wire, 0);
+    assert_eq!(
+        core.peer(),
+        PeerState::NoPeer,
+        "a fragment frame does not attach the peer"
+    );
+    assert!(emit_to(&mut core, &mut wire).is_none(), "a fragment PING gets no reply");
+
+    let Some(hello) = fragment_frame(Class::Control, Control::Hello.wire_id(), 6, &[]) else {
+        return;
+    };
+    wire.send(Direction::PcToRobot, &hello);
+    feed_at(&mut core, &mut wire, 1);
+    assert_eq!(core.epoch(), 0, "a fragment HELLO is not applied");
+    assert!(
+        emit_to(&mut core, &mut wire).is_none(),
+        "a fragment HELLO gets no acknowledgement"
+    );
+}
+
 /// The Boot Id survives a Bridge reset and changes only when a new link period is constructed.
 #[test]
 fn the_boot_id_survives_a_bridge_reset_and_changes_only_on_construction() {

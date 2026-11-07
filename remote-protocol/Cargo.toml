@@ -54,5 +54,9 @@ required-features = ["std"]
 name = "throttle"
 required-features = ["std"]
 
+[[test]]
+name = "sequence"
+required-features = ["std"]
+
 [lints]
 workspace = true

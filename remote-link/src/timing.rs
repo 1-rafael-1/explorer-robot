@@ -5,8 +5,11 @@
 //! 500 ms doubling to a 2 s cap with five attempts, an 8-entry event ring, `THROTTLE` repetition
 //! every 500 ms, a 2 s `BRIDGE_CONTROL` timeout and a 50 ms frame timeout.
 //!
-//! [`Config`] carries those defaults so a host test can compress time; the firmware passes a
-//! `Config` into [`crate::LinkCore::new`] rather than editing these constants.
+//! [`Config`] carries only the values `LinkCore` reads, so a host test can compress time; the
+//! firmware passes a `Config` into [`crate::LinkCore::new`] rather than editing these constants.
+//! [`PING_INTERVAL_MS`], [`HELLO_INTERVAL_MS`], [`HELLO_ATTEMPTS`], the `COMMAND_*` retry figures
+//! and [`THROTTLE_REPEAT_MS`] are the daemon-side contract the spec names; `LinkCore` does not
+//! implement them and therefore does not carry them in [`Config`].
 
 use remote_protocol::{Caps, ids::Stream};
 
@@ -64,7 +67,11 @@ pub const THROTTLE_REPEAT_MS: u64 = 500;
 /// The time to wait for a `BRIDGE_CONTROL` acknowledgement before reporting a timeout.
 pub const CONTROL_TIMEOUT_MS: u64 = 2_000;
 
-/// The frame assembly timeout.
+/// ADR-0033's frame assembly timeout at [`BAUD`].
+///
+/// The parser derives the effective value from the baud and the direction's largest frame, with a
+/// 50 ms floor; this constant documents that contract rather than configuring [`Config`]. A host
+/// test may still override it through [`Config::frame_timeout_ms`].
 pub const FRAME_TIMEOUT_MS: u32 = 50;
 
 /// The robot's baseline cadence per stream, in centi-Hz, indexed by [`Stream::index`].
@@ -106,20 +113,6 @@ pub struct Config {
     pub lease_ms: u64,
     /// The peer silence after which the one-shot `peer_lost` edge fires.
     pub deadman_ms: u64,
-    /// The `PING` interval while a Session is open.
-    pub ping_interval_ms: u64,
-    /// The `HELLO` retry interval.
-    pub hello_interval_ms: u64,
-    /// The number of `HELLO` attempts.
-    pub hello_attempts: u8,
-    /// The first command retry delay.
-    pub command_retry_ms: u64,
-    /// The command retry backoff factor.
-    pub command_retry_factor: u32,
-    /// The command retry delay cap.
-    pub command_retry_cap_ms: u64,
-    /// The number of command attempts.
-    pub command_attempts: u8,
     /// The first event retry delay.
     pub event_retry_ms: u64,
     /// The event retry backoff factor.
@@ -133,12 +126,14 @@ pub struct Config {
     /// The ring's backing array is [`EVENT_RING`] entries; a host test may set this lower to shrink
     /// the usable capacity, but it can never exceed the compile-time bound.
     pub event_ring: usize,
-    /// The interval at which an active `THROTTLE` hint is repeated.
-    pub throttle_repeat_ms: u64,
     /// The time to wait for a `BRIDGE_CONTROL` acknowledgement before reporting a timeout.
     pub control_timeout_ms: u64,
-    /// The frame assembly timeout.
-    pub frame_timeout_ms: u32,
+    /// An optional frame-assembly timeout override for host tests.
+    ///
+    /// [`None`] (the default) lets the parser derive four times the largest frame's wire time
+    /// from [`BAUD`], with ADR-0033's 50 ms floor. Set `Some` only to compress time in a test;
+    /// the robot never overrides the baud-derived value.
+    pub frame_timeout_ms: Option<u32>,
     /// The capabilities the robot advertises and intersects with a peer's `HELLO`.
     pub robot_caps: Caps,
     /// The baseline cadence per stream, in centi-Hz, indexed by [`Stream::index`].
@@ -158,21 +153,13 @@ impl Config {
     pub const DEFAULT: Self = Self {
         lease_ms: LEASE_MS,
         deadman_ms: DEADMAN_MS,
-        ping_interval_ms: PING_INTERVAL_MS,
-        hello_interval_ms: HELLO_INTERVAL_MS,
-        hello_attempts: HELLO_ATTEMPTS,
-        command_retry_ms: COMMAND_RETRY_MS,
-        command_retry_factor: COMMAND_RETRY_FACTOR,
-        command_retry_cap_ms: COMMAND_RETRY_CAP_MS,
-        command_attempts: COMMAND_ATTEMPTS,
         event_retry_ms: EVENT_RETRY_MS,
         event_retry_factor: EVENT_RETRY_FACTOR,
         event_retry_cap_ms: EVENT_RETRY_CAP_MS,
         event_attempts: EVENT_ATTEMPTS,
         event_ring: EVENT_RING,
-        throttle_repeat_ms: THROTTLE_REPEAT_MS,
         control_timeout_ms: CONTROL_TIMEOUT_MS,
-        frame_timeout_ms: FRAME_TIMEOUT_MS,
+        frame_timeout_ms: None,
         robot_caps: Caps::from_bits(0),
         default_rates_chz: DEFAULT_RATES_CHZ,
         heartbeat_ms: DEFAULT_HEARTBEAT_MS,

@@ -390,7 +390,7 @@ fn throttle_ttl_expiry_and_most_restrictive_wins() {
         "the 20 centi-Hz per-stream hint wins over the 50 centi-Hz global hint"
     );
 
-    core.tick(250);
+    core.tick(2_000);
     assert!(
         emit(&mut core).is_some(),
         "when the per-stream hint expires, the 50 centi-Hz global hint still allows the change"

@@ -48,7 +48,9 @@ pub use payload::{
         ProcedureCompleted, RotateCompleted,
     },
 };
-pub use reliability::{AckOutcome, AckTracker, ReplayWindow, RetryPolicy, Throttle, ThrottleState};
+pub use reliability::{
+    AckOutcome, AckTracker, CommandVerdict, CommandWindow, ReplayWindow, RetryPolicy, Throttle, ThrottleState,
+};
 #[cfg(feature = "std")]
 pub use sim::{FakeRemote, Faults, Wire};
 

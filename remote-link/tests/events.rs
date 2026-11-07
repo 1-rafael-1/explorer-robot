@@ -156,6 +156,36 @@ fn a_published_event_is_sequenced_transmitted_and_retired_by_an_ack() {
     assert!(emit(&mut core).is_none(), "a retired event never retries");
 }
 
+/// A `FRAGMENT` event ACK is ignored: the reserved flag means the frame is never acted on.
+#[test]
+fn a_fragment_flagged_event_ack_is_ignored() {
+    let (mut core, mut wire, mut remote) = harness_with(long_lease());
+    attach(&mut core, &mut wire, &mut remote, 0);
+    assert!(emit(&mut core).is_some(), "the HELLO_ACK is queued");
+    assert_eq!(core.publish_event(&obstacle(1), 0), Publish::Queued(Seq::new(0)));
+
+    let payload = [Status::Ok.bits()];
+    let frame = Frame::new(
+        PROTOCOL_MAJOR,
+        Class::Event,
+        Flags::IS_ACK | Flags::FRAGMENT,
+        Event::Obstacle.wire_id(),
+        Seq::new(0),
+        &payload,
+    );
+    let Ok(frame) = frame else {
+        return;
+    };
+    let mut buffer = [0u8; MAX_ROBOT_TO_PC_FRAME];
+    let Ok(written) = frame.encode_into(&mut buffer) else {
+        return;
+    };
+    core.on_rx(&buffer[..written], 10);
+
+    assert_eq!(core.pending_events(), 1, "a fragment ACK must not retire the event");
+    assert!(core.poll().is_none(), "no ACK notice is queued");
+}
+
 /// The retry schedule is exactly 500 ms doubling to a 2 s cap, and exhaustion keeps the entry.
 #[test]
 fn event_retry_schedule_is_exact_and_exhaustion_keeps_the_event() {

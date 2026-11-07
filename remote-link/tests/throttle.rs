@@ -2,7 +2,8 @@
 //!
 //! The tests drive time explicitly: `publish_stream`, `on_rx` and `tick` set the core's notion of
 //! `now`, and `next_frame` only emits a stream whose sample is due. The baseline in these tests is
-//! 100 centi-Hz (a 100 ms minimum spacing) with a 1 s heartbeat, so a 500 ms throttle is visible.
+//! 100 centi-Hz (a 1 s minimum spacing) with a 1 s heartbeat, so a 20 centi-Hz throttle (5 s) is
+//! clearly visible.
 
 use remote_link::{Config, LinkCore};
 use remote_protocol::{
@@ -141,15 +142,12 @@ fn set_rate_applies_per_stream_and_for_all() {
 
     publish_power(&mut core, 2, 100);
     core.tick(100);
-    assert!(
-        emit_stream(&mut core).is_none(),
-        "POWER now waits 500 ms at 20 centi-Hz"
-    );
-    core.tick(500);
+    assert!(emit_stream(&mut core).is_none(), "POWER now waits 5 s at 20 centi-Hz");
+    core.tick(5_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
-        "POWER is due 500 ms after its previous send"
+        "POWER is due 5 s after its previous send"
     );
 
     let (mut core, mut wire, mut remote) = harness();
@@ -173,7 +171,7 @@ fn set_rate_applies_per_stream_and_for_all() {
     publish_motion(&mut core, 2, 2, 100);
     core.tick(100);
     assert!(emit_stream(&mut core).is_none(), "0xFFFF throttles both streams");
-    core.tick(500);
+    core.tick(5_000);
     assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
     assert_eq!(emit_stream(&mut core), Some(StreamId::Motion));
 }
@@ -248,14 +246,14 @@ fn the_most_restrictive_of_requested_rate_and_hints_wins() {
     publish_power(&mut core, 1, 0);
     assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
 
-    // 50 centi-Hz is 200 ms, so the hint wins over the 200 centi-Hz Requested Rate.
+    // 50 centi-Hz is 2 s, so the hint wins over the 200 centi-Hz Requested Rate (500 ms).
     publish_power(&mut core, 2, 100);
     core.tick(100);
     assert!(emit_stream(&mut core).is_none(), "the lower hint rate gates emission");
-    core.tick(200);
+    core.tick(2_000);
     assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
 
-    // A hint above the Requested Rate must not raise the cadence.
+    // A later, looser hint must not erase the still-live 50 centi-Hz hint.
     let Some(_) = remote.send_throttle(
         &mut wire,
         StreamId::Power.wire_id(),
@@ -265,18 +263,47 @@ fn the_most_restrictive_of_requested_rate_and_hints_wins() {
     ) else {
         return;
     };
-    feed_at(&mut core, &mut wire, 200);
-    publish_power(&mut core, 3, 200);
-    core.tick(220);
+    feed_at(&mut core, &mut wire, 2_000);
+    publish_power(&mut core, 3, 2_000);
+    core.tick(2_500);
+    assert!(
+        emit_stream(&mut core).is_none(),
+        "the live 50 centi-Hz hint still wins over the later 5,000 centi-Hz hint"
+    );
+    core.tick(4_000);
+    assert_eq!(
+        emit_stream(&mut core),
+        Some(StreamId::Power),
+        "the change is due at the 50 centi-Hz (2 s) boundary"
+    );
+
+    // A hint above the Requested Rate must not raise the cadence.
+    let (mut core, mut wire, mut remote) = harness();
+    let rates = [RateEntry::enabled(StreamId::Power.wire_id(), 200)];
+    establish_hello(&mut core, &mut wire, &mut remote, &rates);
+    let Some(_) = remote.send_throttle(
+        &mut wire,
+        StreamId::Power.wire_id(),
+        ThrottleAction::SetRate,
+        5_000,
+        10_000,
+    ) else {
+        return;
+    };
+    feed_at(&mut core, &mut wire, 0);
+    publish_power(&mut core, 1, 0);
+    assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
+    publish_power(&mut core, 2, 100);
+    core.tick(100);
     assert!(
         emit_stream(&mut core).is_none(),
         "the 200 centi-Hz Requested Rate is still the ceiling"
     );
-    core.tick(250);
+    core.tick(500);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
-        "200 centi-Hz means a 50 ms spacing"
+        "200 centi-Hz means a 500 ms spacing"
     );
 }
 
@@ -296,9 +323,14 @@ fn ttl_expiry_reverts_to_the_requested_rate() {
 
     publish_power(&mut core, 2, 50);
     core.tick(50);
-    assert!(emit_stream(&mut core).is_none(), "the 500 ms hint gates the change");
+    assert!(emit_stream(&mut core).is_none(), "the 5 s hint gates the change");
 
-    core.tick(250);
+    core.tick(499);
+    assert!(
+        emit_stream(&mut core).is_none(),
+        "the 200 centi-Hz rate is a 500 ms spacing"
+    );
+    core.tick(500);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
@@ -320,9 +352,14 @@ fn ttl_expiry_reverts_to_the_configured_baseline() {
 
     publish_power(&mut core, 2, 50);
     core.tick(50);
-    assert!(emit_stream(&mut core).is_none(), "the 500 ms hint gates the change");
+    assert!(emit_stream(&mut core).is_none(), "the 5 s hint gates the change");
 
-    core.tick(250);
+    core.tick(999);
+    assert!(
+        emit_stream(&mut core).is_none(),
+        "the 100 centi-Hz baseline is a 1 s spacing"
+    );
+    core.tick(1_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
@@ -344,6 +381,11 @@ fn unknown_streams_and_malformed_payloads_are_ignored() {
     assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
     publish_power(&mut core, 2, 100);
     core.tick(100);
+    assert!(
+        emit_stream(&mut core).is_none(),
+        "the 1 s baseline spacing still applies"
+    );
+    core.tick(1_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
@@ -351,17 +393,19 @@ fn unknown_streams_and_malformed_payloads_are_ignored() {
     );
 
     assert!(send_raw_control(&mut wire, 50, &[0u8; 6]), "short payload");
-    feed_at(&mut core, &mut wire, 200);
+    feed_at(&mut core, &mut wire, 1_100);
     assert_eq!(core.invalid_throttles(), 1, "a length error is counted");
 
     let mut bad_action = [0u8; 7];
     bad_action[2] = 9;
     assert!(send_raw_control(&mut wire, 51, &bad_action), "unknown action");
-    feed_at(&mut core, &mut wire, 200);
+    feed_at(&mut core, &mut wire, 1_200);
     assert_eq!(core.invalid_throttles(), 2, "an action error is counted");
 
-    publish_power(&mut core, 3, 200);
-    core.tick(200);
+    publish_power(&mut core, 3, 1_200);
+    core.tick(1_999);
+    assert!(emit_stream(&mut core).is_none(), "the change waits for the 1 s spacing");
+    core.tick(2_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
@@ -441,18 +485,25 @@ fn changed_samples_respect_the_rate_and_unchanged_samples_wait_for_the_heartbeat
 
     publish_power(&mut core, 2, 1_100);
     core.tick(1_100);
+    assert!(
+        emit_stream(&mut core).is_none(),
+        "the 1 s spacing has not elapsed since the heartbeat"
+    );
+    core.tick(1_999);
+    assert!(emit_stream(&mut core).is_none());
+    core.tick(2_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),
-        "a changed sample is sent once the 100 ms spacing elapsed"
+        "a changed sample is sent at the 1 s rate boundary"
     );
 
-    publish_power(&mut core, 3, 1_150);
-    core.tick(1_150);
-    assert!(emit_stream(&mut core).is_none(), "50 ms is below the 100 ms spacing");
-    core.tick(1_199);
+    publish_power(&mut core, 3, 2_050);
+    core.tick(2_050);
+    assert!(emit_stream(&mut core).is_none(), "50 ms is below the 1 s spacing");
+    core.tick(2_999);
     assert!(emit_stream(&mut core).is_none());
-    core.tick(1_200);
+    core.tick(3_000);
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),

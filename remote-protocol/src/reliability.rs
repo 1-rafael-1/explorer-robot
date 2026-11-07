@@ -30,6 +30,11 @@
 //! [`Throttle`] is the flow-control mechanism: it merges advisory rate and pause hints from the
 //! Bridge or the daemon, keeps the most restrictive result per stream, and expires each hint
 //! against injected time. It is also bounded and allocation-free.
+//!
+//! [`CommandWindow`] is the command-sequence mechanism: it classifies an inbound `(epoch, seq)` as
+//! an accepted `last + 1`, a duplicate of `last`, or stale, using wrap-safe arithmetic. A new epoch
+//! starts a clean sequence. The robot and the daemon both compose it instead of hand-rolling the
+//! comparison.
 
 use crate::{
     frame::Seq,
@@ -359,6 +364,92 @@ impl AckTracker {
     }
 }
 
+/// The verdict for one inbound command sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandVerdict {
+    /// The sequence is exactly `last + 1` and may execute after the caller commits it.
+    Accept,
+    /// The sequence equals `last`; re-send the stored status without executing again.
+    Duplicate,
+    /// The sequence is neither `last + 1` nor `last`; answer `STALE`.
+    Stale,
+}
+
+/// The wrap-safe command sequence and epoch state (ADR-0041).
+///
+/// Command sequences start at 1, so the initial `last_seq` is 0. A command with sequence `last + 1`
+/// is accepted, one with `last` is a duplicate, and anything else is stale. Sequence arithmetic
+/// wraps at `u16::MAX` to `0`. A new Session epoch resets the sequence to 0; command frames carry
+/// no epoch, so the caller passes the epoch the Session established.
+///
+/// Classification and commitment are separate: `classify` never advances `last_seq`, because a
+/// command accepted by the sequence rule may still be dropped while the single inbound slot is
+/// busy. The caller calls [`CommandWindow::advance`] only when it actually takes the command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandWindow {
+    /// The Session epoch the sequence belongs to.
+    epoch: u32,
+    /// The last accepted command sequence; zero before any command.
+    last_seq: u16,
+}
+
+impl CommandWindow {
+    /// Creates a window for epoch zero with no accepted command.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { epoch: 0, last_seq: 0 }
+    }
+
+    /// Returns the Session epoch the window currently belongs to.
+    #[must_use]
+    pub const fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    /// Returns the last accepted command sequence, or zero before any command.
+    #[must_use]
+    pub const fn last_seq(&self) -> u16 {
+        self.last_seq
+    }
+
+    /// Resets the sequence to zero for `epoch`.
+    pub const fn reset_epoch(&mut self, epoch: u32) {
+        self.epoch = epoch;
+        self.last_seq = 0;
+    }
+
+    /// Resets the sequence when `epoch` differs from the window's epoch.
+    ///
+    /// Returns `true` when a reset happened. Observing the current epoch is a no-op.
+    pub const fn observe_epoch(&mut self, epoch: u32) -> bool {
+        if epoch == self.epoch {
+            return false;
+        }
+        self.reset_epoch(epoch);
+        true
+    }
+
+    /// Classifies `seq` in `epoch`, resetting the sequence first when the epoch is new.
+    ///
+    /// This never advances `last_seq`; call [`CommandWindow::advance`] after acting on
+    /// [`CommandVerdict::Accept`].
+    pub const fn classify(&mut self, epoch: u32, seq: Seq) -> CommandVerdict {
+        self.observe_epoch(epoch);
+        if seq.get() == self.last_seq.wrapping_add(1) {
+            CommandVerdict::Accept
+        } else if seq.get() == self.last_seq {
+            CommandVerdict::Duplicate
+        } else {
+            CommandVerdict::Stale
+        }
+    }
+
+    /// Records `seq` as the last accepted command.
+    pub const fn advance(&mut self, seq: Seq) {
+        self.last_seq = seq.get();
+    }
+}
+
 /// A bounded replay window that deduplicates events keyed by `(boot_id, seq)`.
 ///
 /// Events are at-least-once: the robot retransmits until the peer ACKs, so the peer sees the same
@@ -479,71 +570,88 @@ pub enum ThrottleState {
     Paused,
 }
 
-/// The merged rate and pause state for one scope: the global `0xFFFF` scope or one stream.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ThrottleSlot {
-    /// The active maximum rate in centi-Hz, if any.
-    rate_chz: Option<u16>,
-    /// The time at which the rate hint expires.
-    rate_expires_ms: u64,
-    /// Whether a pause hint is active.
-    paused: bool,
-    /// The time at which the pause hint expires.
-    pause_expires_ms: u64,
+/// The number of live `THROTTLE` hints the mechanism can retain.
+const ACTIVE_HINTS: usize = 8;
+
+/// The scope a hint addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    /// The global `0xFFFF` scope.
+    Global,
+    /// One implemented stream.
+    Stream(Stream),
 }
 
-impl ThrottleSlot {
-    /// Returns the rate hint if it has not expired at `now_ms`.
-    const fn rate(&self, now_ms: u64) -> Option<u16> {
-        match self.rate_chz {
-            Some(rate) if !reached(now_ms, self.rate_expires_ms) => Some(rate),
-            _ => None,
+impl Scope {
+    /// Resolves a wire stream id to a scope, or [`None`] for an unknown id.
+    fn from_wire(stream_id: u16) -> Option<Self> {
+        if stream_id == ThrottleHint::ALL_STREAMS {
+            Some(Self::Global)
+        } else {
+            Stream::from_wire(stream_id).map(Self::Stream)
         }
     }
 
-    /// Returns `true` when a pause hint has not expired at `now_ms`.
-    const fn is_paused(&self, now_ms: u64) -> bool {
-        self.paused && !reached(now_ms, self.pause_expires_ms)
-    }
-
-    /// Forgets every hint that has expired at `now_ms`.
-    const fn expire(&mut self, now_ms: u64) {
-        if self.rate_chz.is_some() && reached(now_ms, self.rate_expires_ms) {
-            self.rate_chz = None;
-        }
-        if self.paused && reached(now_ms, self.pause_expires_ms) {
-            self.paused = false;
-            self.pause_expires_ms = 0;
+    /// Returns `true` when the hint applies to `stream`.
+    fn applies_to(self, stream: Stream) -> bool {
+        match self {
+            Self::Global => true,
+            Self::Stream(scoped) => scoped == stream,
         }
     }
+}
 
-    /// Clears a pause without touching the rate hint.
-    const fn resume(&mut self) {
-        self.paused = false;
-        self.pause_expires_ms = 0;
+/// One active `THROTTLE` hint and its expiration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveHint {
+    /// The scope the hint addresses.
+    scope: Scope,
+    /// Whether the hint is a pause rather than a rate cap.
+    paused: bool,
+    /// The maximum rate in centi-Hz for a rate hint; zero for a pause.
+    rate_chz: u16,
+    /// The time at which the hint expires.
+    expires_ms: u64,
+}
+
+impl ActiveHint {
+    /// Returns `true` when the hint has expired at `now_ms`.
+    const fn is_expired(&self, now_ms: u64) -> bool {
+        reached(now_ms, self.expires_ms)
+    }
+
+    /// Returns `true` when both hints have the same scope and kind, so a repeat can refresh it.
+    fn same_as(&self, other: &Self) -> bool {
+        match (self.paused, other.paused) {
+            (true, true) => self.scope == other.scope,
+            (false, false) => self.scope == other.scope && self.rate_chz == other.rate_chz,
+            _ => false,
+        }
     }
 }
 
 /// The merged `THROTTLE` state for every stream (ADR-0030, ADR-0041).
 ///
-/// The mechanism holds one slot for the global `0xFFFF` scope and one for each implemented
-/// stream. It merges the active hints by taking the most restrictive result: a pause beats any
-/// rate, and a rate is a maximum, so the lowest active rate wins. Each hint carries a TTL that is
-/// checked against the injected `now_ms`; an expired hint is ignored immediately and is forgotten
-/// by [`Throttle::tick`]. It has no clock, I/O or allocation.
+/// The mechanism holds a bounded, fixed-size set of active hints. Each hint is one advisory
+/// `SET_RATE` or `PAUSE` from the Bridge or the daemon, with its own TTL. The effective state is
+/// the most restrictive of every live hint that applies to the stream: a pause beats any rate,
+/// and otherwise the lowest rate wins. Keeping the hints separate is what makes a later, looser
+/// `SET_RATE` unable to erase a stricter hint that is still live.
+///
+/// TTLs are checked against the injected `now_ms`; an expired hint is ignored immediately and is
+/// forgotten by [`Throttle::tick`]. A repeat of an identical hint refreshes its TTL instead of
+/// consuming another slot. It has no clock, I/O or allocation.
 ///
 /// A `SET_RATE` of zero cannot mean "emit at zero"; it is stored as a pause, the most restrictive
-/// state the protocol can express. A `RESUME` for `0xFFFF` clears the global pause and every
-/// stream pause; a `RESUME` for one stream clears only that stream's pause, so a global pause
-/// still wins.
+/// state the protocol can express. A `RESUME` for `0xFFFF` clears every pause; a `RESUME` for one
+/// stream clears only that stream's pause, so a global pause still wins. A `RESUME` never clears a
+/// rate hint.
 ///
 /// A TTL of zero expires immediately, so it has no effect.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Throttle {
-    /// The hint state addressed by `0xFFFF`.
-    global: ThrottleSlot,
-    /// The per-stream hint state, indexed by [`Stream::index`].
-    streams: [ThrottleSlot; Stream::COUNT],
+    /// The live hints; a `None` slot is free.
+    hints: [Option<ActiveHint>; ACTIVE_HINTS],
 }
 
 impl Throttle {
@@ -551,18 +659,7 @@ impl Throttle {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            global: ThrottleSlot {
-                rate_chz: None,
-                rate_expires_ms: 0,
-                paused: false,
-                pause_expires_ms: 0,
-            },
-            streams: [ThrottleSlot {
-                rate_chz: None,
-                rate_expires_ms: 0,
-                paused: false,
-                pause_expires_ms: 0,
-            }; Stream::COUNT],
+            hints: [None; ACTIVE_HINTS],
         }
     }
 
@@ -571,44 +668,54 @@ impl Throttle {
     /// A `SET_RATE` with a zero rate is applied as a pause. A `RESUME` is immediate and is not
     /// stored; a later `PAUSE` re-applies the pause. An unknown stream id is ignored.
     pub fn apply(&mut self, hint: &ThrottleHint, now_ms: u64) -> bool {
+        self.expire(now_ms);
         let expires_ms = now_ms.saturating_add(u64::from(hint.ttl_ms));
         match hint.action {
             ThrottleAction::Resume => {
                 if hint.stream_id == ThrottleHint::ALL_STREAMS {
-                    self.global.resume();
-                    for slot in &mut self.streams {
-                        slot.resume();
-                    }
+                    self.clear_pauses(None);
                 } else {
-                    let Some(slot) = Self::slot_mut(&mut self.streams, hint.stream_id) else {
+                    let Some(scope) = Scope::from_wire(hint.stream_id) else {
                         return false;
                     };
-                    slot.resume();
+                    self.clear_pauses(Some(scope));
                 }
                 true
             }
             ThrottleAction::Pause => {
-                let Some(slot) = Self::slot_mut_global(self, hint.stream_id) else {
+                let Some(scope) = Scope::from_wire(hint.stream_id) else {
                     return false;
                 };
-                slot.paused = true;
-                slot.pause_expires_ms = expires_ms;
+                self.push(ActiveHint {
+                    scope,
+                    paused: true,
+                    rate_chz: 0,
+                    expires_ms,
+                });
                 true
             }
             ThrottleAction::SetRate if hint.rate_chz == 0 => {
-                let Some(slot) = Self::slot_mut_global(self, hint.stream_id) else {
+                let Some(scope) = Scope::from_wire(hint.stream_id) else {
                     return false;
                 };
-                slot.paused = true;
-                slot.pause_expires_ms = expires_ms;
+                self.push(ActiveHint {
+                    scope,
+                    paused: true,
+                    rate_chz: 0,
+                    expires_ms,
+                });
                 true
             }
             ThrottleAction::SetRate => {
-                let Some(slot) = Self::slot_mut_global(self, hint.stream_id) else {
+                let Some(scope) = Scope::from_wire(hint.stream_id) else {
                     return false;
                 };
-                slot.rate_chz = Some(hint.rate_chz);
-                slot.rate_expires_ms = expires_ms;
+                self.push(ActiveHint {
+                    scope,
+                    paused: false,
+                    rate_chz: hint.rate_chz,
+                    expires_ms,
+                });
                 true
             }
         }
@@ -618,40 +725,90 @@ impl Throttle {
     ///
     /// [`Throttle::effective`] already ignores expired hints, so this only reclaims their slots.
     pub fn tick(&mut self, now_ms: u64) {
-        self.global.expire(now_ms);
-        for slot in &mut self.streams {
-            slot.expire(now_ms);
-        }
+        self.expire(now_ms);
     }
 
     /// Returns the most restrictive active state for `stream` at `now_ms`.
     #[must_use]
     pub fn effective(&self, stream: Stream, now_ms: u64) -> ThrottleState {
-        let local = &self.streams[stream.index()];
-        if self.global.is_paused(now_ms) || local.is_paused(now_ms) {
-            return ThrottleState::Paused;
+        let mut paused = false;
+        let mut rate: Option<u16> = None;
+        for hint in self.hints.iter().flatten() {
+            if hint.is_expired(now_ms) || !hint.scope.applies_to(stream) {
+                continue;
+            }
+            if hint.paused {
+                paused = true;
+            } else {
+                rate = rate.map_or(Some(hint.rate_chz), |current| Some(current.min(hint.rate_chz)));
+            }
         }
-        let global_rate = self.global.rate(now_ms);
-        let local_rate = local.rate(now_ms);
-        match (global_rate, local_rate) {
-            (Some(global), Some(local)) => ThrottleState::Limited(global.min(local)),
-            (Some(rate), None) | (None, Some(rate)) => ThrottleState::Limited(rate),
-            (None, None) => ThrottleState::Unrestricted,
-        }
-    }
-
-    /// Returns the per-stream slot for `stream_id`, or [`None`] for an unknown id.
-    fn slot_mut(streams: &mut [ThrottleSlot; Stream::COUNT], stream_id: u16) -> Option<&mut ThrottleSlot> {
-        let stream = Stream::from_wire(stream_id)?;
-        Some(&mut streams[stream.index()])
-    }
-
-    /// Returns the slot addressed by `stream_id`, including the global `0xFFFF` slot.
-    fn slot_mut_global(&mut self, stream_id: u16) -> Option<&mut ThrottleSlot> {
-        if stream_id == ThrottleHint::ALL_STREAMS {
-            Some(&mut self.global)
+        if paused {
+            ThrottleState::Paused
         } else {
-            Self::slot_mut(&mut self.streams, stream_id)
+            rate.map_or(ThrottleState::Unrestricted, ThrottleState::Limited)
         }
+    }
+
+    /// Forgets every hint that has expired at `now_ms`.
+    fn expire(&mut self, now_ms: u64) {
+        for slot in &mut self.hints {
+            if let Some(hint) = slot
+                && hint.is_expired(now_ms)
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    /// Clears pause hints: every scope when `scope` is [`None`], otherwise only that scope.
+    fn clear_pauses(&mut self, scope: Option<Scope>) {
+        for slot in &mut self.hints {
+            if let Some(hint) = slot {
+                let clear = hint.paused
+                    && match scope {
+                        None => true,
+                        Some(wanted) => hint.scope == wanted,
+                    };
+                if clear {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// Stores one hint, refreshing an identical live hint or evicting the soonest expiry.
+    fn push(&mut self, hint: ActiveHint) {
+        if let Some(slot) = self
+            .hints
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|existing| existing.same_as(&hint)))
+        {
+            *slot = Some(hint);
+            return;
+        }
+        if let Some(slot) = self.hints.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(hint);
+            return;
+        }
+        // The set is bounded: replace the hint that expires soonest. Repeats refresh in place,
+        // so only genuinely distinct live hints can reach this branch.
+        let mut victim = 0;
+        let mut victim_expiry = u64::MAX;
+        for (index, slot) in self.hints.iter().enumerate() {
+            if let Some(existing) = slot
+                && existing.expires_ms < victim_expiry
+            {
+                victim_expiry = existing.expires_ms;
+                victim = index;
+            }
+        }
+        self.hints[victim] = Some(hint);
+    }
+}
+
+impl Default for Throttle {
+    fn default() -> Self {
+        Self::new()
     }
 }
