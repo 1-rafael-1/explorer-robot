@@ -35,6 +35,10 @@ name = "commands"
 required-features = ["std"]
 
 [[test]]
+name = "control"
+required-features = ["std"]
+
+[[test]]
 name = "retry"
 required-features = ["std"]
 

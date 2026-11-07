@@ -8,6 +8,8 @@
 //! [`Config`] carries those defaults so a host test can compress time; the firmware passes a
 //! `Config` into [`crate::LinkCore::new`] rather than editing these constants.
 
+use remote_protocol::{Caps, ids::Stream};
+
 /// The ADR-0033 link baud.
 pub const BAUD: u32 = 921_600;
 
@@ -59,6 +61,21 @@ pub const THROTTLE_REPEAT_MS: u64 = 500;
 /// The frame assembly timeout.
 pub const FRAME_TIMEOUT_MS: u32 = 50;
 
+/// The robot's baseline cadence per stream, in centi-Hz, indexed by [`Stream::index`].
+///
+/// The values follow ADR-0031: `POWER` and `CALIBRATION` report on change at least every 5 s,
+/// `MOTION` idles at 1 Hz, and `ACTIVITY` reports at 1 Hz while `PERCEPTION` and `LIDAR_CLOUD`
+/// run at 10 Hz. A Session's Requested Rate overrides these once ticket 08 applies it; until then
+/// they are only what `HELLO_ACK` advertises.
+pub const DEFAULT_RATES_CHZ: [u16; Stream::COUNT] = [
+    20,    // POWER: 5 s heartbeat
+    100,   // MOTION: 1 Hz idle
+    100,   // ACTIVITY: 1 Hz
+    1_000, // PERCEPTION: 10 Hz
+    1_000, // LIDAR_CLOUD: 10 Hz
+    20,    // CALIBRATION: 5 s heartbeat
+];
+
 /// The timing values `LinkCore` runs with.
 ///
 /// Every field defaults to the matching constant so host tests can override just the ones they
@@ -97,6 +114,13 @@ pub struct Config {
     pub throttle_repeat_ms: u64,
     /// The frame assembly timeout.
     pub frame_timeout_ms: u32,
+    /// The capabilities the robot advertises and intersects with a peer's `HELLO`.
+    pub robot_caps: Caps,
+    /// The baseline cadence per stream, in centi-Hz, indexed by [`Stream::index`].
+    ///
+    /// A host test overrides this to make `HELLO_ACK` deterministic; the firmware leaves it at
+    /// [`DEFAULT_RATES_CHZ`].
+    pub default_rates_chz: [u16; Stream::COUNT],
 }
 
 impl Config {
@@ -118,6 +142,8 @@ impl Config {
         event_ring: EVENT_RING,
         throttle_repeat_ms: THROTTLE_REPEAT_MS,
         frame_timeout_ms: FRAME_TIMEOUT_MS,
+        robot_caps: Caps::from_bits(0),
+        default_rates_chz: DEFAULT_RATES_CHZ,
     };
 }
 

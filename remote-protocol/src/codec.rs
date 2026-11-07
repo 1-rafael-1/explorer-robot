@@ -231,3 +231,21 @@ pub(crate) fn write_u16_le(out: &mut [u8], offset: usize, value: u16) {
     out[offset] = low;
     out[offset + 1] = high;
 }
+
+/// Reads a little-endian `u32` at `offset`.
+///
+/// The caller checks the length first; every codec validates its layout before calling this.
+pub(crate) fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
+}
+
+/// Writes a little-endian `u32` at `offset`.
+///
+/// The caller checks the length first; every codec checks its output buffer before calling this.
+pub(crate) fn write_u32_le(out: &mut [u8], offset: usize, value: u32) {
+    let [b0, b1, b2, b3] = value.to_le_bytes();
+    out[offset] = b0;
+    out[offset + 1] = b1;
+    out[offset + 2] = b2;
+    out[offset + 3] = b3;
+}

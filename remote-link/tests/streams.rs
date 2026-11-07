@@ -290,12 +290,12 @@ fn activity_detail_truncates_at_a_utf8_boundary_end_to_end() {
     );
 }
 
-/// The peer stubs are inert until the session ticket lands.
+/// A link with no traffic stays detached and has no Deadman edge.
 #[test]
-fn peer_state_is_a_stub() {
+fn peer_state_is_no_peer_until_a_frame_arrives() {
     let (mut core, _wire, _remote) = harness();
     assert_eq!(core.peer(), remote_link::PeerState::NoPeer, "no peer yet");
-    assert!(!core.take_peer_lost(), "the Deadman never fires yet");
+    assert!(!core.take_peer_lost(), "silence without an attach does not fire");
     assert_eq!(core.boot_id(), BOOT_ID, "the Boot Id is retained");
     assert_eq!(core.config(), Config::default(), "the config is retained");
 }

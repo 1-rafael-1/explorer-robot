@@ -11,10 +11,11 @@ use std::{collections::VecDeque, vec::Vec};
 
 use crate::{
     PROTOCOL_MAJOR,
-    codec::{CommandMessage, StreamSample, decode_command, decode_stream, encode_command},
+    codec::{CommandMessage, PayloadCodec, StreamSample, decode_command, decode_stream, encode_command},
     frame::{Class, Direction, Flags, Frame, Seq},
-    ids::{Command, Stream},
+    ids::{Caps, Command, Control, Stream},
     parser::{MAX_PC_TO_ROBOT_FRAME, RobotToPcParser},
+    payload::control::{HelloAck, PingAck, RateEntry, encode_hello},
 };
 
 /// The baud the simulated remote assumes; both directions derive a 50 ms timeout from it.
@@ -188,13 +189,14 @@ impl Wire {
     }
 }
 
-/// A daemon-shaped peer that decodes robot-to-PC telemetry from, and sends commands to, a
-/// [`Wire`].
+/// A daemon-shaped peer that decodes robot-to-PC telemetry from, and sends commands and control
+/// frames to, a [`Wire`].
 ///
 /// Feed the wire's robot-to-PC bytes through the real [`RobotToPcParser`] and read back the typed
-/// samples and command ACKs. [`FakeRemote::send_command`] encodes a request with the real codecs
-/// and the next sequence number, so a test exercises the same bytes the daemon would put on the
-/// wire. Later tickets extend the same type with `HELLO`/`PING`, events and `THROTTLE`.
+/// samples, command ACKs and control replies. [`FakeRemote::send_command`] and
+/// [`FakeRemote::send_hello`] encode a request with the real codecs and the next sequence number,
+/// so a test exercises the same bytes the daemon would put on the wire. Events and `THROTTLE`
+/// arrive with later tickets.
 pub struct FakeRemote {
     /// The real robot-to-PC parser, so the simulated path exercises the committed state machine.
     parser: RobotToPcParser,
@@ -206,8 +208,16 @@ pub struct FakeRemote {
     unknown_streams: u32,
     /// Unknown command ids seen in ACKs; they are ignored, never decoded.
     unknown_acks: u32,
+    /// Received `HELLO_ACK` payloads with their sequence numbers, in arrival order.
+    received_hello_acks: Vec<(Seq, Vec<u8>)>,
+    /// Received `PING` ACK payloads with their sequence numbers, in arrival order.
+    received_ping_acks: Vec<(Seq, Vec<u8>)>,
+    /// Unknown or unimplemented control ids seen in ACKs; they are ignored, never decoded.
+    unknown_controls: u32,
     /// The next command sequence; commands start at 1 and zero is never sent.
     command_seq: u16,
+    /// The next control sequence; control frames start at 1 and zero is never sent.
+    control_seq: u16,
 }
 
 impl FakeRemote {
@@ -220,7 +230,11 @@ impl FakeRemote {
             received_acks: Vec::new(),
             unknown_streams: 0,
             unknown_acks: 0,
+            received_hello_acks: Vec::new(),
+            received_ping_acks: Vec::new(),
+            unknown_controls: 0,
             command_seq: 1,
+            control_seq: 1,
         }
     }
 
@@ -241,8 +255,11 @@ impl FakeRemote {
         let before = self.received.len();
         let received = &mut self.received;
         let received_acks = &mut self.received_acks;
+        let received_hello_acks = &mut self.received_hello_acks;
+        let received_ping_acks = &mut self.received_ping_acks;
         let mut unknown = 0u32;
         let mut unknown_acks = 0u32;
+        let mut unknown_controls = 0u32;
         self.parser.feed(bytes, now_ms, |frame| match frame.header.class {
             Class::Stream => {
                 let Some(stream) = Stream::from_wire(frame.header.id) else {
@@ -261,10 +278,25 @@ impl FakeRemote {
                 };
                 received_acks.push((command, frame.header.seq, frame.payload.to_vec()));
             }
-            Class::Event | Class::Control => {}
+            Class::Control => {
+                if !frame.header.flags.contains(Flags::IS_ACK) {
+                    return;
+                }
+                match Control::from_wire(frame.header.id) {
+                    Some(Control::Hello) if HelloAck::decode(frame.payload).is_ok() => {
+                        received_hello_acks.push((frame.header.seq, frame.payload.to_vec()));
+                    }
+                    Some(Control::Ping) if PingAck::decode(frame.payload).is_ok() => {
+                        received_ping_acks.push((frame.header.seq, frame.payload.to_vec()));
+                    }
+                    _ => unknown_controls = unknown_controls.saturating_add(1),
+                }
+            }
+            Class::Event => {}
         });
         self.unknown_streams = self.unknown_streams.saturating_add(unknown);
         self.unknown_acks = self.unknown_acks.saturating_add(unknown_acks);
+        self.unknown_controls = self.unknown_controls.saturating_add(unknown_controls);
         self.received.len() - before
     }
 
@@ -406,6 +438,86 @@ impl FakeRemote {
     #[must_use]
     pub const fn next_command_seq(&self) -> u16 {
         self.command_seq
+    }
+
+    /// Sends a `HELLO` request with the next control sequence number.
+    ///
+    /// Returns the sequence used, or [`None`] when the payload does not fit the PC-to-robot cap.
+    pub fn send_hello(
+        &mut self,
+        wire: &mut Wire,
+        major: u8,
+        minor: u8,
+        caps: Caps,
+        epoch: u32,
+        rates: &[RateEntry],
+    ) -> Option<Seq> {
+        let mut payload = [0u8; MAX_PC_TO_ROBOT_FRAME];
+        let written = encode_hello(major, minor, caps, epoch, rates.iter().copied(), &mut payload).ok()?;
+        self.send_control(wire, Control::Hello, &payload[..written])
+    }
+
+    /// Sends a `PING` request with the next control sequence number.
+    pub fn send_ping(&mut self, wire: &mut Wire) -> Option<Seq> {
+        self.send_control(wire, Control::Ping, &[])
+    }
+
+    /// Encodes and sends one control frame, returning the sequence used.
+    fn send_control(&mut self, wire: &mut Wire, control: Control, payload: &[u8]) -> Option<Seq> {
+        let seq = Seq::new(self.control_seq);
+        let frame = Frame::new(
+            PROTOCOL_MAJOR,
+            Class::Control,
+            Flags::default(),
+            control.wire_id(),
+            seq,
+            payload,
+        )
+        .ok()?;
+        let mut bytes = [0u8; MAX_PC_TO_ROBOT_FRAME];
+        let written = frame.encode_into(&mut bytes).ok()?;
+        wire.send(Direction::PcToRobot, &bytes[..written]);
+        let next = self.control_seq.wrapping_add(1);
+        self.control_seq = if next == 0 { 1 } else { next };
+        Some(seq)
+    }
+
+    /// Returns every received `HELLO_ACK` in arrival order with its decoded payload.
+    pub fn hello_acks(&self) -> impl Iterator<Item = (Seq, HelloAck<'_>)> + '_ {
+        self.received_hello_acks
+            .iter()
+            .filter_map(|(seq, payload)| HelloAck::decode(payload).ok().map(|ack| (*seq, ack)))
+    }
+
+    /// Returns the most recently received `HELLO_ACK`, if any survived decoding.
+    #[must_use]
+    pub fn last_hello_ack(&self) -> Option<(Seq, HelloAck<'_>)> {
+        self.hello_acks().last()
+    }
+
+    /// Returns every received `PING` acknowledgement in arrival order.
+    pub fn ping_acks(&self) -> impl Iterator<Item = (Seq, PingAck)> + '_ {
+        self.received_ping_acks
+            .iter()
+            .filter_map(|(seq, payload)| PingAck::decode(payload).ok().map(|ack| (*seq, ack)))
+    }
+
+    /// Returns the most recently received `PING` acknowledgement, if any survived decoding.
+    #[must_use]
+    pub fn last_ping_ack(&self) -> Option<(Seq, PingAck)> {
+        self.ping_acks().last()
+    }
+
+    /// Returns how many unknown or unimplemented control ids have been ignored.
+    #[must_use]
+    pub const fn unknown_controls(&self) -> u32 {
+        self.unknown_controls
+    }
+
+    /// Returns the next control sequence number the remote will use.
+    #[must_use]
+    pub const fn next_control_seq(&self) -> u16 {
+        self.control_seq
     }
 }
 

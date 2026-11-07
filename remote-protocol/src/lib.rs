@@ -33,8 +33,11 @@ pub use codec::{
 pub use crc::{Crc16, crc16};
 pub use error::{CodecError, EncodeError, FrameError};
 pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, Seq, Status};
-pub use ids::{Caps, Command, ProcedureId, Stream};
+pub use ids::{Caps, Command, Control, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
+pub use payload::control::{
+    Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack,
+};
 pub use reliability::{AckOutcome, AckTracker, RetryPolicy};
 #[cfg(feature = "std")]
 pub use sim::{FakeRemote, Faults, Wire};

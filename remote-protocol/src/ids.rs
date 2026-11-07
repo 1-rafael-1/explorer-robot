@@ -180,6 +180,65 @@ impl Command {
     }
 }
 
+/// A control-frame id (ADR-0031).
+///
+/// The discriminants are the ADR-0031 wire ids. This enum is deliberately not
+/// `#[non_exhaustive]`: a new control message is a reviewed change to the catalogue. `THROTTLE`
+/// and `BRIDGE_CONTROL` are part of the vocabulary before their payload codecs exist; a receiver
+/// ignores a control id it has no payload for.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Control {
+    /// `HELLO`: the session handshake request and its acknowledgement.
+    Hello = 0x0001,
+    /// `PING`: the liveness probe and its acknowledgement.
+    Ping = 0x0002,
+    /// `THROTTLE`: the advisory flow-control hint from the Bridge or the daemon.
+    Throttle = 0x0003,
+    /// `BRIDGE_CONTROL`: a robot-to-Bridge request, acknowledged by the Bridge.
+    BridgeControl = 0x0004,
+}
+
+impl Control {
+    /// Every control id in this version, in wire order.
+    pub const ALL: [Self; 4] = [Self::Hello, Self::Ping, Self::Throttle, Self::BridgeControl];
+
+    /// The number of control ids in this version.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// Returns the wire id of this control message.
+    #[must_use]
+    pub const fn wire_id(self) -> u16 {
+        self as u16
+    }
+
+    /// Returns the position of this control message in [`Control::ALL`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Hello => 0,
+            Self::Ping => 1,
+            Self::Throttle => 2,
+            Self::BridgeControl => 3,
+        }
+    }
+
+    /// Builds a control message from its wire id, returning [`None`] for a reserved id.
+    ///
+    /// The match is exhaustive over the implemented variants; every other id is unknown to this
+    /// version of the protocol and is ignored by the receiver.
+    #[must_use]
+    pub const fn from_wire(id: u16) -> Option<Self> {
+        match id {
+            0x0001 => Some(Self::Hello),
+            0x0002 => Some(Self::Ping),
+            0x0003 => Some(Self::Throttle),
+            0x0004 => Some(Self::BridgeControl),
+            _ => None,
+        }
+    }
+}
+
 /// A Procedure id carried by `ACTIVITY` and by Procedure commands (ADR-0031).
 ///
 /// This is a `u16` newtype rather than an enum because the wire must tolerate a Procedure id that

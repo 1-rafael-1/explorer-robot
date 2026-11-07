@@ -6,15 +6,18 @@
 //! is [`CodecError::Utf8`](crate::error::CodecError::Utf8). Sentinels are ordinary wire values and
 //! survive a round trip unchanged.
 //!
-//! Streams live in [`stream`]; commands and their query responses live in [`command`].
+//! Streams live in [`stream`]; commands and their query responses live in [`command`]; the
+//! session control payloads live in [`control`].
 
 pub mod command;
+pub mod control;
 pub mod stream;
 
 pub use command::{
     AckPayload, CatalogueEntries, CatalogueEntry, CatalogueFlags, CataloguePage, DriveDistance, GetCatalogue,
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,
 };
+pub use control::{Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, encode_hello, encode_hello_ack};
 pub use stream::{
     Activity, ActivityStage, Calibration, CalibrationStatus, LidarCloud, Motion, Perception, PerceptionFlags, Power,
 };
