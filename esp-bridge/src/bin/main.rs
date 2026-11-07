@@ -55,8 +55,8 @@ use esp_hal::{
 };
 use esp_println as _;
 use esp_radio::wifi::{
-    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
-    ap::AccessPointConfig, sta::StationConfig,
+    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, Ssid, WifiController,
+    ap::AccessPointConfig, scan::ScanConfig, sta::StationConfig,
 };
 use heapless::spsc::{Consumer, Producer, Queue};
 use remote_protocol as _;
@@ -152,8 +152,11 @@ const UART_QUEUE_CAPACITY: usize = 8 * 1024;
 /// How much the UART reader asks the driver for in one call.
 const UART_READ_CHUNK: usize = 512;
 
-/// Use UHCI RX DMA instead of the async FIFO reader. Enable with `SPIKE_UART_RX_DMA=1`.
-const UART_RX_DMA: bool = option_env!("SPIKE_UART_RX_DMA").is_some();
+/// Use UHCI RX DMA for the UART drain. This is the default because it is the only RX path that
+/// is lossless at 921600 under TCP load (ticket 09); the async FIFO reader cannot meet the
+/// 1.39 ms line-rate FIFO deadline. Set `SPIKE_UART_RX_ASYNC` to select the async reader
+/// instead, e.g. to re-run the comparison against a future esp-hal/esp-radio version.
+const UART_RX_DMA: bool = option_env!("SPIKE_UART_RX_ASYNC").is_none();
 
 /// UHCI RX DMA buffer and descriptor chunk size. Smaller chunks mean lower latency and more
 /// interrupts; the stream buffer keeps several descriptors in flight.
@@ -349,6 +352,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // -- Station association -----------------------------------------------------------------
 
+    scan_station_target(&mut controller).await;
     connect_station(&mut controller).await;
     let station_has_address = station_stack.is_config_up()
         || with_timeout(Duration::from_secs(20), station_stack.wait_config_up())
@@ -441,6 +445,51 @@ async fn main(spawner: Spawner) -> ! {
 // ---------------------------------------------------------------------------------------------
 // Wi-Fi helpers
 // ---------------------------------------------------------------------------------------------
+
+/// Scans for the configured station SSID and logs every BSS's auth mode before associating.
+///
+/// The spike can only configure `Wpa2Personal` (esp-radio 1.0.0-beta.1 exposes nothing newer), so
+/// a WPA3-only or PMF-required home AP is the prime suspect for an association failure; the
+/// advertised auth mode settles that before any credentials are tried. `scan_async` on this
+/// beta can miss whole sweeps, so an empty result is retried a couple of times.
+async fn scan_station_target(controller: &mut WifiController<'_>) {
+    if STA_SSID == "CHANGE_ME" {
+        return;
+    }
+    let Ok(ssid) = Ssid::try_from(STA_SSID) else {
+        info!("sta: SSID too long to scan for; skipping scan");
+        return;
+    };
+    let config = ScanConfig::default().with_ssid(ssid);
+
+    for attempt in 1..=3 {
+        match controller.scan_async(&config).await {
+            Ok(aps) if !aps.is_empty() => {
+                for ap in &aps {
+                    info!(
+                        "sta: scan: bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch={} rssi={}dBm auth={}",
+                        ap.bssid[0],
+                        ap.bssid[1],
+                        ap.bssid[2],
+                        ap.bssid[3],
+                        ap.bssid[4],
+                        ap.bssid[5],
+                        ap.channel,
+                        ap.signal_strength,
+                        ap.auth_method
+                    );
+                }
+                return;
+            }
+            Ok(_) => info!("sta: scan: sweep {} found nothing; retrying", attempt),
+            Err(error) => info!("sta: scan failed: {:?}", error),
+        }
+        if attempt < 3 {
+            Timer::after(Duration::from_secs(1)).await;
+        }
+    }
+    info!("sta: scan: target SSID was not found in any sweep");
+}
 
 /// Associates the station, retrying once if the controller reports failure.
 async fn connect_station(controller: &mut WifiController<'_>) {
