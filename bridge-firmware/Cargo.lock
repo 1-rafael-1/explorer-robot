@@ -94,6 +94,7 @@ dependencies = [
  "defmt 1.2.0",
  "embassy-executor",
  "embassy-net",
+ "embassy-sync 0.7.2",
  "embassy-time",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
@@ -598,6 +599,7 @@ checksum = "73974a3edbd0bd286759b3d483540f0ebef705919a5f56f4fc7709066f71689b"
 dependencies = [
  "cfg-if",
  "critical-section",
+ "defmt 1.2.0",
  "embedded-io-async 0.6.1",
  "futures-core",
  "futures-sink",

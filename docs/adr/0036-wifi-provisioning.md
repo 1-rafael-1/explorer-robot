@@ -87,6 +87,13 @@ The home passphrase is stored on the Bridge, is never sent to the robot and is n
 | Setup Mode | APSTA when a station config exists, AP-only otherwise | the portal on the AP; the Link Protocol still on STA if associated |
 | unprovisioned | AP only | the portal only |
 
+**Amendment (2026-11-07, ticket 06).** On `esp-radio` 1.0.0-beta.1 `scan_async` returns
+`Other` in AP-only mode. An unprovisioned Setup Mode therefore runs APSTA with a parked,
+never-connected station config rather than AP-only: the portal is still the only served
+surface, no station Beacon is sent, and the radio returns to STA-only when the window closes.
+The table's "AP only" entries describe the intended states; this beta substitutes the
+parked-station APSTA for them.
+
 The Link listener is bound to the STA interface. The setup AP is a provisioning surface, not a
 second operating network. In AP mode the daemon cannot reach the robot and shows "in setup"; in
 APSTA recovery the robot remains reachable on the home network exactly as before. That also
@@ -112,8 +119,15 @@ implicit whole-flash write.
 
 *Retry and recovery.*
 
-Station reconnection backs off 1, 2, 4 … 60 s, forever, and the backoff resets on success. The
-three recovery gestures, most available first:
+Station reconnection backs off 1, 2, 4 … 60 s, forever, and the backoff resets on success.
+
+**Amendment (2026-11-07, ticket 06).** Inside an open setup window, a failed join does not retry
+on the 1–60 s backoff: it waits for the operator's next portal submission or Forget. Every
+association attempt off-channels the single radio and makes the portal unreachable, and a
+known-bad pair cannot succeed by repetition. The forever backoff still applies in steady state
+(window closed).
+
+The three recovery gestures, most available first:
 
 1. **The panel.** A `Link` screen (a `ScreenEntry`, not a Procedure, so it takes no Active Claim)
    shows Bridge present and Remote connected, and offers **"Forget Wi-Fi & set up"** behind a

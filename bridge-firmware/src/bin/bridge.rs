@@ -7,12 +7,23 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 05 — the network edge.
+//! Ticket 06 — Setup Mode and the portal, on top of ticket 05's network edge.
 //!
 //! The Bridge is the trust boundary for the robot (ADR-0037): the `bridge-net` HMAC preamble
 //! completes before a single Link Protocol byte crosses, exactly one authenticated client holds the
 //! slot, failed proofs are rate-limited by `bridge-core`'s gate, and the Discovery Beacon is
 //! broadcast on the station interface every 3 s with the pinned flags.
+//!
+//! Setup Mode (ADR-0036) is a bounded SoftAP with a hand-rolled userspace portal: DHCP, a DNS
+//! catch-all and one HTTP page, all over `embassy-net` on a second stack. `bridge-core` owns the
+//! window rules and the protocol codecs; this binary owns the radio states, the sockets and the
+//! join attempt. The window opens when the Bridge is unprovisioned at boot, after five continuous
+//! minutes without a station link (once per boot), or on the panel's request; it closes after ten
+//! minutes, or about 30 s after a stable station association. In APSTA the station Beacon carries
+//! `setup_mode` and `tcp_port = 0`; in AP-only there is no station Beacon.
+//!
+//! Ticket 06 keeps credentials in RAM only. Ticket 07 owns the versioned record, the pairing token
+//! and the panel's `BRIDGE_CONTROL` actions; the portal's submit path is the seam it will fill.
 //!
 //! ## Wiring
 //!
@@ -29,9 +40,9 @@
 //! BRIDGE_STA_SSID=... BRIDGE_STA_PASSWORD=... BRIDGE_BENCH_TOKEN=... cargo build --release
 //! ```
 //!
-//! With neither station variable set, or with either left as `CHANGE_ME`, the firmware still runs
-//! the UART, the pump and the Beacon task, but it logs a clear warning and never attempts to
-//! associate.
+//! With neither station variable set, or with either left as `CHANGE_ME`, the Bridge boots
+//! unprovisioned and raises the setup AP. The portal can then supply credentials for the running
+//! boot; they are not persisted (ticket 07).
 //!
 //! ## The bench token (TODO(ticket 07))
 //!
@@ -51,7 +62,10 @@
 use core::cell::RefCell;
 
 use bridge_core::{
-    BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome, Seq, TimerEvent,
+    BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome, Seq, TimerEvent, dhcp,
+    dns,
+    portal::{self, Credentials, ScanCache, Status},
+    setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow},
 };
 use bridge_net::{
     beacon::{self, Beacon},
@@ -63,10 +77,11 @@ use critical_section::Mutex;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_net::{
-    Ipv4Address, Runner, Stack, StackResources,
+    Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4,
     tcp::TcpSocket,
     udp::{PacketMetadata, UdpSocket},
 };
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use esp_backtrace as _;
 use esp_hal::{
@@ -83,8 +98,9 @@ use esp_hal::{
 };
 use esp_println as _;
 use esp_radio::wifi::{
-    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, Ssid, WifiController,
-    scan::ScanConfig, sta::StationConfig,
+    AuthenticationMethod, AuthenticationMethodConfig, Config as WifiConfig, ConnectionError, ControllerConfig,
+    DisconnectReason, Interface, Ssid, WifiController, WifiError, ap::AccessPointConfig, scan::ScanConfig,
+    sta::StationConfig,
 };
 use heapless::spsc::Queue;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
@@ -203,11 +219,80 @@ const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------------------------
+// Setup Mode constants (ADR-0036)
+// ---------------------------------------------------------------------------------------------
+
+/// The setup SSID's prefix; the four hex characters of the AP MAC's last two bytes follow it.
+const AP_SSID_PREFIX: &[u8] = b"ExplorerRobot-";
+
+/// The documented, build-fixed WPA2 setup password (ADR-0036: public by construction).
+const AP_PASSWORD: &str = "explorer-setup";
+
+/// The setup AP's channel. In APSTA the radio follows the station's channel instead.
+const AP_CHANNEL: u8 = 1;
+
+/// The setup AP's client limit (ADR-0036: at most two).
+const AP_MAX_CONNECTIONS: u16 = 2;
+
+/// The setup AP's address (ADR-0036).
+const AP_ADDRESS: [u8; 4] = [192, 168, 4, 1];
+const AP_PREFIX_LEN: u8 = 24;
+
+/// The portal's HTTP port on the AP stack.
+const PORTAL_HTTP_PORT: u16 = 80;
+
+/// How long the portal lets a request arrive before it closes the connection.
+const PORTAL_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many portal commands the HTTP workers may queue for the supervisory loop.
+const PORTAL_COMMAND_QUEUE: usize = 4;
+
+/// Best-of-N: `scan_async` on this beta drops whole sweeps (ticket 09), so merge several.
+const SCAN_SWEEPS: usize = 3;
+
+/// How often a fresh best-of-N scan refreshes the portal's list while no join is in flight. A
+/// sweep off-channels the AP and can drop the laptop, so the first scan (at window open, before
+/// the operator joins) is the useful one; the field also accepts a typed SSID.
+const SCAN_REFRESH: Duration = Duration::from_secs(300);
+
+/// The portal's TCP socket buffers (the response pages are written in chunks).
+const PORTAL_TCP_RX_BUFFER: usize = 1024;
+const PORTAL_TCP_TX_BUFFER: usize = 2048;
+
+/// The DHCP and DNS datagram buffers.
+const PORTAL_UDP_BUFFER: usize = 576;
+
+/// A station config parked on a non-existent SSID while an unprovisioned window is closed. There
+/// is no radio-off API on this beta; a STA-only config naming an absent network is the closest
+/// equivalent to turning the AP off while keeping the controller alive.
+const PARKED_STATION_SSID: &str = "bridge-parked";
+const PARKED_STATION_PASSWORD: &str = "unused-pass";
+
+// ---------------------------------------------------------------------------------------------
 // Statics
 // ---------------------------------------------------------------------------------------------
 
 /// The station stack's socket pool: DHCP, the Beacon's UDP socket and the three TCP workers.
 static STA_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
+
+/// The AP stack's socket pool: the DHCP and DNS responders and the two portal HTTP workers.
+static AP_RESOURCES: StaticCell<StackResources<6>> = StaticCell::new();
+
+/// Whether the bounded setup window is open; the Beacon and the portal tasks read it.
+static SETUP_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Whether a usable credential pair exists; the Beacon's `provisioned` bit reads it. Ticket 07
+/// replaces this with the credential record.
+static PROVISIONED: AtomicBool = AtomicBool::new(false);
+
+/// The portal's current status line, shared by the supervisory loop and the HTTP workers.
+static PORTAL_STATUS: Mutex<RefCell<Status>> = Mutex::new(RefCell::new(Status::Unprovisioned));
+
+/// The best-of-N scan list, written by the supervisory loop and read by the HTTP workers.
+static SCAN_CACHE: Mutex<RefCell<ScanCache>> = Mutex::new(RefCell::new(ScanCache::new()));
+
+/// Portal actions queued for the supervisory loop, which owns the radio controller.
+static PORTAL_COMMANDS: Channel<CriticalSectionRawMutex, PortalCommand, PORTAL_COMMAND_QUEUE> = Channel::new();
 
 /// Whether the station is associated and holds an address; the Beacon is sent only then.
 static STATION_UP: AtomicBool = AtomicBool::new(false);
@@ -224,6 +309,26 @@ static BEACON_RX_BUFFER: StaticCell<[u8; BEACON_SOCKET_BUFFER]> = StaticCell::ne
 /// The Beacon's UDP transmit metadata and buffer.
 static BEACON_TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
 static BEACON_TX_BUFFER: StaticCell<[u8; BEACON_SOCKET_BUFFER]> = StaticCell::new();
+
+/// The portal's UDP receive metadata and buffers (DHCP and DNS).
+static DHCP_RX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static DHCP_TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static DHCP_RX_BUFFER: StaticCell<[u8; PORTAL_UDP_BUFFER]> = StaticCell::new();
+static DHCP_TX_BUFFER: StaticCell<[u8; PORTAL_UDP_BUFFER]> = StaticCell::new();
+static DNS_RX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static DNS_TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static DNS_RX_BUFFER: StaticCell<[u8; PORTAL_UDP_BUFFER]> = StaticCell::new();
+static DNS_TX_BUFFER: StaticCell<[u8; PORTAL_UDP_BUFFER]> = StaticCell::new();
+
+/// Each portal HTTP worker owns its TCP buffers, request buffer and response buffer.
+static PORTAL_TCP_RX_0: StaticCell<[u8; PORTAL_TCP_RX_BUFFER]> = StaticCell::new();
+static PORTAL_TCP_RX_1: StaticCell<[u8; PORTAL_TCP_RX_BUFFER]> = StaticCell::new();
+static PORTAL_TCP_TX_0: StaticCell<[u8; PORTAL_TCP_TX_BUFFER]> = StaticCell::new();
+static PORTAL_TCP_TX_1: StaticCell<[u8; PORTAL_TCP_TX_BUFFER]> = StaticCell::new();
+static PORTAL_REQUEST_0: StaticCell<[u8; portal::MAX_REQUEST_BYTES]> = StaticCell::new();
+static PORTAL_REQUEST_1: StaticCell<[u8; portal::MAX_REQUEST_BYTES]> = StaticCell::new();
+static PORTAL_RESPONSE_0: StaticCell<[u8; portal::MAX_RESPONSE_BYTES]> = StaticCell::new();
+static PORTAL_RESPONSE_1: StaticCell<[u8; portal::MAX_RESPONSE_BYTES]> = StaticCell::new();
 
 /// Each connection worker owns its socket buffers for the firmware's lifetime.
 static CLIENT_RX_0: StaticCell<[u8; TCP_RX_BUFFER]> = StaticCell::new();
@@ -305,6 +410,43 @@ static DENIED_REFUSED: AtomicU32 = AtomicU32::new(0);
 static DENIED_VERSION: AtomicU32 = AtomicU32::new(0);
 static BEACONS_SENT: AtomicU32 = AtomicU32::new(0);
 static BEACON_SEND_ERRORS: AtomicU32 = AtomicU32::new(0);
+static DHCP_OFFERS: AtomicU32 = AtomicU32::new(0);
+static DHCP_ACKS: AtomicU32 = AtomicU32::new(0);
+static DNS_ANSWERS: AtomicU32 = AtomicU32::new(0);
+static PORTAL_REQUESTS: AtomicU32 = AtomicU32::new(0);
+static PORTAL_PROVISIONS: AtomicU32 = AtomicU32::new(0);
+static PORTAL_FORGETS: AtomicU32 = AtomicU32::new(0);
+static SCAN_SWEEPS_RUN: AtomicU32 = AtomicU32::new(0);
+static SCAN_APS_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// An action the portal queues for the supervisory loop, which owns the radio controller.
+#[derive(Clone, Copy)]
+enum PortalCommand {
+    /// Join the station with these credentials while the AP stays up.
+    Provision(Credentials),
+    /// Clear the in-flight credentials and return the portal to `unprovisioned`.
+    Forget,
+}
+
+/// Runs `action` with the portal's shared status line.
+fn with_portal_status<R>(action: impl FnOnce(&mut Status) -> R) -> R {
+    critical_section::with(|cs| action(&mut PORTAL_STATUS.borrow(cs).borrow_mut()))
+}
+
+/// Stores the portal's status line.
+fn set_portal_status(status: Status) {
+    with_portal_status(|current| *current = status);
+}
+
+/// Returns the portal's status line.
+fn portal_status() -> Status {
+    with_portal_status(|status| *status)
+}
+
+/// Runs `action` with the best-of-N scan cache.
+fn with_scan_cache<R>(action: impl FnOnce(&mut ScanCache) -> R) -> R {
+    critical_section::with(|cs| action(&mut SCAN_CACHE.borrow(cs).borrow_mut()))
+}
 
 // ---------------------------------------------------------------------------------------------
 // Entry point
@@ -329,8 +471,11 @@ async fn main(spawner: Spawner) -> ! {
     device_id.copy_from_slice(mac.as_bytes());
     store_device_id(device_id);
 
+    let (ap_ssid_bytes, ap_ssid_len) = setup_ssid();
+    let ap_ssid = Ssid::try_from(&ap_ssid_bytes[..ap_ssid_len]).unwrap_or_default();
+
     info!(
-        "bridge firmware: ticket 05 network edge, station-only, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
+        "bridge firmware: ticket 06 setup portal, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
         beacon::INTERVAL_MS,
         UART_BAUD,
         UART_TX_PIN,
@@ -364,19 +509,54 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    let mut station_configured = false;
-    match build_station_config() {
-        Some(station_config) => match controller.set_config(&WifiConfig::Station(station_config)) {
-            Ok(()) => {
-                station_configured = true;
-                info!("sta: station mode configured for ssid={}", STA_SSID);
-            }
-            Err(error) => warn!("sta: set_config failed: {:?}", error),
-        },
-        None => warn!("sta: BRIDGE_STA_SSID/BRIDGE_STA_PASSWORD are empty or too long; station mode is not configured"),
+    let Some(ap_config) = build_access_point_config(ap_ssid) else {
+        warn!("ap: the setup AP configuration was rejected");
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+        }
+    };
+
+    let mut credentials = initial_credentials();
+    let mut station_config = credentials.as_ref().and_then(station_config_from);
+    let provisioned = station_config.is_some();
+    if credentials.is_some() && station_config.is_none() {
+        warn!("sta: the build-time credentials do not form a usable station config");
+        credentials = None;
+    }
+    PROVISIONED.store(provisioned, Ordering::Relaxed);
+
+    let (mut setup, boot_event) = SetupWindow::boot(provisioned, now_ms());
+    SETUP_OPEN.store(setup.is_open(), Ordering::Relaxed);
+    if let Some(event) = boot_event {
+        log_setup_event(event);
     }
 
-    // -- Network stack -----------------------------------------------------------------------
+    let mut radio_mode = if provisioned {
+        if let Some(station) = &station_config {
+            apply_station(&mut controller, station);
+        }
+        RadioMode::Station
+    } else {
+        // Bench finding: `scan_async` returns `Other` in AP-only mode on this beta, so an
+        // unprovisioned window runs APSTA with a parked station that is never associated. The AP
+        // and the portal are the only served surfaces; no station Beacon is sent (ADR-0037).
+        apply_setup_parked(&mut controller, &ap_config);
+        RadioMode::ApStation
+    };
+    info!(
+        "ap: setup ssid={} password={} channel={} max_clients={} address={}.{}.{}.{}/{}",
+        ap_ssid.as_str(),
+        AP_PASSWORD,
+        AP_CHANNEL,
+        AP_MAX_CONNECTIONS,
+        AP_ADDRESS[0],
+        AP_ADDRESS[1],
+        AP_ADDRESS[2],
+        AP_ADDRESS[3],
+        AP_PREFIX_LEN
+    );
+
+    // -- Network stacks ----------------------------------------------------------------------
 
     let station_interface = Interface::station();
     let (station_stack, station_runner) = embassy_net::new(
@@ -386,7 +566,23 @@ async fn main(spawner: Spawner) -> ! {
         0x1234_5678_9abc_def0,
     );
 
-    spawn_or_warn(&spawner, net_task(station_runner), "network");
+    let ap_interface = Interface::access_point();
+    let (ap_stack, ap_runner) = embassy_net::new(
+        ap_interface,
+        embassy_net::Config::ipv4_static(StaticConfigV4 {
+            address: Ipv4Cidr::new(
+                Ipv4Address::new(AP_ADDRESS[0], AP_ADDRESS[1], AP_ADDRESS[2], AP_ADDRESS[3]),
+                AP_PREFIX_LEN,
+            ),
+            gateway: None,
+            dns_servers: heapless::Vec::new(),
+        }),
+        AP_RESOURCES.init(StackResources::new()),
+        0x0fed_cba9_8765_4321,
+    );
+
+    spawn_or_warn(&spawner, net_task(station_runner), "station network");
+    spawn_or_warn(&spawner, net_task(ap_runner), "AP network");
 
     // -- UART --------------------------------------------------------------------------------
 
@@ -431,7 +627,7 @@ async fn main(spawner: Spawner) -> ! {
     spawn_or_warn(&spawner, uart_rx_dma_task(uhci_rx), "UART RX DMA");
     spawn_or_warn(&spawner, uart_tx_task(uhci_tx.uart_tx), "UART TX");
 
-    // -- Station-only network edge -----------------------------------------------------------
+    // -- Station network edge ----------------------------------------------------------------
 
     if bench_token().is_none() {
         warn!("tcp: BRIDGE_BENCH_TOKEN is unset; every preamble will be denied (TODO ticket 07)");
@@ -465,6 +661,42 @@ async fn main(spawner: Spawner) -> ! {
         "TCP client 2",
     );
 
+    // -- Setup AP portal ---------------------------------------------------------------------
+
+    let portal_tcp_rx_0: &'static mut [u8] = PORTAL_TCP_RX_0.init([0u8; PORTAL_TCP_RX_BUFFER]);
+    let portal_tcp_rx_1: &'static mut [u8] = PORTAL_TCP_RX_1.init([0u8; PORTAL_TCP_RX_BUFFER]);
+    let portal_tcp_tx_0: &'static mut [u8] = PORTAL_TCP_TX_0.init([0u8; PORTAL_TCP_TX_BUFFER]);
+    let portal_tcp_tx_1: &'static mut [u8] = PORTAL_TCP_TX_1.init([0u8; PORTAL_TCP_TX_BUFFER]);
+    let portal_request_0: &'static mut [u8] = PORTAL_REQUEST_0.init([0u8; portal::MAX_REQUEST_BYTES]);
+    let portal_request_1: &'static mut [u8] = PORTAL_REQUEST_1.init([0u8; portal::MAX_REQUEST_BYTES]);
+    let portal_response_0: &'static mut [u8] = PORTAL_RESPONSE_0.init([0u8; portal::MAX_RESPONSE_BYTES]);
+    let portal_response_1: &'static mut [u8] = PORTAL_RESPONSE_1.init([0u8; portal::MAX_RESPONSE_BYTES]);
+
+    spawn_or_warn(&spawner, ap_dhcp_task(ap_stack), "AP DHCP");
+    spawn_or_warn(&spawner, ap_dns_task(ap_stack), "AP DNS");
+    spawn_or_warn(
+        &spawner,
+        ap_http_task(
+            ap_stack,
+            portal_tcp_rx_0,
+            portal_tcp_tx_0,
+            portal_request_0,
+            portal_response_0,
+        ),
+        "portal HTTP 0",
+    );
+    spawn_or_warn(
+        &spawner,
+        ap_http_task(
+            ap_stack,
+            portal_tcp_rx_1,
+            portal_tcp_tx_1,
+            portal_request_1,
+            portal_response_1,
+        ),
+        "portal HTTP 1",
+    );
+
     // -- Supervisory loop --------------------------------------------------------------------
 
     let started = Instant::now();
@@ -479,11 +711,83 @@ async fn main(spawner: Spawner) -> ! {
     let mut backoff = MIN_BACKOFF;
     let mut logged_ip: Option<[u8; 4]> = None;
     let mut next_missing_warning = started;
+    let mut next_scan_at = started;
+    // A failed join inside an open window waits for the operator's next submission or Forget
+    // instead of retrying on the steady-state backoff: every attempt off-channels the AP and
+    // makes the portal unreachable, and a known-bad pair cannot succeed by repetition.
+    let mut join_failed = false;
 
     loop {
         Timer::after(LOOP_PERIOD).await;
         let now = Instant::now();
         let now_ms = now_ms();
+
+        // -- Portal commands -----------------------------------------------------------------
+        // The HTTP workers only queue; the radio controller lives here so a join cannot race a
+        // mode change.
+        while let Ok(command) = PORTAL_COMMANDS.try_receive() {
+            match command {
+                PortalCommand::Provision(new_credentials) => {
+                    let Some(new_station) = station_config_from(&new_credentials) else {
+                        warn!("portal: the submitted credentials are not a usable station config");
+                        set_portal_status(Status::Failed);
+                        continue;
+                    };
+                    info!(
+                        "portal: joining ssid={} while the AP stays up",
+                        core::str::from_utf8(new_credentials.ssid()).unwrap_or("?")
+                    );
+                    credentials = Some(new_credentials);
+                    station_config = Some(new_station.clone());
+                    PROVISIONED.store(true, Ordering::Relaxed);
+                    if let Some(event) = setup.set_provisioned(true, now_ms) {
+                        log_setup_event(event);
+                    }
+                    SETUP_OPEN.store(setup.is_open(), Ordering::Relaxed);
+                    // A join must start from a clean link: the old association (if any) is not the
+                    // config being submitted.
+                    if controller.is_connected() {
+                        let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
+                    }
+                    // APSTA keeps the portal reachable while the station associates. If the mode
+                    // switch fails the AP-only portal remains the operator's surface.
+                    if apply_ap_station(&mut controller, &new_station, &ap_config) {
+                        radio_mode = RadioMode::ApStation;
+                    } else {
+                        warn!("portal: could not enter APSTA; leaving the radio in {:?}", radio_mode);
+                    }
+                    station_connected = false;
+                    station_associated_at = Instant::now();
+                    next_station_attempt = Instant::now();
+                    backoff = MIN_BACKOFF;
+                    join_failed = false;
+                    logged_ip = None;
+                    set_portal_status(Status::Connecting);
+                    PORTAL_PROVISIONS.fetch_add(1, Ordering::Relaxed);
+                }
+                PortalCommand::Forget => {
+                    credentials = None;
+                    station_config = None;
+                    PROVISIONED.store(false, Ordering::Relaxed);
+                    let station_up = station_connected && station_stack.config_v4().is_some();
+                    let _ = setup.forget(now_ms, station_up);
+                    SETUP_OPEN.store(true, Ordering::Relaxed);
+                    // Leave the AP untouched: reapplying the mode would bounce the portal for the
+                    // laptop. Disconnecting the station is enough, and the parked/real station
+                    // config in the driver is unused while `credentials` is None.
+                    if controller.is_connected() {
+                        let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
+                    }
+                    station_connected = false;
+                    backoff = MIN_BACKOFF;
+                    next_station_attempt = Instant::now();
+                    join_failed = false;
+                    set_portal_status(Status::Unprovisioned);
+                    PORTAL_FORGETS.fetch_add(1, Ordering::Relaxed);
+                    info!("portal: forgot the network; the setup AP stays up");
+                }
+            }
+        }
 
         // The pump's clock-driven transitions: an authentication deadline and the refusal window.
         if let Some(event) = with_pump(|pump| pump.tick(now_ms)) {
@@ -498,16 +802,46 @@ async fn main(spawner: Spawner) -> ! {
         // Turn ring pressure into a robot-facing THROTTLE hint.
         emit_throttle(now_ms);
 
+        // -- Setup window ---------------------------------------------------------------------
+
+        let station_up = station_connected && station_stack.config_v4().is_some();
+        STATION_UP.store(station_up, Ordering::Relaxed);
+        if let Some(event) = setup.tick(now_ms, station_up) {
+            match event {
+                SetupEvent::Opened(_) => {
+                    SETUP_OPEN.store(true, Ordering::Relaxed);
+                    if let Some(station) = &station_config {
+                        if apply_ap_station(&mut controller, station, &ap_config) {
+                            radio_mode = RadioMode::ApStation;
+                        }
+                    } else {
+                        apply_setup_parked(&mut controller, &ap_config);
+                        radio_mode = RadioMode::ApStation;
+                    }
+                    next_scan_at = Instant::now();
+                    join_failed = false;
+                    log_setup_event(event);
+                }
+                SetupEvent::Closed(_) => {
+                    SETUP_OPEN.store(false, Ordering::Relaxed);
+                    if let Some(station) = &station_config {
+                        // Do not force a reconnect: dropping the AP mode may leave the station
+                        // association intact, and the normal `is_connected` check re-associates
+                        // only if it actually drops.
+                        apply_station(&mut controller, station);
+                    } else {
+                        apply_parked_station(&mut controller);
+                        station_connected = false;
+                    }
+                    radio_mode = RadioMode::Station;
+                    log_setup_event(event);
+                }
+            }
+        }
+
         // -- Station association and reconnect ----------------------------------------------
 
-        if !credentials_present() {
-            if now >= next_missing_warning {
-                warn!(
-                    "sta: BRIDGE_STA_SSID/BRIDGE_STA_PASSWORD are unset or CHANGE_ME; the UART and pump still run, but there is no station link"
-                );
-                next_missing_warning = now + Duration::from_secs(60);
-            }
-        } else if station_configured {
+        if station_config.is_some() {
             if station_connected {
                 if !controller.is_connected() {
                     info!("sta: link lost; reconnecting");
@@ -516,6 +850,9 @@ async fn main(spawner: Spawner) -> ! {
                     backoff = MIN_BACKOFF;
                     next_station_attempt = now + backoff;
                     backoff = next_backoff(backoff);
+                    if matches!(portal_status(), Status::Connected(_)) {
+                        set_portal_status(Status::Connecting);
+                    }
                 } else if station_stack.config_v4().is_none()
                     && now.duration_since(station_associated_at) >= DHCP_TIMEOUT
                 {
@@ -526,31 +863,75 @@ async fn main(spawner: Spawner) -> ! {
                     backoff = MIN_BACKOFF;
                     next_station_attempt = Instant::now() + backoff;
                     backoff = next_backoff(backoff);
+                    if setup.is_open() {
+                        join_failed = true;
+                        set_portal_status(Status::Failed);
+                    }
                 }
             }
 
-            if !station_connected && now >= next_station_attempt {
-                scan_station_target(&mut controller).await;
-                if connect_station(&mut controller).await {
-                    info!("sta: associated; DHCP runs in the background");
-                    station_connected = true;
-                    station_associated_at = Instant::now();
-                    backoff = MIN_BACKOFF;
-                    logged_ip = None;
-                } else {
-                    STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
-                    warn!("sta: reconnect in {}s", backoff.as_secs());
-                    next_station_attempt = Instant::now() + backoff;
-                    backoff = next_backoff(backoff);
+            // Dropping the AP mode can leave an existing association in place; adopt it instead
+            // of scanning and re-associating the network the station is already on.
+            if !station_connected && controller.is_connected() {
+                station_connected = true;
+                station_associated_at = Instant::now();
+            }
+
+            if !station_connected && now >= next_station_attempt && !(setup.is_open() && join_failed) {
+                let target = credentials.as_ref().map_or(&[][..], |current| current.ssid());
+                scan_station_target(&mut controller, target).await;
+                match connect_station(&mut controller).await {
+                    JoinOutcome::Connected => {
+                        info!("sta: associated; DHCP runs in the background");
+                        station_connected = true;
+                        station_associated_at = Instant::now();
+                        backoff = MIN_BACKOFF;
+                        join_failed = false;
+                        logged_ip = None;
+                        if setup.is_open() {
+                            set_portal_status(Status::Connecting);
+                        }
+                    }
+                    JoinOutcome::WrongPassword => {
+                        STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
+                        join_failed = true;
+                        set_portal_status(Status::WrongPassword);
+                        warn!(
+                            "sta: association rejected; check the passphrase; retry in {}s",
+                            backoff.as_secs()
+                        );
+                        next_station_attempt = Instant::now() + backoff;
+                        backoff = next_backoff(backoff);
+                    }
+                    JoinOutcome::Failed => {
+                        STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
+                        join_failed = true;
+                        set_portal_status(Status::Failed);
+                        warn!("sta: reconnect in {}s", backoff.as_secs());
+                        next_station_attempt = Instant::now() + backoff;
+                        backoff = next_backoff(backoff);
+                    }
                 }
             }
+        } else if now >= next_missing_warning {
+            warn!("sta: no credentials; the setup portal is the only network surface");
+            next_missing_warning = now + Duration::from_secs(60);
         }
 
-        // The Beacon is only honest while the station is associated and holds an address.
-        STATION_UP.store(
-            station_connected && station_stack.config_v4().is_some(),
-            Ordering::Relaxed,
-        );
+        // The portal's status line follows the station, without a rejoin.
+        let station_up = station_connected && station_stack.config_v4().is_some();
+        STATION_UP.store(station_up, Ordering::Relaxed);
+        if station_up && let Some(config) = station_stack.config_v4() {
+            set_portal_status(Status::Connected(config.address.address().octets()));
+        }
+
+        // -- Portal scan list -----------------------------------------------------------------
+        // Skip while a join is in flight: a sweep on the one radio can disturb both the AP and
+        // the association attempt.
+        if setup.is_open() && !station_up && now >= next_scan_at && portal_status() != Status::Connecting {
+            run_scan_sweeps(&mut controller, &ap_ssid_bytes[..ap_ssid_len]).await;
+            next_scan_at = Instant::now() + SCAN_REFRESH;
+        }
 
         // -- Status line ---------------------------------------------------------------------
 
@@ -583,7 +964,7 @@ async fn main(spawner: Spawner) -> ! {
                 });
 
             info!(
-                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={}",
+                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={}",
                 now.duration_since(started).as_secs(),
                 rssi,
                 uart_rx,
@@ -624,6 +1005,16 @@ async fn main(spawner: Spawner) -> ! {
                 BEACONS_SENT.load(Ordering::Relaxed),
                 BEACON_SEND_ERRORS.load(Ordering::Relaxed),
                 link_ready(),
+                setup.is_open(),
+                PROVISIONED.load(Ordering::Relaxed),
+                DHCP_OFFERS.load(Ordering::Relaxed),
+                DHCP_ACKS.load(Ordering::Relaxed),
+                DNS_ANSWERS.load(Ordering::Relaxed),
+                PORTAL_REQUESTS.load(Ordering::Relaxed),
+                PORTAL_PROVISIONS.load(Ordering::Relaxed),
+                PORTAL_FORGETS.load(Ordering::Relaxed),
+                SCAN_SWEEPS_RUN.load(Ordering::Relaxed),
+                SCAN_APS_SEEN.load(Ordering::Relaxed),
             );
 
             last_uart_rx = uart_rx;
@@ -638,19 +1029,68 @@ async fn main(spawner: Spawner) -> ! {
 // Wi-Fi helpers
 // ---------------------------------------------------------------------------------------------
 
+/// The radio's current mode, so a setup transition only reconfigures when it changes something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
+enum RadioMode {
+    /// Steady state: the station only, no setup AP.
+    Station,
+    /// Setup Mode: the portal plus the station (a parked one when unprovisioned).
+    ApStation,
+}
+
+/// The result of one association attempt, as the portal's status line reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JoinOutcome {
+    /// Association succeeded; DHCP may still be pending.
+    Connected,
+    /// The network rejected the credential pair (a wrong WPA2 passphrase).
+    WrongPassword,
+    /// Any other failure (timeout, missing network, radio error).
+    Failed,
+}
+
 /// Returns whether usable build-time credentials were supplied.
 fn credentials_present() -> bool {
     !STA_SSID.is_empty() && STA_SSID != "CHANGE_ME" && !STA_PASSWORD.is_empty() && STA_PASSWORD != "CHANGE_ME"
 }
 
-/// Builds the station configuration, or `None` when a build-time value is malformed.
+/// Returns the build-time credentials as the portal's fixed-size form, or `None`.
+fn initial_credentials() -> Option<Credentials> {
+    if !credentials_present() {
+        return None;
+    }
+    credentials_from(STA_SSID.as_bytes(), STA_PASSWORD.as_bytes())
+}
+
+/// Copies a credential pair into the portal's fixed-size form, validating the WPA2-PSK lengths.
+fn credentials_from(ssid: &[u8], passphrase: &[u8]) -> Option<Credentials> {
+    if ssid.is_empty() || ssid.len() > portal::MAX_SSID_BYTES {
+        return None;
+    }
+    if passphrase.len() < portal::MIN_PASSPHRASE_BYTES || passphrase.len() > portal::MAX_PASSPHRASE_BYTES {
+        return None;
+    }
+    let mut credentials = Credentials {
+        ssid: [0u8; portal::MAX_SSID_BYTES],
+        ssid_len: 0,
+        passphrase: [0u8; portal::MAX_PASSPHRASE_BYTES],
+        passphrase_len: 0,
+    };
+    credentials.ssid[..ssid.len()].copy_from_slice(ssid);
+    credentials.ssid_len = u8::try_from(ssid.len()).ok()?;
+    credentials.passphrase[..passphrase.len()].copy_from_slice(passphrase);
+    credentials.passphrase_len = u8::try_from(passphrase.len()).ok()?;
+    Some(credentials)
+}
+
+/// Builds a station configuration from a credential pair, or `None` when the radio rejects it.
 #[allow(
     clippy::large_stack_frames,
     reason = "the station configuration is a boot-time value that lives in the radio driver"
 )]
-fn build_station_config() -> Option<StationConfig> {
-    let ssid = Ssid::try_from(STA_SSID).ok()?;
-    let password = STA_PASSWORD.try_into().ok()?;
+fn station_config_from(credentials: &Credentials) -> Option<StationConfig> {
+    let ssid = Ssid::try_from(credentials.ssid()).ok()?;
+    let password = credentials.passphrase().try_into().ok()?;
     Some(
         StationConfig::default()
             .with_ssid(ssid)
@@ -658,9 +1098,155 @@ fn build_station_config() -> Option<StationConfig> {
     )
 }
 
+/// Builds the setup AP's configuration: `ExplorerRobot-XXXX`, WPA2-PSK, at most two clients.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the AP configuration is a boot-time value that lives in the radio driver"
+)]
+fn build_access_point_config(ssid: Ssid) -> Option<AccessPointConfig> {
+    let password = AP_PASSWORD.try_into().ok()?;
+    Some(
+        AccessPointConfig::default()
+            .with_ssid(ssid)
+            .with_channel(AP_CHANNEL)
+            .with_authentication(AuthenticationMethodConfig::Wpa2Personal(password))
+            .with_max_connections(AP_MAX_CONNECTIONS),
+    )
+}
+
+/// Builds the setup SSID from the AP interface MAC's last two bytes, uppercase hex (ADR-0036).
+fn setup_ssid() -> ([u8; portal::MAX_SSID_BYTES], usize) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mac = interface_mac_address(InterfaceMacAddress::AccessPoint);
+    let bytes = mac.as_bytes();
+    let mut ssid = [0u8; portal::MAX_SSID_BYTES];
+    ssid[..AP_SSID_PREFIX.len()].copy_from_slice(AP_SSID_PREFIX);
+    let mut index = AP_SSID_PREFIX.len();
+    for byte in [bytes[4], bytes[5]] {
+        ssid[index] = HEX[usize::from(byte >> 4)];
+        ssid[index + 1] = HEX[usize::from(byte & 0x0F)];
+        index += 2;
+    }
+    (ssid, index)
+}
+
+/// Applies station-only mode.
+fn apply_station(controller: &mut WifiController<'_>, station: &StationConfig) -> bool {
+    match controller.set_config(&WifiConfig::Station(station.clone())) {
+        Ok(()) => {
+            info!("wifi: station mode");
+            true
+        }
+        Err(error) => {
+            warn!("wifi: station mode rejected: {:?}", error);
+            false
+        }
+    }
+}
+
+/// Builds the parked station config: a real SSID/password pair for an absent network. The radio
+/// is never asked to connect to it; it exists so the controller stays in APSTA.
+fn parked_station_config() -> Option<StationConfig> {
+    credentials_from(PARKED_STATION_SSID.as_bytes(), PARKED_STATION_PASSWORD.as_bytes())
+        .and_then(|credentials| station_config_from(&credentials))
+}
+
+/// Applies APSTA with the parked station. This is the unprovisioned setup state on this beta:
+/// APSTA is what makes `scan_async` work, and the station is never associated, so the portal is
+/// the only served surface.
+fn apply_setup_parked(controller: &mut WifiController<'_>, access_point: &AccessPointConfig) -> bool {
+    let Some(station) = parked_station_config() else {
+        warn!("wifi: the parked station configuration was rejected");
+        return false;
+    };
+    apply_ap_station(controller, &station, access_point)
+}
+
+/// Applies APSTA: the setup AP plus the station, so the portal stays up during a join.
+fn apply_ap_station(
+    controller: &mut WifiController<'_>,
+    station: &StationConfig,
+    access_point: &AccessPointConfig,
+) -> bool {
+    match controller.set_config(&WifiConfig::AccessPointStation(station.clone(), access_point.clone())) {
+        Ok(()) => {
+            info!("wifi: setup AP mode (APSTA)");
+            true
+        }
+        Err(error) => {
+            warn!("wifi: APSTA mode rejected: {:?}", error);
+            false
+        }
+    }
+}
+
+/// Parks the radio in STA-only mode on a network that does not exist. There is no radio-off API
+/// on this beta, so this is how a closed, still-unprovisioned window stops serving the AP while
+/// the controller stays alive and the next window can re-open it.
+fn apply_parked_station(controller: &mut WifiController<'_>) {
+    let Some(station) = parked_station_config() else {
+        warn!("wifi: the parked station configuration was rejected");
+        return;
+    };
+    apply_station(controller, &station);
+}
+
+/// Logs one setup-window transition.
+fn log_setup_event(event: SetupEvent) {
+    match event {
+        SetupEvent::Opened(reason) => info!("setup: window opened ({})", raise_reason(reason)),
+        SetupEvent::Closed(reason) => info!("setup: window closed ({})", close_reason(reason)),
+    }
+}
+
+/// The short textual label for a window's closing reason.
+fn close_reason(reason: CloseReason) -> &'static str {
+    match reason {
+        CloseReason::Expired => "expired",
+        CloseReason::StationStable => "station stable",
+    }
+}
+
+/// The short textual label for a window's opening reason.
+fn raise_reason(reason: RaiseReason) -> &'static str {
+    match reason {
+        RaiseReason::Unprovisioned => "unprovisioned",
+        RaiseReason::StationOutage => "station outage",
+        RaiseReason::PanelRequest => "panel request",
+        RaiseReason::Forgotten => "forgotten",
+    }
+}
+
 /// Doubles the reconnect backoff, capped at [`MAX_BACKOFF`].
 fn next_backoff(backoff: Duration) -> Duration {
     (backoff * 2).min(MAX_BACKOFF)
+}
+
+/// Best-of-N 2.4 GHz scan for the portal: `scan_async` on this beta drops whole sweeps, so merge
+/// several and keep the strongest RSSI per SSID. The AP's own SSID is filtered out.
+async fn run_scan_sweeps(controller: &mut WifiController<'_>, own_ssid: &[u8]) {
+    with_scan_cache(ScanCache::clear);
+    for sweep in 1..=SCAN_SWEEPS {
+        match controller.scan_async(&ScanConfig::default()).await {
+            Ok(aps) => {
+                SCAN_SWEEPS_RUN.fetch_add(1, Ordering::Relaxed);
+                for ap in &aps {
+                    let ssid = ap.ssid.as_str().as_bytes();
+                    if ssid.is_empty() || ssid == own_ssid {
+                        continue;
+                    }
+                    let secure = !matches!(ap.auth_method, None | Some(AuthenticationMethod::None));
+                    with_scan_cache(|cache| cache.observe(ssid, ap.signal_strength, secure));
+                    SCAN_APS_SEEN.fetch_add(1, Ordering::Relaxed);
+                }
+                info!("portal: scan sweep {}/{} saw {} APs", sweep, SCAN_SWEEPS, aps.len());
+            }
+            Err(error) => warn!("portal: scan sweep {}/{} failed: {:?}", sweep, SCAN_SWEEPS, error),
+        }
+        if sweep < SCAN_SWEEPS {
+            Timer::after(Duration::from_millis(300)).await;
+        }
+    }
 }
 
 /// Scans for the configured station SSID and logs every BSS's auth mode before associating.
@@ -668,8 +1254,8 @@ fn next_backoff(backoff: Duration) -> Duration {
 /// `esp-radio` 1.0.0-beta.1 only exposes `Wpa2Personal`; a WPA3-only or PMF-required AP is the
 /// usual cause of an association failure, and the advertised auth mode settles that before any
 /// credentials are tried. `scan_async` on this beta can miss a sweep, so an empty result is retried.
-async fn scan_station_target(controller: &mut WifiController<'_>) {
-    let Ok(ssid) = Ssid::try_from(STA_SSID) else {
+async fn scan_station_target(controller: &mut WifiController<'_>, target: &[u8]) {
+    let Ok(ssid) = Ssid::try_from(target) else {
         warn!("sta: SSID too long to scan for; skipping the scan");
         return;
     };
@@ -704,22 +1290,51 @@ async fn scan_station_target(controller: &mut WifiController<'_>) {
     warn!("sta: scan: target SSID was not found in any sweep");
 }
 
-/// Associates the station, returning whether the controller reported success.
-async fn connect_station(controller: &mut WifiController<'_>) -> bool {
+/// Associates the station, classifying a WPA2 credential rejection so the portal can say
+/// "wrong password" instead of a generic failure.
+async fn connect_station(controller: &mut WifiController<'_>) -> JoinOutcome {
     match with_timeout(CONNECT_TIMEOUT, controller.connect_async()).await {
         Ok(Ok(info)) => {
             info!("sta: associated ssid={} channel={}", info.ssid, info.channel);
-            true
+            JoinOutcome::Connected
+        }
+        Ok(Err(ConnectionError::Failed(info))) => {
+            if auth_failure(info.reason) {
+                warn!("sta: association rejected: {:?}", info.reason);
+                JoinOutcome::WrongPassword
+            } else {
+                warn!("sta: association failed: {:?}", info.reason);
+                JoinOutcome::Failed
+            }
+        }
+        Ok(Err(ConnectionError::WifiError(WifiError::InvalidPassword))) => {
+            warn!("sta: the radio rejected the passphrase");
+            JoinOutcome::WrongPassword
         }
         Ok(Err(error)) => {
             warn!("sta: association failed: {:?}", error);
-            false
+            JoinOutcome::Failed
         }
         Err(_) => {
             warn!("sta: association timed out");
-            false
+            JoinOutcome::Failed
         }
     }
+}
+
+/// Returns whether a disconnect reason means the WPA2 pre-shared key was wrong.
+fn auth_failure(reason: DisconnectReason) -> bool {
+    matches!(
+        reason,
+        DisconnectReason::AuthenticationExpired
+            | DisconnectReason::MicFailure
+            | DisconnectReason::FourWayHandshakeTimeout
+            | DisconnectReason::GroupKeyUpdateTimeout
+            | DisconnectReason::IeIn4wayDiffers
+            | DisconnectReason::_802_1xAuthenticationFailed
+            | DisconnectReason::CipherSuiteRejected
+            | DisconnectReason::BadCipherOrAkm
+    )
 }
 
 /// Bits per second converted to whole kilobits per second for a status interval.
@@ -732,11 +1347,234 @@ fn kbps(bytes: u32, interval: Duration) -> u32 {
 // Network tasks
 // ---------------------------------------------------------------------------------------------
 
-/// The station stack's runner.
-#[embassy_executor::task]
+/// One `embassy-net` stack's runner (station or AP).
+#[embassy_executor::task(pool_size = 2)]
 async fn net_task(mut runner: Runner<'static, Interface>) {
-    info!("net: station runner started");
+    info!("net: stack runner started");
     runner.run().await;
+}
+
+/// The setup AP's hand-rolled DHCP server (RFC 2131): DISCOVER/OFFER and REQUEST/ACK, broadcast
+/// replies, a two-client pool. No DHCP crate.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the task owns the UDP socket and the two datagram buffers for its lifetime"
+)]
+#[embassy_executor::task]
+async fn ap_dhcp_task(stack: Stack<'static>) {
+    let mut socket = UdpSocket::new(
+        stack,
+        DHCP_RX_META.init([PacketMetadata::EMPTY; 1]),
+        DHCP_RX_BUFFER.init([0u8; PORTAL_UDP_BUFFER]),
+        DHCP_TX_META.init([PacketMetadata::EMPTY; 1]),
+        DHCP_TX_BUFFER.init([0u8; PORTAL_UDP_BUFFER]),
+    );
+    if socket.bind(dhcp::SERVER_PORT).is_err() {
+        warn!("ap: could not bind UDP {}", dhcp::SERVER_PORT);
+        return;
+    }
+    let mut server = dhcp::Server::new(dhcp::ServerConfig::standard());
+    let mut request = [0u8; PORTAL_UDP_BUFFER];
+    let mut response = [0u8; PORTAL_UDP_BUFFER];
+    info!("ap: DHCP server on UDP {}", dhcp::SERVER_PORT);
+    loop {
+        let (length, _meta) = match socket.recv_from(&mut request).await {
+            Ok(pair) => pair,
+            Err(error) => {
+                warn!("ap: DHCP receive failed: {:?}", error);
+                Timer::after(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
+        if !SETUP_OPEN.load(Ordering::Relaxed) {
+            continue;
+        }
+        if let Some(reply) = server.handle(&request[..length], now_ms(), &mut response) {
+            match reply.kind {
+                dhcp::ReplyKind::Offer => {
+                    DHCP_OFFERS.fetch_add(1, Ordering::Relaxed);
+                }
+                dhcp::ReplyKind::Ack => {
+                    DHCP_ACKS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            if socket
+                .send_to(&response[..reply.length], (Ipv4Address::BROADCAST, dhcp::CLIENT_PORT))
+                .await
+                .is_err()
+            {
+                warn!("ap: DHCP reply send failed");
+            }
+        }
+    }
+}
+
+/// The setup AP's DNS catch-all: every A query resolves to the AP's address, so a captive probe
+/// lands on the portal.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the task owns the UDP socket and the two datagram buffers for its lifetime"
+)]
+#[embassy_executor::task]
+async fn ap_dns_task(stack: Stack<'static>) {
+    let mut socket = UdpSocket::new(
+        stack,
+        DNS_RX_META.init([PacketMetadata::EMPTY; 1]),
+        DNS_RX_BUFFER.init([0u8; PORTAL_UDP_BUFFER]),
+        DNS_TX_META.init([PacketMetadata::EMPTY; 1]),
+        DNS_TX_BUFFER.init([0u8; PORTAL_UDP_BUFFER]),
+    );
+    if socket.bind(dns::PORT).is_err() {
+        warn!("ap: could not bind UDP {}", dns::PORT);
+        return;
+    }
+    let mut request = [0u8; PORTAL_UDP_BUFFER];
+    let mut reply = [0u8; PORTAL_UDP_BUFFER];
+    info!("ap: DNS catch-all on UDP {}", dns::PORT);
+    loop {
+        let (length, meta) = match socket.recv_from(&mut request).await {
+            Ok(pair) => pair,
+            Err(error) => {
+                warn!("ap: DNS receive failed: {:?}", error);
+                Timer::after(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
+        if !SETUP_OPEN.load(Ordering::Relaxed) {
+            continue;
+        }
+        if let Some(reply_len) = dns::answer(&request[..length], AP_ADDRESS, &mut reply) {
+            DNS_ANSWERS.fetch_add(1, Ordering::Relaxed);
+            if socket.send_to(&reply[..reply_len], meta.endpoint).await.is_err() {
+                warn!("ap: DNS reply send failed");
+            }
+        }
+    }
+}
+
+/// One portal HTTP worker: accept, read one request, answer it and close.
+///
+/// Two workers so the page's 1 s status poll and a form submit never block each other.
+#[embassy_executor::task(pool_size = 2)]
+async fn ap_http_task(
+    stack: Stack<'static>,
+    rx_buffer: &'static mut [u8],
+    tx_buffer: &'static mut [u8],
+    request: &'static mut [u8],
+    response: &'static mut [u8],
+) {
+    let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
+    loop {
+        if !SETUP_OPEN.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_millis(250)).await;
+            continue;
+        }
+        socket.set_timeout(Some(PORTAL_READ_TIMEOUT));
+        if socket.accept(PORTAL_HTTP_PORT).await.is_err() {
+            Timer::after(Duration::from_secs(1)).await;
+            continue;
+        }
+        PORTAL_REQUESTS.fetch_add(1, Ordering::Relaxed);
+        if serve_portal(&mut socket, request, response).await {
+            info!("portal: response sent");
+        }
+        finish_socket(&mut socket).await;
+    }
+}
+
+/// Reads one HTTP request into `request` and answers it, returning whether a response was sent.
+async fn serve_portal(socket: &mut TcpSocket<'_>, request: &mut [u8], response: &mut [u8]) -> bool {
+    let mut used = 0;
+    loop {
+        match portal::parse_request(&request[..used]) {
+            Ok(parsed) => {
+                let body = request.get(parsed.body_start..used).unwrap_or(&[]);
+                return answer_portal(socket, parsed, body, response).await;
+            }
+            Err(portal::RequestError::Incomplete) => {
+                if used >= request.len() {
+                    return send_error(socket, 400, response).await;
+                }
+                match with_timeout(PORTAL_READ_TIMEOUT, socket.read(&mut request[used..])).await {
+                    Ok(Ok(0)) => return false,
+                    Ok(Ok(count)) => used += count,
+                    Ok(Err(_)) | Err(_) => return false,
+                }
+            }
+            Err(portal::RequestError::Malformed) => return send_error(socket, 400, response).await,
+        }
+    }
+}
+
+/// Routes one parsed portal request and writes its response.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the portal credential command is the largest value this router holds"
+)]
+async fn answer_portal(
+    socket: &mut TcpSocket<'_>,
+    request: portal::Request<'_>,
+    body: &[u8],
+    response: &mut [u8],
+) -> bool {
+    let length = match (request.method, request.path) {
+        (portal::Method::Get, "/") | (portal::Method::Get, "/index.html") => {
+            let status = portal_status();
+            with_scan_cache(|cache| portal::write_index_page(cache, status, response))
+        }
+        (portal::Method::Get, "/status") => portal::write_status_response(portal_status(), response),
+        (portal::Method::Post, "/provision") => match portal::parse_provision(body) {
+            Ok(credentials) => match PORTAL_COMMANDS.try_send(PortalCommand::Provision(credentials)) {
+                Ok(()) => {
+                    set_portal_status(Status::Connecting);
+                    portal::write_redirect(response)
+                }
+                Err(_) => {
+                    warn!("portal: the provision command queue is full");
+                    portal::write_error(400, response)
+                }
+            },
+            Err(_) => portal::write_error(400, response),
+        },
+        (portal::Method::Post, "/forget") => match PORTAL_COMMANDS.try_send(PortalCommand::Forget) {
+            Ok(()) => {
+                set_portal_status(Status::Unprovisioned);
+                portal::write_redirect(response)
+            }
+            Err(_) => {
+                warn!("portal: the forget command queue is full");
+                portal::write_error(400, response)
+            }
+        },
+        (_, "/" | "/index.html" | "/status" | "/provision" | "/forget") => portal::write_error(405, response),
+        _ => portal::write_error(404, response),
+    };
+
+    let Some(length) = length else {
+        return send_error(socket, 400, response).await;
+    };
+    write_portal_response(socket, &response[..length]).await
+}
+
+/// Writes a complete HTTP error response, falling back to closing the socket if it cannot fit.
+async fn send_error(socket: &mut TcpSocket<'_>, code: u16, response: &mut [u8]) -> bool {
+    let Some(length) = portal::write_error(code, response) else {
+        return false;
+    };
+    write_portal_response(socket, &response[..length]).await
+}
+
+/// Writes the whole portal response without touching the Link Protocol's counters.
+async fn write_portal_response(socket: &mut TcpSocket<'_>, data: &[u8]) -> bool {
+    let mut written = 0;
+    while written < data.len() {
+        match socket.write(&data[written..]).await {
+            Ok(0) => return false,
+            Ok(count) => written += count,
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 /// One Link Protocol connection worker: accept, run the `bridge-net` preamble, then serve.
@@ -757,6 +1595,13 @@ async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buf
     let mut parser = PcToRobotParser::new(Direction::PcToRobot, UART_BAUD);
 
     loop {
+        // Setup Mode serves the portal, not the Link Protocol: the Beacon advertises
+        // `PORTAL_ONLY` and no new client is admitted. An already-authenticated session is left
+        // alone, matching ADR-0036's "the Link Protocol still on STA if associated".
+        if SETUP_OPEN.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_millis(250)).await;
+            continue;
+        }
         socket.set_timeout(Some(SOCKET_TIMEOUT));
         if socket.accept(LINK_TCP_DEFAULT).await.is_err() {
             Timer::after(Duration::from_secs(1)).await;
@@ -1075,8 +1920,10 @@ async fn finish_socket(socket: &mut TcpSocket<'_>) {
 /// Broadcasts the Discovery Beacon every [`beacon::INTERVAL_MS`] while the station is up.
 ///
 /// The flags come from the same helpers the challenge serves, so the Beacon and the preamble can
-/// never describe the Bridge differently. `tcp_port` is the Link listener's port: portal-only zero
-/// belongs to ticket 06.
+/// never describe the Bridge differently. In Setup Mode the Beacon advertises
+/// [`beacon::PORTAL_ONLY`]: the portal is the served surface and the Link listener does not admit
+/// clients, so the daemon must not connect. In AP-only Setup Mode there is no station Beacon at
+/// all (ADR-0037's amendment).
 #[allow(
     clippy::large_stack_frames,
     reason = "the task owns the UDP socket and the encoded datagram"
@@ -1103,11 +1950,16 @@ async fn beacon_task(stack: Stack<'static>) {
     let mut bytes = [0u8; beacon::ENCODED_LEN];
     loop {
         if STATION_UP.load(Ordering::Relaxed) {
+            let tcp_port = if SETUP_OPEN.load(Ordering::Relaxed) {
+                beacon::PORTAL_ONLY
+            } else {
+                LINK_TCP_DEFAULT
+            };
             let beacon = Beacon {
                 major: beacon::LINK_MAJOR,
                 device_id: device_id(),
                 name: bridge_name(),
-                tcp_port: LINK_TCP_DEFAULT,
+                tcp_port,
                 flags: flags_now(),
             };
             match beacon.encode_into(&mut bytes) {
@@ -1170,12 +2022,19 @@ fn link_ready() -> bool {
 
 /// Returns the flags the Beacon and the challenge serve.
 ///
-/// Provisioned stays false until ticket 07 stores a credential record; setup-mode stays false while
-/// the firmware is station-only (ticket 06 adds APSTA).
+/// `provisioned` is whether a usable credential pair exists (ticket 07 replaces the RAM stand-in
+/// with the record); `setup_mode` is the bounded window, which is only observable on the station
+/// Beacon in APSTA.
 fn flags_now() -> IdentityFlags {
     let mut flags = IdentityFlags::default();
+    if PROVISIONED.load(Ordering::Relaxed) {
+        flags |= IdentityFlags::PROVISIONED;
+    }
     if link_ready() {
         flags |= IdentityFlags::LINK_READY;
+    }
+    if SETUP_OPEN.load(Ordering::Relaxed) {
+        flags |= IdentityFlags::SETUP_MODE;
     }
     flags
 }

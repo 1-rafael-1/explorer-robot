@@ -8,7 +8,7 @@ It currently holds two binaries:
 
 | binary | purpose |
 |---|---|
-| `bridge` | the ticket-05 network edge: station-only Wi-Fi, UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate on a station-only TCP listener, and the Discovery Beacon |
+| `bridge` | the ticket-06 network edge and Setup Mode: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, and the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal |
 | `stack-soak` | the ticket-09 language spike, kept as the regression soak: APSTA, a UART loopback and a TCP echo |
 
 `bridge-core` is the host-testable pump crate the `bridge` binary wires to the HAL (see
@@ -49,9 +49,15 @@ BRIDGE_STA_SSID='your-ssid' BRIDGE_STA_PASSWORD='your-passphrase' \
     BRIDGE_BENCH_TOKEN='your-bench-token' cargo build --release --bin bridge
 ```
 
-With neither station variable set, or with either left at `CHANGE_ME`, the firmware still boots
-and runs the UART, the pump and the Beacon task, but it logs a clear warning every minute and
-never attempts to associate. The listener is useless without a station address.
+With neither station variable set, or with either left at `CHANGE_ME`, the Bridge boots
+**unprovisioned** and raises Setup Mode: the AP-only-equivalent portal comes up at `192.168.4.1`,
+and credentials submitted through the page join the station for this boot only. Ticket 07 owns the
+persisted record; ticket 06 keeps the submitted pair in RAM.
+
+The setup AP is `ExplorerRobot-XXXX` (uppercase hex of the AP interface MAC's last two bytes),
+WPA2-PSK `explorer-setup`, at most two clients, on `192.168.4.1/24` with a two-address DHCP pool.
+`scan_async` returns `Other` in AP-only mode on this beta, so the unprovisioned window runs APSTA
+with a parked station config that is never connected; the portal is still the only served surface.
 
 `BRIDGE_BENCH_TOKEN` is a **temporary build-time stand-in** for ticket 07's credential record. Its
 **UTF-8 bytes are the HMAC key**: the daemon stores the same text in its config (`default_token`
@@ -89,7 +95,8 @@ the variables silently rebuilds with `CHANGE_ME`/empty values, so check the boot
 
 The repository's runner is `espflash flash --monitor --chip esp32c3 --log-format defmt`. The
 end-to-end sequence, with the exact boot lines and probe output to expect, is
-[Bench acceptance run](#bench-acceptance-run-ticket-05). The command above flashes and attaches
+[Bench acceptance run](#bench-acceptance-run-ticket-05) (the network edge) and
+[Bench acceptance run (ticket 06)](#bench-acceptance-run-ticket-06) (Setup Mode). The command above flashes and attaches
 the monitor in one go; `Ctrl-C` ends the monitor and frees `/dev/ttyACM0`.
 
 The monitor resets the board, so the boot banner and the association lines appear after it
@@ -159,13 +166,13 @@ BRIDGE_BENCH_TOKEN='bench05' \
 Expected for step 1:
 
 ```text
-beacon from=192.168.0.138 device=907069c1d064 name='Explorer-D064' major=1 tcp_port=9000 flags=0x00 (-)
+beacon from=192.168.0.138 device=907069c1d064 name='Explorer-D064' major=1 tcp_port=9000 flags=0x01 (provisioned)
 ```
 
 Expected for step 2:
 
 ```text
-link-probe: authenticated device=907069c1d064 name='Explorer-D064' flags=0x00
+link-probe: authenticated device=907069c1d064 name='Explorer-D064' flags=0x01
 link-probe: HELLO sent to 192.168.0.138:9000 (epoch=0, rate=10Hz)
 link-probe: done after 1.0s frames=0 hello_ack=no loopback=sent
 link-probe: loopback HELLO sent; watch the Bridge status line …
@@ -174,13 +181,15 @@ link-probe: loopback HELLO sent; watch the Bridge status line …
 The `HELLO` is ignored by the router on the way back, so `frames=0` and `hello_ack=no` are
 expected. The proof is the next status line —
 `uart_rx=52B uart_tx=52B … good=1 … link_ready=true` — and the Beacon watcher showing
-`flags=0x02 (link-ready)` for one or two datagrams, then back to `0x00` after the 5 s window.
+`flags=0x03 (provisioned,link-ready)` for one or two datagrams, then back to `0x01` after the 5 s
+window. (Ticket 06 sets the `provisioned` bit whenever a usable credential pair exists; a build
+with no station credentials shows `0x00` and `0x02` instead.)
 
 Expected for step 3:
 
 ```text
 auth-probe: valid
-  accepted device=907069c1d064 name='Explorer-D064' flags=0x00
+  accepted device=907069c1d064 name='Explorer-D064' flags=0x01
   PASS
 auth-probe: busy
   second client refused: denied: busy, retry_ms=4000
@@ -201,8 +210,8 @@ auth-probe: all checks passed
 ```
 
 The Bridge counters corroborate it: `auth_ok` rises, `auth_bad` and `auth_expired` move with the
-matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags=0x02` instead of
-`0x00` if the matrix starts inside the loopback's 5 s link-ready window.
+matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags=0x03` instead of
+`0x01` if the matrix starts inside the loopback's 5 s link-ready window.
 
 ### Notes
 
@@ -215,6 +224,103 @@ matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags
 - `token=MISSING` on the boot banner means the token was not exported for that `cargo build`.
   `preamble failed: denied: unauthorized` in a probe means the probe's token differs from the one
   compiled into the image.
+
+## Bench acceptance run (ticket 06)
+
+This is the flow that passed on 2026-11-07. It deliberately builds **without** station
+credentials, so the Bridge boots unprovisioned and raises Setup Mode. The flashed image had no
+token either; Setup Mode does not use it.
+
+### Terminal 1 — build, flash and monitor
+
+```sh
+cd bridge-firmware
+touch src/bin/bridge.rs
+
+cargo build --release --bin bridge && \
+espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
+    target/riscv32imc-unknown-none-elf/release/bridge
+```
+
+If `espflash` reports every section `Skipped! (checksum matches)`, it does not reset the chip;
+rebuild with a changed input (or run `espflash reset`) or the 10-minute window will already be
+expired when you start.
+
+Expect:
+
+```text
+[INFO ] bridge firmware: ticket 06 setup portal, bridge-net preamble, Beacon every 3000ms; …
+[INFO ] bridge identity: device_id=… name=Explorer-… token=MISSING
+[INFO ] setup: window opened (unprovisioned)
+[INFO ] wifi: setup AP mode (APSTA)
+[INFO ] ap: setup ssid=ExplorerRobot-XXXX password=explorer-setup channel=1 max_clients=2 address=192.168.4.1/24
+[INFO ] ap: DHCP server on UDP 67
+[INFO ] ap: DNS catch-all on UDP 53
+[INFO ] portal: scan sweep 1/3 saw N APs …
+```
+
+### Terminal 2 — join the AP and use the portal
+
+Join `ExplorerRobot-XXXX` with `explorer-setup` (a laptop, a phone or `nmcli`). The hand-rolled
+DHCP server answers with `192.168.4.100` or `192.168.4.101` and a default route via
+`192.168.4.1`:
+
+```sh
+nmcli device wifi connect ExplorerRobot-XXXX password explorer-setup
+ip -4 addr show wlan0 | grep inet     # 192.168.4.100/24
+curl -s http://192.168.4.1/status     # unprovisioned
+dig +short @192.168.4.1 example.com A # 192.168.4.1
+curl -s http://192.168.4.1/ | head
+```
+
+The page carries the status line, the best-of-N scan list, the SSID/passphrase form and the
+Forget form. The status line polls `/status` once a second.
+
+```sh
+# a wrong passphrase: 303, then connecting -> wrong password; the page stays reachable
+curl -s -o /dev/null -w '%{http_code}\n' \
+    -d 'ssid=YourNetwork&passphrase=definitely-wrong' http://192.168.4.1/provision
+curl -s http://192.168.4.1/status     # wrong password
+
+# Forget clears the attempt and leaves the window open
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://192.168.4.1/forget
+curl -s http://192.168.4.1/status     # unprovisioned
+
+# valid credentials: 303, then connected at 192.168.x.y without a resubmit
+curl -s -o /dev/null -w '%{http_code}\n' \
+    --data-urlencode 'ssid=YourNetwork' --data-urlencode 'passphrase=YourPassphrase' \
+    http://192.168.4.1/provision
+curl -s http://192.168.4.1/status     # connected at 192.168.x.y
+```
+
+On a valid submit the Bridge logs `portal: joining … while the AP stays up`, then
+`sta: associated …` and `sta: address=192.168.x.y`. About 30 s after the stable association it logs
+`setup: window closed (station stable)` and `wifi: station mode`; the AP goes away and the station
+stays up. From a machine on the home LAN:
+
+```text
+# during the 30 s window
+beacon from=192.168.x.y device=… name='Explorer-…' major=1 tcp_port=0   flags=0x05 (provisioned,setup_mode)
+# after the window
+beacon from=192.168.x.y device=… name='Explorer-…' major=1 tcp_port=9000 flags=0x01 (provisioned)
+```
+
+### Notes and deviations
+
+- **Single-radio blip.** The first `/status` poll after a submit can time out for ~3 s while the
+  station scans/associates off-channel. The page then recovers with `connected at …`; the laptop
+  does not rejoin. Every scan has the same hazard, so the portal scans at window open and only
+  every 5 minutes. The SSID field is free text, so a network that appears later can be typed.
+- **No retries inside an open window.** A wrong passphrase or association failure waits for the
+  next submit or Forget instead of retrying on the steady-state 1–60 s backoff; retrying a
+  known-bad pair only off-channels the AP. The status is `connecting` → brief `failed` →
+  `wrong password`.
+- **WPA2 vs the client limit.** WPA2-PSK is confirmed by the laptop join. `max_connections = 2`
+  is configured and accepted by the driver, but a third client was not available to exercise the
+  rejection. Close that with a phone when convenient.
+- **Cost.** Against the ticket-05 image: **+27,064 B flash (~26.4 KiB)** and **+32,088 B static
+  RAM (~31.3 KiB)**; the app partition reported 13.75% of 4 MB. The RAM is mostly the two HTTP
+  workers' static request/response/TCP buffers.
 
 ## Running the Robot Stub against it
 
@@ -346,6 +452,8 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
         auth_ok=… auth_bad=… auth_expired=… auth_superseded=… auth_failed=…
         deny_busy=… deny_refused=… deny_version=…
         beacons=… beacon_errors=… link_ready=…
+        setup_open=… provisioned=… dhcp_offers=… dhcp_acks=… dns=…
+        portal_reqs=… provisions=… forgets=… scan_sweeps=… scan_aps=…
 ```
 
 | field | meaning |
@@ -374,6 +482,11 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
 | `deny_version` | connections denied for a preamble major mismatch |
 | `beacons` / `beacon_errors` | Discovery Beacons sent / send attempts that failed (usually no DHCP yet) |
 | `link_ready` | the Beacon's pinned link-ready flag at status time |
+| `setup_open` / `provisioned` | the bounded Setup Mode window / a usable credential pair exists |
+| `dhcp_offers` / `dhcp_acks` | DHCP replies the setup AP's hand-rolled server sent |
+| `dns` | DNS catch-all answers sent |
+| `portal_reqs` / `provisions` / `forgets` | HTTP requests read / valid provisioning submits / Forget actions |
+| `scan_sweeps` / `scan_aps` | best-of-N sweeps completed / AP observations merged into the scan cache |
 
 `uart_drop=0` on a sustained run is the ticket-04 "zero loss" observation.
 

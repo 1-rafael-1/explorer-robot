@@ -1,9 +1,10 @@
 # bridge-core
 
-The Bridge's HAL-agnostic pump rules, proven on the host without the C3. The crate is `no_std`,
+The Bridge's HAL-agnostic rules, proven on the host without the C3. The crate is `no_std`,
 allocation-free and I/O-free: it owns no UART, socket, radio or clock. The firmware parses frames
 with `remote-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
-what is dropped and when to ask the robot to slow down.
+what is dropped and when to ask the robot to slow down. It also owns the Setup Mode protocol that
+needs no HAL: the bounded window and the DHCP, DNS and portal codecs.
 
 This is the crate behind the spec's claim that "the risky forwarding rules are provable without
 the hardware". Its test suite runs on `x86_64-unknown-linux-gnu` behind the `std` feature, and the
@@ -28,6 +29,21 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
    refusal window; a success resets the counter. Comparison is constant time.
 
 `pump` composes the four into `BridgePump`, the frame-level type the firmware wires to its HAL.
+
+## Setup Mode protocol (ticket 06)
+
+- **`setup`** — the bounded window (ADR-0036): 10 minutes, closed ~30 s after a station rises
+  while the window is open, raised by an unprovisioned boot, once per boot after five continuous
+  minutes without a station link, or by a panel request. `SetupWindow` has no clock; the caller
+  passes monotonic milliseconds.
+- **`dhcp`** — a DHCPv4 server codec: DISCOVER/OFFER, REQUEST/ACK, a fixed two-address pool,
+  release/decline/expiry, and the fixed reply options (message type, server id, lease, mask,
+  router, DNS, broadcast). `handle` writes the reply into a caller buffer.
+- **`dns`** — a single-question catch-all: A/ANY answers the AP's address, every other type is
+  NOERROR with no answer, and EDNS/additional records are ignored.
+- **`portal`** — HTTP request and form parsing, percent decoding, the best-of-N `ScanCache`
+  (strongest RSSI per SSID), the status text, and the one-page HTML with inline CSS and the
+  `fetch('/status')` poll. All writers take a caller buffer.
 
 ## Public API map
 
@@ -77,7 +93,7 @@ cd bridge-firmware
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
-The suites are `tests/{coalescing,routing,watermark,auth,pump}.rs`. They exercise the crate's
+The suites are `tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal}.rs`. They exercise the crate's
 external contract — frames in, decisions and drained entries out — not its internals. The
 `bridge-firmware` CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's
 pedantic/nursery table to `bridge-core` (the root `bridge-firmware` package deliberately does not
@@ -104,6 +120,7 @@ The `bridge` binary keeps only HAL wiring:
 - **Timers**: `pump.tick()` expires the authentication deadline and the refusal window.
 - **Status**: the ring occupancy and every drop counter are printed every ten seconds.
 
-Ticket 05 replaces the firmware's zero-proof placeholder with `bridge-net`'s HMAC preamble and
-wires the real single-client supersede path; ticket 07 wires the robot-side `BRIDGE_CONTROL`
-replies. Neither changes the rules in this crate.
+Ticket 05 replaced the firmware's zero-proof placeholder with `bridge-net`'s HMAC preamble and
+wired the real single-client supersede path. Ticket 06 wires the setup window and the portal
+codecs to a second `embassy-net` stack. Ticket 07 wires the credential record and the robot-side
+`BRIDGE_CONTROL` replies; neither changes the rules in this crate.
