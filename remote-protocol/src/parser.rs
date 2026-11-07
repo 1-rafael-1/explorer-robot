@@ -76,6 +76,12 @@ pub struct Parser<const CAP: usize> {
     started_at: u32,
     /// Whether a completed frame was returned and must be released before more input.
     delivered: bool,
+    /// How many candidates were rejected because the CRC field did not match.
+    crc_failures: u32,
+    /// How many candidates were discarded and the scan restarted.
+    resyncs: u32,
+    /// How many bytes were discarded while resynchronising.
+    discarded_bytes: u32,
 }
 
 impl<const CAP: usize> Parser<CAP> {
@@ -94,6 +100,9 @@ impl<const CAP: usize> Parser<CAP> {
             filled: 0,
             started_at: 0,
             delivered: false,
+            crc_failures: 0,
+            resyncs: 0,
+            discarded_bytes: 0,
         }
     }
 
@@ -112,6 +121,32 @@ impl<const CAP: usize> Parser<CAP> {
     /// Overrides the assembly timeout, for tests that should not wait for the derived value.
     pub const fn set_timeout_ms(&mut self, timeout_ms: u32) {
         self.timeout_ms = timeout_ms;
+    }
+
+    /// Returns how many candidates were rejected because the CRC field did not match.
+    ///
+    /// The counter is cumulative for the parser's lifetime; [`Parser::reset`] does not clear it.
+    #[must_use]
+    pub const fn crc_failures(&self) -> u32 {
+        self.crc_failures
+    }
+
+    /// Returns how many candidates were discarded and the scan restarted.
+    ///
+    /// A candidate is discarded for a failed CRC, an out-of-range length or a declared frame that
+    /// does not fit the buffer. The counter is cumulative; [`Parser::reset`] does not clear it.
+    #[must_use]
+    pub const fn resyncs(&self) -> u32 {
+        self.resyncs
+    }
+
+    /// Returns how many bytes were dropped from the stream while resynchronising.
+    ///
+    /// This is the damage the parser discarded: header bytes of a rejected candidate and the
+    /// payload that came with it. The counter is cumulative; [`Parser::reset`] does not clear it.
+    #[must_use]
+    pub const fn discarded_bytes(&self) -> u32 {
+        self.discarded_bytes
     }
 
     /// Discards any partial candidate and returns to scanning for magic.
@@ -207,6 +242,7 @@ impl<const CAP: usize> Parser<CAP> {
                             self.delivered = true;
                             return Some(self.frame());
                         }
+                        self.crc_failures = self.crc_failures.wrapping_add(1);
                         self.resync(now_ms);
                         continue;
                     }
@@ -222,6 +258,7 @@ impl<const CAP: usize> Parser<CAP> {
                         self.delivered = true;
                         return Some(self.frame());
                     }
+                    self.crc_failures = self.crc_failures.wrapping_add(1);
                     self.resync(now_ms);
                 }
             }
@@ -263,6 +300,8 @@ impl<const CAP: usize> Parser<CAP> {
 
     /// Discards the candidate's first byte and rescans the rest for the next magic pair.
     fn resync(&mut self, now_ms: u32) {
+        self.resyncs = self.resyncs.wrapping_add(1);
+
         let len = self.filled;
         if len == 0 {
             self.state = State::Sync;
@@ -272,18 +311,24 @@ impl<const CAP: usize> Parser<CAP> {
         let start = (1..len.saturating_sub(1))
             .find(|&index| self.buffer[index] == MAGIC[0] && self.buffer[index + 1] == MAGIC[1]);
 
-        if let Some(start) = start {
+        let discarded = if let Some(start) = start {
             self.buffer.copy_within(start..len, 0);
             self.filled = len - start;
             self.state = State::Header;
+            start
         } else if self.buffer[len - 1] == MAGIC[0] {
             self.buffer[0] = MAGIC[0];
             self.filled = 1;
             self.state = State::Sync;
+            len - 1
         } else {
             self.filled = 0;
             self.state = State::Sync;
-        }
+            len
+        };
+        self.discarded_bytes = self
+            .discarded_bytes
+            .wrapping_add(u32::try_from(discarded).unwrap_or(u32::MAX));
         self.started_at = now_ms;
     }
 }

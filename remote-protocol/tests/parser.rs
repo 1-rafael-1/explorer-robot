@@ -259,6 +259,65 @@ fn worst_case_garbage_is_bounded_and_does_not_panic() {
     );
 }
 
+/// A corrupted CRC is counted as a failure and the candidate is discarded.
+#[test]
+fn a_bad_crc_is_counted_and_rejected() {
+    let Some(mut frame) = encoded(7, &[0x10, 0x20, 0x30]) else {
+        return;
+    };
+    // The CRC field is at offsets 10 and 11; flipping one byte makes it disagree.
+    frame[10] ^= 0xFF;
+
+    let mut parser = robot_parser();
+    assert!(
+        collect(&mut parser, &frame, 0).is_empty(),
+        "a bad CRC must not yield a frame"
+    );
+    assert_eq!(parser.crc_failures(), 1, "the CRC failure must be counted");
+    assert_eq!(parser.resyncs(), 1, "the candidate must be resynchronised");
+    assert!(
+        parser.discarded_bytes() > 0,
+        "the rejected candidate's bytes must be counted as discarded"
+    );
+}
+
+/// A resync after a bad CRC still yields the next clean frame.
+#[test]
+fn a_resync_after_a_bad_crc_recovers_and_is_counted() {
+    let Some(mut first) = encoded(1, &[0x10, 0x20]) else {
+        return;
+    };
+    let Some(second) = encoded(2, &[0x30]) else {
+        return;
+    };
+    first[10] ^= 0xFF;
+    let mut bytes = first;
+    bytes.extend_from_slice(&second);
+
+    let mut parser = robot_parser();
+    assert_eq!(
+        collect(&mut parser, &bytes, 0),
+        vec![(2, vec![0x30])],
+        "the clean frame after the resync must be yielded"
+    );
+    assert_eq!(parser.crc_failures(), 1, "one bad CRC must be counted");
+    assert_eq!(parser.resyncs(), 1, "one resync must be counted");
+}
+
+/// A clean stream leaves the reject counters at zero.
+#[test]
+fn a_clean_frame_leaves_the_statistics_at_zero() {
+    let Some(frame) = encoded(9, &[0x01, 0x02]) else {
+        return;
+    };
+
+    let mut parser = robot_parser();
+    assert_eq!(collect(&mut parser, &frame, 0), vec![(9, vec![0x01, 0x02])]);
+    assert_eq!(parser.crc_failures(), 0);
+    assert_eq!(parser.resyncs(), 0);
+    assert_eq!(parser.discarded_bytes(), 0);
+}
+
 /// The same seed and the same calls replay the same bytes in both directions.
 #[test]
 fn wire_is_deterministic_for_a_fixed_seed_in_both_directions() {
