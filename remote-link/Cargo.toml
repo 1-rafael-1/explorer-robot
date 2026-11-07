@@ -40,3 +40,11 @@ required-features = ["std"]
 [[test]]
 name = "bridge_control"
 required-features = ["std"]
+
+[[test]]
+name = "acceptance"
+required-features = ["std"]
+
+[[test]]
+name = "fault_matrix"
+required-features = ["std"]

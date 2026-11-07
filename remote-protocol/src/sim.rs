@@ -34,10 +34,12 @@ const FALLBACK_SEED: u32 = 0x9E37_79B9;
 /// The seed offset that gives the second direction an independent generator.
 const DIRECTION_SEED_OFFSET: u32 = 0x5A5A_A5A5;
 
-/// Fault injection settings for a [`Wire`].
+/// Fault injection settings for one direction of a [`Wire`].
 ///
 /// Zero disables a fault. Byte and chunk counters are maintained per direction, so traffic in
-/// one direction never changes the fault pattern in the other.
+/// one direction never changes the fault pattern in the other. [`Wire::set_faults`] applies one
+/// setting to both directions; [`Wire::set_direction_faults`] injects a fault into one direction
+/// only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Faults {
     /// Drop every `drop_every`-th byte (1-based); zero disables dropping.
@@ -107,8 +109,8 @@ pub struct Wire {
     chunk_counts: [u64; 2],
     /// One independent generator per direction so faults do not couple.
     rng: [XorShift; 2],
-    /// The active fault settings.
-    faults: Faults,
+    /// The active fault settings, indexed with [`slot`].
+    faults: [Faults; 2],
 }
 
 impl Wire {
@@ -123,7 +125,7 @@ impl Wire {
             byte_counts: [0; 2],
             chunk_counts: [0; 2],
             rng: [XorShift::new(seed), XorShift::new(seed ^ DIRECTION_SEED_OFFSET)],
-            faults,
+            faults: [faults; 2],
         }
     }
 
@@ -138,21 +140,29 @@ impl Wire {
         self.now_ms = self.now_ms.wrapping_add(ms);
     }
 
-    /// Returns the active fault settings.
+    /// Returns the active fault settings for `direction`.
     #[must_use]
-    pub const fn faults(&self) -> Faults {
-        self.faults
+    pub const fn faults(&self, direction: Direction) -> Faults {
+        self.faults[slot(direction)]
     }
 
-    /// Replaces the fault settings; bytes already queued are not changed.
+    /// Replaces the fault settings in both directions; bytes already queued are not changed.
     pub const fn set_faults(&mut self, faults: Faults) {
-        self.faults = faults;
+        self.faults = [faults; 2];
+    }
+
+    /// Replaces the fault settings for one direction, leaving the other direction untouched.
+    ///
+    /// This is how a test injects a fault into, for example, the PC-to-robot direction without
+    /// also corrupting the robot-to-PC ACKs that would otherwise let the sender recover.
+    pub const fn set_direction_faults(&mut self, direction: Direction, faults: Faults) {
+        self.faults[slot(direction)] = faults;
     }
 
     /// Sends `bytes` in `direction`, applying every active fault.
     ///
     /// Bytes are counted across sends and per direction. A chunk is truncated before its bytes
-    /// are dropped or corrupted, and a non-empty chunk advances the clock by
+    /// are dropped or corrupted, and a non-empty chunk advances the clock by the direction's
     /// [`Faults::stall_ms`].
     pub fn send(&mut self, direction: Direction, bytes: &[u8]) {
         if bytes.is_empty() {
@@ -160,9 +170,10 @@ impl Wire {
         }
 
         let index = slot(direction);
+        let faults = self.faults[index];
         self.chunk_counts[index] = self.chunk_counts[index].wrapping_add(1);
         let chunk = self.chunk_counts[index];
-        let truncate = self.faults.truncate_every != 0 && chunk.is_multiple_of(u64::from(self.faults.truncate_every));
+        let truncate = faults.truncate_every != 0 && chunk.is_multiple_of(u64::from(faults.truncate_every));
         let end = if truncate {
             bytes.len().saturating_sub(1)
         } else {
@@ -172,15 +183,15 @@ impl Wire {
         for &original in &bytes[..end] {
             self.byte_counts[index] = self.byte_counts[index].wrapping_add(1);
             let count = self.byte_counts[index];
-            if self.faults.drop_every != 0 && count.is_multiple_of(u64::from(self.faults.drop_every)) {
+            if faults.drop_every != 0 && count.is_multiple_of(u64::from(faults.drop_every)) {
                 continue;
             }
-            let corrupt = self.faults.corrupt_every != 0 && count.is_multiple_of(u64::from(self.faults.corrupt_every));
+            let corrupt = faults.corrupt_every != 0 && count.is_multiple_of(u64::from(faults.corrupt_every));
             let byte = if corrupt { self.rng[index].next_u8() } else { original };
             self.queues[index].push_back(byte);
         }
 
-        self.now_ms = self.now_ms.wrapping_add(self.faults.stall_ms);
+        self.now_ms = self.now_ms.wrapping_add(faults.stall_ms);
     }
 
     /// Returns how many bytes are queued in `direction`.
