@@ -47,8 +47,9 @@ use remote_protocol::{
 };
 
 use crate::schema::{
-    CalibrationStatus, Catalogue, CommandFrame, CommandResult, CompletionStatus, EventEntry, EventName, EventValue,
-    MANUAL_DRIVE_ID, Outcome, PROTOCOL, ServerMessage, Snapshot, Stage, Status, StreamEntry, StreamName, StreamValue,
+    CalibrationStatus, Catalogue, CommandFrame, CommandResult, CompletionStatus, Connection, EventEntry, EventName,
+    EventValue, MANUAL_DRIVE_ID, Outcome, PROTOCOL, ServerMessage, Snapshot, Stage, Status, StreamEntry, StreamName,
+    StreamValue,
 };
 
 /// A relay connection identifier.
@@ -113,6 +114,8 @@ struct App {
     event_cursor: u64,
     /// Command results addressed to this connection, drained before streams.
     results: VecDeque<CommandResult>,
+    /// The connection-state sequence this app has already been sent.
+    connection_cursor: u64,
 }
 
 /// The app that originated a completion event, kept so the event can be attributed per tab.
@@ -308,6 +311,10 @@ pub struct Relay {
     last_live_ms: u64,
     /// Whether any app was live at the last connection change or [`Relay::tick`].
     app_live: bool,
+    /// The latest app-facing connection state, shared by every tab (latest wins).
+    connection: Option<Connection>,
+    /// A sequence bumped on every connection update, so each tab sees one copy.
+    connection_seq: u64,
 }
 
 impl Relay {
@@ -333,6 +340,8 @@ impl Relay {
             frozen: false,
             last_live_ms: 0,
             app_live: false,
+            connection: None,
+            connection_seq: 0,
         }
     }
 
@@ -352,6 +361,7 @@ impl Relay {
                 stream_cursors: [0; STREAM_SLOTS],
                 event_cursor: self.events_pushed,
                 results: VecDeque::new(),
+                connection_cursor: 0,
             },
         );
         self.app_live = true;
@@ -402,6 +412,16 @@ impl Relay {
     /// Closes the robot Session, keeping its retained state for a same-Boot-Id reconnect.
     pub const fn session_down(&mut self) {
         self.connected = false;
+    }
+
+    /// Publishes the latest app-facing connection state to every tab (ADR-0039).
+    ///
+    /// The relay keeps one latest-wins slot rather than a queue: a tab that is slow to drain sees
+    /// the newest reachability state, never a replay of intermediates. A tab that connects later
+    /// is sent the current state on its first [`Relay::poll`], before its snapshot.
+    pub fn set_connection(&mut self, connection: Connection) {
+        self.connection = Some(connection);
+        self.connection_seq = self.connection_seq.saturating_add(1);
     }
 
     /// Returns the last Boot Id learned from the robot, `None` before the first Session.
@@ -669,6 +689,22 @@ impl Relay {
         let mut messages = Vec::new();
         if !self.apps.contains_key(&app) {
             return messages;
+        }
+        let pending_connection = if self
+            .apps
+            .get(&app)
+            .is_some_and(|state| state.connection_cursor < self.connection_seq)
+        {
+            self.connection.clone()
+        } else {
+            None
+        };
+        if let Some(connection) = pending_connection {
+            messages.push(ServerMessage::Connection(connection));
+            let sequence = self.connection_seq;
+            if let Some(state) = self.apps.get_mut(&app) {
+                state.connection_cursor = sequence;
+            }
         }
         if self.apps.get(&app).is_some_and(|state| state.pending_snapshot)
             && let Some(snapshot) = self.snapshot(app, now_ms)

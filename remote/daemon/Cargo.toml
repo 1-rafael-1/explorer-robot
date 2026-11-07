@@ -21,6 +21,7 @@ tokio = { version = "1", features = [
     "net",
     "rt",
     "rt-multi-thread",
+    "signal",
     "sync",
     "time",
 ] }
@@ -31,11 +32,21 @@ axum = { version = "0.8", features = ["ws"] }
 # The compile-time embed of `remote/app`, with a disk override for `--assets` (ADR-0039).
 include_dir = "0.7"
 
+# The per-user token store (ADR-0039): a versioned `config.toml` under the platform's config dir.
+directories = "6"
+toml = "0.8"
+# The CLI surface (ADR-0039): `--host/--port`, `--no-open`, `--assets`, `--config`, `--verbose`.
+clap = { version = "4", features = ["derive"] }
+# Opening the default browser unless `--no-open` (ADR-0039).
+open = "5"
+
 [dev-dependencies]
 # The TCP/preamble seam's other end: the Bridge Stub's in-process listener (ticket 09).
 bridge-stub = { path = "../bridge-stub" }
 futures-util = "0.3"
 tokio-tungstenite = "0.30"
+# Temporary config directories for the token-store tests.
+tempfile = "3"
 
 [lints]
 workspace = true
