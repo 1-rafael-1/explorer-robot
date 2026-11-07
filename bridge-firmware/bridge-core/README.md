@@ -1,0 +1,109 @@
+# bridge-core
+
+The Bridge's HAL-agnostic pump rules, proven on the host without the C3. The crate is `no_std`,
+allocation-free and I/O-free: it owns no UART, socket, radio or clock. The firmware parses frames
+with `remote-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
+what is dropped and when to ask the robot to slow down.
+
+This is the crate behind the spec's claim that "the risky forwarding rules are provable without
+the hardware". Its test suite runs on `x86_64-unknown-linux-gnu` behind the `std` feature, and the
+same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
+
+## The four rule surfaces
+
+1. **Coalescing** (`coalescing`) — a latest-wins ring of one pending slot per stream inside 8 KiB.
+   A newer stream sample replaces the older one, so a Wi-Fi stall drops stale telemetry instead
+   of queueing seconds of it. Reliable entries (events, command acknowledgements, control replies)
+   are not coalesced; their room is reserved so stream pressure cannot take it. Every entry stores
+   the wire frame's `Seq` and `Flags`, so the surviving entry carries the newest frame's header.
+2. **Routing** (`routing`) — the Link Protocol's class rules plus exactly two control exceptions:
+   `THROTTLE` out to the robot and `BRIDGE_CONTROL` in, consumed by the Bridge. A `BRIDGE_CONTROL`
+   arriving from the client is dropped and counted. A frame travelling the wrong way is ignored.
+3. **Flow** (`flow`) — ring occupancy to `THROTTLE`: at 6 KiB the robot is told to
+   `PAUSE(ALL_STREAMS, 1000 ms)`, at 2 KiB it is told to `RESUME`, and hints are at least 500 ms
+   apart. The hint is advisory and time-limited.
+4. **Authentication** (`auth`) — the single-client gate. A connection has five seconds to
+   authenticate, a new unauthenticated connection supersedes an older one, and exactly one
+   authenticated client holds the slot. Five failed proofs within a minute close a one-minute
+   refusal window; a success resets the counter. Comparison is constant time.
+
+`pump` composes the four into `BridgePump`, the frame-level type the firmware wires to its HAL.
+
+## Public API map
+
+`BridgePump`:
+
+| method | role |
+|---|---|
+| `new()` / `default()` | idle pump, empty ring, no client |
+| `connect(now_ms) -> ConnectOutcome` | offer a new TCP connection to the gate |
+| `authenticate(connection, proof, expected, now_ms) -> ProofOutcome` | present a proof |
+| `tick(now_ms) -> Option<TimerEvent>` | expire the authentication deadline or the refusal window |
+| `disconnect(connection) -> bool` | drop the current connection |
+| `is_authenticated()` / `authenticated_connection()` | observe the gate |
+| `on_robot_frame(&Frame) -> Decision` | route one UART-side frame |
+| `on_client_frame(&Frame) -> Decision` | route one client-side frame |
+| `poll_throttle(now_ms) -> Option<ThrottleHint>` | observe ring occupancy and return a hint |
+| `pop() -> Option<Entry>` / `drain(sink)` | take client-bound entries |
+| `used_bytes()` / `reserved_bytes()` | ring occupancy and the event reservation |
+| `dropped_streams()` / `dropped_reliable()` | ring discard counters |
+| `dropped_without_client()` | robot frames dropped while no client was authenticated |
+| `dropped_bridge_controls()` | client-side `BRIDGE_CONTROL` frames dropped |
+
+Decision and state types:
+
+- `Decision` — `Queued`, `DroppedNoClient`, `DroppedFull`, `BridgeControl(request)`,
+  `ForwardToRobot`, `DroppedBridgeControl`, `Ignored`.
+- `Entry { kind, payload }` and `EntryKind` — `Stream { id, seq, flags }` or
+  `Reliable { class, id, seq, flags }`. The header fields are the parsed wire values.
+- `Route` / `Destination` / `Side` — the routing filter's vocabulary.
+- `ConnectOutcome`, `ProofOutcome`, `TimerEvent` — the gate's transitions.
+- `Proof::from_bytes([u8; 32])` / `Proof::as_bytes()` / `Proof::matches()` — the opaque proof
+  `bridge-net` computes.
+- `WatermarkPolicy`, `PushOutcome`, `PushError`, `BridgeControlRequest`, `BridgeReply`, `Status`,
+  `Class`, `Flags`, `Frame`, `Seq`, `Direction` — the remaining public surface.
+
+Constants are the ADR numbers, not tuning knobs: `CAPACITY` 8 KiB, `EVENT_RESERVED_BYTES` 512,
+`STREAM_CAPACITY` 7.5 KiB, `HIGH_WATERMARK_BYTES` 6 KiB, `LOW_WATERMARK_BYTES` 2 KiB,
+`PAUSE_TTL_MS` 1000, `MIN_HINT_INTERVAL_MS` 500, `DEADLINE_MS` 5000, `FAILURE_LIMIT` 5,
+`FAILURE_WINDOW_MS` 60_000 and `REFUSAL_MS` 60_000.
+
+## Host tests
+
+The tests use the explicit-target pattern so the host and firmware builds never share artifacts:
+
+```sh
+cd bridge-firmware
+cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
+```
+
+The suites are `tests/{coalescing,routing,watermark,auth,pump}.rs`. They exercise the crate's
+external contract — frames in, decisions and drained entries out — not its internals. The
+`bridge-firmware` CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's
+pedantic/nursery table to `bridge-core` (the root `bridge-firmware` package deliberately does not
+opt in because the pre-existing `stack-soak` spike is out of scope).
+
+## What the firmware wires
+
+The `bridge` binary keeps only HAL wiring:
+
+- **UART RX**: UHCI RX DMA at 921600 8N1 (`GPIO6` TX, `GPIO7` RX) feeds
+  `remote-protocol::RobotToPcParser`; each frame goes to `pump.on_robot_frame()`. The UART is
+  parsed regardless of a client, so `BRIDGE_CONTROL` and the Beacon's eventual link flag stay
+  truthful with no Remote attached.
+- **TCP RX**: one client at a time on the station stack. On accept the firmware calls
+  `pump.connect()` and `pump.authenticate()`; on close it calls `pump.disconnect()` and drains
+  what the client never read. Client bytes feed `PcToRobotParser`; each frame goes to
+  `pump.on_client_frame()`, and `Decision::ForwardToRobot` is re-encoded into the bounded UART TX
+  queue.
+- **TCP TX**: `pump.pop()` is drained one entry per frame and re-encoded verbatim with the
+  entry's stored class, flags, id, sequence and payload. The ring carries the wire header, so a
+  forwarded frame keeps its original sequence number and flag bits; nothing is implied or reset.
+- **Flow control**: `pump.poll_throttle()` is encoded as a `THROTTLE` control frame into the same
+  UART TX queue.
+- **Timers**: `pump.tick()` expires the authentication deadline and the refusal window.
+- **Status**: the ring occupancy and every drop counter are printed every ten seconds.
+
+Ticket 05 replaces the firmware's zero-proof placeholder with `bridge-net`'s HMAC preamble and
+wires the real single-client supersede path; ticket 07 wires the robot-side `BRIDGE_CONTROL`
+replies. Neither changes the rules in this crate.

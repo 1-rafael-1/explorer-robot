@@ -34,6 +34,7 @@ version      = "0.1.0"
 [dependencies]
 remote-protocol = { path = "../remote-protocol", version = "1" }
 bridge-net = { path = "../remote/bridge-net", version = "1" }
+bridge-core = { path = "bridge-core", version = "0.1.0" }
 
 esp-hal = { version = "~1.2.2", features = ["defmt", "esp32c3", "unstable"] }
 

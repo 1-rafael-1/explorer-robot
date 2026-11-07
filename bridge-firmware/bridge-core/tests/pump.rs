@@ -117,8 +117,43 @@ fn connecting_and_disconnecting_does_not_flush_the_ring() {
     let Some(entry) = pump.pop() else {
         return;
     };
-    assert_eq!(entry.kind, EntryKind::Stream(0x0002));
+    assert_eq!(
+        entry.kind,
+        EntryKind::Stream {
+            id: 0x0002,
+            seq: Seq::new(0),
+            flags: Flags::default(),
+        }
+    );
     assert_eq!(entry.payload, &[1, 2]);
+}
+
+/// The pump passes the parsed header through: a stream's wire sequence and flags are whatever the
+/// frame carried, not an implied value.
+#[test]
+fn a_queued_stream_keeps_the_wire_sequence_and_flags() {
+    let mut pump = BridgePump::new();
+    let Some(_connection) = connect_and_authenticate(&mut pump, 0) else {
+        return;
+    };
+
+    let flags = Flags::RETRY | Flags::ACK_REQUESTED;
+    let Some(stream) = frame(Class::Stream, flags, 0x0002, 77, &[1, 2]) else {
+        return;
+    };
+    assert_eq!(pump.on_robot_frame(&stream), Decision::Queued);
+
+    let Some(entry) = pump.pop() else {
+        return;
+    };
+    assert_eq!(
+        entry.kind,
+        EntryKind::Stream {
+            id: 0x0002,
+            seq: Seq::new(77),
+            flags,
+        }
+    );
 }
 
 /// Client frames are routed: commands leave for the robot, and `BRIDGE_CONTROL` never crosses.
@@ -202,7 +237,7 @@ fn an_authenticated_event_is_queued_with_its_sequence() {
         return;
     };
 
-    let Some(event) = frame(Class::Event, Flags::default(), 0x0001, 9, &[1]) else {
+    let Some(event) = frame(Class::Event, Flags::ACK_REQUESTED, 0x0001, 9, &[1]) else {
         return;
     };
     assert_eq!(pump.on_robot_frame(&event), Decision::Queued);
@@ -216,7 +251,9 @@ fn an_authenticated_event_is_queued_with_its_sequence() {
             class: Class::Event,
             id: 0x0001,
             seq: Seq::new(9),
-        }
+            flags: Flags::ACK_REQUESTED,
+        },
+        "the event keeps its wire flags"
     );
 }
 

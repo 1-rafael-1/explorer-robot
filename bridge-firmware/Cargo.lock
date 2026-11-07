@@ -88,6 +88,7 @@ dependencies = [
 name = "bridge-firmware"
 version = "0.1.0"
 dependencies = [
+ "bridge-core",
  "bridge-net",
  "critical-section",
  "defmt 1.2.0",

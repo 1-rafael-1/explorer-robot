@@ -179,17 +179,28 @@ impl BridgePump {
         }
 
         let queued = match frame.header.class {
-            Class::Stream => match self.ring.push_stream(frame.header.id, frame.payload) {
-                PushOutcome::Stored | PushOutcome::Replaced => true,
-                PushOutcome::Dropped => false,
-            },
+            Class::Stream => {
+                match self
+                    .ring
+                    .push_stream(frame.header.id, frame.header.seq, frame.header.flags, frame.payload)
+                {
+                    PushOutcome::Stored | PushOutcome::Replaced => true,
+                    PushOutcome::Dropped => false,
+                }
+            }
             Class::Event => self
                 .ring
-                .push_event(frame.header.id, frame.header.seq, frame.payload)
+                .push_event(frame.header.id, frame.header.seq, frame.header.flags, frame.payload)
                 .is_ok(),
             Class::Command | Class::Control => self
                 .ring
-                .push_reliable(frame.header.class, frame.header.id, frame.header.seq, frame.payload)
+                .push_reliable(
+                    frame.header.class,
+                    frame.header.id,
+                    frame.header.seq,
+                    frame.header.flags,
+                    frame.payload,
+                )
                 .is_ok(),
         };
         if queued {

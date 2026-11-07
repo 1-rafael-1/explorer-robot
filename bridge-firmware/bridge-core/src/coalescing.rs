@@ -8,8 +8,12 @@
 //!
 //! The ring is sized by ADR-0033: 8 KiB total, with eight worst-case event frames (under 0.5 KiB)
 //! reserved. It owns no clock and no I/O; the caller pushes parsed frames and drains entries.
+//!
+//! Every entry carries the wire frame's sequence number and flags, so a drained entry can be
+//! re-encoded exactly as it arrived. Coalescing replaces an older stream sample with a newer one;
+//! the surviving entry always describes the most recently pushed frame, header included.
 
-use remote_protocol::{Class, Seq};
+use remote_protocol::{Class, Flags, Seq};
 
 /// The ring's total byte capacity: ADR-0033's 8 KiB.
 pub const CAPACITY: usize = 8 * 1024;
@@ -26,11 +30,21 @@ const MAX_PAYLOAD: usize = 1024;
 /// The largest number of entries the descriptor table can hold.
 const MAX_ENTRIES: usize = 16;
 
-/// The identity of one queued entry.
+/// The identity and wire header of one queued entry.
+///
+/// `seq` and `flags` are the values from the parsed frame's header. The ring stores them verbatim
+/// so the firmware can re-encode the frame without inventing an implied header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
     /// A telemetry stream sample, coalesced by its stream id.
-    Stream(u16),
+    Stream {
+        /// The stream id.
+        id: u16,
+        /// The frame's sequence number.
+        seq: Seq,
+        /// The frame's flags.
+        flags: Flags,
+    },
     /// A reliable frame that stream pressure cannot displace.
     Reliable {
         /// The frame's delivery class.
@@ -39,6 +53,8 @@ pub enum EntryKind {
         id: u16,
         /// The frame's sequence number.
         seq: Seq,
+        /// The frame's flags.
+        flags: Flags,
     },
 }
 
@@ -86,7 +102,11 @@ struct Slot {
 impl Slot {
     /// An unused descriptor; `count` keeps it from being read.
     const EMPTY: Self = Self {
-        kind: EntryKind::Stream(0),
+        kind: EntryKind::Stream {
+            id: 0,
+            seq: Seq::new(0),
+            flags: Flags::from_bits(0),
+        },
         start: 0,
         len: 0,
     };
@@ -181,8 +201,11 @@ impl Ring {
     }
 
     /// Offers a stream sample, replacing the same stream's pending sample when one exists.
+    ///
+    /// `seq` and `flags` are stored with the sample and returned unchanged by [`Ring::pop`], even
+    /// when a newer sample replaces an older one.
     #[must_use]
-    pub fn push_stream(&mut self, stream_id: u16, payload: &[u8]) -> PushOutcome {
+    pub fn push_stream(&mut self, stream_id: u16, seq: Seq, flags: Flags, payload: &[u8]) -> PushOutcome {
         let len = payload.len();
         if len > MAX_PAYLOAD {
             self.dropped_streams += 1;
@@ -197,12 +220,26 @@ impl Ring {
                 return PushOutcome::Dropped;
             }
             let _ = self.remove_at(index);
-            self.append(EntryKind::Stream(stream_id), payload);
+            self.append(
+                EntryKind::Stream {
+                    id: stream_id,
+                    seq,
+                    flags,
+                },
+                payload,
+            );
             return PushOutcome::Replaced;
         }
 
         if self.count < MAX_ENTRIES && self.used + len <= CAPACITY && self.stream_used + len <= STREAM_CAPACITY {
-            self.append(EntryKind::Stream(stream_id), payload);
+            self.append(
+                EntryKind::Stream {
+                    id: stream_id,
+                    seq,
+                    flags,
+                },
+                payload,
+            );
             PushOutcome::Stored
         } else {
             self.dropped_streams += 1;
@@ -215,8 +252,8 @@ impl Ring {
     /// # Errors
     ///
     /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame.
-    pub fn push_event(&mut self, event_id: u16, seq: Seq, payload: &[u8]) -> Result<(), PushError> {
-        self.push_reliable(Class::Event, event_id, seq, payload)
+    pub fn push_event(&mut self, event_id: u16, seq: Seq, flags: Flags, payload: &[u8]) -> Result<(), PushError> {
+        self.push_reliable(Class::Event, event_id, seq, flags, payload)
     }
 
     /// Queues a reliable robot-to-PC payload without coalescing it.
@@ -228,7 +265,14 @@ impl Ring {
     /// # Errors
     ///
     /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame.
-    pub fn push_reliable(&mut self, class: Class, id: u16, seq: Seq, payload: &[u8]) -> Result<(), PushError> {
+    pub fn push_reliable(
+        &mut self,
+        class: Class,
+        id: u16,
+        seq: Seq,
+        flags: Flags,
+        payload: &[u8],
+    ) -> Result<(), PushError> {
         let len = payload.len();
         if len > MAX_PAYLOAD {
             self.dropped_reliable += 1;
@@ -237,7 +281,7 @@ impl Ring {
 
         loop {
             if self.count < MAX_ENTRIES && self.used + len <= CAPACITY {
-                self.append(EntryKind::Reliable { class, id, seq }, payload);
+                self.append(EntryKind::Reliable { class, id, seq, flags }, payload);
                 return Ok(());
             }
             let Some(index) = self.oldest_stream().or_else(|| self.oldest_reliable()) else {
@@ -246,7 +290,7 @@ impl Ring {
             };
             let evicted = self.remove_at(index);
             match evicted.kind {
-                EntryKind::Stream(_) => self.dropped_streams += 1,
+                EntryKind::Stream { .. } => self.dropped_streams += 1,
                 EntryKind::Reliable { .. } => self.dropped_reliable += 1,
             }
         }
@@ -278,14 +322,14 @@ impl Ring {
     fn stream_slot(&self, stream_id: u16) -> Option<usize> {
         self.slots[..self.count]
             .iter()
-            .position(|slot| matches!(slot.kind, EntryKind::Stream(id) if id == stream_id))
+            .position(|slot| matches!(slot.kind, EntryKind::Stream { id, .. } if id == stream_id))
     }
 
     /// Returns the descriptor index of the oldest stream entry.
     fn oldest_stream(&self) -> Option<usize> {
         self.slots[..self.count]
             .iter()
-            .position(|slot| matches!(slot.kind, EntryKind::Stream(_)))
+            .position(|slot| matches!(slot.kind, EntryKind::Stream { .. }))
     }
 
     /// Returns the descriptor index of the oldest reliable entry.
@@ -304,7 +348,7 @@ impl Ring {
         self.count += 1;
         self.used += len;
         match kind {
-            EntryKind::Stream(_) => self.stream_used += len,
+            EntryKind::Stream { .. } => self.stream_used += len,
             EntryKind::Reliable { .. } => self.reliable_used += len,
         }
     }
@@ -322,7 +366,7 @@ impl Ring {
         self.count -= 1;
         self.used -= slot.len;
         match slot.kind {
-            EntryKind::Stream(_) => self.stream_used -= slot.len,
+            EntryKind::Stream { .. } => self.stream_used -= slot.len,
             EntryKind::Reliable { .. } => self.reliable_used -= slot.len,
         }
         slot
