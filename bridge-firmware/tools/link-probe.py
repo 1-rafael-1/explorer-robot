@@ -10,10 +10,17 @@ Usage:
     python3 tools/link-probe.py 192.168.1.42
     python3 tools/link-probe.py 192.168.1.42 --duration 60 --quiet
     python3 tools/link-probe.py 192.168.1.42 --count 100
+    python3 tools/link-probe.py 192.168.1.42 --loopback   # GPIO6↔GPIO7 jumper, no robot
 
 Exit status:
-    0  a ``HELLO_ACK`` was decoded and the requested count (if any) was reached
-    1  the idle timeout expired, the peer closed, or no ``HELLO_ACK`` arrived
+    0  a ``HELLO_ACK`` was decoded and the requested count (if any) was reached;
+       with ``--loopback``, the probe's own ``HELLO`` returned through the jumper
+    1  the idle timeout expired, the peer closed, or the expected frame did not arrive
+
+With UART1's TX and RX jumpered instead of wired to a robot, the Bridge forwards the probe's
+``HELLO`` out of the UART and the jumper returns it, so the probe sees its own frame (no
+``IS_ACK`` flag). That still exercises the whole pump — TCP, routing, UART TX, UHCI RX DMA,
+parser, coalescing ring and TCP back — but it does not prove a robot ``HELLO_ACK``.
 
 The frame envelope is ADR-0030: magic ``0xA5 0x5A``, a twelve-byte header and the
 ``CRC-16/CCITT-FALSE`` of header bytes 0..10 plus the payload. The probe deliberately does not
@@ -342,9 +349,12 @@ def run(args: argparse.Namespace) -> int:
         last_activity = started
         frames = 0
         hello_ack = False
+        loopback_echo = False
 
         while True:
             now = time.monotonic()
+            if args.loopback and loopback_echo and args.count == 0:
+                break
             if args.duration > 0 and now - started >= args.duration:
                 break
             if args.count > 0 and frames >= args.count:
@@ -374,6 +384,12 @@ def run(args: argparse.Namespace) -> int:
                     and frame.flags & FLAG_IS_ACK
                 ):
                     hello_ack = True
+                if (
+                    frame.class_ == CLASS_CONTROL
+                    and frame.frame_id == CONTROL_HELLO
+                    and not frame.flags & FLAG_IS_ACK
+                ):
+                    loopback_echo = True
                 if not args.quiet:
                     print(describe(frame), flush=True)
                 if args.count > 0 and frames >= args.count:
@@ -382,13 +398,18 @@ def run(args: argparse.Namespace) -> int:
         sock.close()
 
     elapsed = time.monotonic() - started
+    loopback = f" loopback={'ok' if loopback_echo else 'no'}" if args.loopback else ""
     print(
         f"link-probe: done after {elapsed:.1f}s frames={frames} "
-        f"hello_ack={'yes' if hello_ack else 'no'}",
+        f"hello_ack={'yes' if hello_ack else 'no'}{loopback}",
         flush=True,
     )
 
-    if not hello_ack:
+    if args.loopback:
+        if not loopback_echo:
+            print("link-probe: timed out without the looped-back HELLO", file=sys.stderr)
+            return 1
+    elif not hello_ack:
         print("link-probe: timed out without a HELLO_ACK", file=sys.stderr)
         return 1
     if args.count > 0 and frames < args.count:
@@ -446,6 +467,11 @@ def main() -> int:
         "--quiet",
         action="store_true",
         help="print only the final count, not every frame",
+    )
+    parser.add_argument(
+        "--loopback",
+        action="store_true",
+        help="accept the echoed HELLO as success (GPIO6↔GPIO7 jumper instead of a robot)",
     )
     args = parser.parse_args()
 

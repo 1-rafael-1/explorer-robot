@@ -123,7 +123,15 @@ python3 tools/link-probe.py 192.168.1.42 --duration 60 --quiet
 
 # Stop after one hundred decoded frames.
 python3 tools/link-probe.py 192.168.1.42 --count 100 --quiet
+
+# No robot: GPIO6 and GPIO7 jumpered together instead of wired to a USB-TTL adapter.
+python3 tools/link-probe.py 192.168.1.42 --loopback
 ```
+
+With the jumper, the Bridge forwards the probe's `HELLO` out of UART1 and the jumper returns it,
+so the probe sees its own frame and reports `loopback=ok`. That exercises the whole pump path —
+TCP, routing, UART TX, UHCI RX DMA, parser, coalescing ring and TCP back — but it does not prove
+a robot `HELLO_ACK`; that needs the Robot Stub on a real adapter.
 
 Pass the address the Bridge logs (`sta: address=…`). The probe prints lines such as:
 
