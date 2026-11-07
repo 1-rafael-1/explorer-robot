@@ -14,13 +14,15 @@ Usage:
 
 Exit status:
     0  a ``HELLO_ACK`` was decoded and the requested count (if any) was reached;
-       with ``--loopback``, the probe's own ``HELLO`` returned through the jumper
+       with ``--loopback``, the ``HELLO`` was sent (the evidence is on the Bridge)
     1  the idle timeout expired, the peer closed, or the expected frame did not arrive
 
 With UART1's TX and RX jumpered instead of wired to a robot, the Bridge forwards the probe's
-``HELLO`` out of the UART and the jumper returns it, so the probe sees its own frame (no
-``IS_ACK`` flag). That still exercises the whole pump — TCP, routing, UART TX, UHCI RX DMA,
-parser, coalescing ring and TCP back — but it does not prove a robot ``HELLO_ACK``.
+``HELLO`` out of the UART and the jumper returns it. The router then **ignores** it by design: a
+robot-side ``HELLO`` without ``IS_ACK`` is not a legal robot frame, so nothing can come back over
+the socket. The ``--loopback`` run therefore sends the frame and exits 0; the proof is the
+Bridge's status line, where ``tcp_rx``, ``uart_tx``, ``uart_rx`` and ``good`` must rise while
+``crc``, ``resync``, ``bad`` and ``dma_stalls`` stay zero.
 
 The frame envelope is ADR-0030: magic ``0xA5 0x5A``, a twelve-byte header and the
 ``CRC-16/CCITT-FALSE`` of header bytes 0..10 plus the payload. The probe deliberately does not
@@ -53,6 +55,9 @@ CONTROL_HELLO: Final = 1
 CONTROL_PING: Final = 2
 CONTROL_THROTTLE: Final = 3
 CONTROL_BRIDGE_CONTROL: Final = 4
+
+# A loopback run only has to get the HELLO out; the jumper echo is ignored by the router.
+LOOPBACK_GRACE: Final = 1.0
 
 CAPS_THROTTLE_SUPPORT: Final = 0x0000_0008
 
@@ -353,7 +358,7 @@ def run(args: argparse.Namespace) -> int:
 
         while True:
             now = time.monotonic()
-            if args.loopback and loopback_echo and args.count == 0:
+            if args.loopback and now - started >= LOOPBACK_GRACE:
                 break
             if args.duration > 0 and now - started >= args.duration:
                 break
@@ -398,7 +403,7 @@ def run(args: argparse.Namespace) -> int:
         sock.close()
 
     elapsed = time.monotonic() - started
-    loopback = f" loopback={'ok' if loopback_echo else 'no'}" if args.loopback else ""
+    loopback = f" loopback={'echo' if loopback_echo else 'sent'}" if args.loopback else ""
     print(
         f"link-probe: done after {elapsed:.1f}s frames={frames} "
         f"hello_ack={'yes' if hello_ack else 'no'}{loopback}",
@@ -406,10 +411,13 @@ def run(args: argparse.Namespace) -> int:
     )
 
     if args.loopback:
-        if not loopback_echo:
-            print("link-probe: timed out without the looped-back HELLO", file=sys.stderr)
-            return 1
-    elif not hello_ack:
+        print(
+            "link-probe: loopback HELLO sent; watch the Bridge status line "
+            "(tcp_rx, uart_tx, uart_rx and good must rise; crc, resync, bad, dma_stalls stay 0)",
+            flush=True,
+        )
+        return 0
+    if not hello_ack:
         print("link-probe: timed out without a HELLO_ACK", file=sys.stderr)
         return 1
     if args.count > 0 and frames < args.count:

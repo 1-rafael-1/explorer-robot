@@ -128,10 +128,13 @@ python3 tools/link-probe.py 192.168.1.42 --count 100 --quiet
 python3 tools/link-probe.py 192.168.1.42 --loopback
 ```
 
-With the jumper, the Bridge forwards the probe's `HELLO` out of UART1 and the jumper returns it,
-so the probe sees its own frame and reports `loopback=ok`. That exercises the whole pump path —
-TCP, routing, UART TX, UHCI RX DMA, parser, coalescing ring and TCP back — but it does not prove
-a robot `HELLO_ACK`; that needs the Robot Stub on a real adapter.
+With the jumper, the Bridge forwards the probe's `HELLO` out of UART1 and the jumper returns it. The
+router then **ignores** it by design — a robot-side `HELLO` without `IS_ACK` is not a legal robot
+frame — so nothing comes back over the socket and `--loopback` only sends and exits 0. The proof
+is the Bridge's status line: `tcp_rx`, `uart_tx`, `uart_rx` and `good` must rise while `crc`,
+`resync`, `bad` and `dma_stalls` stay zero. That exercises TCP, routing, UART TX, UHCI RX DMA,
+the parser and the routing decision; it does not prove a robot `HELLO_ACK`, which needs the Robot
+Stub on a real adapter.
 
 Pass the address the Bridge logs (`sta: address=…`). The probe prints lines such as:
 
