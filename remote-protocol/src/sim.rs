@@ -7,7 +7,7 @@
 //!
 //! This module is compiled only with the `std` feature.
 
-use std::{collections::VecDeque, vec::Vec};
+use std::{collections::VecDeque, string::String, vec::Vec};
 
 use crate::{
     PROTOCOL_MAJOR,
@@ -18,7 +18,10 @@ use crate::{
     frame::{Class, Direction, Flags, Frame, Seq, Status},
     ids::{Caps, Command, Control, Event, Stream},
     parser::{MAX_PC_TO_ROBOT_FRAME, RobotToPcParser},
-    payload::control::{HelloAck, PingAck, RateEntry, Throttle, ThrottleAction, encode_hello},
+    payload::control::{
+        BridgeControl, BridgeControlAction, BridgeControlReply, HelloAck, PairingCode, PingAck, RateEntry,
+        SetupCredentials, Throttle, ThrottleAction, encode_bridge_control_ack, encode_hello,
+    },
     reliability::ReplayWindow,
 };
 
@@ -222,6 +225,18 @@ pub struct FakeRemote {
     command_seq: u16,
     /// The next control sequence; control frames start at 1 and zero is never sent.
     control_seq: u16,
+    /// The setup SSID the simulated Bridge returns for action 0.
+    setup_ssid: String,
+    /// The setup passphrase the simulated Bridge returns for action 0.
+    setup_passphrase: String,
+    /// The twelve-character pairing code the simulated Bridge returns for actions 1 and 2.
+    pairing_code: String,
+    /// `BRIDGE_CONTROL` requests received from the robot, in arrival order.
+    received_bridge_controls: Vec<(BridgeControlAction, Seq)>,
+    /// `BRIDGE_CONTROL` ids with an unknown action that were ignored.
+    unknown_bridge_controls: u32,
+    /// `BRIDGE_CONTROL` acknowledgements waiting to be written to the wire.
+    pending_bridge_acks: Vec<(Seq, BridgeControlAction)>,
     /// The Boot Id most recently observed in a `HELLO_ACK`; scopes the event replay window.
     boot_id: Option<u32>,
     /// The event replay window keyed by `(boot_id, seq)`.
@@ -255,6 +270,12 @@ impl FakeRemote {
             unknown_controls: 0,
             command_seq: 1,
             control_seq: 1,
+            setup_ssid: String::from("ExplorerRobot-ABCD"),
+            setup_passphrase: String::from("setup-mode"),
+            pairing_code: String::from("ABCD2345EFGH"),
+            received_bridge_controls: Vec::new(),
+            unknown_bridge_controls: 0,
+            pending_bridge_acks: Vec::new(),
             boot_id: None,
             event_window: ReplayWindow::new(),
             received_events: Vec::new(),
@@ -273,7 +294,50 @@ impl FakeRemote {
         let bytes = wire.take(Direction::RobotToPc);
         let decoded = self.feed(&bytes, now_ms);
         self.flush_event_acks(wire);
+        self.flush_bridge_acks(wire);
         decoded
+    }
+
+    /// Writes the `BRIDGE_CONTROL` acknowledgements collected by [`FakeRemote::feed`] to the wire.
+    ///
+    /// [`FakeRemote::receive`] calls this automatically; a caller that feeds bytes directly must
+    /// call it once the robot-to-PC bytes have been consumed.
+    pub fn flush_bridge_acks(&mut self, wire: &mut Wire) {
+        let acks = std::mem::take(&mut self.pending_bridge_acks);
+        for (seq, action) in acks {
+            let reply = match action {
+                BridgeControlAction::ForgetNetwork => BridgeControlReply::Setup(SetupCredentials {
+                    status: Status::Ok,
+                    ssid: &self.setup_ssid,
+                    passphrase: &self.setup_passphrase,
+                }),
+                BridgeControlAction::ShowPairingCode | BridgeControlAction::RotatePairingCode => {
+                    BridgeControlReply::PairingCode(PairingCode {
+                        status: Status::Ok,
+                        code: &self.pairing_code,
+                    })
+                }
+            };
+            let mut payload = [0u8; MAX_PC_TO_ROBOT_FRAME];
+            let Ok(len) = encode_bridge_control_ack(&reply, &mut payload) else {
+                continue;
+            };
+            let Ok(frame) = Frame::new(
+                PROTOCOL_MAJOR,
+                Class::Control,
+                Flags::IS_ACK,
+                Control::BridgeControl.wire_id(),
+                seq,
+                &payload[..len],
+            ) else {
+                continue;
+            };
+            let mut bytes = [0u8; MAX_PC_TO_ROBOT_FRAME];
+            let Ok(written) = frame.encode_into(&mut bytes) else {
+                continue;
+            };
+            wire.send(Direction::PcToRobot, &bytes[..written]);
+        }
     }
 
     /// Writes the event ACKs collected by [`FakeRemote::feed`] to the wire.
@@ -313,6 +377,8 @@ impl FakeRemote {
         let received_events = &mut self.received_events;
         let event_window = &mut self.event_window;
         let pending_event_acks = &mut self.pending_event_acks;
+        let received_bridge_controls = &mut self.received_bridge_controls;
+        let pending_bridge_acks = &mut self.pending_bridge_acks;
         let mut current_boot = self.boot_id.unwrap_or(0);
         let mut new_boot_id = None;
         let mut duplicates = 0u32;
@@ -320,6 +386,7 @@ impl FakeRemote {
         let mut unknown_acks = 0u32;
         let mut unknown_controls = 0u32;
         let mut unknown_events = 0u32;
+        let mut unknown_bridge_controls = 0u32;
         self.parser.feed(bytes, now_ms, |frame| match frame.header.class {
             Class::Stream => {
                 let Some(stream) = Stream::from_wire(frame.header.id) else {
@@ -340,6 +407,15 @@ impl FakeRemote {
             }
             Class::Control => {
                 if !frame.header.flags.contains(Flags::IS_ACK) {
+                    // The simulated peer is also the Bridge for the one robot-to-Bridge control.
+                    if frame.header.id == Control::BridgeControl.wire_id() {
+                        if let Ok(request) = BridgeControl::decode(frame.payload) {
+                            received_bridge_controls.push((request.action, frame.header.seq));
+                            pending_bridge_acks.push((frame.header.seq, request.action));
+                        } else {
+                            unknown_bridge_controls = unknown_bridge_controls.saturating_add(1);
+                        }
+                    }
                     return;
                 }
                 match Control::from_wire(frame.header.id) {
@@ -382,6 +458,7 @@ impl FakeRemote {
         self.unknown_acks = self.unknown_acks.saturating_add(unknown_acks);
         self.unknown_controls = self.unknown_controls.saturating_add(unknown_controls);
         self.unknown_events = self.unknown_events.saturating_add(unknown_events);
+        self.unknown_bridge_controls = self.unknown_bridge_controls.saturating_add(unknown_bridge_controls);
         self.event_duplicates = self.event_duplicates.saturating_add(duplicates);
         self.received.len() - before
     }
@@ -693,6 +770,61 @@ impl FakeRemote {
     /// Sets the status the peer reports in every event ACK.
     pub const fn set_event_ack_status(&mut self, status: Status) {
         self.event_ack_status = status;
+    }
+
+    /// Returns every `BRIDGE_CONTROL` request received, in arrival order.
+    pub fn bridge_controls(&self) -> impl Iterator<Item = (BridgeControlAction, Seq)> + '_ {
+        self.received_bridge_controls.iter().copied()
+    }
+
+    /// Returns the most recent `BRIDGE_CONTROL` request, if any.
+    #[must_use]
+    pub fn last_bridge_control(&self) -> Option<(BridgeControlAction, Seq)> {
+        self.received_bridge_controls.last().copied()
+    }
+
+    /// Returns how many `BRIDGE_CONTROL` requests have been received.
+    #[must_use]
+    pub const fn bridge_control_count(&self) -> usize {
+        self.received_bridge_controls.len()
+    }
+
+    /// Returns how many `BRIDGE_CONTROL` requests with an unknown action were ignored.
+    #[must_use]
+    pub const fn unknown_bridge_controls(&self) -> u32 {
+        self.unknown_bridge_controls
+    }
+
+    /// Returns the setup SSID the simulated Bridge reports for action 0.
+    #[must_use]
+    pub fn setup_ssid(&self) -> &str {
+        &self.setup_ssid
+    }
+
+    /// Returns the setup passphrase the simulated Bridge reports for action 0.
+    #[must_use]
+    pub fn setup_passphrase(&self) -> &str {
+        &self.setup_passphrase
+    }
+
+    /// Returns the pairing code the simulated Bridge reports for actions 1 and 2.
+    #[must_use]
+    pub fn pairing_code(&self) -> &str {
+        &self.pairing_code
+    }
+
+    /// Sets the setup SSID and passphrase the simulated Bridge reports for action 0.
+    pub fn set_setup_credentials(&mut self, ssid: &str, passphrase: &str) {
+        self.setup_ssid = String::from(ssid);
+        self.setup_passphrase = String::from(passphrase);
+    }
+
+    /// Sets the pairing code the simulated Bridge reports for actions 1 and 2.
+    ///
+    /// A code that is not exactly twelve characters cannot be encoded, so no acknowledgement is
+    /// written for a request while it is set.
+    pub fn set_pairing_code(&mut self, code: &str) {
+        self.pairing_code = String::from(code);
     }
 }
 

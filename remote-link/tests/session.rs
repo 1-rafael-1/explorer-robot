@@ -76,7 +76,7 @@ fn accept_command(core: &mut LinkCore, wire: &mut Wire, now_ms: u64) -> bool {
     };
     let seq = match inbound {
         Inbound::Command(request) => request.seq.get(),
-        Inbound::EventAck(_) => return false,
+        Inbound::EventAck(_) | Inbound::ControlReply(_) | Inbound::ControlTimeout { .. } => return false,
     };
     core.ack_command(seq, Status::Ok, &[])
 }

@@ -36,3 +36,7 @@ required-features = ["std"]
 [[test]]
 name = "throttle"
 required-features = ["std"]
+
+[[test]]
+name = "bridge_control"
+required-features = ["std"]

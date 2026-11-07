@@ -3,7 +3,7 @@
 //! The values are the spec's: a 5 s lease, a 2 s Deadman, 1 s `PING`, `HELLO` every 1 s up to five
 //! attempts, command retries at 300 ms doubling to a 1 s cap with three attempts, event retries at
 //! 500 ms doubling to a 2 s cap with five attempts, an 8-entry event ring, `THROTTLE` repetition
-//! every 500 ms and a 50 ms frame timeout.
+//! every 500 ms, a 2 s `BRIDGE_CONTROL` timeout and a 50 ms frame timeout.
 //!
 //! [`Config`] carries those defaults so a host test can compress time; the firmware passes a
 //! `Config` into [`crate::LinkCore::new`] rather than editing these constants.
@@ -60,6 +60,9 @@ pub const EVENT_RING: usize = 8;
 
 /// The interval at which an active `THROTTLE` hint is repeated.
 pub const THROTTLE_REPEAT_MS: u64 = 500;
+
+/// The time to wait for a `BRIDGE_CONTROL` acknowledgement before reporting a timeout.
+pub const CONTROL_TIMEOUT_MS: u64 = 2_000;
 
 /// The frame assembly timeout.
 pub const FRAME_TIMEOUT_MS: u32 = 50;
@@ -132,6 +135,8 @@ pub struct Config {
     pub event_ring: usize,
     /// The interval at which an active `THROTTLE` hint is repeated.
     pub throttle_repeat_ms: u64,
+    /// The time to wait for a `BRIDGE_CONTROL` acknowledgement before reporting a timeout.
+    pub control_timeout_ms: u64,
     /// The frame assembly timeout.
     pub frame_timeout_ms: u32,
     /// The capabilities the robot advertises and intersects with a peer's `HELLO`.
@@ -166,6 +171,7 @@ impl Config {
         event_attempts: EVENT_ATTEMPTS,
         event_ring: EVENT_RING,
         throttle_repeat_ms: THROTTLE_REPEAT_MS,
+        control_timeout_ms: CONTROL_TIMEOUT_MS,
         frame_timeout_ms: FRAME_TIMEOUT_MS,
         robot_caps: Caps::from_bits(0),
         default_rates_chz: DEFAULT_RATES_CHZ,

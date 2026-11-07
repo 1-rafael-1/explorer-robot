@@ -31,13 +31,16 @@ pub mod timing;
 use events::EventRing;
 pub use events::{EventAckNotice, Publish};
 use remote_protocol::{
-    Caps, Class, Command, CommandMessage, Control, Direction, EncodeError, Event, EventMessage, Flags, Frame,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
+    Caps, Class, CodecError, Command, CommandMessage, Control, Direction, EncodeError, Event, EventMessage, Flags,
+    Frame, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
     codec::{PayloadCodec, StreamSample, decode_command},
     ids::Stream,
     parser::PcToRobotParser,
     payload::{
-        control::{Hello, HelloAck, Ping, PingAck, RateEntry, RateFlags, Throttle as ThrottleHint, encode_hello_ack},
+        control::{
+            BridgeControl, BridgeControlAction, BridgeControlReply, Hello, HelloAck, Ping, PingAck, RateEntry,
+            RateFlags, Throttle as ThrottleHint, decode_bridge_control_ack, encode_hello_ack,
+        },
         event::EventAck,
         stream::{Activity, Calibration, LidarCloud, Motion, Perception, Power},
     },
@@ -106,6 +109,36 @@ pub enum Inbound<'a> {
     Command(CommandRequest<'a>),
     /// The peer acknowledged one of the events published earlier.
     EventAck(EventAckNotice),
+    /// The Bridge acknowledged the outstanding `BRIDGE_CONTROL` request.
+    ControlReply(ControlReply<'a>),
+    /// The outstanding `BRIDGE_CONTROL` request received no acknowledgement in time.
+    ControlTimeout {
+        /// The timed-out request's control sequence number.
+        seq: u16,
+    },
+}
+
+/// A `BRIDGE_CONTROL` acknowledgement surfaced by [`LinkCore::poll`].
+///
+/// The acknowledgement is paired to the request by `seq`; the wire payload does not repeat the
+/// action. The link only carries the setup credentials or pairing code and never acts on them.
+#[derive(Debug)]
+pub struct ControlReply<'a> {
+    /// The acknowledgement's sequence number, mirroring the request.
+    pub seq: Seq,
+    /// The typed reply, or the status a malformed acknowledgement maps to.
+    pub result: Result<BridgeControlReply<'a>, Status>,
+}
+
+impl ControlReply<'_> {
+    /// Returns the status the Bridge reported, or the status a malformed acknowledgement maps to.
+    #[must_use]
+    pub const fn status(&self) -> Status {
+        match &self.result {
+            Ok(reply) => reply.status(),
+            Err(status) => *status,
+        }
+    }
 }
 
 /// The latest encoded payload of each stream.
@@ -553,7 +586,7 @@ const CONTROL_REPLY_CAPACITY: usize = 4;
 
 /// A queued `HELLO_ACK` or `PING` acknowledgement.
 #[derive(Clone, Copy, Debug)]
-struct ControlReply {
+struct QueuedControlReply {
     /// The control id to mirror.
     id: u16,
     /// The sequence number to mirror.
@@ -567,7 +600,7 @@ struct ControlReply {
 /// The outbound control replies, oldest first.
 struct ControlState {
     /// The queued replies.
-    replies: heapless::Vec<ControlReply, CONTROL_REPLY_CAPACITY>,
+    replies: heapless::Vec<QueuedControlReply, CONTROL_REPLY_CAPACITY>,
 }
 
 impl ControlState {
@@ -585,7 +618,7 @@ impl ControlState {
         }
         let mut bytes = [0u8; CONTROL_REPLY_BYTES];
         bytes[..payload.len()].copy_from_slice(payload);
-        let _ = self.replies.push(ControlReply {
+        let _ = self.replies.push(QueuedControlReply {
             id,
             seq,
             len: payload.len(),
@@ -608,6 +641,180 @@ impl ControlState {
         let written = frame.encode_into(out).ok()?;
         self.replies.remove(0);
         Some(written)
+    }
+}
+
+/// The largest `BRIDGE_CONTROL` acknowledgement payload the robot accepts.
+const BRIDGE_CONTROL_PAYLOAD_BYTES: usize = Direction::PcToRobot.max_payload();
+
+/// An outbound `BRIDGE_CONTROL` request awaiting emission or an acknowledgement.
+#[derive(Clone, Copy, Debug)]
+struct PendingBridgeControl {
+    /// The request's control sequence number.
+    seq: u16,
+    /// The action, kept so the acknowledgement can be decoded without an action echo.
+    action: BridgeControlAction,
+    /// Whether the request has been emitted.
+    sent: bool,
+    /// The timeout deadline, set when the request is first emitted.
+    deadline_ms: Option<u64>,
+}
+
+/// A received `BRIDGE_CONTROL` acknowledgement copied out of the parser for `poll`.
+struct InboundBridgeControl {
+    /// The acknowledgement's sequence number.
+    seq: u16,
+    /// The action of the request it answers.
+    action: BridgeControlAction,
+    /// The number of valid bytes in `bytes`.
+    len: usize,
+    /// The copied acknowledgement payload.
+    bytes: [u8; BRIDGE_CONTROL_PAYLOAD_BYTES],
+}
+
+impl InboundBridgeControl {
+    /// Creates an empty slot.
+    const fn empty() -> Self {
+        Self {
+            seq: 0,
+            action: BridgeControlAction::ForgetNetwork,
+            len: 0,
+            bytes: [0; BRIDGE_CONTROL_PAYLOAD_BYTES],
+        }
+    }
+}
+
+/// The one outbound `BRIDGE_CONTROL` request and its acknowledgement or timeout.
+///
+/// A request is queued, emitted once at control priority and then either matched to an
+/// acknowledgement by `seq` or timed out. It is never retransmitted, so a lost acknowledgement
+/// cannot duplicate the action at the Bridge.
+struct BridgeControlState {
+    /// The next control sequence number; zero is skipped.
+    next_seq: u16,
+    /// The request in flight.
+    outbound: Option<PendingBridgeControl>,
+    /// The acknowledgement copied for `poll`.
+    inbound: InboundBridgeControl,
+    /// Whether `inbound` holds an unread acknowledgement.
+    inbound_ready: bool,
+    /// A timed-out request sequence waiting for `poll`.
+    timeout: Option<u16>,
+}
+
+impl BridgeControlState {
+    /// Creates the empty state with the control sequence at one.
+    const fn new() -> Self {
+        Self {
+            next_seq: 1,
+            outbound: None,
+            inbound: InboundBridgeControl::empty(),
+            inbound_ready: false,
+            timeout: None,
+        }
+    }
+
+    /// Allocates the next non-zero control sequence number.
+    const fn allocate_seq(&mut self) -> u16 {
+        let seq = self.next_seq;
+        let next = seq.wrapping_add(1);
+        self.next_seq = if next == 0 { 1 } else { next };
+        seq
+    }
+
+    /// Queues one request, returning its sequence number or a rejection status.
+    const fn request(&mut self, action_byte: u8, _now_ms: u64) -> Result<u16, Status> {
+        if self.outbound.is_some() || self.inbound_ready || self.timeout.is_some() {
+            return Err(Status::Busy);
+        }
+        let Some(action) = BridgeControlAction::from_wire(action_byte) else {
+            return Err(Status::BadArgument);
+        };
+        let seq = self.allocate_seq();
+        self.outbound = Some(PendingBridgeControl {
+            seq,
+            action,
+            sent: false,
+            deadline_ms: None,
+        });
+        Ok(seq)
+    }
+
+    /// Encodes the queued request into `out` if it has not been emitted yet.
+    fn next_frame(&mut self, out: &mut [u8], now_ms: u64, timeout_ms: u64) -> Option<usize> {
+        let pending = self.outbound.as_mut()?;
+        if pending.sent {
+            return None;
+        }
+        let request = BridgeControl { action: pending.action };
+        let mut payload = [0u8; BridgeControl::ENCODED_LEN];
+        let len = request.encode_into(&mut payload).ok()?;
+        let frame = Frame::new(
+            PROTOCOL_MAJOR,
+            Class::Control,
+            Flags::ACK_REQUESTED,
+            Control::BridgeControl.wire_id(),
+            Seq::new(pending.seq),
+            &payload[..len],
+        )
+        .ok()?;
+        let written = frame.encode_into(out).ok()?;
+        pending.sent = true;
+        pending.deadline_ms = Some(now_ms.saturating_add(timeout_ms));
+        Some(written)
+    }
+
+    /// Copies an acknowledgement whose sequence matches the outstanding request.
+    ///
+    /// A mismatched sequence, an acknowledgement with no outstanding request, or a payload above
+    /// the PC-to-robot cap is ignored.
+    fn on_ack(&mut self, seq: u16, payload: &[u8]) {
+        let Some(pending) = self.outbound else {
+            return;
+        };
+        if pending.seq != seq || payload.len() > BRIDGE_CONTROL_PAYLOAD_BYTES {
+            return;
+        }
+        self.inbound.seq = pending.seq;
+        self.inbound.action = pending.action;
+        self.inbound.len = payload.len();
+        self.inbound.bytes[..payload.len()].copy_from_slice(payload);
+        self.inbound_ready = true;
+        self.outbound = None;
+    }
+
+    /// Marks an emitted request as timed out once its deadline passes.
+    fn tick(&mut self, now_ms: u64) {
+        let Some(pending) = self.outbound else {
+            return;
+        };
+        let Some(deadline_ms) = pending.deadline_ms else {
+            return;
+        };
+        if now_ms < deadline_ms {
+            return;
+        }
+        self.outbound = None;
+        self.timeout.get_or_insert(pending.seq);
+    }
+
+    /// Decodes the buffered acknowledgement and clears its ready flag.
+    fn pop_reply(&mut self) -> Option<ControlReply<'_>> {
+        if !self.inbound_ready {
+            return None;
+        }
+        self.inbound_ready = false;
+        let slot = &self.inbound;
+        let result = decode_bridge_control_ack(slot.action, &slot.bytes[..slot.len]).map_err(CodecError::status);
+        Some(ControlReply {
+            seq: Seq::new(slot.seq),
+            result,
+        })
+    }
+
+    /// Takes the timed-out request sequence, if one is waiting.
+    const fn pop_timeout(&mut self) -> Option<u16> {
+        self.timeout.take()
     }
 }
 
@@ -761,6 +968,8 @@ pub struct LinkCore {
     peers: PeerTracker,
     /// Outbound `HELLO_ACK` and `PING` replies.
     controls: ControlState,
+    /// The outbound `BRIDGE_CONTROL` request and its acknowledgement or timeout.
+    bridge: BridgeControlState,
     /// The encoded event ring and its retransmission schedule.
     events: EventRing,
     /// The merged advisory `THROTTLE` hints.
@@ -793,6 +1002,7 @@ impl LinkCore {
             session: SessionState::new(),
             peers: PeerTracker::new(),
             controls: ControlState::new(),
+            bridge: BridgeControlState::new(),
             events: EventRing::new(&config, boot_id),
             throttle: Throttle::new(),
             invalid_throttles: 0,
@@ -953,37 +1163,66 @@ impl LinkCore {
         self.events.iter()
     }
 
-    /// Yields the one accepted command, or one buffered event ACK, if any.
+    /// Queues one `BRIDGE_CONTROL` request and returns its control sequence number.
+    ///
+    /// One request is in flight at a time. A request while another is queued, awaiting its
+    /// acknowledgement or its timeout notice is rejected with [`Status::Busy`]; an action outside
+    /// `0..=2` is rejected with [`Status::BadArgument`]. The request is emitted by
+    /// [`LinkCore::next_frame`] at control priority, is never retransmitted, and times out after
+    /// [`Config::control_timeout_ms`] once it has been emitted.
+    ///
+    /// The link only carries the Bridge's credentials or pairing code; it never logs, stores
+    /// beyond the pending reply, or acts on them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Status::BadArgument`] for an unknown action and [`Status::Busy`] while an earlier
+    /// request or its unread result is outstanding.
+    pub const fn request_bridge_control(&mut self, action: u8, now_ms: u64) -> Result<u16, Status> {
+        self.now_ms = now_ms;
+        self.bridge.request(action, now_ms)
+    }
+
+    /// Yields the one accepted command, one `BRIDGE_CONTROL` result, or one buffered event ACK.
     ///
     /// A command takes priority; nothing is yielded while an earlier polled command is
-    /// unacknowledged, because the firmware must call [`LinkCore::ack_command`] first. An
+    /// unacknowledged, because the firmware must call [`LinkCore::ack_command`] first. A
+    /// `BRIDGE_CONTROL` reply or timeout follows the command seam and precedes an event ACK. An
     /// [`Inbound::EventAck`] borrows nothing and exists only so the firmware can log the peer's
     /// diagnostic status: the matching ring entry is already retired.
     pub fn poll(&mut self) -> Option<Inbound<'_>> {
         if self.commands.pending.is_some() {
             return None;
         }
-        if !self.commands.ready {
-            return self.events.pop_ack().map(Inbound::EventAck);
+        if self.commands.ready {
+            let state = &mut self.commands;
+            let slot = &state.inbound;
+            let Ok(message) = decode_command(slot.command, false, &slot.bytes[..slot.len]) else {
+                // `on_rx` already validated the payload; this branch is unreachable but never panics.
+                return None;
+            };
+            state.ready = false;
+            state.pending = Some(PendingCommand {
+                id: slot.command.wire_id(),
+                seq: slot.seq,
+                flags: slot.flags,
+            });
+            return Some(Inbound::Command(CommandRequest {
+                seq: Seq::new(slot.seq),
+                flags: slot.flags,
+                command: slot.command,
+                message,
+            }));
         }
-        let state = &mut self.commands;
-        let slot = &state.inbound;
-        let Ok(message) = decode_command(slot.command, false, &slot.bytes[..slot.len]) else {
-            // `on_rx` already validated the payload; this branch is unreachable but never panics.
-            return None;
-        };
-        state.ready = false;
-        state.pending = Some(PendingCommand {
-            id: slot.command.wire_id(),
-            seq: slot.seq,
-            flags: slot.flags,
-        });
-        Some(Inbound::Command(CommandRequest {
-            seq: Seq::new(slot.seq),
-            flags: slot.flags,
-            command: slot.command,
-            message,
-        }))
+        // A reply and a timeout are mutually exclusive, so their order does not matter; the
+        // owned timeout is taken first so the reply's borrow does not overlap this borrow.
+        if let Some(seq) = self.bridge.pop_timeout() {
+            return Some(Inbound::ControlTimeout { seq });
+        }
+        if let Some(reply) = self.bridge.pop_reply() {
+            return Some(Inbound::ControlReply(reply));
+        }
+        self.events.pop_ack().map(Inbound::EventAck)
     }
 
     /// Records the firmware's outcome for the polled command and queues its ACK.
@@ -1032,13 +1271,18 @@ impl LinkCore {
     /// Emits the next frame into `out`, returning the number of bytes written.
     ///
     /// Priority is control before events before streams. The queued `HELLO_ACK`/`PING` replies go
-    /// first, then the buffered auto-ACKs and the stored command ACK, then one ready event. Events
-    /// are emitted only while the peer's lease is live. Streams follow in round-robin order, but
-    /// only a stream whose sample is due at the most recent observed time is emitted.
-    /// A frame that does not fit returns [`None`] without consuming the pending payload or
-    /// advancing its sequence.
+    /// first, then the outbound `BRIDGE_CONTROL` request, then the buffered auto-ACKs and the
+    /// stored command ACK, then one ready event. Events are emitted only while the peer's lease is
+    /// live. Streams follow in round-robin order, but only a stream whose sample is due at the most
+    /// recent observed time is emitted. A frame that does not fit returns [`None`] without
+    /// consuming the pending payload or advancing its sequence.
     pub fn next_frame(&mut self, out: &mut [u8]) -> Option<usize> {
         if let Some(written) = self.controls.pop(out) {
+            return Some(written);
+        }
+        let now_ms = self.now_ms;
+        let timeout_ms = self.config.control_timeout_ms;
+        if let Some(written) = self.bridge.next_frame(out, now_ms, timeout_ms) {
             return Some(written);
         }
         if let Some(written) = self.commands.pop_auto_ack(out) {
@@ -1151,6 +1395,7 @@ impl LinkCore {
     pub fn tick(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
         self.throttle.tick(now_ms);
+        self.bridge.tick(now_ms);
         self.peers.tick(now_ms, &self.config);
         self.events.tick(now_ms, self.peers.is_live());
     }
@@ -1182,9 +1427,10 @@ impl LinkCore {
     /// A command frame is validated and copied into the single inbound slot; a malformed, unknown,
     /// bad-flagged or stale command is auto-ACKed and never yielded. Unknown stream ids are counted
     /// and ignored. An event ACK retires the matching ring entry and queues a typed notice for
-    /// [`LinkCore::poll`]. Any valid frame, including one for a mismatched major, renews the lease.
-    /// The first frame after an expired lease re-attaches the peer and re-arms every surviving
-    /// event's retry schedule.
+    /// [`LinkCore::poll`]. A `BRIDGE_CONTROL` acknowledgement is paired to the outstanding request
+    /// by `seq`; a mismatched or unsolicited one is ignored. Any valid frame, including one for a
+    /// mismatched major, renews the lease. The first frame after an expired lease re-attaches the
+    /// peer and re-arms every surviving event's retry schedule.
     pub fn on_rx(&mut self, bytes: &[u8], now_ms: u64) {
         self.now_ms = now_ms;
         self.throttle.tick(now_ms);
@@ -1198,6 +1444,7 @@ impl LinkCore {
             session,
             peers,
             controls,
+            bridge,
             events,
             unknown_streams,
             throttle,
@@ -1243,6 +1490,12 @@ impl LinkCore {
                             return;
                         };
                         let _ = throttle.apply(&hint, now_ms);
+                    } else if frame.header.id == Control::BridgeControl.wire_id() {
+                        // The robot is the sender of BRIDGE_CONTROL; only the Bridge's ACK is
+                        // meaningful here. An inbound request is ignored.
+                        if frame.header.flags.contains(Flags::IS_ACK) {
+                            bridge.on_ack(frame.header.seq.get(), frame.payload);
+                        }
                     } else {
                         handle_control(config, *boot_id, session, controls, commands, frame);
                     }

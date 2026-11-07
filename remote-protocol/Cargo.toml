@@ -39,6 +39,10 @@ name = "control"
 required-features = ["std"]
 
 [[test]]
+name = "bridge_control"
+required-features = ["std"]
+
+[[test]]
 name = "retry"
 required-features = ["std"]
 

@@ -16,7 +16,7 @@ use crate::{
             AckPayload, CataloguePage, DriveDistance, GetCatalogue, GetStatus, RotateBy, StartProcedure,
             StatusSnapshot, StopMotion, StopProcedure,
         },
-        control::{Hello, HelloAck, Ping, PingAck, Throttle},
+        control::{BridgeControl, Hello, HelloAck, Ping, PingAck, Throttle},
         event::{
             CalibrationLoaded, DriveDistanceCompleted, EventAck, EventOverflow, FloorDrop, Obstacle,
             ProcedureCompleted, RotateCompleted,
@@ -326,8 +326,10 @@ pub fn encode_event(message: &EventMessage<'_>, out: &mut [u8]) -> Result<usize,
 /// One typed control payload, tagged with the control message it belongs to.
 ///
 /// `HELLO` and `PING` branch on `IS_ACK`; `THROTTLE` has no acknowledgement, so it is the same
-/// type in both directions and [`decode_control`] ignores `IS_ACK` for it. `BRIDGE_CONTROL` has no
-/// payload codec in this version and is not represented here.
+/// type in both directions and [`decode_control`] ignores `IS_ACK` for it. `BRIDGE_CONTROL` has a
+/// one-byte request here; its acknowledgement is action-dependent and is decoded with
+/// [`decode_bridge_control_ack`](crate::payload::control::decode_bridge_control_ack), because the
+/// wire acknowledgement does not repeat the action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlMessage<'a> {
     /// A `HELLO` request.
@@ -340,6 +342,8 @@ pub enum ControlMessage<'a> {
     PingAck(PingAck),
     /// A `THROTTLE` hint.
     Throttle(Throttle),
+    /// A `BRIDGE_CONTROL` request.
+    BridgeControl(BridgeControl),
 }
 
 impl ControlMessage<'_> {
@@ -350,21 +354,25 @@ impl ControlMessage<'_> {
             Self::Hello(_) | Self::HelloAck(_) => Control::Hello,
             Self::Ping(_) | Self::PingAck(_) => Control::Ping,
             Self::Throttle(_) => Control::Throttle,
+            Self::BridgeControl(_) => Control::BridgeControl,
         }
     }
 }
 
-/// Decodes one control payload, branching on `IS_ACK` for the two acknowledged controls.
+/// Decodes one control payload, branching on `IS_ACK` for the acknowledged controls.
 ///
 /// `THROTTLE` is decoded identically whether or not `IS_ACK` is set, because it has no
-/// acknowledgement. `BRIDGE_CONTROL` has no codec in this version and reports
-/// [`CodecError::Length`].
+/// acknowledgement. A `BRIDGE_CONTROL` request decodes from its one action byte; its
+/// acknowledgement cannot be decoded without the outstanding request's action, so this function
+/// reports [`CodecError::Length`] for it. Use
+/// [`decode_bridge_control_ack`](crate::payload::control::decode_bridge_control_ack) for that
+/// frame.
 ///
 /// # Errors
 ///
 /// Returns [`CodecError::Length`] for a structural mismatch, [`CodecError::Value`] for an
-/// out-of-range value (including an unassigned `THROTTLE` action or ACK status) and
-/// [`CodecError::Utf8`] for invalid text.
+/// out-of-range value (including an unassigned `THROTTLE` or `BRIDGE_CONTROL` action or ACK
+/// status) and [`CodecError::Utf8`] for invalid text.
 pub fn decode_control(control: Control, is_ack: bool, bytes: &[u8]) -> Result<ControlMessage<'_>, CodecError> {
     match control {
         Control::Hello if is_ack => HelloAck::decode(bytes).map(ControlMessage::HelloAck),
@@ -372,7 +380,8 @@ pub fn decode_control(control: Control, is_ack: bool, bytes: &[u8]) -> Result<Co
         Control::Ping if is_ack => PingAck::decode(bytes).map(ControlMessage::PingAck),
         Control::Ping => Ping::decode(bytes).map(ControlMessage::Ping),
         Control::Throttle => Throttle::decode(bytes).map(ControlMessage::Throttle),
-        Control::BridgeControl => Err(CodecError::Length),
+        Control::BridgeControl if is_ack => Err(CodecError::Length),
+        Control::BridgeControl => BridgeControl::decode(bytes).map(ControlMessage::BridgeControl),
     }
 }
 
@@ -389,6 +398,7 @@ pub fn encode_control(message: &ControlMessage<'_>, out: &mut [u8]) -> Result<us
         ControlMessage::Ping(value) => value.encode_into(out),
         ControlMessage::PingAck(value) => value.encode_into(out),
         ControlMessage::Throttle(value) => value.encode_into(out),
+        ControlMessage::BridgeControl(value) => value.encode_into(out),
     }
 }
 

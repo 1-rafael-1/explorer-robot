@@ -7,7 +7,7 @@
 //! survive a round trip unchanged.
 //!
 //! Streams live in [`stream`]; commands and their query responses live in [`command`]; the
-//! reliable events live in [`event`]; the session control payloads live in [`control`].
+//! reliable events live in [`event`]; the session and Bridge control payloads live in [`control`].
 
 pub mod command;
 pub mod control;
@@ -19,8 +19,9 @@ pub use command::{
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,
 };
 pub use control::{
-    Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, Throttle, ThrottleAction, encode_hello,
-    encode_hello_ack,
+    BridgeControl, BridgeControlAction, BridgeControlReply, Hello, HelloAck, PAIRING_CODE_LEN, PairingCode, Ping,
+    PingAck, RateEntries, RateEntry, RateFlags, SetupCredentials, Throttle, ThrottleAction, decode_bridge_control_ack,
+    encode_bridge_control_ack, encode_hello, encode_hello_ack,
 };
 pub use event::{
     CalibrationKind, CalibrationLoadStatus, CalibrationLoaded, CompletionStatus, DriveDistanceCompleted,

@@ -38,8 +38,9 @@ pub use ids::{Caps, Command, Control, Event, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
 pub use payload::{
     control::{
-        Hello, HelloAck, Ping, PingAck, RateEntries, RateEntry, RateFlags, Throttle as ThrottleHint, ThrottleAction,
-        encode_hello, encode_hello_ack,
+        BridgeControl, BridgeControlAction, BridgeControlReply, Hello, HelloAck, PAIRING_CODE_LEN, PairingCode, Ping,
+        PingAck, RateEntries, RateEntry, RateFlags, SetupCredentials, Throttle as ThrottleHint, ThrottleAction,
+        decode_bridge_control_ack, encode_bridge_control_ack, encode_hello, encode_hello_ack,
     },
     event::{
         CalibrationKind, CalibrationLoadStatus, CalibrationLoaded, CompletionStatus, DriveDistanceCompleted,
