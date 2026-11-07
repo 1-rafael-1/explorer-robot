@@ -25,7 +25,6 @@ import socket
 import struct
 import time
 
-
 MAGIC = 0x55AA55AA
 HEADER = struct.Struct("<II")
 
@@ -144,7 +143,9 @@ def run(host: str, port: int, duration: float, frame_size: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="TCP soak client for the C3 bridge spike")
+    parser = argparse.ArgumentParser(
+        description="TCP soak client for the C3 bridge spike"
+    )
     parser.add_argument("host", help="station address or 192.168.4.1 on the setup AP")
     parser.add_argument("port", nargs="?", type=int, default=9000)
     parser.add_argument("duration", nargs="?", type=float, default=600.0)
