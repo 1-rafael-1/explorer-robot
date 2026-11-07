@@ -262,6 +262,10 @@ impl<'a> PayloadCodec<'a> for DriveDistanceCompleted<'a> {
 }
 
 /// A `ROTATE_COMPLETED` event: a `ROTATE_BY` command finished.
+///
+/// The wire's angles are clockwise; ADR-0039's boundary rule defines [`Self::error_cdeg`] as
+/// **actual − target** in clockwise centidegrees, and the daemon negates both angles once when it
+/// converts to the App Boundary's counter-clockwise degrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RotateCompleted<'a> {
     /// The originating command's sequence number.
@@ -270,7 +274,10 @@ pub struct RotateCompleted<'a> {
     pub status: CompletionStatus,
     /// The requested angle in centidegrees; positive is clockwise.
     pub target_cdeg: i16,
-    /// The signed angle actually achieved, in centidegrees.
+    /// The signed error, **actual − target**, in clockwise centidegrees.
+    ///
+    /// The daemon negates it once to report the App Boundary's counter-clockwise `error_deg`
+    /// (ADR-0039's boundary rule); the wire field itself stays clockwise.
     pub error_cdeg: i32,
     /// The rotation's duration in milliseconds.
     pub duration_ms: u32,

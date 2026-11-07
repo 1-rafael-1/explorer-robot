@@ -842,6 +842,33 @@ impl Relay {
         Some(outbound)
     }
 
+    /// Returns whether any command is queued or awaiting its acknowledgement.
+    ///
+    /// The link adapter uses this before sending a daemon-owned `GET_STATUS`/`GET_CATALOGUE`
+    /// query, so the query's wire sequence cannot make a queued app command stale (ADR-0039).
+    #[must_use]
+    pub fn has_pending_commands(&self) -> bool {
+        self.in_flight.is_some() || !self.queue.is_empty()
+    }
+
+    /// Allocates a wire sequence for a daemon-owned query frame.
+    ///
+    /// The daemon's own queries never enter the command map and never produce an app
+    /// `command_result`, but they share the robot's single sequence space so the next app command
+    /// is still `last + 1`. Call only while [`Relay::has_pending_commands`] is false.
+    pub fn allocate_query_seq(&mut self) -> u16 {
+        self.allocate_wire_seq()
+    }
+
+    /// Restarts the wire command sequence for a new robot Boot Id.
+    ///
+    /// The robot resets its own dedupe window on a boot, so its next accepted command is sequence
+    /// `1`. The link adapter calls this when `HELLO_ACK` reports a different Boot Id, keeping the
+    /// daemon's sequence and the robot's window in step (ADR-0039).
+    pub const fn restart_wire_sequence(&mut self) {
+        self.next_wire_seq = FIRST_WIRE_SEQ;
+    }
+
     /// Completes the in-flight command with the robot's acknowledgement.
     ///
     /// An `Ok` ACK is `acked`; every other wire status is `rejected`, with `VERSION_MISMATCH`
@@ -1520,8 +1547,16 @@ mod tests {
 
     use remote_protocol::Status as WireStatus;
 
-    use super::{ack_status, unknown_sentinel};
-    use crate::schema::Status;
+    use super::{Relay, ack_status, unknown_sentinel};
+    use crate::schema::{CommandFrame, Status};
+
+    /// Extracts a value, failing the test rather than unwrapping (the workspace denies `unwrap`).
+    fn must<T>(value: Option<T>, what: &str) -> T {
+        value.unwrap_or_else(|| {
+            assert_eq!(what.len(), usize::MAX, "missing {what}");
+            std::process::abort()
+        })
+    }
 
     /// The unknown sentinel maps to `null` and every other value survives.
     #[test]
@@ -1539,5 +1574,41 @@ mod tests {
             ack_status(WireStatus::VersionMismatch),
             (Status::Rejected, Some("Robot protocol version mismatch"))
         );
+    }
+
+    /// A daemon-owned query shares the app command's wire sequence space but not its map.
+    #[test]
+    fn a_query_sequence_shares_the_app_command_space() {
+        let mut relay = Relay::new();
+        relay.session_up(7, 0);
+        let app = relay.connect_app(0);
+        assert!(!relay.has_pending_commands(), "a fresh Session has nothing pending");
+
+        assert_eq!(relay.allocate_query_seq(), 1, "the first wire sequence is one");
+        assert!(!relay.has_pending_commands(), "a query is not an app command");
+
+        let frame = CommandFrame {
+            command_seq: 1,
+            command: "stop_motion".to_owned(),
+            args: serde_json::json!({"brake": true}),
+        };
+        assert!(relay.submit_command(app, frame, 0).is_none());
+        assert!(relay.has_pending_commands(), "a queued command counts as pending");
+        let outbound = must(relay.poll_link(0), "app command");
+        assert_eq!(outbound.wire_seq, 2, "the app command follows the query sequence");
+        assert!(relay.has_pending_commands(), "the command is in flight");
+        relay.on_command_ack(outbound.wire_seq, WireStatus::Ok, 1);
+        assert!(!relay.has_pending_commands(), "the ACK clears the in-flight slot");
+    }
+
+    /// A new robot Boot Id restarts the wire sequence at the robot's expected `1`.
+    #[test]
+    fn a_boot_restart_restarts_the_wire_sequence() {
+        let mut relay = Relay::new();
+        relay.session_up(7, 0);
+        assert_eq!(relay.allocate_query_seq(), 1);
+        assert_eq!(relay.allocate_query_seq(), 2);
+        relay.restart_wire_sequence();
+        assert_eq!(relay.allocate_query_seq(), 1, "a new boot expects sequence one");
     }
 }

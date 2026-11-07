@@ -15,5 +15,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod handshake;
+pub mod link;
 pub mod relay;
 pub mod schema;

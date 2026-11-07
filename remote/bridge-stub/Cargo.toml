@@ -10,11 +10,13 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 bridge-net = { path = "../bridge-net", version = "1" }
 remote-protocol = { path = "../../remote-protocol", version = "1", features = ["std"] }
 
-# The preamble's proofs (ADR-0039): the same no_std HMAC/SHA-256 pair the Bridge firmware picks.
-hmac = "0.12"
-sha2 = "0.10"
 # The bridge nonce's source; the daemon uses the same one (ADR-0039).
 getrandom = "0.3"
+
+[dev-dependencies]
+# The stub's proof test computes HMAC-SHA256 straight from the ADR's text.
+hmac = "0.12"
+sha2 = "0.10"
 
 [lints]
 workspace = true
