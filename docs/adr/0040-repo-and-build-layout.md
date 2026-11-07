@@ -282,3 +282,23 @@ homes"). Recorded here as an amendment because the layout above is otherwise unc
 - Historical records keep the old name deliberately: this ADR's body above, ADR-0033, and the
   resolved tickets under `.scratch/expansion-remote/issues/` (notably ticket 09's Answer) all
   predate the rename and are not rewritten.
+
+## Amendment — 2026-11-07: the host workspace's two bench-tool crates
+
+The layout above lists `remote/`'s members as `bridge-net` and `daemon`. The host workspace now
+also holds **`robot-stub`** and **`bridge-stub`**, each a library plus a binary rather than a
+library alone. Recorded here as an amendment because the layout is otherwise unchanged.
+
+- `robot-stub` is the robot's bench persona: the real `remote-link` `LinkCore` behind a serial
+  port, with load and fault personas. It path-depends on `remote-link` and `remote-protocol` (both
+  with their `std` feature) and is the only host crate that depends on `serialport`.
+- `bridge-stub` is the daemon's bench peer: the `bridge-net` preamble server side, the Discovery
+  Beacon and scripted robot traffic. It path-depends on `bridge-net` and `remote-protocol`.
+- Both are **bench tools, not domain concepts**: they exist so a developer can drive the daemon
+  and the firmware from a host machine, and so they stay in the host workspace instead of becoming
+  members of the robot or Bridge workspaces.
+- The `remote` CI job builds and tests them: its `cargo clippy --workspace --all-targets` and
+  `cargo test --workspace` cover the new members, and `robot-stub`'s binary needs `libudev` on the
+  runner.
+- They follow the existing host rules unchanged: path dependencies carry a `version`, and each
+  crate takes `[lints] workspace = true`.

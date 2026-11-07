@@ -5,7 +5,7 @@
 //! inside a minute close a one-minute refusal window, and a success resets the counter. The proof
 //! comparison is constant time; the HMAC that produces the proof belongs to `bridge-net`.
 
-use bridge_core::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent, auth, constant_time_eq};
+use bridge_core::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent, auth};
 
 /// A proof filled with one byte.
 const fn proof(byte: u8) -> Proof {
@@ -248,6 +248,12 @@ fn proofs_match_only_when_every_byte_is_identical() {
         );
     }
 
-    assert!(constant_time_eq(expected.as_bytes(), &[0x5A; auth::PROOF_LEN]));
-    assert!(!constant_time_eq(expected.as_bytes(), &[0x00; auth::PROOF_LEN]));
+    assert!(bridge_net::preamble::proofs_match(
+        expected.as_bytes(),
+        &[0x5A; auth::PROOF_LEN]
+    ));
+    assert!(!bridge_net::preamble::proofs_match(
+        expected.as_bytes(),
+        &[0x00; auth::PROOF_LEN]
+    ));
 }

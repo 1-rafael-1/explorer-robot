@@ -26,7 +26,7 @@ pub mod flow;
 pub mod pump;
 pub mod routing;
 
-pub use auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent, constant_time_eq};
+pub use auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent};
 pub use coalescing::{Entry, EntryKind, PushError, PushOutcome, Ring};
 pub use flow::WatermarkPolicy;
 pub use pump::{BridgePump, Decision};

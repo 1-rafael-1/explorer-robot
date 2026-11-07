@@ -9,6 +9,9 @@
 //!
 //! The gate has no I/O and no clock: the caller passes a monotonic millisecond timestamp.
 
+pub use bridge_net::preamble::PROOF_LEN;
+use bridge_net::preamble::proofs_match;
+
 /// How long a connection has to authenticate (ADR-0037's 5 s).
 pub const DEADLINE_MS: u32 = 5_000;
 
@@ -20,9 +23,6 @@ pub const FAILURE_WINDOW_MS: u32 = 60_000;
 
 /// How long the gate refuses new connections (ADR-0037's 60 s).
 pub const REFUSAL_MS: u32 = 60_000;
-
-/// The size of the opaque proof: HMAC-SHA256's 32 bytes.
-pub const PROOF_LEN: usize = 32;
 
 /// The number of failure timestamps the gate remembers; equal to [`FAILURE_LIMIT`].
 const FAILURE_SLOTS: usize = 5;
@@ -56,21 +56,8 @@ impl Proof {
     /// Compares two proofs without an early exit.
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
-        constant_time_eq(&self.0, &other.0)
+        proofs_match(&self.0, &other.0)
     }
-}
-
-/// Compares two 32-byte proofs without an early exit.
-///
-/// Every byte pair is folded into one accumulator and only the final accumulator is inspected.
-/// `black_box` keeps the compiler from turning the fold into a short-circuiting comparison.
-#[must_use]
-pub fn constant_time_eq(left: &[u8; PROOF_LEN], right: &[u8; PROOF_LEN]) -> bool {
-    let mut difference = 0u8;
-    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
-        difference |= left_byte ^ right_byte;
-    }
-    core::hint::black_box(difference) == 0
 }
 
 /// The gate's answer to a new connection.
