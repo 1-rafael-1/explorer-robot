@@ -22,7 +22,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-#[cfg(feature = "std")]
+/// The `std` feature is host-only: on a `no_std` target it compiles to nothing, so the workspace's
+/// `--all-features` clippy pass stays valid for the firmware.
+#[cfg(all(feature = "std", not(target_os = "none")))]
 extern crate std;
 
 mod events;
@@ -1467,6 +1469,7 @@ impl LinkCore {
                 }
                 return;
             }
+
             // Any valid PC-to-robot frame renews the lease and re-attaches the peer before the
             // next tick is evaluated.
             peers.on_frame(now_ms);

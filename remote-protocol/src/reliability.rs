@@ -42,6 +42,26 @@ use crate::{
     payload::control::{Throttle as ThrottleHint, ThrottleAction},
 };
 
+/// A millisecond timestamp.
+///
+/// Encapsulates the unit and invariants of time values used throughout the protocol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Timestamp(u64);
+
+impl Timestamp {
+    /// Creates a new timestamp from a millisecond value.
+    #[must_use]
+    pub const fn new(ms: u64) -> Self {
+        Self(ms)
+    }
+
+    /// Returns the inner millisecond value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// The largest forward distance for which a wrapping deadline comparison is unambiguous.
 const HALF_RANGE: u64 = u64::MAX / 2;
 

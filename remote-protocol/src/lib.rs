@@ -3,7 +3,8 @@
 //! This crate is `no_std` and transport agnostic: it carries the frame envelope, the shared
 //! identifiers and the payload codecs that the robot, the Bridge and the daemon all speak. It has
 //! no UART, clock, allocator or logging. Enable the `std` feature only for host tests and the
-//! simulated lossy link.
+//! simulated lossy link; the feature is a no-op on `no_std` targets so `--all-features` stays
+//! valid for the firmware.
 //!
 //! The crate version mirrors the wire version: changing [`PROTOCOL_MAJOR`] or [`PROTOCOL_MINOR`]
 //! changes the crate's major or minor version, and every consumer states a `version = "1"`
@@ -13,7 +14,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-#[cfg(feature = "std")]
+/// The `std` feature is host-only: on a `no_std` target it compiles to nothing, so the workspace's
+/// `--all-features` clippy pass stays valid for the firmware.
+#[cfg(all(feature = "std", not(target_os = "none")))]
 extern crate std;
 
 pub mod codec;
@@ -24,7 +27,7 @@ pub mod ids;
 pub mod parser;
 pub mod payload;
 pub mod reliability;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_os = "none")))]
 pub mod sim;
 
 pub use codec::{
@@ -50,8 +53,9 @@ pub use payload::{
 };
 pub use reliability::{
     AckOutcome, AckTracker, CommandVerdict, CommandWindow, ReplayWindow, RetryPolicy, Throttle, ThrottleState,
+    Timestamp,
 };
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(target_os = "none")))]
 pub use sim::{FakeRemote, Faults, Wire};
 
 /// The wire major version carried in every frame header.

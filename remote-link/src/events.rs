@@ -13,6 +13,7 @@
 
 use remote_protocol::{
     AckOutcome, AckTracker, Class, Event, EventMessage, Flags, Frame, PROTOCOL_MAJOR, RetryPolicy, Seq, Status,
+    Timestamp,
     codec::encode_event,
     payload::event::{EVENT_PAYLOAD_MAX, EventOverflow},
 };
@@ -73,8 +74,9 @@ enum EventPhase {
     Exhausted,
 }
 
-/// One encoded event and its schedule.
-struct EventEntry {
+/// A raw encoded event: the bytes and identity that go on the wire, unchanged by retransmission.
+#[derive(Clone, Copy)]
+struct RawEvent {
     /// The event sequence, unchanged by every retransmission.
     seq: Seq,
     /// The event id carried in the frame header.
@@ -83,31 +85,28 @@ struct EventEntry {
     len: usize,
     /// The encoded event payload.
     payload: [u8; EVENT_PAYLOAD_BYTES],
+}
+
+/// One encoded event and its schedule.
+struct EventEntry {
+    /// The encoded event this entry transmits and retransmits.
+    raw: RawEvent,
     /// The retry schedule of this entry.
     tracker: AckTracker,
     /// The entry's place in the schedule.
     phase: EventPhase,
-    /// Whether a retransmission is due and waiting for [`EventRing::next_frame`].
-    retry_due: bool,
+    /// Whether a retransmission is needed and waiting for [`EventRing::next_frame`].
+    needs_retry: bool,
 }
 
 impl EventEntry {
     /// Creates a fresh entry for a just-published event.
-    const fn fresh(
-        seq: Seq,
-        event: Event,
-        len: usize,
-        payload: [u8; EVENT_PAYLOAD_BYTES],
-        policy: RetryPolicy,
-    ) -> Self {
+    const fn fresh(raw: RawEvent, policy: RetryPolicy) -> Self {
         Self {
-            seq,
-            event,
-            len,
-            payload,
+            raw,
             tracker: AckTracker::new(policy),
             phase: EventPhase::Fresh,
-            retry_due: false,
+            needs_retry: false,
         }
     }
 
@@ -115,7 +114,7 @@ impl EventEntry {
     const fn ready(&self) -> bool {
         match self.phase {
             EventPhase::Fresh => true,
-            EventPhase::Sent => self.retry_due,
+            EventPhase::Sent => self.needs_retry,
             EventPhase::Exhausted => false,
         }
     }
@@ -136,7 +135,7 @@ pub struct EventRing {
     /// The number of events dropped since the last `EVENT_OVERFLOW` was queued.
     dropped: u16,
     /// The most recent millisecond stamp observed by `publish` or `tick`.
-    now_ms: u64,
+    now_ms: Timestamp,
     /// ACK notices waiting for [`crate::LinkCore::poll`].
     acks: heapless::Vec<EventAckNotice, EVENT_ACK_CAPACITY>,
 }
@@ -156,7 +155,7 @@ impl EventRing {
                 config.event_attempts,
             ),
             dropped: 0,
-            now_ms: 0,
+            now_ms: Timestamp::new(0),
             acks: heapless::Vec::new(),
         }
     }
@@ -184,12 +183,12 @@ impl EventRing {
 
     /// Iterates over the queued `(seq, event)` pairs, oldest first.
     pub fn iter(&self) -> impl Iterator<Item = (Seq, Event)> + '_ {
-        self.entries.iter().map(|entry| (entry.seq, entry.event))
+        self.entries.iter().map(|entry| (entry.raw.seq, entry.raw.event))
     }
 
     /// Encodes and queues one event, dropping the oldest when the ring is full.
     pub fn publish(&mut self, message: &EventMessage<'_>, now_ms: u64) -> Publish {
-        self.now_ms = now_ms;
+        self.now_ms = Timestamp::new(now_ms);
         let Some(event) = message.event() else {
             return Publish::Rejected;
         };
@@ -209,11 +208,13 @@ impl EventRing {
         let seq = self.next_sequence();
         let mut payload = [0u8; EVENT_PAYLOAD_BYTES];
         payload[..len].copy_from_slice(&encoded[..len]);
-        if self
-            .entries
-            .push(EventEntry::fresh(seq, event, len, payload, self.policy))
-            .is_err()
-        {
+        let raw = RawEvent {
+            seq,
+            event,
+            len,
+            payload,
+        };
+        if self.entries.push(EventEntry::fresh(raw, self.policy)).is_err() {
             // Unreachable: a full entry was removed above, or the ring had room.
             return Publish::Rejected;
         }
@@ -242,9 +243,9 @@ impl EventRing {
             PROTOCOL_MAJOR,
             Class::Event,
             flags,
-            entry.event.wire_id(),
-            entry.seq,
-            &entry.payload[..entry.len],
+            entry.raw.event.wire_id(),
+            entry.raw.seq,
+            &entry.raw.payload[..entry.raw.len],
         )
         .ok()?;
         let written = frame.encode_into(out).ok()?;
@@ -252,10 +253,10 @@ impl EventRing {
         let entry = &mut self.entries[index];
         if fresh {
             // The tracker owns the schedule from the first transmission onwards.
-            let _ = entry.tracker.begin(entry.seq, self.boot_id, self.now_ms);
+            let _ = entry.tracker.begin(entry.raw.seq, self.boot_id, self.now_ms.get());
             entry.phase = EventPhase::Sent;
         } else {
-            entry.retry_due = false;
+            entry.needs_retry = false;
         }
         Some(written)
     }
@@ -267,16 +268,16 @@ impl EventRing {
     /// [`EventRing::next_frame`]; a final deadline moves the entry to [`EventPhase::Exhausted`]
     /// and leaves it in the ring.
     pub fn tick(&mut self, now_ms: u64, live: bool) {
-        self.now_ms = now_ms;
+        self.now_ms = Timestamp::new(now_ms);
         if !live {
             return;
         }
         for entry in &mut self.entries {
-            if entry.phase != EventPhase::Sent || entry.retry_due {
+            if entry.phase != EventPhase::Sent || entry.needs_retry {
                 continue;
             }
-            match entry.tracker.poll(now_ms) {
-                AckOutcome::Retransmit { .. } => entry.retry_due = true,
+            match entry.tracker.poll(self.now_ms.get()) {
+                AckOutcome::Retransmit { .. } => entry.needs_retry = true,
                 AckOutcome::Indeterminate { .. } => entry.phase = EventPhase::Exhausted,
                 AckOutcome::Idle | AckOutcome::DiscardedOnBootChange { .. } => {}
             }
@@ -291,7 +292,7 @@ impl EventRing {
         let Some(index) = self
             .entries
             .iter()
-            .position(|entry| entry.seq == seq && entry.event == event)
+            .position(|entry| entry.raw.seq == seq && entry.raw.event == event)
         else {
             return;
         };
@@ -319,7 +320,7 @@ impl EventRing {
     /// silently forgets an event. Entries that were never transmitted are left for their first
     /// send.
     pub fn rearm(&mut self, now_ms: u64) {
-        self.now_ms = now_ms;
+        self.now_ms = Timestamp::new(now_ms);
         let policy = self.policy;
         let boot_id = self.boot_id;
         for entry in &mut self.entries {
@@ -327,9 +328,9 @@ impl EventRing {
                 continue;
             }
             entry.tracker = AckTracker::new(policy);
-            let _ = entry.tracker.begin(entry.seq, boot_id, now_ms);
+            let _ = entry.tracker.begin(entry.raw.seq, boot_id, now_ms);
             entry.phase = EventPhase::Sent;
-            entry.retry_due = true;
+            entry.needs_retry = true;
         }
     }
 
@@ -354,11 +355,13 @@ impl EventRing {
         let seq = self.next_sequence();
         let mut payload = [0u8; EVENT_PAYLOAD_BYTES];
         payload[..len].copy_from_slice(&encoded[..len]);
-        if self
-            .entries
-            .push(EventEntry::fresh(seq, Event::EventOverflow, len, payload, self.policy))
-            .is_ok()
-        {
+        let raw = RawEvent {
+            seq,
+            event: Event::EventOverflow,
+            len,
+            payload,
+        };
+        if self.entries.push(EventEntry::fresh(raw, self.policy)).is_ok() {
             self.dropped = 0;
         }
     }
