@@ -77,6 +77,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge-firmware"
+version = "0.1.0"
+dependencies = [
+ "bridge-net",
+ "critical-section",
+ "defmt 1.2.0",
+ "embassy-executor",
+ "embassy-net",
+ "embassy-time",
+ "embedded-io 0.7.1",
+ "embedded-io-async 0.7.0",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "heapless 0.9.3",
+ "portable-atomic",
+ "remote-protocol",
+ "smoltcp 0.14.0",
+ "static_cell",
+]
+
+[[package]]
 name = "bridge-net"
 version = "1.0.0"
 dependencies = [
@@ -791,32 +817,6 @@ dependencies = [
  "jiff",
  "sha2",
  "strum",
-]
-
-[[package]]
-name = "esp-bridge"
-version = "0.1.0"
-dependencies = [
- "bridge-net",
- "critical-section",
- "defmt 1.2.0",
- "embassy-executor",
- "embassy-net",
- "embassy-time",
- "embedded-io 0.7.1",
- "embedded-io-async 0.7.0",
- "esp-alloc",
- "esp-backtrace",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-println",
- "esp-radio",
- "esp-rtos",
- "heapless 0.9.3",
- "portable-atomic",
- "remote-protocol",
- "smoltcp 0.14.0",
- "static_cell",
 ]
 
 [[package]]

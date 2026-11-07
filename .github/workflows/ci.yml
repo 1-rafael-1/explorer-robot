@@ -94,7 +94,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: esp-bridge
+        working-directory: bridge-firmware
 
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "esp-bridge -> target"
+          workspaces: "bridge-firmware -> target"
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check

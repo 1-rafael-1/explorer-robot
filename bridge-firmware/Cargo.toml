@@ -5,13 +5,13 @@
 
 [package]
 edition      = "2024"
-name         = "esp-bridge"
+name         = "bridge-firmware"
 rust-version = "1.95"
 version      = "0.1.0"
 
-[[bin]]
-name = "esp-bridge"
-path = "./src/bin/main.rs"
+# `src/bin/stack-soak.rs` is auto-discovered as the `stack-soak` binary: the ticket-09
+# language spike, kept as the regression soak (see its module doc). The `bridge` firmware
+# binary joins it here when ticket 04 lands.
 
 [dependencies]
 remote-protocol = { path = "../remote-protocol", version = "1" }

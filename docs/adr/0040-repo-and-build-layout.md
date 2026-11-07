@@ -261,3 +261,24 @@ its own cache key from its own lockfile. Details that matter:
 - Define `remote-protocol`'s `sim` module and its feature name when the codec lands (ticket 18).
 - Confirm the HMAC/SHA-256 code size on the C3 once `bridge-net::preamble` exists (ADR-0039's open
   item, now with a concrete home).
+
+## Amendment — 2026-11-07: the Bridge workspace rename
+
+The RISC-V workspace is renamed so its name says what it is (ticket 01 of the
+`bridge-and-daemon` tracker; the naming decision is that tracker's spec, "Trackers, names and
+homes"). Recorded here as an amendment because the layout above is otherwise unchanged.
+
+- The directory `esp-bridge/` is renamed **`bridge-firmware/`** (history-preserving `git mv`;
+  the untracked `target/` moved with it). The package is renamed **`esp-bridge` →
+  `bridge-firmware`**, so the directory and the package agree. The `bridge` firmware binary
+  joins this workspace in ticket 04.
+- The ticket-09 spike binary is renamed **`esp-bridge` → `stack-soak`** and moves to
+  `src/bin/stack-soak.rs` (cargo auto-discovery replaces the explicit `[[bin]]` path). It stays
+  the regression soak that can reproduce the ticket-09 evidence; `tools/soak.py` is unchanged.
+- The CI `bridge` job's `working-directory` and the `Swatinem/rust-cache` `workspaces:` key
+  now say `bridge-firmware` (`.github/workflows/ci.yml`).
+- The root workspace's `exclude` now says `bridge-firmware` (`Cargo.toml`); the exclude remains
+  the contract that keeps the RISC-V workspace out of the robot's `thumbv8m` builds.
+- Historical records keep the old name deliberately: this ADR's body above, ADR-0033, and the
+  resolved tickets under `.scratch/expansion-remote/issues/` (notably ticket 09's Answer) all
+  predate the rename and are not rewritten.

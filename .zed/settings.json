@@ -18,7 +18,7 @@
         },
         "linkedProjects": [
           "Cargo.toml",
-          "esp-bridge/Cargo.toml",
+          "bridge-firmware/Cargo.toml",
           "remote/Cargo.toml"
         ]
       }

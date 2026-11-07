@@ -15,7 +15,8 @@
 //!
 //! It is not the Bridge firmware. It deliberately has no Link Protocol framing, no robot
 //! lifecycle, no boot loader hand-off and no provisioning. It is a load generator and an
-//! observer.
+//! observer. It is kept as the regression soak under the name `stack-soak`, so the ticket-09
+//! evidence stays reproducible against future stack changes.
 //!
 //! ## Bench wiring
 //!
@@ -35,18 +36,16 @@
 //! connect to it directly. With no station credentials the binary still brings the AP up; it
 //! simply cannot exercise the station half of APSTA.
 
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
-
 use bridge_net as _;
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_net::{Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use esp_backtrace as _;
-use esp_hal::dma_rx_stream_buffer;
 use esp_hal::{
     Async,
     clock::CpuClock,
+    dma_rx_stream_buffer,
     timer::timg::TimerGroup,
     uart::{
         Config as UartConfig, RxConfig, RxError, TxError, Uart, UartRx, UartTx,
@@ -59,6 +58,7 @@ use esp_radio::wifi::{
     ap::AccessPointConfig, scan::ScanConfig, sta::StationConfig,
 };
 use heapless::spsc::{Consumer, Producer, Queue};
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use remote_protocol as _;
 use static_cell::StaticCell;
 

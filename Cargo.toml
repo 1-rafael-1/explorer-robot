@@ -19,10 +19,10 @@ members = [
     "remote-protocol",
     "remote-link",
 ]
-# Separate workspaces with their own targets and runners: `esp-bridge` is RISC-V and
+# Separate workspaces with their own targets and runners: `bridge-firmware` is RISC-V and
 # `remote` is a host workspace. Keeping both out of `members` is what stops the robot's
 # `cargo check`/`clippy` from building them on `thumbv8m.main-none-eabihf` (ADR-0040).
-exclude = ["esp-bridge", "remote"]
+exclude = ["bridge-firmware", "remote"]
 resolver = "3"
 
 [features]
