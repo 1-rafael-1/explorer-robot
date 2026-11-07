@@ -54,6 +54,21 @@ The listener is useless without a station address; set both variables and reflas
 cannot be joined yet. The startup scan logs each BSS's advertised auth mode, which settles that
 before any credentials are tried.
 
+To keep the passphrase out of shell history and this transcript, put both variables in a
+`0600` file outside the repository and let the helper source it:
+
+```sh
+# ~/.config/explorer-bench.env
+BRIDGE_STA_SSID='your-ssid'
+BRIDGE_STA_PASSWORD='your-passphrase'
+```
+
+```sh
+cd bridge-firmware
+tools/bench-flash.sh            # build + flash, leaving the firmware running
+tools/bench-flash.sh /dev/ttyACM0
+```
+
 ## Flash and monitor
 
 The repository's runner is `espflash flash --monitor --chip esp32c3 --log-format defmt`, so:
