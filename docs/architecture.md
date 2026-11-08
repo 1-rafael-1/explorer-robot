@@ -150,7 +150,8 @@ takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-
 ### Link side
 
 The Link Task is the firmware's side of the Link Protocol, specified in
-[ADR-0032](adr/0032-remote-link-task.md) for `robot/src/task/remote_link/`. It owns the
+[ADR-0032](adr/0032-remote-link-task.md) for a task module under `robot/src/task/`; the module
+lands with the robot-link integration effort. It owns the
 Link Port's power and UART1, drives `LinkCore` from `link-core`, samples the state modules for
 Streams, forwards the curated Events and publishes the Bridge Status snapshot into the link state
 for the panel. The port resources are already assigned in `robot/src/resources.rs`

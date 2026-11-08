@@ -16,6 +16,10 @@ Cargo reads, so the host workspace's target would apply instead. The three
 workspaces and their build targets are described in
 [ADR-0040](../../docs/adr/0040-repo-and-build-layout.md).
 
+**Not packaged.** There is no published robot binary, release artifact, OTA
+update or installer. The operator path is a clone, the pinned toolchain and
+`probe-rs`; the firmware is built from source and flashed over SWD.
+
 ## Prerequisites
 
 - **Rust 1.96.0.** [`rust-toolchain.toml`](../../rust-toolchain.toml) pins the
@@ -211,6 +215,7 @@ bench-required.
 ## Source material
 
 - [Root README](../../README.md) — the front door and the hardware summary.
+- [Robot package README](../../robot/README.md) — the package and its crate buckets.
 - [link-protocol](../../robot/crates/link/link-protocol/README.md) — the Link
   Protocol wire contract.
 - [link-core](../../robot/crates/link/link-core/README.md) — `LinkCore`, the

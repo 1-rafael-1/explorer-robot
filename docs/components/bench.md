@@ -6,6 +6,10 @@ UART1, and the host tools that replace the robot or the Bridge. Every wiring,
 serial-port and radio step here is **bench-required**: the bench has no
 hardware-in-the-loop rig, so CI cannot run it.
 
+**Not packaged.** The bench is not an installable artifact. It is the host tools
+and scripts in this repository plus your own hardware, USB-TTL adapters, radio
+and Wi-Fi network; nothing here is a release artifact.
+
 **Verified:** 2026-11-08 — `python3 bridge/tools/link-probe.py --help`,
 `python3 bridge/tools/auth-probe.py --help`,
 `python3 bridge/tools/beacon-watch.py --help` and

@@ -18,7 +18,7 @@ the current tree.
 
 | Role | Directory | Workspace or target | README |
 |---|---|---|---|
-| Robot firmware | `robot/`, `robot/Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [README.md](README.md) |
+| Robot firmware | `robot/`, `robot/Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [robot](robot/README.md) |
 | Link contract — the wire and the robot-side core | `robot/crates/link/link-protocol/`, `robot/crates/link/link-core/` | Robot workspace; host tests on `x86_64-unknown-linux-gnu` | [link-protocol](robot/crates/link/link-protocol/README.md), [link-core](robot/crates/link/link-core/README.md) |
 | Bridge — network ⇄ UART1 | `bridge/` | Its own workspace — `riscv32imc-unknown-none-elf` | [Bridge README](bridge/README.md) |
 | Remote — daemon and static app | `remote/` | Host workspace — `x86_64-unknown-linux-gnu` | [remote](remote/README.md) |
