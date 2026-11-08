@@ -61,6 +61,35 @@
             "symbol": "ABM8-272-T3_C20625731"
         },
         {
+            "componentId": "C182182",
+            "files": {
+                "step": "SMD-PIND_L6.6-W7.1-H3.0.step"
+            },
+            "footprint": "IND-SMD_L7.1-W6.6_SLO0618H",
+            "model": {
+                "name": "SMD-PIND_L6.6-W7.1-H3.0",
+                "rotationDeg": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "stepOffsetMm": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "translationMm": {
+                    "x": 3987.9645,
+                    "y": 3009,
+                    "z": 0
+                },
+                "uuid": "551356b30c00496b91e689fb83cf3e2a"
+            },
+            "modelStem": "SMD-PIND_L6.6-W7.1-H3.0",
+            "status": "success",
+            "symbol": "SLO0630H150MTT"
+        },
+        {
             "componentId": "C726001",
             "diagnostic": "Failed to convert OBJ to WRL",
             "files": {

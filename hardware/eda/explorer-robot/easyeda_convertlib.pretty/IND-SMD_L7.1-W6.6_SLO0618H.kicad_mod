@@ -33,12 +33,7 @@
   (fp_line (start 3.55 -3.32) (end 3.55 3.28) (layer F.CrtYd) (width 0.05))
   (fp_line (start 3.55 3.28) (end -3.55 3.28) (layer F.CrtYd) (width 0.05))
   (fp_line (start -3.55 3.28) (end -3.55 -3.32) (layer F.CrtYd) (width 0.05))
-  (model "../easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.wrl"
-    (offset (xyz 0.000 0.000 0.000))
-    (scale (xyz 1 1 1))
-    (rotate (xyz 0 0 0))
-  )
-  (model "../easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.step"
+  (model "${KIPRJMOD}/easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.step"
     (offset (xyz 0.000 -0.000 0.000))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))

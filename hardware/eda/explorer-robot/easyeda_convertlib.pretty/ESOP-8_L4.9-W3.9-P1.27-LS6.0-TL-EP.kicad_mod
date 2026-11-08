@@ -140,12 +140,12 @@
   (fp_line (start 2.08 3.05) (end -1.82 3.05) (layer F.CrtYd) (width 0.05))
   (fp_line (start -1.82 3.05) (end -1.82 -1.85) (layer F.CrtYd) (width 0.05))
   (fp_line (start -1.82 -1.85) (end 2.08 -1.85) (layer F.CrtYd) (width 0.05))
-  (model "../easyeda_convertlib.3dmodels/ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.wrl"
+  (model "${KIPRJMOD}/easyeda_convertlib.3dmodels/ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.wrl"
     (offset (xyz 0.000 0.000 0.320))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))
   )
-  (model "../easyeda_convertlib.3dmodels/ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.step"
+  (model "${KIPRJMOD}/easyeda_convertlib.3dmodels/ESOP-8_L4.9-W3.9-P1.27-LS6.0-TL-EP.step"
     (offset (xyz 0.000 -0.000 0.820))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))

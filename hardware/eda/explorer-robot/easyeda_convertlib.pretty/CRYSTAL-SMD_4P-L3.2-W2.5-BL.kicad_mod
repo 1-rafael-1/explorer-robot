@@ -48,12 +48,12 @@
   (fp_line (start -1.49 -1.37) (end 1.71 -1.37) (layer F.CrtYd) (width 0.05))
   (fp_line (start 1.71 -1.37) (end 1.71 1.13) (layer F.CrtYd) (width 0.05))
   (fp_line (start 1.71 1.13) (end -1.49 1.13) (layer F.CrtYd) (width 0.05))
-  (model "../easyeda_convertlib.3dmodels/CRYSTAL-SMD_4P-L3.2-W2.5-BL.wrl"
+  (model "${KIPRJMOD}/easyeda_convertlib.3dmodels/CRYSTAL-SMD_4P-L3.2-W2.5-BL.wrl"
     (offset (xyz 0.000 0.000 0.000))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))
   )
-  (model "../easyeda_convertlib.3dmodels/CRYSTAL-SMD_4P-L3.2-W2.5-BL.step"
+  (model "${KIPRJMOD}/easyeda_convertlib.3dmodels/CRYSTAL-SMD_4P-L3.2-W2.5-BL.step"
     (offset (xyz -0.000 0.000 0.000))
     (scale (xyz 1 1 1))
     (rotate (xyz 0 0 0))

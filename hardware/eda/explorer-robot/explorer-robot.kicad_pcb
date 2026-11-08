@@ -35484,17 +35484,6 @@
 				(xyz 0 0 0)
 			)
 		)
-		(model "../easyeda_convertlib.3dmodels/CRYSTAL-SMD_4P-L3.2-W2.5-BL.step"
-			(offset
-				(xyz -0 0 0)
-			)
-			(scale
-				(xyz 1 1 1)
-			)
-			(rotate
-				(xyz 0 0 0)
-			)
-		)
 	)
 	(footprint "Capacitor_SMD:C_0603_1608Metric"
 		(layer "F.Cu")
@@ -37174,18 +37163,7 @@
 			(uuid "dc0679f3-17ad-4a99-a200-e9e788517d0b")
 		)
 		(embedded_fonts no)
-		(model "../easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.wrl"
-			(offset
-				(xyz 0 0 0)
-			)
-			(scale
-				(xyz 1 1 1)
-			)
-			(rotate
-				(xyz 0 0 0)
-			)
-		)
-		(model "../easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.step"
+		(model "${KIPRJMOD}/easyeda_convertlib.3dmodels/SMD-PIND_L6.6-W7.1-H3.0.step"
 			(offset
 				(xyz 0 -0 0)
 			)
@@ -50027,17 +50005,6 @@
 		(model "${KICAD10_3DMODEL_DIR}/Package_DFN_QFN.3dshapes/QFN-24_3x3mm_P0.4mm.step"
 			(offset
 				(xyz 0 0 0)
-			)
-			(scale
-				(xyz 1 1 1)
-			)
-			(rotate
-				(xyz 0 0 270)
-			)
-		)
-		(model "../easyeda_convertlib.3dmodels/QFN-24_L3.0-W3.0-H0.9-P0.40-BL-EP.step"
-			(offset
-				(xyz -0 -0 0)
 			)
 			(scale
 				(xyz 1 1 1)
