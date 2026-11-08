@@ -29,8 +29,8 @@
 //! The UI's `LiDAR` warm-up helper spawns this task with the one Active Claim the
 //! UI took with [`crate::task::procedure::start`]. The claim's stop latch is the
 //! only cancellation authority: a stop makes the in-flight queue resolve
-//! `Cancelled`, and the mode then brakes, disables the `LiDAR` and releases the
-//! claim with [`Claim::abandon`]. A failure records its reason with
+//! `Cancelled`, and the mode then brakes, disables the `LiDAR` and finishes the
+//! claim with [`Claim::finish`]. A failure records its reason with
 //! [`Claim::fail`] instead. The mode never requests or releases any other
 //! controller: the one Active Claim is the only authority.
 //!
@@ -120,7 +120,7 @@ async fn coast_obstacle_avoid_task(claim: Claim) {
     stop_hardware().await;
 
     match outcome {
-        Outcome::Stopped => claim.abandon().await,
+        Outcome::Stopped => claim.finish().await,
         Outcome::Failed(reason) => claim.fail(reason).await,
     }
 
@@ -131,7 +131,7 @@ async fn coast_obstacle_avoid_task(claim: Claim) {
 
 /// How the mode ended, before the terminal claim call.
 enum Outcome {
-    /// The operator stopped the mode; abandon the claim.
+    /// The operator stopped the mode; finish the claim.
     Stopped,
     /// The mode failed for `reason`; fail the claim.
     Failed(&'static str),

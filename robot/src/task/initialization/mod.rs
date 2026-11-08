@@ -18,7 +18,7 @@ use crate::{
     task::{
         io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
         motor_driver::{self, MotorCommand},
-        procedure::{self, Claim, ClaimKind},
+        procedure::{self, Claim, ClaimKind, ClaimOrigin},
         ui,
     },
 };
@@ -35,7 +35,7 @@ pub async fn handle_initialize() {
 
     // Take the claim if it is free. A Procedure that already owns the slot keeps
     // it: the boot flow then reports progress only to the log.
-    let claim = procedure::claim(ClaimKind::Boot).await;
+    let claim = procedure::claim(ClaimKind::Boot, ClaimOrigin::Panel).await;
     if claim.is_none() {
         info!("Boot flow: another claim is held, reporting progress only to the log");
     }

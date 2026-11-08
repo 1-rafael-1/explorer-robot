@@ -807,11 +807,15 @@ dependencies = [
  "embassy-time",
  "embedded-graphics",
  "embedded-hal-async",
+ "embedded-io-async 0.7.0",
  "embedded-storage-async",
  "heapless 0.9.3",
  "icm20948-rs",
  "libm",
  "lidar-cloud",
+ "link-core",
+ "link-protocol",
+ "link-state",
  "micromath",
  "moving_median",
  "nalgebra",
@@ -1262,6 +1266,13 @@ dependencies = [
 [[package]]
 name = "link-protocol"
 version = "1.1.0"
+
+[[package]]
+name = "link-state"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+]
 
 [[package]]
 name = "litrs"
@@ -2055,6 +2066,7 @@ version = "0.1.0"
 dependencies = [
  "embedded-graphics",
  "libm",
+ "link-state",
 ]
 
 [[package]]

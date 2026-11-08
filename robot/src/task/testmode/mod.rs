@@ -59,8 +59,8 @@ pub fn init_testing(spawner: Spawner) {
 
 /// Start the test-mode `procedure`, routing the caller's `claim` to its task.
 ///
-/// The caller took the claim with [`crate::task::procedure::start`], which already
-/// claimed the one slot and published the starting Activity. This maps the
+/// The dispatch seam took the claim with [`crate::task::procedure::start`], which
+/// already claimed the one slot and published the starting Activity. This maps the
 /// Procedure to its [`TestCommand`] and hands `(command, claim)` to the controller.
 /// A Procedure that is not a test entry starts nothing and abandons the claim
 /// defensively — the panel never routes one here.

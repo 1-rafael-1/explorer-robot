@@ -91,6 +91,26 @@ fn a_status_is_stored_and_the_newest_replaces_it() {
     assert_eq!(core.bridge_status(), Some(second), "the newest snapshot wins");
 }
 
+/// A byte-identical repeat still counts as a received snapshot, so a consumer can refresh its
+/// received-at time at the Bridge's 1 Hz cadence without the value changing.
+#[test]
+fn an_identical_repeat_advances_the_receipt_counter() {
+    let (mut core, _wire, _remote) = harness();
+    assert_eq!(core.bridge_status_updates(), 0, "nothing has arrived yet");
+
+    let repeat = status(1);
+    send_status(&mut core, &repeat, 1, 0);
+    assert_eq!(core.bridge_status_updates(), 1);
+
+    send_status(&mut core, &repeat, 2, 1_000);
+    assert_eq!(core.bridge_status(), Some(repeat));
+    assert_eq!(
+        core.bridge_status_updates(),
+        2,
+        "an identical repeat is still a fresh receipt"
+    );
+}
+
 /// A malformed status never panics and leaves the previous value untouched.
 #[test]
 fn a_malformed_status_is_ignored_and_keeps_the_last_good_one() {

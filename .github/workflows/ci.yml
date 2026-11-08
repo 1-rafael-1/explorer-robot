@@ -87,6 +87,9 @@ jobs:
       - name: Test claim-slot (host)
         run: cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
 
+      - name: Test link-state (host)
+        run: cargo test -p link-state --features std --target x86_64-unknown-linux-gnu --tests
+
   # The Bridge workspace: RISC-V, `no_std`, build-std. This job also compiles both shared crates
   # for the C3, which is the real cross-target gate (ADR-0040).
   bridge:

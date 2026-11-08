@@ -95,9 +95,10 @@ async fn turns_test_task(claim: Claim) {
     if run_turns_test(&claim).await {
         claim.complete("Turns complete").await;
     } else {
-        // A stop: the owner clears the Activity now that `procedure::stop` does
-        // not. A failure already released the claim, so this is a no-op there.
-        claim.abandon().await;
+        // A stop: the owner records the latched outcome now that
+        // `procedure::stop` does not. A failure already released the claim, so
+        // this is a no-op there.
+        claim.finish().await;
     }
 }
 

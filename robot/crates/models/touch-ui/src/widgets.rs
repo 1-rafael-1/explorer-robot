@@ -6,28 +6,31 @@
 //! error rather than panicking; the caller flushes the framebuffer afterwards.
 
 use embedded_graphics::{
-    draw_target::DrawTarget,
+    draw_target::{DrawTarget, DrawTargetExt},
     mono_font::{MonoFont, MonoTextStyle},
     pixelcolor::Rgb565,
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text, renderer::TextRenderer},
 };
+use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, Snapshot};
 
 use crate::{
     buffer::TextBuf,
     geometry::{
-        BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_ACTION_GAP, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H,
-        SCROLL_W, footer_rect, info_row_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
+        BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H, SCROLL_W,
+        footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
+        link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
         progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
         slider_thumb_rect, slider_track_rect,
     },
-    hit::{HeaderAction, Hit},
+    hit::{HeaderAction, Hit, LinkAction},
     palette::{ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT},
     radar,
     screens::{StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
+    ui::HeaderStatus,
 };
 
 /// Draw the title header with a muted divider along its bottom edge.
@@ -35,8 +38,9 @@ use crate::{
 /// `action` is the header's left button, if any: [`HeaderAction::Cancel`] on
 /// the value screens, [`HeaderAction::Back`] on the other list-like screens,
 /// and [`HeaderAction::Stop`] on a running screen; the Main Menu passes `None`.
-/// `action_pressed` selects its accent fill. The title is centered in the space
-/// the action leaves free, so a wide button and a long title cannot overlap.
+/// `action_pressed` selects its accent fill. `status` is drawn in the fixed slot
+/// on the right on every screen, so a missing or changing value never moves the
+/// title or the action. The title is centered between the action and that slot.
 ///
 /// # Errors
 ///
@@ -46,6 +50,7 @@ pub fn draw_header<D>(
     title: &str,
     action: Option<HeaderAction>,
     action_pressed: bool,
+    status: HeaderStatus,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
@@ -56,19 +61,22 @@ where
         .into_styled(PrimitiveStyle::with_fill(BG))
         .draw(d)?;
 
-    let title_left = if let Some(action) = action {
+    let action_width = if let Some(action) = action {
         let rect = action.rect();
         draw_button(d, rect, action.label(), LABEL_FONT, action_pressed, true)?;
-        rect.top_left.x + rect.size.width as i32 + HEADER_ACTION_GAP as i32
+        Some(rect.size.width)
     } else {
-        0
+        None
     };
 
-    let area = Rectangle::new(
-        Point::new(title_left, 0),
-        Size::new(FB_W as u32 - title_left as u32, HEADER_H),
-    );
-    draw_centered_text(d, area, title, MonoTextStyle::new(TITLE_FONT, TEXT))?;
+    let title_area = header_title_rect(action_width);
+    let title_font = header_title_font(title, title_area);
+    // The fixed status slot leaves a narrow title area. Fall back to the small
+    // font for a long title, and clip as a last resort so the action button on
+    // the left and the status slot on the right can never be overpainted.
+    let mut clipped = d.clipped(&title_area);
+    draw_centered_text(&mut clipped, title_area, title, MonoTextStyle::new(title_font, TEXT))?;
+    draw_header_status(d, status)?;
 
     Rectangle::new(
         Point::new(0, HEADER_H as i32 - DIVIDER_H as i32),
@@ -77,6 +85,64 @@ where
     .into_styled(PrimitiveStyle::with_fill(MUTED))
     .draw(d)?;
     Ok(())
+}
+
+/// The font the header uses for `title` in `area`.
+///
+/// A title that does not fit the title font falls back to the small font. The
+/// caller still clips to `area`, so even a title too long for the small font
+/// cannot paint over the header action or the fixed status slot.
+#[must_use]
+pub fn header_title_font(title: &str, area: Rectangle) -> &'static MonoFont<'static> {
+    let style = MonoTextStyle::new(TITLE_FONT, TEXT);
+    let width = style
+        .measure_string(title, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width;
+    if width <= area.size.width {
+        TITLE_FONT
+    } else {
+        SMALL_FONT
+    }
+}
+
+/// Draw the fixed header status slot: the compact link phase over the battery.
+///
+/// The slot paints its own background, so a title long enough to reach it is
+/// clipped rather than drawn over the indicator.
+fn draw_header_status<D>(d: &mut D, status: HeaderStatus) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let slot = header_status_rect();
+    slot.into_styled(PrimitiveStyle::with_fill(BG)).draw(d)?;
+
+    let half = slot.size.height / 2;
+    let top = Rectangle::new(slot.top_left, Size::new(slot.size.width, half));
+    let bottom = Rectangle::new(
+        Point::new(slot.top_left.x, slot.top_left.y + half as i32),
+        Size::new(slot.size.width, slot.size.height - half),
+    );
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    draw_centered_text(d, top, compact_link_label(status.link), style)?;
+
+    let mut battery = TextBuf::new();
+    match status.battery {
+        Some(level) => battery.fill(format_args!("{level}%")),
+        None => battery.fill(format_args!("--%")),
+    }
+    draw_centered_text(d, bottom, battery.as_str(), style)
+}
+
+/// The compact link phase the fixed header slot shows.
+const fn compact_link_label(phase: LinkPhase) -> &'static str {
+    match phase {
+        LinkPhase::Off => "Off",
+        LinkPhase::WaitingForBoard => "Wait",
+        LinkPhase::ReadyNoPeer => "NoPeer",
+        LinkPhase::PeerLive => "Live",
+    }
 }
 
 /// Draw one wide button.
@@ -199,7 +265,7 @@ where
     } else {
         panel
     };
-    draw_centered_text(d, body_area, view.body, MonoTextStyle::new(SMALL_FONT, TEXT))?;
+    draw_centered_text(d, body_area, view.body_text(), MonoTextStyle::new(SMALL_FONT, TEXT))?;
 
     if let Some(percent) = view.progress {
         track.into_styled(PrimitiveStyle::with_fill(BUTTON_BORDER)).draw(d)?;
@@ -227,6 +293,180 @@ where
         draw_left_text(d, info_row_rect(index), row.as_str(), style)?;
     }
     Ok(())
+}
+
+/// Draw the Link screen: a compact info block, the three Bridge Control action
+/// buttons, and the result band.
+///
+/// The info block keeps Bridge presence, Peer, RSSI, channel, station and setup
+/// state visible. The actions are drawn and hittable even when no Bridge is
+/// present, so the firmware — not the panel — decides what to do with them. The
+/// result band shows the latest Bridge Control outcome: pending, timed out, or
+/// the Bridge's credentials or pairing code. `pressed` selects an action's
+/// accent fill while the pen is on it.
+///
+/// # Errors
+///
+/// Returns the draw target's error if a primitive or text fails to draw.
+pub fn draw_link<D>(d: &mut D, snapshot: &Snapshot, pressed: Option<Hit>) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+
+    for (row, cells) in link_info_rows(snapshot).iter().enumerate() {
+        for (column, text) in cells.iter().enumerate() {
+            if !text.as_str().is_empty() {
+                draw_left_text(d, link_info_cell_rect(row, column), text.as_str(), style)?;
+            }
+        }
+    }
+
+    for (index, action) in LinkAction::ALL.into_iter().enumerate() {
+        draw_button(
+            d,
+            link_action_rect(index),
+            action.label(),
+            LABEL_FONT,
+            pressed == Some(Hit::LinkAction(action)),
+            false,
+        )?;
+    }
+
+    link_result_rect()
+        .into_styled(PrimitiveStyle::with_fill(BUTTON_BG))
+        .draw(d)?;
+
+    match &snapshot.control {
+        ControlOutcome::Idle => draw_left_text(d, link_result_line_rect(0), "No request", style)?,
+        ControlOutcome::Pending => draw_left_text(d, link_result_line_rect(0), "Sending...", style)?,
+        ControlOutcome::TimedOut => draw_left_text(d, link_result_line_rect(0), "Timed out", style)?,
+        ControlOutcome::Answered(reply) => {
+            let status = reply.status();
+            draw_left_text(d, link_result_line_rect(0), status.label(), style)?;
+            match reply {
+                ControlReply::Setup { status, credentials } => {
+                    if *status == ControlStatus::Ok {
+                        draw_labelled_value(d, link_result_line_rect(1), "SSID: ", credentials.ssid.as_str(), style)?;
+                        draw_labelled_value(
+                            d,
+                            link_result_line_rect(2),
+                            "Pass: ",
+                            credentials.passphrase.as_str(),
+                            style,
+                        )?;
+                    }
+                }
+                ControlReply::PairingCode { code, .. } => {
+                    draw_labelled_value(d, link_result_line_rect(1), "Code: ", code.code.as_str(), style)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Draw `label` and then `value` on one line, left-aligned in `area`.
+///
+/// The value is drawn from its own slice, not through [`TextBuf`], so a setup
+/// SSID or passphrase longer than [`crate::buffer::TEXT_BUF_LEN`] is not
+/// truncated. A string wider than the screen still clips at the panel edge, but
+/// no byte of it is dropped by this crate.
+fn draw_labelled_value<D>(
+    d: &mut D,
+    area: Rectangle,
+    label: &str,
+    value: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let start = Point::new(area.top_left.x + BUTTON_PAD as i32, area.top_left.y);
+    draw_text_line(d, start, area.size.height, label, style)?;
+    let label_width = style
+        .measure_string(label, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width;
+    let value_start = Point::new(start.x + label_width as i32, start.y);
+    draw_text_line(d, value_start, area.size.height, value, style)
+}
+
+/// Draw one text line whose top-left is `start`, vertically centered in
+/// `height`.
+fn draw_text_line<D>(
+    d: &mut D,
+    start: Point,
+    height: u32,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let size = style
+        .measure_string(text, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size;
+    let position = Point::new(start.x, start.y + (height as i32 - size.height as i32) / 2);
+    Text::with_baseline(text, position, style, Baseline::Top).draw(d)?;
+    Ok(())
+}
+
+/// The Link info block, row by row: `Bridge`/`Peer`, `RSSI`/`Channel`,
+/// `Station`/`Setup`, and `Status` on its own.
+fn link_info_rows(snapshot: &Snapshot) -> [[TextBuf; 2]; 4] {
+    let bridge = snapshot.bridge;
+
+    let mut presence = TextBuf::new();
+    presence.fill(format_args!("Bridge: {}", snapshot.presence.label()));
+
+    let mut peer = TextBuf::new();
+    peer.fill(format_args!("Peer: {}", snapshot.peer.label()));
+
+    let mut rssi = TextBuf::new();
+    match bridge.and_then(|status| status.rssi_dbm) {
+        Some(dbm) => rssi.fill(format_args!("RSSI: {dbm} dBm")),
+        None => rssi.fill(format_args!("RSSI: --")),
+    }
+
+    let mut channel = TextBuf::new();
+    match bridge.and_then(|status| status.channel) {
+        Some(value) => channel.fill(format_args!("Channel: {value}")),
+        None => channel.fill(format_args!("Channel: --")),
+    }
+
+    let mut station = TextBuf::new();
+    match bridge {
+        Some(status) => station.fill(format_args!("Station: {}", status.station.label())),
+        None => station.fill(format_args!("Station: --")),
+    }
+
+    let mut setup = TextBuf::new();
+    match bridge {
+        Some(status) => setup.fill(format_args!(
+            "Setup: {}",
+            if status.flags.setup_open { "Open" } else { "Closed" }
+        )),
+        None => setup.fill(format_args!("Setup: --")),
+    }
+
+    let mut status = TextBuf::new();
+    let label = match (bridge, snapshot.bridge_stale) {
+        (None, _) => "No status",
+        (Some(_), true) => "Stale",
+        (Some(_), false) => "Fresh",
+    };
+    status.fill(format_args!("Status: {label}"));
+
+    [
+        [presence, peer],
+        [rssi, channel],
+        [station, setup],
+        [status, TextBuf::new()],
+    ]
 }
 
 /// Draw the scroll indicator: a muted track over the list view with an accent

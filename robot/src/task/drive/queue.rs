@@ -14,7 +14,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use heapless::Vec;
 
 use super::{
-    api::complete_drive_command,
+    api::{complete_drive_command, complete_drive_command_at_epoch},
     types::{
         CompletionStatus, DriveCommand, DriveCompletion, DriveQueueBuildError, DriveQueueCompletion,
         DriveQueueSubmitError,
@@ -41,6 +41,13 @@ pub(super) struct DriveQueueRequest {
     steps: Vec<DriveQueueStep, DRIVE_QUEUE_CAPACITY>,
     /// Reply channel for queue completion.
     reply_channel: &'static Channel<CriticalSectionRawMutex, DriveQueueCompletion, 1>,
+    /// Optional epoch to stamp every step with.
+    ///
+    /// A caller that must not move after a stop captures the epoch before checking
+    /// its stop latch and passes it here; an interrupt that lands before the step
+    /// is dispatched then makes the step stale and it resolves `Cancelled` without
+    /// moving.
+    epoch: Option<u32>,
 }
 
 /// Queue submission channel (single active queue rule).
@@ -112,12 +119,17 @@ static QUEUE_BUSY: AtomicBool = AtomicBool::new(false);
 pub struct DriveQueueBuilder {
     /// Accumulated command steps.
     steps: Vec<DriveQueueStep, DRIVE_QUEUE_CAPACITY>,
+    /// Optional epoch to stamp every step with.
+    epoch: Option<u32>,
 }
 
 impl DriveQueueBuilder {
     /// Create a new, empty builder.
     pub const fn new() -> Self {
-        Self { steps: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            epoch: None,
+        }
     }
 
     /// Push a step that continues the queue even if it fails.
@@ -168,8 +180,25 @@ impl DriveQueueBuilder {
 
     /// Submit the queue for execution and await queue completion.
     ///
-    /// Returns `QueueBusy` if another queue is already active.
+    /// Returns `QueueBusy` if another queue is already active. Each step is stamped
+    /// with the drive epoch current at submit time.
     pub async fn submit(self) -> Result<DriveQueueCompletion, DriveQueueSubmitError> {
+        let epoch = self.epoch;
+        self.submit_with_epoch(epoch).await
+    }
+
+    /// Submit the queue stamped with `epoch` and await queue completion.
+    ///
+    /// A stop that bumps the drive epoch before the step is dispatched invalidates
+    /// every step, so the queue resolves `Cancelled` instead of moving after the
+    /// stop.
+    pub async fn submit_at_epoch(mut self, epoch: u32) -> Result<DriveQueueCompletion, DriveQueueSubmitError> {
+        self.epoch = Some(epoch);
+        self.submit().await
+    }
+
+    /// Submit the queue with an optional pre-captured epoch.
+    async fn submit_with_epoch(self, epoch: Option<u32>) -> Result<DriveQueueCompletion, DriveQueueSubmitError> {
         if QUEUE_BUSY
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
@@ -189,6 +218,7 @@ impl DriveQueueBuilder {
             .send(DriveQueueRequest {
                 steps: self.steps,
                 reply_channel,
+                epoch,
             })
             .await;
 
@@ -200,8 +230,8 @@ impl DriveQueueBuilder {
 
 /// Drive queue executor task.
 ///
-/// This task owns per-step completion (`complete_drive_command`) and exposes
-/// a single queue-level completion event per submission.
+/// This task owns per-step completion (stamped with the queue's epoch) and
+/// exposes a single queue-level completion event per submission.
 #[embassy_executor::task]
 pub async fn drive_queue_executor() {
     loop {
@@ -211,9 +241,13 @@ pub async fn drive_queue_executor() {
         let mut failed_step_index = None;
         let mut last_step_completion: Option<DriveCompletion> = None;
         let mut status = CompletionStatus::Success;
+        let epoch = request.epoch;
 
         for (index, step) in request.steps.into_iter().enumerate() {
-            let completion = complete_drive_command(step.command).await;
+            let completion = match epoch {
+                Some(epoch) => complete_drive_command_at_epoch(step.command, epoch).await,
+                None => complete_drive_command(step.command).await,
+            };
             last_step_completion = Some(completion.clone());
 
             match completion.status {

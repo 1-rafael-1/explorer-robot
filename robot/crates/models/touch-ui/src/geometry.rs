@@ -59,6 +59,12 @@ pub const BACK_MARGIN: u32 = 12;
 /// pixels.
 pub const HEADER_ACTION_GAP: u32 = 8;
 
+/// Width of the fixed header status slot on the right, in pixels.
+///
+/// The slot always occupies the same rectangle, so a missing or changing link
+/// phase and battery never move the title or the header action.
+pub const HEADER_STATUS_W: u32 = 92;
+
 /// Horizontal inset of the status panel from the screen edges, in pixels.
 pub const PANEL_MARGIN: u32 = 24;
 
@@ -74,6 +80,34 @@ pub const PANEL_BORDER: u32 = 2;
 
 /// Height of one System Info row, in pixels.
 pub const INFO_ROW_H: u32 = 26;
+
+/// Height of one compact Link info row, in pixels.
+pub const LINK_INFO_ROW_H: u32 = 13;
+
+/// Width of the Link info block's left column, in pixels.
+///
+/// The left column carries the longer labels (`Bridge`, `Station`, `Status`),
+/// so it is wider than the right one.
+pub const LINK_INFO_LEFT_W: u32 = 156;
+
+/// Vertical gap between the Link info block and the action buttons, and between
+/// the buttons and the result band, in pixels.
+pub const LINK_SECTION_GAP: u32 = 4;
+
+/// Height of one Link action button, in pixels.
+pub const LINK_ACTION_H: u32 = 24;
+
+/// Vertical gap between adjacent Link action buttons, in pixels.
+pub const LINK_ACTION_GAP: u32 = 3;
+
+/// Number of Link action buttons.
+pub const LINK_ACTION_COUNT: usize = 3;
+
+/// Height of one line in the Link result band, in pixels.
+pub const LINK_RESULT_LINE_H: u32 = 14;
+
+/// Number of lines in the Link result band.
+pub const LINK_RESULT_LINES: usize = 3;
 
 /// Width of the scroll-indicator track, in pixels.
 pub const SCROLL_W: u32 = 25;
@@ -187,6 +221,39 @@ pub const fn back_button_rect() -> Rectangle {
 #[must_use]
 pub const fn cancel_button_rect() -> Rectangle {
     header_action_rect(CANCEL_W)
+}
+
+/// The on-screen rectangle of the fixed header status slot, on the right of the
+/// header.
+///
+/// The slot is the same rectangle on every screen and for every value; it holds
+/// the compact link phase and the battery on two small-font lines.
+#[must_use]
+pub const fn header_status_rect() -> Rectangle {
+    Rectangle::new(
+        Point::new(
+            (FB_W as u32 - SCROLL_MARGIN - HEADER_STATUS_W) as i32,
+            BACK_MARGIN as i32,
+        ),
+        Size::new(HEADER_STATUS_W, HEADER_H - 2 * BACK_MARGIN),
+    )
+}
+
+/// The on-screen rectangle the header title is centered in.
+///
+/// It starts after the header action button (when there is one) and ends before
+/// the fixed status slot, so the slot's content can never move the title.
+#[must_use]
+pub const fn header_title_rect(action_width: Option<u32>) -> Rectangle {
+    let left = match action_width {
+        Some(width) => SIDE_MARGIN + width + HEADER_ACTION_GAP,
+        None => 0,
+    };
+    let right = header_status_rect().top_left.x as u32;
+    Rectangle::new(
+        Point::new(left as i32, 0),
+        Size::new(right.saturating_sub(left), HEADER_H),
+    )
 }
 
 /// The on-screen rectangle of the scroll-indicator track, in the right margin
@@ -303,6 +370,91 @@ pub const fn room_scan_caption_rect() -> Rectangle {
     Rectangle::new(
         Point::new(0, (FB_H as u32 - CAPTION_H) as i32),
         Size::new(FB_W as u32, CAPTION_H),
+    )
+}
+
+/// Vertical offset of the Link screen's compact info block.
+#[must_use]
+pub const fn link_info_top() -> u32 {
+    list_top()
+}
+
+/// The on-screen rectangle of Link info row `index`.
+#[must_use]
+pub const fn link_info_row_rect(index: usize) -> Rectangle {
+    Rectangle::new(
+        Point::new(
+            SIDE_MARGIN as i32,
+            (link_info_top() + index as u32 * LINK_INFO_ROW_H) as i32,
+        ),
+        Size::new(FB_W as u32 - 2 * SIDE_MARGIN, LINK_INFO_ROW_H),
+    )
+}
+
+/// The on-screen rectangle of one cell in Link info row `row`.
+///
+/// Column `0` is the left cell and every other column is the right cell.
+#[must_use]
+pub const fn link_info_cell_rect(row: usize, column: usize) -> Rectangle {
+    let row_rect = link_info_row_rect(row);
+    if column == 0 {
+        Rectangle::new(row_rect.top_left, Size::new(LINK_INFO_LEFT_W, row_rect.size.height))
+    } else {
+        Rectangle::new(
+            Point::new(row_rect.top_left.x + LINK_INFO_LEFT_W as i32, row_rect.top_left.y),
+            Size::new(row_rect.size.width - LINK_INFO_LEFT_W, row_rect.size.height),
+        )
+    }
+}
+
+/// Vertical offset of the Link screen's action buttons.
+#[must_use]
+pub const fn link_actions_top() -> u32 {
+    link_info_top() + 4 * LINK_INFO_ROW_H + LINK_SECTION_GAP
+}
+
+/// The on-screen rectangle of Link action button `index`.
+#[must_use]
+pub const fn link_action_rect(index: usize) -> Rectangle {
+    Rectangle::new(
+        Point::new(
+            SIDE_MARGIN as i32,
+            (link_actions_top() + index as u32 * (LINK_ACTION_H + LINK_ACTION_GAP)) as i32,
+        ),
+        Size::new(FB_W as u32 - 2 * SIDE_MARGIN, LINK_ACTION_H),
+    )
+}
+
+/// Vertical offset of the Link screen's result band.
+#[must_use]
+pub const fn link_result_top() -> u32 {
+    link_actions_top()
+        + LINK_ACTION_COUNT as u32 * LINK_ACTION_H
+        + (LINK_ACTION_COUNT as u32 - 1) * LINK_ACTION_GAP
+        + LINK_SECTION_GAP
+}
+
+/// The on-screen rectangle of the Link screen's result band.
+#[must_use]
+pub const fn link_result_rect() -> Rectangle {
+    Rectangle::new(
+        Point::new(SIDE_MARGIN as i32, link_result_top() as i32),
+        Size::new(
+            FB_W as u32 - 2 * SIDE_MARGIN,
+            LINK_RESULT_LINES as u32 * LINK_RESULT_LINE_H,
+        ),
+    )
+}
+
+/// The on-screen rectangle of result-band line `index`.
+#[must_use]
+pub const fn link_result_line_rect(index: usize) -> Rectangle {
+    Rectangle::new(
+        Point::new(
+            SIDE_MARGIN as i32,
+            (link_result_top() + index as u32 * LINK_RESULT_LINE_H) as i32,
+        ),
+        Size::new(FB_W as u32 - 2 * SIDE_MARGIN, LINK_RESULT_LINE_H),
     )
 }
 

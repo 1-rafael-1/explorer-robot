@@ -12,17 +12,18 @@ use crate::{
 
 /// Handle a change of the obstacle flag.
 ///
-/// The event is an edge, so the handler reads the flag from the perception
-/// state module rather than a copy in the payload. When the flag is set it
-/// unconditionally sends an `EmergencyBrake` interrupt to the drive task. This
-/// is a system-wide safety invariant — sensors are armed in all modes
-/// (autonomous, testing). The interrupt brakes motors, bumps the command epoch,
-/// and drains queued commands.
-pub fn handle_obstacle_detected(source: crate::system::event::ObstacleSource) {
+/// The event is an edge and carries the value the producer measured, which is
+/// logged. The brake decision still reads the live perception flag: the safety
+/// edge must reflect the current state, not a queued edge whose successor has
+/// already cleared it. When the flag is set the handler unconditionally sends an
+/// `EmergencyBrake` interrupt to the drive task. This is a system-wide safety
+/// invariant — sensors are armed in all modes (autonomous, testing). The
+/// interrupt brakes motors, bumps the command epoch, and drains queued commands.
+pub fn handle_obstacle_detected(source: crate::system::event::ObstacleSource, detected: bool) {
     let obstacle = perception::is_obstacle_detected();
     info!(
-        "Obstacle detection status changed: source={:?} detected={}",
-        source, obstacle
+        "Obstacle detection status changed: source={:?} detected={} live={}",
+        source, detected, obstacle
     );
 
     update_obstacle_indicator(obstacle);

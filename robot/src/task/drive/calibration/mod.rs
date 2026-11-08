@@ -8,7 +8,7 @@
 //!
 //! Each calibration runs on a task of its own, spawned by
 //! [`calibration_controller`]. The caller takes the one Active Claim (ADR-0034)
-//! with [`crate::task::procedure::start`] before calling [`start`], so the claim
+//! through [`crate::task::procedure::dispatch`] before calling [`start`], so the claim
 //! travels with the [`CalibrationCommand`] to the controller and the task reports
 //! its phases and terminal outcome through it. The claim is already held and
 //! published, so a calibration body's first call is [`Claim::phase`], never a
@@ -17,7 +17,7 @@
 //! The distance calibration holds its claim across the drive step and the value
 //! entry, because the factor is forced to 1.0 for the drive: releasing the slot
 //! before the operator's commit or cancel would let another Procedure run on that
-//! forced factor. A stop of the drive restores the factor and abandons the claim,
+//! forced factor. A stop of the drive restores the factor and finishes the claim,
 //! and the value entry ends it on the commit or cancel the panel offers there.
 //!
 //! # Stopping
@@ -66,8 +66,8 @@ pub fn init(spawner: Spawner) {
 
 /// Start the calibration `procedure`, routing the caller's `claim` to its task.
 ///
-/// The caller took the claim with [`crate::task::procedure::start`], which already
-/// claimed the one slot and published the starting Activity. This maps the
+/// The dispatch seam took the claim with [`crate::task::procedure::start`], which
+/// already claimed the one slot and published the starting Activity. This maps the
 /// Procedure to its [`CalibrationCommand`] and hands `(command, claim)` to the
 /// controller. A Procedure that is not a calibration starts nothing and abandons
 /// the claim defensively — the panel never routes one here.
@@ -167,7 +167,7 @@ async fn distance_calibration_task(claim: Claim) {
 
     match distance::run_drive_step(&claim).await {
         DriveOutcome::Complete => {}
-        // The step already restored the factor and abandoned the claim, or failed
+        // The step already restored the factor and finished the claim, or failed
         // it with the reason on the running screen: a second terminal call here
         // would be a stale no-op, so the task simply ends.
         DriveOutcome::Stopped | DriveOutcome::Failed => return,
@@ -183,5 +183,5 @@ async fn distance_calibration_task(claim: Claim) {
         // A cancel or a stop both restore the factor the run overrode.
         Some(DistanceDecision::Cancel) | None => distance::abort().await,
     }
-    claim.abandon().await;
+    claim.finish().await;
 }

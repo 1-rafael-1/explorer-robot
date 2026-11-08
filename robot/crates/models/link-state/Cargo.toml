@@ -1,0 +1,22 @@
+[package]
+name = "link-state"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Neutral operator-facing link state: presence, peer, Bridge Status and control outcomes. no_std and host-tested."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+heapless = "0.9"
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+
+[[test]]
+name = "link_state"
+required-features = ["std"]

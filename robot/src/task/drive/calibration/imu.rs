@@ -811,7 +811,7 @@ async fn run_mag_calibration(claim: &Claim) {
         }
         Outcome::Stopped => {
             info!("Mag calibration stopped by the operator");
-            claim.abandon().await;
+            claim.finish().await;
             return;
         }
     };

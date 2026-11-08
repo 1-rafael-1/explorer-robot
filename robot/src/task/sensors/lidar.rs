@@ -636,6 +636,7 @@ async fn publish_scan(scan: &Scan, sequence: u64, last_obstacle: &mut Option<boo
         perception::set_lidar_obstacle(detected);
         raise_event(Events::ObstacleDetected {
             source: ObstacleSource::Lidar,
+            detected,
         })
         .await;
         *last_obstacle = Some(detected);
@@ -654,6 +655,7 @@ async fn clear_stale_state(last_obstacle: &mut Option<bool>) {
     if perception::clear_lidar_state().await == ChangeDetected::ChangedToCleared {
         raise_event(Events::ObstacleDetected {
             source: ObstacleSource::Lidar,
+            detected: false,
         })
         .await;
     }

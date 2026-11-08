@@ -66,9 +66,10 @@ async fn arc_drive_test_task(claim: Claim) {
     if run_arc_drive_test(&claim).await {
         claim.complete("Arc drive complete").await;
     } else {
-        // A stop: the owner clears the Activity now that `procedure::stop` does
-        // not. A failure already released the claim, so this is a no-op there.
-        claim.abandon().await;
+        // A stop: the owner records the latched outcome now that
+        // `procedure::stop` does not. A failure already released the claim, so
+        // this is a no-op there.
+        claim.finish().await;
     }
 }
 

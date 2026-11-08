@@ -143,7 +143,7 @@ async fn basic_motor_test_task(claim: Claim) {
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoders::send_command(EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    claim.abandon().await;
+    claim.finish().await;
 }
 
 /// Drive one leg for its duration, logging the encoder count as it goes.

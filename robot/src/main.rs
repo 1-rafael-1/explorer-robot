@@ -24,7 +24,7 @@ use embassy_rp::{
     multicore::{Stack, spawn_core1},
     peripherals::{
         ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, DMA_CH7, FLASH, I2C0, I2C1, PIN_16, PIN_17,
-        PIN_18, PIN_19, PIN_20, PIN_21, PIN_26, PIN_27, PIN_40, PIO0, PIO1, SPI0, UART0, UART1,
+        PIN_18, PIN_19, PIN_20, PIN_21, PIN_26, PIN_27, PIN_40, PIO0, PIO1, SPI0, TRNG, UART0, UART1,
     },
     pio::{InterruptHandler as PioInterruptHandler, Pio},
     pio_programs::{
@@ -33,16 +33,17 @@ use embassy_rp::{
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
-    uart::{self, InterruptHandler as UartInterruptHandler},
+    trng::InterruptHandler as TrngInterruptHandler,
+    uart,
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use panic_probe as _;
 use static_cell::StaticCell;
 
 use crate::resources::{
-    AiCamResources, AssignedResources, BatteryResources, CoreResources, D6LidarResources, ExpansionResources,
-    ImuResources, MotorDriverResources, PanelResources, Rangefinder0Resources, Rangefinder1Resources, RgbLedResources,
-    StorageResources,
+    AiCamResources, AssignedResources, BatteryResources, CoreResources, D6LidarResources, ImuResources,
+    MotorDriverResources, PanelResources, Rangefinder0Resources, Rangefinder1Resources, RemoteLinkResources,
+    RgbLedResources, StorageResources,
 };
 
 mod resources;
@@ -75,7 +76,8 @@ bind_interrupts!(pub struct Irqs {
         DmaInterruptHandler<DMA_CH3>, DmaInterruptHandler<DMA_CH4>, DmaInterruptHandler<DMA_CH5>,
         DmaInterruptHandler<DMA_CH6>, DmaInterruptHandler<DMA_CH7>;
     UART0_IRQ => uart::BufferedInterruptHandler<UART0>;
-    UART1_IRQ => UartInterruptHandler<UART1>;
+    UART1_IRQ => uart::BufferedInterruptHandler<UART1>;
+    TRNG_IRQ => TrngInterruptHandler<TRNG>;
 });
 
 // ── Boot descriptor ────────────────────────────────────────────────────────────
@@ -333,7 +335,7 @@ fn init_lidar(spawner: Spawner, d6_pins: D6LidarResources) {
 ///
 /// The camera uses two PIO0 state machines (TX on SM0, RX on SM1). This leaves
 /// PIO1 for the RGB LED and PIO2 free, and leaves hardware UART1 free for the
-/// buffered expansion link.
+/// buffered Link Port.
 ///
 /// This only brings the transport up — no protocol implementation yet.
 /// Returns the PIO UART halves and the TPS22917 enable for the real driver task
@@ -362,6 +364,23 @@ fn init_ai_cam_pio(
     let power_enable = Output::new(ai_cam_pins.power_enable, Level::Low);
 
     (tx, rx, power_enable)
+}
+
+/// Build the Link Port session and spawn its task on core0.
+///
+/// The session retains UART1, the GPIO 36/37 pads, `EXP_PWR`/`EXP_EN`/`EXP_BOOT`,
+/// `EXP_IRQ` and the hardware TRNG. No UART is constructed at boot: the task
+/// builds one per powered period, after it has asserted the branch and waited
+/// for the switch rise (ADR-0023, ADR-0032).
+///
+/// Must be called on **core0** so `UART1_IRQ` and `TRNG_IRQ` are enabled on
+/// core0's NVIC, mirroring how `init_lidar` must run on core1 for `UART0_IRQ`.
+#[allow(clippy::unwrap_used)]
+fn init_remote_link(spawner: Spawner, pins: RemoteLinkResources, trng: embassy_rp::Peri<'static, TRNG>) {
+    let session = task::remote_link::RemoteLinkSession::new(pins, trng);
+
+    spawner.spawn(task::remote_link::remote_link_task(session).unwrap());
+    task::remote_link::spawn_drive_job(spawner);
 }
 
 /// Spawn the startup task that fires the `Initialize` event.
@@ -398,8 +417,7 @@ fn main() -> ! {
     let battery = r.battery;
     let storage = r.storage;
     let core = r.core;
-    // `r.expansion` (UART1, DMA_CH4/5 and GPIO 32–37, including `EXP_PWR`)
-    // stays untouched until the expansion connector lands.
+    let remote_link_pins = r.remote_link;
 
     // ── Core1: LiDAR driver ─────────────────────────────────────────────────
     #[allow(static_mut_refs)]
@@ -426,8 +444,7 @@ fn main() -> ! {
         // SPI bus for ICM20948 IMU
         let (imu_spi, imu_cs) = init_imu_spi(imu.spi, imu.sck, imu.mosi, imu.miso, imu.cs, imu.tx_dma, imu.rx_dma);
 
-        // UART1 is left free for the expansion connector (GPIO 36/37).
-        // The camera is brought up on PIO0 so it does not occupy it.
+        // The camera is brought up on PIO0 so it does not occupy UART1.
         let (_ai_cam_tx, _ai_cam_rx, _ai_cam_power) = init_ai_cam_pio(ai_cam_pins);
 
         init_orchestrate(spawner);
@@ -437,6 +454,7 @@ fn main() -> ! {
         init_ui(spawner, panel_pins);
         init_vl53l0x_stub(spawner);
         init_imu(spawner, imu_spi, imu_cs);
+        init_remote_link(spawner, remote_link_pins, core.trng);
         init_flash_storage(spawner, storage.flash, storage.dma);
         init_testing(spawner);
         init_calibration(spawner);

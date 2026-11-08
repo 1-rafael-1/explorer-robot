@@ -1,12 +1,12 @@
 //! Activity state module.
 //!
-//! Records which Procedure the robot is currently performing and a small
-//! progress snapshot for the panel: which one, how far it has got, a short phase
-//! line, and an optional percent. The Procedure is recorded by identity, so a
-//! running screen's title and where its Stop returns come from the same Menu
-//! Entry that started it. The one Active Claim
-//! ([`crate::task::procedure::Claim`]) is what publishes it; the touch UI reads it
-//! on its tick and is the only thing that draws.
+//! Records which Activity the robot is currently performing — a Procedure,
+//! the boot flow, or a transient Manual Drive — and a small progress snapshot
+//! for the panel: which one, how far it has got, a short phase line, and an
+//! optional percent. A Procedure is recorded by identity, so a running screen's
+//! title and where its Stop returns come from the same Menu Entry that started
+//! it. The one Active Claim ([`crate::task::procedure::Claim`]) is what publishes
+//! it; the touch UI reads it on its tick and is the only thing that draws.
 //!
 //! # Lifecycle
 //!
@@ -29,7 +29,56 @@
 //!    state accessor while holding it, so it can never close a lock cycle.
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use touch_ui::Procedure;
+use touch_ui::{Procedure, buffer::TextBuf};
+
+/// One transient Manual Drive: a single volatile Remote drive command.
+///
+/// A Manual Drive is an Activity, not a Procedure: it is not in the menu, not in
+/// the Catalogue, and it leaves no Result Report. The value is the command the
+/// operator asked for, in the wire's units, so the running screen can name it
+/// without allocating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualDrive {
+    /// Travel `cm` centimetres, forward when positive.
+    Distance {
+        /// Signed distance in centimetres.
+        cm: i32,
+    },
+    /// Rotate by `centidegrees`, clockwise when positive (the wire convention).
+    Rotate {
+        /// Signed angle in centidegrees.
+        centidegrees: i32,
+    },
+}
+
+impl ManualDrive {
+    /// A distance drive of `cm` centimetres.
+    #[must_use]
+    pub const fn distance(cm: i32) -> Self {
+        Self::Distance { cm }
+    }
+
+    /// A rotation of `centidegrees` centidegrees, positive clockwise.
+    #[must_use]
+    pub const fn rotate_centidegrees(centidegrees: i32) -> Self {
+        Self::Rotate { centidegrees }
+    }
+
+    /// The short operator label the running screen shows as its body line.
+    ///
+    /// Examples: `Drive 150 cm`, `Rotate 90 deg`, `Rotate -45 deg`. Whole
+    /// degrees are enough for the label; the wire keeps centidegrees for the
+    /// command itself.
+    #[must_use]
+    pub fn label(self) -> TextBuf {
+        let mut label = TextBuf::new();
+        match self {
+            Self::Distance { cm } => label.fill(format_args!("Drive {cm} cm")),
+            Self::Rotate { centidegrees } => label.fill(format_args!("Rotate {} deg", centidegrees / 100)),
+        }
+        label
+    }
+}
 
 /// What the robot is currently doing.
 ///
@@ -42,21 +91,24 @@ pub enum Activity {
     Idle,
     /// The boot/initialisation flow is loading calibration data.
     Booting,
-    /// A Procedure started from the Panel is running.
+    /// A Procedure is running.
     Procedure(Procedure),
+    /// A transient Manual Drive is running.
+    ManualDrive(ManualDrive),
 }
 
 impl Activity {
     /// The title the running screen shows for this activity.
     ///
-    /// A Procedure names itself; only the boot flow and the idle state fall back
-    /// to a line of their own.
+    /// A Procedure names itself and a Manual Drive has its own fixed title; only
+    /// the boot flow and the idle state fall back to a line of their own.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Idle => "Running",
             Self::Booting => "Boot",
             Self::Procedure(procedure) => procedure.label(),
+            Self::ManualDrive(_) => "Manual Drive",
         }
     }
 
@@ -65,7 +117,7 @@ impl Activity {
     pub const fn is_calibration(self) -> bool {
         match self {
             Self::Procedure(procedure) => procedure.is_calibration(),
-            Self::Idle | Self::Booting => false,
+            Self::Idle | Self::Booting | Self::ManualDrive(_) => false,
         }
     }
 }
@@ -102,7 +154,8 @@ impl Snapshot {
         self.activity.title()
     }
 
-    /// The Procedure this snapshot names, or `None` for boot and idle.
+    /// The Procedure this snapshot names, or `None` for boot, idle and a Manual
+    /// Drive.
     ///
     /// The running screen reads the Procedure's own identity — its title and
     /// where its Stop returns — through this rather than restating either.
@@ -110,7 +163,20 @@ impl Snapshot {
     pub const fn procedure(&self) -> Option<Procedure> {
         match self.activity {
             Activity::Procedure(procedure) => Some(procedure),
-            Activity::Idle | Activity::Booting => None,
+            Activity::Idle | Activity::Booting | Activity::ManualDrive(_) => None,
+        }
+    }
+
+    /// The operator label for a Manual Drive, if this snapshot is one.
+    ///
+    /// The label is the running screen's body line: the exact distance or angle
+    /// the drive was asked for, formatted into a fixed-capacity buffer so the
+    /// snapshot stays `Copy` and nothing allocates.
+    #[must_use]
+    pub fn manual_drive_label(&self) -> Option<TextBuf> {
+        match self.activity {
+            Activity::ManualDrive(drive) => Some(drive.label()),
+            Activity::Idle | Activity::Booting | Activity::Procedure(_) => None,
         }
     }
 

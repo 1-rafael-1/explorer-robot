@@ -5,10 +5,10 @@
 //! list-like screens, Cancel on the value screens, and Stop on a running
 //! screen.
 
-use embedded_graphics::primitives::Rectangle;
+use embedded_graphics::{prelude::Point, primitives::Rectangle};
 
 use crate::{
-    geometry::{back_button_rect, cancel_button_rect},
+    geometry::{back_button_rect, cancel_button_rect, link_action_rect},
     screens::Item,
 };
 
@@ -32,6 +32,50 @@ pub enum Hit {
     NudgeMinus,
     /// The fine-adjust increment button on a value-entry screen.
     NudgePlus,
+    /// One of the Link screen's Bridge Control action buttons.
+    LinkAction(LinkAction),
+}
+
+/// A Bridge Control action offered on the Link screen.
+///
+/// The actions are neutral: the panel names what the operator asked for and the
+/// firmware maps it onto the wire, so this type carries no protocol value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LinkAction {
+    /// Forget the stored network and raise Setup Mode.
+    ForgetNetwork,
+    /// Show the existing pairing code without rotating it.
+    ShowPairingCode,
+    /// Rotate the pairing code and return the new one.
+    RotatePairingCode,
+}
+
+impl LinkAction {
+    /// Every action, in screen order.
+    pub const ALL: [Self; 3] = [Self::ForgetNetwork, Self::ShowPairingCode, Self::RotatePairingCode];
+
+    /// The button label for this action.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ForgetNetwork => "Forget Wi-Fi & set up",
+            Self::ShowPairingCode => "Show pairing code",
+            Self::RotatePairingCode => "Rotate pairing code",
+        }
+    }
+}
+
+/// The Link screen's action whose rectangle contains `p`, if any.
+///
+/// The rectangles come from [`crate::geometry`], so this and the drawing pass
+/// cannot disagree about where an action is.
+#[must_use]
+pub fn link_action_hit(p: Point) -> Option<LinkAction> {
+    LinkAction::ALL
+        .into_iter()
+        .enumerate()
+        .find(|(index, _)| link_action_rect(*index).contains(p))
+        .map(|(_, action)| action)
 }
 
 /// The header's single left action button.
