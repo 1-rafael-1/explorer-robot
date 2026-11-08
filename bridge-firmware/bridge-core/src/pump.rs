@@ -131,7 +131,7 @@ impl BridgePump {
     /// Observes the ring's occupancy and returns the `THROTTLE` hint to emit, if any.
     #[must_use]
     pub const fn poll_throttle(&mut self, now_ms: u32) -> Option<ThrottleHint> {
-        self.flow.observe(self.ring.used_bytes(), now_ms)
+        self.flow.observe(self.ring.used_bytes(), self.ring.entries(), now_ms)
     }
 
     /// Queues a Bridge-originated status snapshot for the authenticated client.
@@ -167,6 +167,12 @@ impl BridgePump {
     #[must_use]
     pub const fn used_bytes(&self) -> usize {
         self.ring.used_bytes()
+    }
+
+    /// Returns the number of queued client-bound entries.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.ring.entries()
     }
 
     /// Returns the ring's reserved bytes.

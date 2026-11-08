@@ -8,7 +8,7 @@
 use remote_link::{Config, LinkCore};
 use remote_protocol::{
     Caps, Class, Control, Direction, Flags, Frame, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, Seq,
-    Status, StreamSample, ThrottleAction, ThrottleHint,
+    Status, StreamSample, ThrottleAction, ThrottleHint, ThrottleState,
     codec::{PayloadCodec, decode_stream},
     ids::Stream as StreamId,
     payload::{
@@ -194,6 +194,13 @@ fn pause_beats_rate_and_resume_clears_it() {
         return;
     };
     feed_at(&mut core, &mut wire, 0);
+    assert_eq!(core.throttle_state(StreamId::Power), ThrottleState::Paused);
+    assert_eq!(core.throttle_state(StreamId::Motion), ThrottleState::Unrestricted);
+    assert_eq!(
+        core.throttle_hints(),
+        2,
+        "the rate hint and the pause hint were received"
+    );
 
     publish_power(&mut core, 1, 0);
     core.tick(1_000);
@@ -205,6 +212,7 @@ fn pause_beats_rate_and_resume_clears_it() {
         return;
     };
     feed_at(&mut core, &mut wire, 1_000);
+    assert_eq!(core.throttle_state(StreamId::Power), ThrottleState::Limited(1_000));
     assert_eq!(
         emit_stream(&mut core),
         Some(StreamId::Power),

@@ -1290,20 +1290,28 @@ async fn main(spawner: Spawner) -> ! {
             let uart_tx = UART_TX_BYTES.load(Ordering::Relaxed);
             let tcp_rx = TCP_RX_BYTES.load(Ordering::Relaxed);
             let tcp_tx = TCP_TX_BYTES.load(Ordering::Relaxed);
-            let (ring_used, ring_reserved, drop_stream, drop_no_client, drop_reliable, drop_bridge_control) =
-                with_pump(|pump| {
-                    (
-                        pump.used_bytes(),
-                        pump.reserved_bytes(),
-                        pump.dropped_streams(),
-                        pump.dropped_without_client(),
-                        pump.dropped_reliable(),
-                        pump.dropped_bridge_controls(),
-                    )
-                });
+            let (
+                ring_used,
+                ring_entries,
+                ring_reserved,
+                drop_stream,
+                drop_no_client,
+                drop_reliable,
+                drop_bridge_control,
+            ) = with_pump(|pump| {
+                (
+                    pump.used_bytes(),
+                    pump.entries(),
+                    pump.reserved_bytes(),
+                    pump.dropped_streams(),
+                    pump.dropped_without_client(),
+                    pump.dropped_reliable(),
+                    pump.dropped_bridge_controls(),
+                )
+            });
 
             info!(
-                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={} wdt_feeds={} wdt_withheld={}",
+                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_entries={} ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={} wdt_feeds={} wdt_withheld={}",
                 now.duration_since(started).as_secs(),
                 rssi,
                 uart_rx,
@@ -1324,6 +1332,7 @@ async fn main(spawner: Spawner) -> ! {
                 CLIENT_CRC_FAILURES.load(Ordering::Relaxed),
                 CLIENT_RESYNCS.load(Ordering::Relaxed),
                 u32::try_from(ring_used).unwrap_or(u32::MAX),
+                u32::try_from(ring_entries).unwrap_or(u32::MAX),
                 u32::try_from(ring_reserved).unwrap_or(u32::MAX),
                 drop_stream,
                 drop_no_client,

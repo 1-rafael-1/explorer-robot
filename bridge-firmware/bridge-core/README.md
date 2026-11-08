@@ -115,6 +115,7 @@ Decision and state types:
 
 Constants are the ADR numbers, not tuning knobs: `CAPACITY` 8 KiB, `EVENT_RESERVED_BYTES` 512,
 `STREAM_CAPACITY` 7.5 KiB, `HIGH_WATERMARK_BYTES` 6 KiB, `LOW_WATERMARK_BYTES` 2 KiB,
+`HIGH_WATERMARK_ENTRIES` 12, `LOW_WATERMARK_ENTRIES` 4,
 `PAUSE_TTL_MS` 1000, `MIN_HINT_INTERVAL_MS` 500, `DEADLINE_MS` 5000, `FAILURE_LIMIT` 5,
 `FAILURE_WINDOW_MS` 60_000 and `REFUSAL_MS` 60_000.
 
@@ -151,8 +152,9 @@ The `bridge` binary keeps only HAL wiring:
 - **TCP TX**: `pump.pop()` is drained one entry per frame and re-encoded verbatim with the
   entry's stored class, flags, id, sequence and payload. The ring carries the wire header, so a
   forwarded frame keeps its original sequence number and flag bits; nothing is implied or reset.
-- **Flow control**: `pump.poll_throttle()` is encoded as a `THROTTLE` control frame into the same
-  UART TX queue.
+- **Flow control**: `pump.poll_throttle()` watches both ring bytes and queued entries (the
+  16-slot descriptor table fills before 6 KiB under the worst-case robot mix) and is encoded as a
+  `THROTTLE` control frame into the same UART TX queue.
 - **Timers**: `pump.tick()` expires the authentication deadline and the refusal window.
 - **Status**: the ring occupancy and every drop counter are printed every ten seconds.
 

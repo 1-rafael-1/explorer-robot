@@ -88,6 +88,8 @@ fn run() -> Result<(), String> {
     let start = Instant::now();
     let mut printed_executions = 0;
     let mut next_stats = STATS_MS;
+    let mut last_paused = 0;
+    let mut last_hints = 0;
     loop {
         thread::sleep(Duration::from_millis(STEP_MS));
         let now_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -117,11 +119,25 @@ fn run() -> Result<(), String> {
             }
         }
 
+        // Print a transition immediately: the Bridge's pause hint has a 1 s TTL, so the 5 s
+        // summary alone would miss the induced-stall window.
+        let paused = stub.paused_streams();
+        let hints = stub.throttle_hints();
+        if hints != last_hints {
+            println!("robot-stub: THROTTLE hint {hints} received, {paused} streams paused ({now_ms} ms)");
+            last_hints = hints;
+        }
+        if paused != last_paused {
+            println!("robot-stub: THROTTLE pause now {paused} streams ({now_ms} ms)");
+            last_paused = paused;
+        }
+
         if now_ms >= next_stats {
             println!(
-                "robot-stub: {now_ms} ms, peer {:?}, {} events dropped",
+                "robot-stub: {now_ms} ms, peer {:?}, {} events dropped, {} streams paused",
                 stub.peer(),
-                stub.dropped_events()
+                stub.dropped_events(),
+                paused
             );
             next_stats += STATS_MS;
         }
@@ -189,6 +205,12 @@ struct SerialTransport {
     port: Box<dyn SerialPort>,
 }
 
+/// How many consecutive no-progress write attempts before the stub gives up on a frame.
+const WRITE_ATTEMPTS: u32 = 2_000;
+
+/// The pause between write retries while the adapter's buffer is full.
+const WRITE_RETRY: Duration = Duration::from_micros(200);
+
 impl Transport for SerialTransport {
     fn read(&mut self, out: &mut [u8]) -> usize {
         // A read timeout means nothing new arrived; the next step drains again.
@@ -196,8 +218,30 @@ impl Transport for SerialTransport {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        if let Err(error) = self.port.write_all(bytes) {
-            eprintln!("robot-stub: serial write failed: {error}");
+        // The port's 1 ms timeout applies to writes too. A worst-case frame can take longer than
+        // that to drain into the adapter, and a bare `write_all` would drop the tail of the frame
+        // on the timeout. Retry the remaining bytes until the frame is on the wire.
+        let mut remaining = bytes;
+        let mut attempts = 0;
+        while !remaining.is_empty() {
+            match self.port.write(remaining) {
+                Ok(0) => attempts += 1,
+                Ok(written) => {
+                    remaining = &remaining[written..];
+                    attempts = 0;
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => attempts += 1,
+                Err(error) => {
+                    eprintln!("robot-stub: serial write failed: {error}");
+                    return;
+                }
+            }
+            if attempts >= WRITE_ATTEMPTS {
+                eprintln!("robot-stub: serial write stalled; dropping {} bytes", remaining.len());
+                return;
+            }
+            thread::sleep(WRITE_RETRY);
         }
     }
 }

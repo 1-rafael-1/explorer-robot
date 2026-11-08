@@ -176,6 +176,18 @@ impl Ring {
         self.used
     }
 
+    /// Returns the number of queued entries.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.count
+    }
+
+    /// Returns the ring's descriptor capacity.
+    #[must_use]
+    pub const fn capacity_entries(&self) -> usize {
+        MAX_ENTRIES
+    }
+
     /// Returns the bytes currently used by stream samples.
     #[must_use]
     pub const fn stream_bytes(&self) -> usize {

@@ -987,6 +987,8 @@ pub struct LinkCore {
     throttle: Throttle,
     /// The number of malformed `THROTTLE` payloads ignored so far.
     invalid_throttles: u32,
+    /// The number of well-formed `THROTTLE` hints received (pause, resume or rate).
+    throttle_hints: u32,
     /// The most recent time observed through [`LinkCore::publish_stream`], [`LinkCore::tick`] or
     /// [`LinkCore::on_rx`].
     now_ms: u64,
@@ -1020,6 +1022,7 @@ impl LinkCore {
             events: EventRing::new(&config, boot_id),
             throttle: Throttle::new(),
             invalid_throttles: 0,
+            throttle_hints: 0,
             now_ms,
         }
     }
@@ -1101,6 +1104,24 @@ impl LinkCore {
     #[must_use]
     pub const fn invalid_throttles(&self) -> u32 {
         self.invalid_throttles
+    }
+
+    /// Returns how many well-formed `THROTTLE` hints have been received.
+    ///
+    /// Hints are advisory; this is the observation point for the bench's induced-stall run.
+    #[must_use]
+    pub const fn throttle_hints(&self) -> u32 {
+        self.throttle_hints
+    }
+
+    /// Returns the most restrictive active `THROTTLE` state for `stream`.
+    ///
+    /// The Bridge's hints are advisory and time-limited; this reports what the emission schedule
+    /// is honouring at the core's last advanced time. It is read-only observation and changes no
+    /// scheduling state.
+    #[must_use]
+    pub fn throttle_state(&self, stream: Stream) -> ThrottleState {
+        self.throttle.effective(stream, self.now_ms)
     }
 
     /// Returns the latest Bridge status received over the UART, for the panel.
@@ -1477,6 +1498,7 @@ impl LinkCore {
             unknown_streams,
             throttle,
             invalid_throttles,
+            throttle_hints,
             ..
         } = self;
         let config: &Config = config;
@@ -1540,6 +1562,7 @@ impl LinkCore {
                             return;
                         };
                         let _ = throttle.apply(&hint, now_ms);
+                        *throttle_hints = (*throttle_hints).saturating_add(1);
                     } else if frame.header.id == Control::BridgeStatus.wire_id() {
                         // The Bridge's unacknowledged snapshot. A malformed one is ignored and the
                         // last good value is kept; there is no reply.

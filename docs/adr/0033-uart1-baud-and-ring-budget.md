@@ -110,6 +110,14 @@ that fills the ring, the Bridge emits `THROTTLE`, and the robot coalesces or dro
 designed to lose streams. Reliable events are the only thing that must survive, and eight
 entries fit in under 0.5 KiB, so the Bridge reserves room for them before it drops a stream.
 
+The ring's descriptor table is also a limit: it holds 16 entries, and the robot's worst-case mix
+(six coalesced streams plus many small reliable events) reaches that limit at roughly 2–3 KiB,
+well below the 6 KiB byte watermark. A byte-only policy therefore drops frames without ever
+asking the robot to slow down — ticket 14's induced-stall run caught exactly that
+(`ring_entries=16`, `ring_used=736B`, no hint). The Bridge now watches both dimensions: it pauses
+at 12 entries or 6 KiB and resumes only below 4 entries **and** 2 KiB. The byte watermarks are
+unchanged; the entry watermarks are the descriptor table's three-quarters and one-quarter marks.
+
 *The ESP32-C3 side.*
 
 `esp-hal` 1.2.2 validates UART baud rates up to **5 Mbps**, so 921600 is 18% of the API

@@ -24,6 +24,7 @@ pub use remote_link::timing::Config;
 use remote_link::{Inbound, LinkCore, PeerState};
 use remote_protocol::{
     Command, CommandMessage, CompletionStatus, EventMessage, MAX_ROBOT_TO_PC_FRAME, Status, StreamSample,
+    ThrottleState,
     ids::{ProcedureId, Stream},
     payload::{
         control::BridgeControlReply,
@@ -332,6 +333,24 @@ where
         let seq = self.core.request_bridge_control(action, now_ms)?;
         self.requests.push(Requested { seq, action });
         Ok(seq)
+    }
+
+    /// Returns how many of the six streams the Bridge has paused right now.
+    ///
+    /// The Bridge sends `THROTTLE` when its robot-facing ring crosses the high watermark and
+    /// resumes at the low one, so this is the robot-side observation of back-pressure.
+    #[must_use]
+    pub fn paused_streams(&self) -> usize {
+        Stream::ALL
+            .into_iter()
+            .filter(|stream| self.core.throttle_state(*stream) == ThrottleState::Paused)
+            .count()
+    }
+
+    /// Returns how many well-formed `THROTTLE` hints the core has received.
+    #[must_use]
+    pub const fn throttle_hints(&self) -> u32 {
+        self.core.throttle_hints()
     }
 
     /// Takes the oldest `BRIDGE_CONTROL` report: the Bridge's reply, or its timeout.
