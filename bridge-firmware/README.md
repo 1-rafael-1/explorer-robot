@@ -473,16 +473,17 @@ remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueu
 ## Browser provisioning round-trip (ticket 14)
 
 This is the browser-driven version of the portal round trip: forget the station over UART1, join the
-Bridge's setup AP, provision the throwaway network from the page, and rejoin the bench AP. A human
+Bridge's setup AP, provision the target network from the page, and rejoin the bench AP. A human
 drives the radio and the browser; no agent is involved.
 
 ### Prerequisites
 
 - The C3 console on `/dev/ttyACM1` and the CH343G UART adapter on `/dev/ttyACM0`.
 - The `robot-stub` binary: `cd remote && cargo build -p robot-stub`.
-- The throwaway AP's SSID and passphrase, and the bench AP's saved NetworkManager connection (named
-  `PandorasMesh` here). Keep the throwaway passphrase out of this repository, shell history and
-  saved logs; use a placeholder such as `<throwaway-ap-passphrase>` anywhere you write it down.
+- The target AP's SSID and passphrase (the throwaway AP or the home LAN), and the bench AP's saved
+  NetworkManager connection (named `PandorasMesh` here). Keep the passphrase out of this
+  repository, shell history and saved logs; use a placeholder such as `<target-ap-passphrase>`
+  anywhere you write it down.
 
 ### 1. Monitor the Bridge and forget the network
 
@@ -527,7 +528,7 @@ five minutes in mind.
 ### 3. Provision through the portal
 
 Join `ExplorerRobot-D064` with the setup passphrase `explorer-setup` in the GUI network menu, then
-open `http://192.168.4.1/` and submit the throwaway AP's SSID and passphrase. The page's status line
+open `http://192.168.4.1/` and submit the target AP's SSID and passphrase. The page's status line
 advances `unprovisioned` → `connecting` → `connected at <ip>`; the first poll after the submit can
 time out for a few seconds while the single radio scans off-channel. On the monitor:
 
@@ -586,7 +587,7 @@ python3 tools/beacon-watch.py --count 3
 A provisioned Bridge advertises `tcp_port=9000` with `flags=0x01 (provisioned)`; while the setup
 window is open it advertises `tcp_port=0` with the `setup_mode` bit. The monitor's next `status:`
 line carries `ring_used`, `ring_entries` and the drop counters, and `auth_ok` / `tcp_accepts` rise as
-the daemon connects. Never commit the throwaway passphrase, the pairing code or a filled-in
+the daemon connects. Never commit the passphrase, the pairing code or a filled-in
 `config.toml`.
 
 ## Bridge Presence and the watchdog (ticket 08)
