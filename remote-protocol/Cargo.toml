@@ -1,6 +1,6 @@
 [package]
 name = "remote-protocol"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 license = "MIT"
 description = "Shared no_std Link Protocol contract for the robot, the Bridge and the remote daemon."
@@ -40,6 +40,10 @@ required-features = ["std"]
 
 [[test]]
 name = "bridge_control"
+required-features = ["std"]
+
+[[test]]
+name = "bridge_status"
 required-features = ["std"]
 
 [[test]]

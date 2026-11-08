@@ -18,9 +18,11 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
    of queueing seconds of it. Reliable entries (events, command acknowledgements, control replies)
    are not coalesced; their room is reserved so stream pressure cannot take it. Every entry stores
    the wire frame's `Seq` and `Flags`, so the surviving entry carries the newest frame's header.
-2. **Routing** (`routing`) — the Link Protocol's class rules plus exactly two control exceptions:
-   `THROTTLE` out to the robot and `BRIDGE_CONTROL` in, consumed by the Bridge. A `BRIDGE_CONTROL`
-   arriving from the client is dropped and counted. A frame travelling the wrong way is ignored.
+2. **Routing** (`routing`) — the Link Protocol's class rules plus exactly two *forwarding* control
+   exceptions: `THROTTLE` out to the robot and `BRIDGE_CONTROL` in, consumed by the Bridge.
+   `BRIDGE_STATUS` is Bridge-originated (ADR-0042) and is not a forwarding exception: the router
+   ignores it. A `BRIDGE_CONTROL` arriving from the client is dropped and counted. A frame
+   travelling the wrong way is ignored.
 3. **Flow** (`flow`) — ring occupancy to `THROTTLE`: at 6 KiB the robot is told to
    `PAUSE(ALL_STREAMS, 1000 ms)`, at 2 KiB it is told to `RESUME`, and hints are at least 500 ms
    apart. The hint is advisory and time-limited.
@@ -89,6 +91,7 @@ spawn succeeds. No clock, timer, HAL or allocator is involved; everything is hos
 | `on_robot_frame(&Frame) -> Decision` | route one UART-side frame |
 | `on_client_frame(&Frame) -> Decision` | route one client-side frame |
 | `poll_throttle(now_ms) -> Option<ThrottleHint>` | observe ring occupancy and return a hint |
+| `offer_bridge_status(seq, payload) -> Decision` | queue the Bridge's own `BRIDGE_STATUS` for the daemon, coalesced as stream `0x0007`; `Ignored` without an authenticated client |
 | `pop() -> Option<Entry>` / `drain(sink)` | take client-bound entries |
 | `used_bytes()` / `reserved_bytes()` | ring occupancy and the event reservation |
 | `dropped_streams()` / `dropped_reliable()` | ring discard counters |

@@ -58,17 +58,21 @@ malformed file is an error rather than a silent loss of tokens.
 The daemon listens for Beacons from process start but opens the robot Session only while at
 least one app connection has authenticated (and through the 5 s post-app grace). Three seconds
 without a decoded robot frame is `reconnecting`; reconnect backoff is 500 ms doubling to 8 s
-with ±20% jitter. A robot Boot Id change clears retained state and voids in-flight commands.
+with ±20% jitter. A robot Boot Id change clears robot-derived retained state and voids in-flight
+commands; the Bridge status survives it.
 
 ## The app surface
 
 `GET /` serves the SPA (embedded at compile time, or `--assets`). `GET /ws` is one text-frame
 JSON WebSocket; its path never carries a version — `hello.protocol` does. Server messages are
-`hello`, `connection`, `snapshot`, `stream`, `event` and `command_result`; client messages are
-`hello`, `auth`, `pair`, `connect`, `disconnect`, `heartbeat` and `command`. Close codes are
-**4401** (unauthorised), **4426** (protocol mismatch) and **1001** (shutdown). A loopback peer
-needs no token; a non-loopback peer must send `auth` or `pair` first. `Origin` is checked on
-the upgrade, and static responses carry the ADR-0039 CSP and `no-store`.
+`hello`, `connection`, `snapshot`, `stream`, `event`, `bridge` and `command_result`; client
+messages are `hello`, `auth`, `pair`, `connect`, `disconnect`, `heartbeat` and `command`. A
+`snapshot` carries the reload-safe state — the latest stream samples, the last terminal Activity, a
+bounded event replay, the catalogue and the Bridge's latest `bridge` status (`null` before the
+first, independent of the robot Boot Id). Close codes are **4401** (unauthorised), **4426**
+(protocol mismatch) and **1001** (shutdown). A loopback peer needs no token; a non-loopback peer
+must send `auth` or `pair` first. `Origin` is checked on the upgrade, and static responses carry the
+ADR-0039 CSP and `no-store`.
 
 ## Running against the Bridge Stub headlessly
 

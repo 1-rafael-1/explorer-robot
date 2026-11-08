@@ -37,6 +37,8 @@ pub enum ServerMessage {
     Event(EventEntry),
     /// The ACK or rejection of an app command, never the drive outcome.
     CommandResult(CommandResult),
+    /// The Bridge's latest link and resilience status; latest-wins and independent of the robot.
+    Bridge(BridgeStatus),
 }
 
 /// An app-to-daemon message.
@@ -422,6 +424,53 @@ pub enum EventValue {
     },
 }
 
+/// The Bridge's Wi-Fi association state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BridgeStation {
+    /// The station interface is down.
+    Down,
+    /// The station is connecting.
+    Connecting,
+    /// The station is associated.
+    Associated,
+}
+
+/// A `bridge` message: the Bridge's link and resilience snapshot (ADR-0031).
+///
+/// The status is Bridge/network state, independent of the robot's Boot Id; its `ts` exposes
+/// staleness. Unknown RSSI and channel values are `null`, never a sentinel.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeStatus {
+    /// The daemon's receive time.
+    pub ts: u64,
+    /// The station RSSI in dBm, `null` when unknown.
+    pub rssi_dbm: Option<i8>,
+    /// The station channel, `null` when unknown.
+    pub channel: Option<u8>,
+    /// The station association state.
+    pub station: BridgeStation,
+    /// Whether the Bridge is provisioned.
+    pub provisioned: bool,
+    /// Whether the Bridge's setup mode is open.
+    pub setup_open: bool,
+    /// Whether the Bridge's link is ready.
+    pub link_ready: bool,
+    /// Bytes dropped by the Bridge's UART receive path.
+    pub uart_dropped_bytes: u32,
+    /// DMA stalls observed by the Bridge.
+    pub dma_stalls: u32,
+    /// Frame CRC failures observed by the Bridge.
+    pub crc_failures: u32,
+    /// Resynchronisations after a framing error.
+    pub resyncs: u32,
+    /// Watchdog feeds.
+    pub wdt_feeds: u32,
+    /// Watchdog feeds withheld because a task was late.
+    pub wdt_withheld: u32,
+}
+
 /// A `snapshot` message (ADR-0038).
 ///
 /// A snapshot may arrive at any time: on connect, on a robot reconnect, on a Boot Id change and
@@ -445,6 +494,8 @@ pub struct Snapshot {
     pub event_cursor: Option<u16>,
     /// The robot's `GET_CATALOGUE` response, `null` while unknown.
     pub catalogue: Option<Catalogue>,
+    /// The Bridge's latest status, `null` before the first one; it survives a robot Boot Id change.
+    pub bridge: Option<BridgeStatus>,
 }
 
 /// The robot's startable Procedures (ADR-0031's `GET_CATALOGUE` response).

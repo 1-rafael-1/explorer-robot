@@ -128,9 +128,9 @@ use esp_radio::wifi::{
 use heapless::spsc::Queue;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use remote_protocol::{
-    BridgeControlAction, BridgeControlReply, Control, ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME,
-    MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PcToRobotParser, RobotToPcParser, SetupCredentials,
-    ThrottleHint, encode_bridge_control_ack, encode_control,
+    BridgeControlAction, BridgeControlReply, BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, Control,
+    ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec,
+    PcToRobotParser, RobotToPcParser, SetupCredentials, ThrottleHint, encode_bridge_control_ack, encode_control,
 };
 use sequential_storage::{
     cache::NoCache,
@@ -304,6 +304,9 @@ const BEACON_SOCKET_BUFFER: usize = 64;
 
 /// The status-line cadence, matching the spike.
 const STATUS_PERIOD: Duration = Duration::from_secs(10);
+
+/// The `BRIDGE_STATUS` cadence: one snapshot per second to the robot and the daemon.
+const BRIDGE_STATUS_PERIOD: Duration = Duration::from_secs(1);
 
 /// The main loop period.
 const LOOP_PERIOD: Duration = Duration::from_millis(500);
@@ -585,6 +588,10 @@ static CLIENT_RESYNCS: AtomicU32 = AtomicU32::new(0);
 static RING_DISCARDED_ON_CLOSE: AtomicU32 = AtomicU32::new(0);
 static RING_ENCODE_ERRORS: AtomicU32 = AtomicU32::new(0);
 static THROTTLE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// The `BRIDGE_STATUS` sequence, shared by the robot control frame and the daemon stream so both
+/// peers see the same snapshot number.
+static BRIDGE_STATUS_SEQ: AtomicU32 = AtomicU32::new(0);
 static STATION_RECONNECTS: AtomicU32 = AtomicU32::new(0);
 static AUTH_ACCEPTED: AtomicU32 = AtomicU32::new(0);
 static AUTH_REJECTED: AtomicU32 = AtomicU32::new(0);
@@ -987,6 +994,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let started = Instant::now();
     let mut next_status = started + STATUS_PERIOD;
+    let mut next_bridge_status = started + BRIDGE_STATUS_PERIOD;
     let mut last_status_at = started;
     let mut last_uart_rx = 0u32;
     let mut last_tcp_rx = 0u32;
@@ -1354,6 +1362,13 @@ async fn main(spawner: Spawner) -> ! {
             last_tcp_rx = tcp_rx;
             last_status_at = now;
             next_status = now + STATUS_PERIOD;
+        }
+
+        // -- Bridge status -------------------------------------------------------------------
+
+        if now >= next_bridge_status {
+            emit_bridge_status(&controller, station_up);
+            next_bridge_status = now + BRIDGE_STATUS_PERIOD;
         }
     }
 }
@@ -2832,6 +2847,81 @@ fn bridge_name() -> Name {
 fn link_ready() -> bool {
     let last = LAST_ROBOT_FRAME_MS.load(Ordering::Relaxed);
     last != NO_ROBOT_FRAME && now_ms().wrapping_sub(last) < beacon::LINK_READY_WINDOW_MS as u32
+}
+
+/// Emits one `BRIDGE_STATUS` snapshot to both peers from the same encoded payload.
+///
+/// The robot gets an unacknowledged control frame whether or not a daemon is attached, because the
+/// panel needs the snapshot too. The daemon gets a latest-wins stream through the pump, which
+/// skips it silently while no client is authenticated.
+fn emit_bridge_status(controller: &WifiController<'_>, station_up: bool) {
+    let rssi_dbm = controller.rssi().ok().and_then(|rssi| i8::try_from(rssi).ok());
+    let channel = controller
+        .channel()
+        .ok()
+        .and_then(|(primary, _)| (primary != CHANNEL_UNKNOWN).then_some(primary));
+
+    let provisioned = PROVISIONED.load(Ordering::Relaxed);
+    let station = if controller.is_connected() || station_up {
+        BridgeStation::Associated
+    } else if provisioned {
+        BridgeStation::Connecting
+    } else {
+        BridgeStation::Down
+    };
+
+    let mut flags = BridgeStatusFlags::default();
+    if provisioned {
+        flags |= BridgeStatusFlags::PROVISIONED;
+    }
+    if SETUP_OPEN.load(Ordering::Relaxed) {
+        flags |= BridgeStatusFlags::SETUP_OPEN;
+    }
+    if link_ready() {
+        flags |= BridgeStatusFlags::LINK_READY;
+    }
+
+    let status = BridgeStatus {
+        rssi_dbm,
+        channel,
+        station,
+        flags,
+        uart_dropped_bytes: UART_DROPPED_BYTES.load(Ordering::Relaxed),
+        dma_stalls: UART_DMA_STALLS.load(Ordering::Relaxed),
+        crc_failures: UART_CRC_FAILURES.load(Ordering::Relaxed),
+        resyncs: UART_RESYNCS.load(Ordering::Relaxed),
+        wdt_feeds: WATCHDOG_FEEDS.load(Ordering::Relaxed),
+        wdt_withheld: WATCHDOG_WITHHELD.load(Ordering::Relaxed),
+    };
+
+    let mut payload = [0u8; BridgeStatus::ENCODED_LEN];
+    let Ok(len) = status.encode_into(&mut payload) else {
+        warn!("bridge status: could not encode the snapshot");
+        return;
+    };
+    let sequence = BRIDGE_STATUS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let sequence = u16::try_from(sequence & u32::from(u16::MAX)).unwrap_or(0);
+
+    // The robot's snapshot is an unacknowledged control frame; it is queued even with no daemon.
+    match Frame::new(
+        PROTOCOL_MAJOR,
+        Class::Control,
+        Flags::default(),
+        Control::BridgeStatus.wire_id(),
+        Seq::new(sequence),
+        &payload[..len],
+    ) {
+        Ok(frame) => enqueue_encoded(&frame),
+        Err(_) => warn!("bridge status: could not build the robot control frame"),
+    }
+
+    // The daemon's snapshot coalesces by stream id; without a client the pump ignores it.
+    if matches!(
+        with_pump(|pump| pump.offer_bridge_status(Seq::new(sequence), &payload[..len])),
+        Decision::DroppedFull
+    ) {
+        warn!("bridge status: the ring is full; the snapshot was dropped");
+    }
 }
 
 /// Returns the flags the Beacon and the challenge serve.

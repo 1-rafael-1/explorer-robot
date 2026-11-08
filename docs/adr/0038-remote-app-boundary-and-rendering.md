@@ -242,6 +242,16 @@ ADR-0039 implements this contract and records the app-facing clarifications:
 - `setup_mode` is observable only in APSTA; AP-only setup is honestly `no_robots`.
 - `ROTATE_COMPLETED.error_deg` is actual minus target, counter-clockwise positive.
 
+**Amendment 2026-11-08 (ticket 15: Bridge telemetry)**
+
+ADR-0042 gives the daemon a Bridge-originated snapshot, so the schema grows additively:
+
+- The server messages gain `bridge`, the Bridge's latest link and resilience status.
+- `snapshot` gains a `bridge` field, `null` before the first status; it survives a robot Boot Id
+  change.
+
+Unknown fields and message types remain tolerated.
+
 **Open items**
 
 - Ticket 14 is resolved in ADR-0040: the app lives at `remote/app/`, is not a cargo package, and

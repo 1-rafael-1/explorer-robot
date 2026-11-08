@@ -27,6 +27,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use remote_protocol::{
+    BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags as WireBridgeFlags,
     Command, CommandMessage, CompletionStatus as WireCompletionStatus, OBSTACLE_SOURCE_LIDAR, ProcedureId,
     Status as WireStatus,
     payload::{
@@ -43,9 +44,9 @@ use remote_protocol::{
 };
 
 use crate::schema::{
-    CalibrationStatus, Catalogue, CommandFrame, CommandResult, CompletionStatus, Connection, EventEntry, EventName,
-    EventValue, MANUAL_DRIVE_ID, Outcome, PROTOCOL, ServerMessage, Snapshot, Stage, Status, StreamEntry, StreamName,
-    StreamValue,
+    BridgeStation, BridgeStatus, CalibrationStatus, Catalogue, CommandFrame, CommandResult, CompletionStatus,
+    Connection, EventEntry, EventName, EventValue, MANUAL_DRIVE_ID, Outcome, PROTOCOL, ServerMessage, Snapshot, Stage,
+    Status, StreamEntry, StreamName, StreamValue,
 };
 
 /// A relay connection identifier.
@@ -112,6 +113,8 @@ struct App {
     results: VecDeque<CommandResult>,
     /// The connection-state sequence this app has already been sent.
     connection_cursor: u64,
+    /// The Bridge-status sequence this app has already been sent.
+    bridge_cursor: u64,
 }
 
 /// The app that originated a completion event, kept so the event can be attributed per tab.
@@ -315,6 +318,10 @@ pub struct Relay {
     connection: Option<Connection>,
     /// A sequence bumped on every connection update, so each tab sees one copy.
     connection_seq: u64,
+    /// The Bridge's latest status; independent of the robot Boot Id.
+    bridge: Option<BridgeStatus>,
+    /// A sequence bumped on every Bridge-status update, so each tab sees one copy.
+    bridge_seq: u64,
 }
 
 impl Relay {
@@ -342,6 +349,8 @@ impl Relay {
             app_live: false,
             connection: None,
             connection_seq: 0,
+            bridge: None,
+            bridge_seq: 0,
         }
     }
 
@@ -362,6 +371,7 @@ impl Relay {
                 event_cursor: self.events_pushed,
                 results: VecDeque::new(),
                 connection_cursor: 0,
+                bridge_cursor: 0,
             },
         );
         self.app_live = true;
@@ -664,6 +674,34 @@ impl Relay {
         }
     }
 
+    /// Records the Bridge's latest status and makes it available to every tab.
+    ///
+    /// The status is Bridge/network state, independent of the robot's Boot Id, so it survives a
+    /// Session close and a Boot Id change; its `ts` exposes staleness. The caller only feeds it
+    /// from within an open Session, so this method does not require [`Relay::is_connected`].
+    pub const fn on_bridge_status(&mut self, status: &WireBridgeStatus, now_ms: u64) {
+        self.bridge = Some(BridgeStatus {
+            ts: now_ms,
+            rssi_dbm: status.rssi_dbm,
+            channel: status.channel,
+            station: match status.station {
+                WireBridgeStation::Down => BridgeStation::Down,
+                WireBridgeStation::Connecting => BridgeStation::Connecting,
+                WireBridgeStation::Associated => BridgeStation::Associated,
+            },
+            provisioned: status.flags.contains(WireBridgeFlags::PROVISIONED),
+            setup_open: status.flags.contains(WireBridgeFlags::SETUP_OPEN),
+            link_ready: status.flags.contains(WireBridgeFlags::LINK_READY),
+            uart_dropped_bytes: status.uart_dropped_bytes,
+            dma_stalls: status.dma_stalls,
+            crc_failures: status.crc_failures,
+            resyncs: status.resyncs,
+            wdt_feeds: status.wdt_feeds,
+            wdt_withheld: status.wdt_withheld,
+        });
+        self.bridge_seq = self.bridge_seq.wrapping_add(1);
+    }
+
     /// Assembles a snapshot for `app` at any time, and marks it delivered.
     ///
     /// Returns `None` for an unknown connection. Calling this advances the app's cursors past the
@@ -678,6 +716,7 @@ impl Relay {
                 state.stream_cursors[index] = state.stream_cursors[index].max(entry.seq);
             }
         }
+        state.bridge_cursor = self.bridge_seq;
         Some(snapshot)
     }
 
@@ -685,6 +724,7 @@ impl Relay {
     ///
     /// The lanes are a pending snapshot, the command results addressed to this connection, the
     /// latest-wins stream slots it has not seen, and the shared event ring from its own cursor.
+    /// The Bridge status rides alongside the streams as its own latest-wins message.
     pub fn poll(&mut self, app: AppId, now_ms: u64) -> Vec<ServerMessage> {
         let mut messages = Vec::new();
         if !self.apps.contains_key(&app) {
@@ -711,9 +751,22 @@ impl Relay {
         {
             messages.push(ServerMessage::Snapshot(snapshot));
         }
+        let pending_bridge = if self
+            .apps
+            .get(&app)
+            .is_some_and(|state| state.bridge_cursor < self.bridge_seq)
+        {
+            self.bridge.clone()
+        } else {
+            None
+        };
         let Some(state) = self.apps.get_mut(&app) else {
             return messages;
         };
+        if let Some(bridge) = pending_bridge {
+            messages.push(ServerMessage::Bridge(bridge));
+            state.bridge_cursor = self.bridge_seq;
+        }
         while let Some(result) = state.results.pop_front() {
             messages.push(ServerMessage::CommandResult(result));
         }
@@ -1284,6 +1337,7 @@ impl Relay {
             events: self.events.iter().map(|entry| entry.for_app(app)).collect(),
             event_cursor: self.events.back().and_then(|entry| entry.event.seq),
             catalogue: self.catalogue.clone(),
+            bridge: self.bridge.clone(),
         }
     }
 }

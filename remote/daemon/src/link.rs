@@ -28,10 +28,10 @@ use std::{
 
 use bridge_net::preamble::DenyReason;
 use remote_protocol::{
-    Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event, EventMessage, Flags as LinkFlags,
-    Frame, MAX_PC_TO_ROBOT_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, RateEntry, RobotToPcParser, Seq, Status, Stream,
-    StreamSample, decode_command, decode_control, decode_event, decode_stream, encode_command, encode_event,
-    encode_hello,
+    BridgeStatus, BridgeStream, Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event,
+    EventMessage, Flags as LinkFlags, Frame, MAX_PC_TO_ROBOT_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodec,
+    RateEntry, RobotToPcParser, Seq, Status, Stream, StreamSample, decode_command, decode_control, decode_event,
+    decode_stream, encode_command, encode_event, encode_hello,
     payload::{
         command::{CatalogueFlags, CataloguePage, GetCatalogue, GetStatus},
         event::EventAck,
@@ -663,6 +663,14 @@ struct RawFrame {
     payload: Vec<u8>,
 }
 
+/// Returns `true` when `frame` is Bridge-originated telemetry rather than a robot frame.
+///
+/// The robot's stall timer must measure the robot, not the Bridge: a healthy Bridge publishing
+/// `BRIDGE_STATUS` while the robot itself is silent would otherwise mask a dead robot.
+fn is_bridge_telemetry(frame: &RawFrame) -> bool {
+    frame.class == Class::Stream && BridgeStream::from_wire(frame.id).is_some()
+}
+
 /// Decodes every complete frame in `bytes`, returning them in wire order.
 fn decode_frames(parser: &mut RobotToPcParser, bytes: &[u8], stamp: u32) -> Vec<RawFrame> {
     let mut frames = Vec::new();
@@ -986,7 +994,9 @@ impl Session {
 
     /// Dispatches one decoded robot frame.
     fn handle_frame(&mut self, frame: &RawFrame, relay: &Mutex<Relay>, now_ms: u64) {
-        self.last_robot_frame = Instant::now();
+        if !is_bridge_telemetry(frame) {
+            self.last_robot_frame = Instant::now();
+        }
         match frame.class {
             Class::Stream => Self::handle_stream(frame, relay, now_ms),
             Class::Event => self.handle_event(frame, relay, now_ms),
@@ -997,6 +1007,12 @@ impl Session {
 
     /// Feeds one stream sample into the relay's latest-wins slot.
     fn handle_stream(frame: &RawFrame, relay: &Mutex<Relay>, now_ms: u64) {
+        if BridgeStream::from_wire(frame.id) == Some(BridgeStream::Status) {
+            if let Ok(status) = BridgeStatus::decode(&frame.payload) {
+                lock(relay).on_bridge_status(&status, now_ms);
+            }
+            return;
+        }
         let Some(stream) = Stream::from_wire(frame.id) else {
             return;
         };
@@ -1168,9 +1184,11 @@ mod tests {
 
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    use remote_protocol::{Caps, Hello, MAX_PC_TO_ROBOT_FRAME, PayloadCodec, RateEntry, Stream};
+    use remote_protocol::{
+        BridgeStream, Caps, Class, Flags as LinkFlags, Hello, MAX_PC_TO_ROBOT_FRAME, PayloadCodec, RateEntry, Stream,
+    };
 
-    use super::{BASELINE_RATE_CHZ, LinkConfig, hello_payload};
+    use super::{BASELINE_RATE_CHZ, LinkConfig, RawFrame, hello_payload, is_bridge_telemetry};
 
     /// Extracts a value, failing the test rather than unwrapping (the workspace denies `unwrap`).
     fn must<T>(value: Option<T>, what: &str) -> T {
@@ -1202,6 +1220,35 @@ mod tests {
         assert_eq!(
             entries.get(1),
             Some(&RateEntry::enabled(Stream::Activity.wire_id(), BASELINE_RATE_CHZ))
+        );
+    }
+
+    /// Bridge telemetry must not refresh the robot's stall timer.
+    #[test]
+    fn bridge_telemetry_is_not_a_robot_frame() {
+        let frame = |class: Class, id: u16| RawFrame {
+            class,
+            flags: LinkFlags::default(),
+            id,
+            seq: 1,
+            payload: Vec::new(),
+        };
+
+        assert!(
+            is_bridge_telemetry(&frame(Class::Stream, BridgeStream::Status.wire_id())),
+            "BRIDGE_STATUS is Bridge telemetry"
+        );
+        assert!(
+            !is_bridge_telemetry(&frame(Class::Stream, Stream::Power.wire_id())),
+            "a robot stream is a robot frame"
+        );
+        assert!(
+            !is_bridge_telemetry(&frame(Class::Event, 1)),
+            "an event is a robot frame"
+        );
+        assert!(
+            !is_bridge_telemetry(&frame(Class::Stream, 0x00FF)),
+            "an unassigned stream id is not Bridge telemetry"
         );
     }
 }

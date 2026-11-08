@@ -12,6 +12,7 @@ use crate::{
     error::{CodecError, EncodeError},
     ids::{Command, Control, Event, Stream},
     payload::{
+        bridge::BridgeStatus,
         command::{
             AckPayload, CataloguePage, DriveDistance, GetCatalogue, GetStatus, RotateBy, StartProcedure,
             StatusSnapshot, StopMotion, StopProcedure,
@@ -344,6 +345,8 @@ pub enum ControlMessage<'a> {
     Throttle(Throttle),
     /// A `BRIDGE_CONTROL` request.
     BridgeControl(BridgeControl),
+    /// A `BRIDGE_STATUS` snapshot.
+    BridgeStatus(BridgeStatus),
 }
 
 impl ControlMessage<'_> {
@@ -355,6 +358,7 @@ impl ControlMessage<'_> {
             Self::Ping(_) | Self::PingAck(_) => Control::Ping,
             Self::Throttle(_) => Control::Throttle,
             Self::BridgeControl(_) => Control::BridgeControl,
+            Self::BridgeStatus(_) => Control::BridgeStatus,
         }
     }
 }
@@ -380,8 +384,9 @@ pub fn decode_control(control: Control, is_ack: bool, bytes: &[u8]) -> Result<Co
         Control::Ping if is_ack => PingAck::decode(bytes).map(ControlMessage::PingAck),
         Control::Ping => Ping::decode(bytes).map(ControlMessage::Ping),
         Control::Throttle => Throttle::decode(bytes).map(ControlMessage::Throttle),
-        Control::BridgeControl if is_ack => Err(CodecError::Length),
+        Control::BridgeControl | Control::BridgeStatus if is_ack => Err(CodecError::Length),
         Control::BridgeControl => BridgeControl::decode(bytes).map(ControlMessage::BridgeControl),
+        Control::BridgeStatus => BridgeStatus::decode(bytes).map(ControlMessage::BridgeStatus),
     }
 }
 
@@ -399,6 +404,7 @@ pub fn encode_control(message: &ControlMessage<'_>, out: &mut [u8]) -> Result<us
         ControlMessage::PingAck(value) => value.encode_into(out),
         ControlMessage::Throttle(value) => value.encode_into(out),
         ControlMessage::BridgeControl(value) => value.encode_into(out),
+        ControlMessage::BridgeStatus(value) => value.encode_into(out),
     }
 }
 

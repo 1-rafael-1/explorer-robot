@@ -238,3 +238,12 @@ are host-testable. The Link Task observes the edge and calls the robot's one fai
 - Route coast-and-avoid through the drive subsystem (debt ticket 19) so the interrupt alone would
   reach it; until then the claim latch is what stops it, and the build must not assume otherwise.
 - Ticket 15 owns the app→daemon heartbeat, "not confirmed" and "outcome unknown" rendering.
+
+**Amendment (2026-11-08, ticket 15).** "Any valid PC→robot frame renews the lease", and the Link
+Loss definition's "no valid PC→robot frame", are narrowed to **Remote-originated** PC→robot
+frames. `HELLO`, `PING`, commands and event ACKs renew the lease and re-arm the Deadman;
+`THROTTLE`, `BRIDGE_CONTROL`'s ACK and `BRIDGE_STATUS` do not. The last two are Bridge-originated,
+and `THROTTLE` may be Bridge-synthesised, so the robot cannot tell its origin from the frame.
+Without this, the Bridge's 1 Hz `BRIDGE_STATUS` control frame would keep a dead Remote's lease
+alive and disarm the Deadman. The daemon's 1 Hz `PING` still renews an idle but healthy Session
+(ADR-0042).

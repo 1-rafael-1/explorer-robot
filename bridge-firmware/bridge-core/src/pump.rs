@@ -6,7 +6,7 @@
 //! being parsed regardless, which is what lets a `BRIDGE_CONTROL` and the Beacon's link flag stay
 //! truthful with no client attached.
 
-use remote_protocol::{Class, Frame, ThrottleHint};
+use remote_protocol::{BridgeStream, Class, Flags, Frame, Seq, ThrottleHint};
 
 use crate::{
     auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent},
@@ -132,6 +132,25 @@ impl BridgePump {
     #[must_use]
     pub const fn poll_throttle(&mut self, now_ms: u32) -> Option<ThrottleHint> {
         self.flow.observe(self.ring.used_bytes(), now_ms)
+    }
+
+    /// Queues a Bridge-originated status snapshot for the authenticated client.
+    ///
+    /// The snapshot is coalesced by its stream id in the same latest-wins ring as robot streams.
+    /// With no authenticated client it is skipped silently (it must not pollute the
+    /// `dropped_without_client` counter, which counts robot frames).
+    pub fn offer_bridge_status(&mut self, seq: Seq, payload: &[u8]) -> Decision {
+        if !self.auth.is_authenticated() {
+            return Decision::Ignored;
+        }
+
+        match self
+            .ring
+            .push_stream(BridgeStream::Status.wire_id(), seq, Flags::default(), payload)
+        {
+            PushOutcome::Stored | PushOutcome::Replaced => Decision::Queued,
+            PushOutcome::Dropped => Decision::DroppedFull,
+        }
     }
 
     /// Removes and returns the oldest client-bound entry.

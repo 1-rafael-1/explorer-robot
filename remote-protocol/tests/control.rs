@@ -9,11 +9,12 @@ use remote_protocol::{
 /// The control id vocabulary covers every implemented id in wire order.
 #[test]
 fn control_ids_cover_the_wire_vocabulary() {
-    assert_eq!(Control::ALL.len(), 4, "every control id is in ALL");
+    assert_eq!(Control::ALL.len(), 5, "every control id is in ALL");
     assert_eq!(Control::Hello.wire_id(), 0x0001);
     assert_eq!(Control::Ping.wire_id(), 0x0002);
     assert_eq!(Control::Throttle.wire_id(), 0x0003);
     assert_eq!(Control::BridgeControl.wire_id(), 0x0004);
+    assert_eq!(Control::BridgeStatus.wire_id(), 0x0005);
 
     for (index, control) in Control::ALL.iter().enumerate() {
         assert_eq!(control.index(), index, "index follows ALL order");
@@ -24,7 +25,7 @@ fn control_ids_cover_the_wire_vocabulary() {
         );
     }
     assert_eq!(Control::from_wire(0x0000), None, "0 is reserved");
-    assert_eq!(Control::from_wire(0x0005), None, "0x0005+ is reserved");
+    assert_eq!(Control::from_wire(0x0006), None, "0x0006+ is reserved");
 }
 
 /// A representative rate-entry list, including an unknown stream id and a disabled entry.

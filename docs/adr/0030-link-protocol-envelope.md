@@ -186,3 +186,12 @@ link backs the host tests.
   stream rates, the configured frame timeout per baud, buffer and ring sizing, the Bridge's
   single-client enforcement, and command authority. The protocol crate's host tests are the
   acceptance gate for the reliability rules.
+
+**Amendment (2026-11-08, ticket 15).** The control class gains `BRIDGE_STATUS` (`0x0005`), a
+Bridge-originated snapshot sent to the robot at 1 Hz. The stream delivery class now covers **robot
+or Bridge → PC**: `0x0007` is allocated to the Bridge-originated `BRIDGE_STATUS` stream, so the
+Bridge is an originator for this one stream, not only a forwarder (ADR-0042). The robot does not
+relay it. The lease sentence above — "Any valid PC→robot frame renews the lease" — is narrowed to
+**Remote-originated** frames: `HELLO`, `PING`, commands and event ACKs renew it; `THROTTLE`,
+`BRIDGE_CONTROL`'s ACK and `BRIDGE_STATUS` do not, so a Bridge-local 1 Hz frame cannot keep a dead
+Remote's lease alive (ADR-0035).

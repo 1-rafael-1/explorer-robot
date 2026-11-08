@@ -9,7 +9,7 @@ use bridge_core::{
     Seq,
 };
 use remote_protocol::{
-    BridgeControl, BridgeControlAction, Control, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME,
+    BridgeControl, BridgeControlAction, BridgeStream, Control, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME,
     PROTOCOL_MAJOR, PayloadCodec, PcToRobotParser, RobotToPcParser, ThrottleAction,
 };
 
@@ -255,6 +255,78 @@ fn an_authenticated_event_is_queued_with_its_sequence() {
         },
         "the event keeps its wire flags"
     );
+}
+
+/// A `BRIDGE_STATUS` snapshot is queued as the Bridge stream, with its wire sequence intact.
+#[test]
+fn a_bridge_status_is_queued_as_the_bridge_stream() {
+    let mut pump = BridgePump::new();
+    let Some(_connection) = connect_and_authenticate(&mut pump, 0) else {
+        return;
+    };
+
+    let payload = [1u8, 2, 3, 4];
+    assert_eq!(pump.offer_bridge_status(Seq::new(9), &payload), Decision::Queued);
+
+    let Some(entry) = pump.pop() else {
+        return;
+    };
+    assert_eq!(
+        entry.kind,
+        EntryKind::Stream {
+            id: BridgeStream::Status.wire_id(),
+            seq: Seq::new(9),
+            flags: Flags::default(),
+        },
+        "the snapshot is a stream under id 0x0007"
+    );
+    assert_eq!(entry.payload, &payload);
+    assert_eq!(pump.pop(), None);
+}
+
+/// A newer snapshot replaces the pending one: the ring keeps one entry, the newest payload.
+#[test]
+fn a_newer_bridge_status_replaces_the_pending_one() {
+    let mut pump = BridgePump::new();
+    let Some(_connection) = connect_and_authenticate(&mut pump, 0) else {
+        return;
+    };
+
+    assert_eq!(pump.offer_bridge_status(Seq::new(1), &[0xAA]), Decision::Queued);
+    assert_eq!(pump.offer_bridge_status(Seq::new(2), &[0xBB, 0xCC]), Decision::Queued);
+
+    let Some(entry) = pump.pop() else {
+        return;
+    };
+    assert_eq!(
+        entry.kind,
+        EntryKind::Stream {
+            id: BridgeStream::Status.wire_id(),
+            seq: Seq::new(2),
+            flags: Flags::default(),
+        }
+    );
+    assert_eq!(entry.payload, &[0xBB, 0xCC]);
+    assert_eq!(
+        pump.pop(),
+        None,
+        "the older snapshot was replaced, not queued behind the newer one"
+    );
+}
+
+/// Without an authenticated client the snapshot is skipped and the robot-frame counter stays put.
+#[test]
+fn a_bridge_status_is_ignored_without_a_client() {
+    let mut pump = BridgePump::new();
+
+    assert_eq!(pump.offer_bridge_status(Seq::new(1), &[1, 2]), Decision::Ignored);
+    assert_eq!(pump.used_bytes(), 0, "the ring stays empty without a client");
+    assert_eq!(
+        pump.dropped_without_client(),
+        0,
+        "the counter counts robot frames, not Bridge snapshots"
+    );
+    assert_eq!(pump.pop(), None);
 }
 
 /// The pump surfaces a full ring as a drop and the throttle policy follows the occupancy.

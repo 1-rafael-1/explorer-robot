@@ -205,3 +205,34 @@ event does not break an older remote.
   payload host tests; confirm the stream rates against the chosen baud; decide command authority
   (a separate decision); implement the alignment mechanism (exhaustive matches, `PayloadCodec`,
   scoped wildcard lint).
+
+**Amendment (2026-11-08, ticket 15).** `BRIDGE_STATUS` joins the control ids. The list now reads
+`0x0001 HELLO`, `0x0002 PING`, `0x0003 THROTTLE`, `0x0004 BRIDGE_CONTROL`, `0x0005 BRIDGE_STATUS`;
+`0x0006+` reserved. `BRIDGE_STATUS` is unacknowledged and Bridge-originated. The robot→PC stream
+table above gains no row: the stream carrying the same payload is Bridge-originated, so it is
+recorded separately:
+
+| id | stream | origin | consumer | payload | rate |
+|---|---|---|---|---|---|
+| `0x0007` | `BRIDGE_STATUS` | Bridge | daemon | 28 B (below) | 1 Hz, latest-wins |
+
+It is deliberately **not** a variant of the robot's `Stream` enum, so the robot's catalogue stays
+exactly six streams and `remote-link`'s stream slots stay robot-shaped; the Bridge-originated id
+lives in a separate `BridgeStream` (`Status = 0x0007`, ADR-0042). The payload is identical in both
+directions:
+
+| offset | field | encoding |
+|---|---|---|
+| 0 | `rssi_dbm` | `i8`; `0x80` = unknown |
+| 1 | `channel` | `u8`; `0` = unknown |
+| 2 | `station` | `0` down, `1` connecting, `2` associated |
+| 3 | `flags` | bit 0 provisioned, bit 1 setup open, bit 2 link ready; bits 3–7 reserved |
+| 4 | `uart_dropped_bytes` | `u32` little-endian |
+| 8 | `dma_stalls` | `u32` little-endian |
+| 12 | `crc_failures` | `u32` little-endian |
+| 16 | `resyncs` | `u32` little-endian |
+| 20 | `wdt_feeds` | `u32` little-endian |
+| 24 | `wdt_withheld` | `u32` little-endian |
+
+The counters are cumulative since the Bridge's boot. The robot consumes the control snapshot and
+does not re-emit it; the daemon consumes the stream directly from the Bridge.

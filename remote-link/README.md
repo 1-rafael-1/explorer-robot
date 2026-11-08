@@ -17,6 +17,8 @@ power, sampling and the mapping onto the wire vocabulary.
   `ControlTimeout`.
 - **`ack_command(seq, status, result)`** — answer the command awaiting a reply.
 - **`request_bridge_control(action, now_ms)`** — queue an acknowledged `BRIDGE_CONTROL`.
+- **`bridge_status()`** — the stored `BRIDGE_STATUS` control snapshot from the Bridge (`None`
+  before the first); it is kept even with no Remote connected.
 - **`peer()`**, `take_peer_lost()`, `dropped_events()`, `pending_events()`,
   `exhausted_events()`, `last_seq()`, `last_status()`, `version_mismatch()` — observability.
 - **`reset_parser()`**, `reset_epoch(epoch)` — recovery without losing the Boot Id or ring.
@@ -47,11 +49,11 @@ cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tes
 
 ## Tests
 
-`streams`, `commands`, `session`, `events`, `throttle`, `bridge_control`, `acceptance` and
-`fault_matrix` cover the stream schedule, the two-phase command seam, the Session and lease,
-the event ring, throttle merging, the `BRIDGE_CONTROL` path and loss/truncation/stall
-recovery. A `no_std` binary cannot use the built-in harness, so the robot firmware links this
-crate rather than testing it on target.
+`streams`, `commands`, `session`, `events`, `throttle`, `bridge_control`, `bridge_status`,
+`acceptance` and `fault_matrix` cover the stream schedule, the two-phase command seam, the
+Session and lease, the event ring, throttle merging, the `BRIDGE_CONTROL` and `BRIDGE_STATUS`
+paths and loss/truncation/stall recovery. A `no_std` binary cannot use the built-in harness, so
+the robot firmware links this crate rather than testing it on target.
 
 ## Validation
 

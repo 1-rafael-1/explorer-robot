@@ -153,3 +153,9 @@ rate, then delta encoding, then the baud.
 - Fix the event retry interval in `remote-protocol`; the budget assumes 250 ms.
 - Re-check the budget if `POSE_TRAIL`, `MAP` or `CAMERA_DETECTIONS` gain payload layouts and
   rates.
+
+**Amendment (2026-11-08, ticket 15).** The Bridge-originated `BRIDGE_STATUS` adds +28 B/s of
+payload robot→PC (40 B/s on the wire with the 12-byte header, at 1 Hz) and ~40 B/s PC→robot as a
+control frame (28 B plus the header). The daemon-side status is coalesced in the existing 8 KiB
+ring, so it adds no backlog and no new buffer. No ring size or baud changes; the budget's ~11%
+utilisation moves by well under a tenth of a percent (ADR-0042).

@@ -204,11 +204,20 @@ pub enum Control {
     Throttle = 0x0003,
     /// `BRIDGE_CONTROL`: a robot-to-Bridge request, acknowledged by the Bridge.
     BridgeControl = 0x0004,
+    /// `BRIDGE_STATUS`: the Bridge's link and resilience snapshot, emitted to the robot (control)
+    /// and to the daemon (stream). Unacknowledged.
+    BridgeStatus = 0x0005,
 }
 
 impl Control {
     /// Every control id in this version, in wire order.
-    pub const ALL: [Self; 4] = [Self::Hello, Self::Ping, Self::Throttle, Self::BridgeControl];
+    pub const ALL: [Self; 5] = [
+        Self::Hello,
+        Self::Ping,
+        Self::Throttle,
+        Self::BridgeControl,
+        Self::BridgeStatus,
+    ];
 
     /// The number of control ids in this version.
     pub const COUNT: usize = Self::ALL.len();
@@ -227,6 +236,7 @@ impl Control {
             Self::Ping => 1,
             Self::Throttle => 2,
             Self::BridgeControl => 3,
+            Self::BridgeStatus => 4,
         }
     }
 
@@ -241,6 +251,52 @@ impl Control {
             0x0002 => Some(Self::Ping),
             0x0003 => Some(Self::Throttle),
             0x0004 => Some(Self::BridgeControl),
+            0x0005 => Some(Self::BridgeStatus),
+            _ => None,
+        }
+    }
+}
+
+/// A Bridge-originated stream id (Bridge to PC, lossy and latest-wins).
+///
+/// Stream ids are namespaced by class, so `0x0007` is allocated to the Bridge-originated
+/// `BRIDGE_STATUS` while the robot's [`Stream`] catalogue stays exactly six entries. This is a
+/// separate enum rather than a [`Stream`] variant because `remote-link::StreamSlots` and
+/// [`Stream::COUNT`] are robot-shaped; [`Stream::from_wire`] deliberately returns [`None`] for
+/// `0x0007`.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BridgeStream {
+    /// `BRIDGE_STATUS`: the Bridge's link and resilience snapshot.
+    Status = 0x0007,
+}
+
+impl BridgeStream {
+    /// Every Bridge-originated stream, in wire order.
+    pub const ALL: [Self; 1] = [Self::Status];
+
+    /// The number of Bridge-originated streams.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// Returns the wire id of this stream.
+    #[must_use]
+    pub const fn wire_id(self) -> u16 {
+        self as u16
+    }
+
+    /// Returns the position of this stream in [`BridgeStream::ALL`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Status => 0,
+        }
+    }
+
+    /// Builds a Bridge-originated stream from its wire id, returning [`None`] for any other id.
+    #[must_use]
+    pub const fn from_wire(id: u16) -> Option<Self> {
+        match id {
+            0x0007 => Some(Self::Status),
             _ => None,
         }
     }

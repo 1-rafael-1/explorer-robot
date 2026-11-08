@@ -11,8 +11,8 @@ host workspace consume the same manifest.
 
 ## Versioning
 
-The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `1`/`0`,
-the manifest is `1.0.0`, and a test asserts the two agree. Every consumer states
+The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `1`/`1`,
+the manifest is `1.1.0`, and a test asserts the two agree. Every consumer states
 `version = "1"`, so a major bump fails resolution until each is reviewed. Additive ids and
 enums bump the minor; a payload-layout or header-semantics change bumps the major (ADR-0040).
 
@@ -23,8 +23,8 @@ enums bump the minor; a payload-layout or header-semantics change bumps the majo
 | `frame` | `MAGIC`, `HEADER_LEN`, `Frame`, `FrameHeader`, `Class`, `Direction`, `Flags`, `Seq`, `Status` |
 | `codec` | `encode_*`/`decode_*` for command, control, event and stream; `PayloadCodec` |
 | `crc` | `Crc16`, incremental and one-shot, CRC-16/CCITT-FALSE |
-| `ids` | `Stream`, `Command`, `Event`, `Control`, `ProcedureId`, `Caps` |
-| `payload` | the typed stream, event, command and control payloads, including `BridgeControl` |
+| `ids` | `Stream`, `BridgeStream` (`Status = 0x0007`), `Command`, `Event`, `Control`, `ProcedureId`, `Caps` |
+| `payload` | the typed stream, event, command and control payloads, including `BridgeControl` and the 28-byte `BridgeStatus` |
 | `parser` | `Parser<CAP>`, `RobotToPcParser`, `PcToRobotParser`, `MAX_*_FRAME` |
 | `reliability` | `AckTracker`, `CommandWindow`, `ReplayWindow`, `RetryPolicy`, `Throttle` |
 | `sim` | `FakeRemote`, `Faults`, `Wire`, behind the `std` feature |
@@ -62,9 +62,9 @@ The explicit target overrides the root workspace's `thumbv8m.main-none-eabihf` d
 
 ## Tests
 
-`crc`, `frame`, `ids`, `parser`, `streams`, `commands`, `control`, `bridge_control`, `retry`,
-`events`, `throttle`, `sequence` and `version` cover the envelope, every payload, the
-reliability schedules and the version mirror.
+`crc`, `frame`, `ids`, `parser`, `streams`, `commands`, `control`, `bridge_control`,
+`bridge_status`, `retry`, `events`, `throttle`, `sequence` and `version` cover the envelope, every
+payload, the reliability schedules and the version mirror.
 
 ## Validation
 

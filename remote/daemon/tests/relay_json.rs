@@ -4,9 +4,10 @@
 //! app sees, and the value that comes back is the value the adapter sent.
 
 use remote_daemon::schema::{
-    Auth, Catalogue, CatalogueProcedure, ClientHello, ClientMessage, CommandFrame, CommandResult, CompletionStatus,
-    Connect, Connection, ConnectionState, EventEntry, EventName, EventValue, Hello, Outcome, PROTOCOL, Pair,
-    RobotModel, ServerMessage, ServerName, Snapshot, Stage, Status, StreamEntry, StreamName, StreamValue,
+    Auth, BridgeStation, BridgeStatus, Catalogue, CatalogueProcedure, ClientHello, ClientMessage, CommandFrame,
+    CommandResult, CompletionStatus, Connect, Connection, ConnectionState, EventEntry, EventName, EventValue, Hello,
+    Outcome, PROTOCOL, Pair, RobotModel, ServerMessage, ServerName, Snapshot, Stage, Status, StreamEntry, StreamName,
+    StreamValue,
 };
 use serde_json::{Value, json};
 
@@ -106,6 +107,7 @@ fn a_snapshot_round_trips() {
         }],
         event_cursor: Some(3),
         catalogue: Some(catalogue()),
+        bridge: None,
     });
     let value = json!({
         "type": "snapshot",
@@ -149,6 +151,44 @@ fn a_snapshot_round_trips() {
                 }
             ]
         },
+        "bridge": null,
+    });
+    assert_round_trip(&message, value);
+}
+
+/// A `bridge` message carries the converted Bridge status as a latest-wins snapshot.
+#[test]
+fn a_bridge_message_round_trips() {
+    let message = ServerMessage::Bridge(BridgeStatus {
+        ts: 12_345,
+        rssi_dbm: Some(-54),
+        channel: Some(6),
+        station: BridgeStation::Associated,
+        provisioned: true,
+        setup_open: false,
+        link_ready: true,
+        uart_dropped_bytes: 1,
+        dma_stalls: 2,
+        crc_failures: 3,
+        resyncs: 4,
+        wdt_feeds: 5,
+        wdt_withheld: 6,
+    });
+    let value = json!({
+        "type": "bridge",
+        "ts": 12345,
+        "rssi_dbm": -54,
+        "channel": 6,
+        "station": "associated",
+        "provisioned": true,
+        "setup_open": false,
+        "link_ready": true,
+        "uart_dropped_bytes": 1,
+        "dma_stalls": 2,
+        "crc_failures": 3,
+        "resyncs": 4,
+        "wdt_feeds": 5,
+        "wdt_withheld": 6,
     });
     assert_round_trip(&message, value);
 }

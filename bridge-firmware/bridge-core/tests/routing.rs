@@ -6,8 +6,8 @@
 
 use bridge_core::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
 use remote_protocol::{
-    BridgeControl, BridgeControlAction, Class, Control, Flags, Frame, PROTOCOL_MAJOR, PayloadCodec, Seq,
-    ThrottleAction, ThrottleHint,
+    BridgeControl, BridgeControlAction, BridgeStream, Class, Control, Flags, Frame, PROTOCOL_MAJOR, PayloadCodec, Seq,
+    Stream, ThrottleAction, ThrottleHint,
 };
 
 /// Encodes a `BRIDGE_CONTROL` request payload with the real codec.
@@ -170,6 +170,68 @@ fn streams_cross_to_the_client() {
     assert_eq!(router.route(Side::Robot, &frame), Route::Forward(Destination::Client));
 }
 
+/// The Bridge owns the `BRIDGE_STATUS` stream, so a robot-side frame carrying its id is ignored
+/// rather than forwarded to the client where it could masquerade as Bridge telemetry (ADR-0042).
+#[test]
+fn bridge_status_stream_from_the_robot_is_ignored() {
+    let mut router = Router::new();
+    let Some(frame) = frame(
+        Class::Stream,
+        Flags::default(),
+        BridgeStream::Status.wire_id(),
+        5,
+        &[0; 8],
+    ) else {
+        return;
+    };
+    assert_eq!(router.route(Side::Robot, &frame), Route::Ignore);
+}
+
+/// A normal robot stream still crosses; only the Bridge-originated id is filtered.
+#[test]
+fn a_normal_stream_from_the_robot_still_crosses() {
+    let mut router = Router::new();
+    let Some(frame) = frame(Class::Stream, Flags::default(), Stream::Power.wire_id(), 5, &[0; 2]) else {
+        return;
+    };
+    assert_eq!(router.route(Side::Robot, &frame), Route::Forward(Destination::Client));
+}
+
+/// The Bridge-originated stream id is never accepted from the client either.
+#[test]
+fn bridge_status_stream_from_the_client_is_ignored() {
+    let mut router = Router::new();
+    let Some(frame) = frame(
+        Class::Stream,
+        Flags::default(),
+        BridgeStream::Status.wire_id(),
+        5,
+        &[0; 8],
+    ) else {
+        return;
+    };
+    assert_eq!(router.route(Side::Client, &frame), Route::Ignore);
+}
+
+/// The `BRIDGE_STATUS` control message is Bridge-originated; the router ignores it from either
+/// peer, since the Bridge injects its snapshot into the pump's ring directly.
+#[test]
+fn bridge_status_control_is_ignored_from_either_side() {
+    let mut router = Router::new();
+    for side in [Side::Robot, Side::Client] {
+        let Some(frame) = frame(
+            Class::Control,
+            Flags::default(),
+            Control::BridgeStatus.wire_id(),
+            2,
+            &[],
+        ) else {
+            return;
+        };
+        assert_eq!(router.route(side, &frame), Route::Ignore);
+    }
+}
+
 /// Events cross from the robot to the client.
 #[test]
 fn events_cross_to_the_client() {
@@ -252,7 +314,7 @@ fn wrong_direction_frames_are_ignored() {
 #[test]
 fn unknown_control_ids_are_ignored() {
     let mut router = Router::new();
-    let Some(frame) = frame(Class::Control, Flags::default(), 0x0005, 0, &[]) else {
+    let Some(frame) = frame(Class::Control, Flags::default(), 0x0006, 0, &[]) else {
         return;
     };
     assert_eq!(router.route(Side::Robot, &frame), Route::Ignore);

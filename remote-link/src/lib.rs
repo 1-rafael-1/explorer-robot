@@ -33,8 +33,9 @@ pub mod timing;
 use events::EventRing;
 pub use events::{EventAckNotice, Publish};
 use remote_protocol::{
-    Caps, Class, CodecError, Command, CommandMessage, CommandVerdict, CommandWindow, Control, Direction, EncodeError,
-    Event, EventMessage, Flags, Frame, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle, ThrottleState,
+    BridgeStatus, Caps, Class, CodecError, Command, CommandMessage, CommandVerdict, CommandWindow, Control, Direction,
+    EncodeError, Event, EventMessage, Flags, Frame, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Throttle,
+    ThrottleState,
     codec::{PayloadCodec, StreamSample, decode_command},
     ids::Stream,
     parser::PcToRobotParser,
@@ -82,10 +83,11 @@ const AUTO_ACK_CAPACITY: usize = 8;
 /// Whether a Remote is currently attached to the link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PeerState {
-    /// No valid PC-to-robot frame has arrived in this powered link period, or the lease expired.
+    /// No Remote-originated PC-to-robot frame has arrived in this powered link period, or the
+    /// lease expired.
     #[default]
     NoPeer,
-    /// A valid PC-to-robot frame arrived and the lease has not expired.
+    /// A Remote-originated PC-to-robot frame arrived and the lease has not expired.
     PeerLive,
 }
 
@@ -519,7 +521,7 @@ impl SessionState {
 struct PeerTracker {
     /// Whether a peer is attached and its lease is live.
     state: PeerState,
-    /// The time of the most recent valid PC-to-robot frame.
+    /// The time of the most recent Remote-originated PC-to-robot frame.
     last_frame_ms: Option<u64>,
     /// Whether the Deadman edge is waiting to be taken.
     lost_pending: bool,
@@ -538,11 +540,12 @@ impl PeerTracker {
         }
     }
 
-    /// Records one valid PC-to-robot frame and attaches on the first frame of the period.
+    /// Records one Remote-originated PC-to-robot frame and attaches on the first frame of the
+    /// period.
     ///
-    /// Every valid frame re-arms the Deadman. A reconnect inside the 5 s lease keeps the peer
-    /// `PeerLive`, so the latch cannot rely on a `NoPeer → PeerLive` transition: each new silence
-    /// period after a frame must be able to raise one `peer_lost` edge.
+    /// Every Remote-originated frame re-arms the Deadman. A reconnect inside the 5 s lease keeps
+    /// the peer `PeerLive`, so the latch cannot rely on a `NoPeer → PeerLive` transition: each new
+    /// silence period after a frame must be able to raise one `peer_lost` edge.
     const fn on_frame(&mut self, now_ms: u64) {
         self.last_frame_ms = Some(now_ms);
         self.deadman_fired = false;
@@ -859,7 +862,9 @@ fn handle_control(
             };
             controls.push(Control::Ping.wire_id(), seq, &payload[..len]);
         }
-        Control::Throttle | Control::BridgeControl => {}
+        // `BRIDGE_STATUS` is stored in `on_rx`; this arm keeps the match exhaustive without a
+        // second handler.
+        Control::Throttle | Control::BridgeControl | Control::BridgeStatus => {}
     }
 }
 
@@ -974,6 +979,8 @@ pub struct LinkCore {
     controls: ControlState,
     /// The outbound `BRIDGE_CONTROL` request and its acknowledgement or timeout.
     bridge: BridgeControlState,
+    /// The latest Bridge status received over the UART.
+    bridge_status: Option<BridgeStatus>,
     /// The encoded event ring and its retransmission schedule.
     events: EventRing,
     /// The merged advisory `THROTTLE` hints.
@@ -1009,6 +1016,7 @@ impl LinkCore {
             peers: PeerTracker::new(),
             controls: ControlState::new(),
             bridge: BridgeControlState::new(),
+            bridge_status: None,
             events: EventRing::new(&config, boot_id),
             throttle: Throttle::new(),
             invalid_throttles: 0,
@@ -1093,6 +1101,14 @@ impl LinkCore {
     #[must_use]
     pub const fn invalid_throttles(&self) -> u32 {
         self.invalid_throttles
+    }
+
+    /// Returns the latest Bridge status received over the UART, for the panel.
+    ///
+    /// [`None`] until the Bridge sends one.
+    #[must_use]
+    pub const fn bridge_status(&self) -> Option<BridgeStatus> {
+        self.bridge_status
     }
 
     /// Publishes one telemetry sample into its per-stream latest-wins slot.
@@ -1434,9 +1450,14 @@ impl LinkCore {
     /// bad-flagged or stale command is auto-ACKed and never yielded. Unknown stream ids are counted
     /// and ignored. An event ACK retires the matching ring entry and queues a typed notice for
     /// [`LinkCore::poll`]. A `BRIDGE_CONTROL` acknowledgement is paired to the outstanding request
-    /// by `seq`; a mismatched or unsolicited one is ignored. Any valid frame, including one for a
-    /// mismatched major, renews the lease. The first frame after an expired lease re-attaches the
-    /// peer and re-arms every surviving event's retry schedule.
+    /// by `seq`; a mismatched or unsolicited one is ignored. A `BRIDGE_STATUS` snapshot is stored
+    /// for [`LinkCore::bridge_status`] and a malformed one is ignored.
+    ///
+    /// Only a Remote-originated frame renews the lease and re-arms the Deadman: a command, an
+    /// event ACK, `HELLO` or `PING`. A `THROTTLE`, the Bridge's `BRIDGE_CONTROL` ACK and its
+    /// `BRIDGE_STATUS` share the PC-to-robot direction but do not renew, so a silent Remote cannot
+    /// be masked. The first Remote-originated frame after an expired lease re-attaches the peer and
+    /// re-arms every surviving event's retry schedule.
     pub fn on_rx(&mut self, bytes: &[u8], now_ms: u64) {
         self.now_ms = now_ms;
         self.throttle.tick(now_ms);
@@ -1451,6 +1472,7 @@ impl LinkCore {
             peers,
             controls,
             bridge,
+            bridge_status,
             events,
             unknown_streams,
             throttle,
@@ -1470,9 +1492,21 @@ impl LinkCore {
                 return;
             }
 
-            // Any valid PC-to-robot frame renews the lease and re-attaches the peer before the
-            // next tick is evaluated.
-            peers.on_frame(now_ms);
+            // ADR-0035: only a Remote-originated frame renews the lease and re-attaches the peer
+            // before the next tick is evaluated. The Bridge's control traffic shares the
+            // PC-to-robot direction but must never keep a silent Remote's claim alive.
+            let remote_originated = match frame.header.class {
+                Class::Command => true,
+                Class::Event => frame.header.flags.contains(Flags::IS_ACK),
+                Class::Control => matches!(
+                    Control::from_wire(frame.header.id),
+                    Some(Control::Hello | Control::Ping)
+                ),
+                Class::Stream => false,
+            };
+            if remote_originated {
+                peers.on_frame(now_ms);
+            }
             match frame.header.class {
                 Class::Stream => {
                     if session.mismatch {
@@ -1506,6 +1540,16 @@ impl LinkCore {
                             return;
                         };
                         let _ = throttle.apply(&hint, now_ms);
+                    } else if frame.header.id == Control::BridgeStatus.wire_id() {
+                        // The Bridge's unacknowledged snapshot. A malformed one is ignored and the
+                        // last good value is kept; there is no reply.
+                        if session.mismatch {
+                            return;
+                        }
+                        let Ok(status) = BridgeStatus::decode(frame.payload) else {
+                            return;
+                        };
+                        *bridge_status = Some(status);
                     } else if frame.header.id == Control::BridgeControl.wire_id() {
                         // The robot is the sender of BRIDGE_CONTROL; only the Bridge's ACK is
                         // meaningful here. An inbound request is ignored.

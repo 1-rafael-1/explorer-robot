@@ -8,12 +8,15 @@
 //!
 //! Streams live in [`stream`]; commands and their query responses live in [`command`]; the
 //! reliable events live in [`event`]; the session and Bridge control payloads live in [`control`].
+//! The Bridge-originated status snapshot lives in [`bridge`].
 
+pub mod bridge;
 pub mod command;
 pub mod control;
 pub mod event;
 pub mod stream;
 
+pub use bridge::{BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM};
 pub use command::{
     AckPayload, CatalogueEntries, CatalogueEntry, CatalogueFlags, CataloguePage, DriveDistance, GetCatalogue,
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,

@@ -203,9 +203,9 @@ fn ping_is_answered_on_the_same_sequence_with_ok() {
     assert_eq!(remote.last_ping_ack(), Some((seq, PingAck { status: Status::Ok })));
 }
 
-/// Any valid PC-to-robot frame renews the lease; 5 s of silence expires it.
+/// A Remote-originated `PING` renews the lease; 5 s of silence expires it.
 #[test]
-fn any_valid_frame_renews_the_lease() {
+fn a_remote_originated_frame_renews_the_lease() {
     let (mut core, mut wire, mut remote) = harness();
     let Some(_) = remote.send_ping(&mut wire) else {
         return;
