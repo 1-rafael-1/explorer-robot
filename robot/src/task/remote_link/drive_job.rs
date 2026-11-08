@@ -27,8 +27,8 @@ use crate::{
     task::{
         drive::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
-            DriveQueueBuilder,
-            types::{DriveQueueBuildError, RotationDirection, RotationMotion, SPROCKET_CIRCUMFERENCE_CM},
+            DriveQueueBuilder, current_epoch,
+            types::{DriveQueueBuildError, RotationDirection, RotationMotion},
         },
         procedure::{self, Claim, ClaimKind, ClaimOrigin},
     },
@@ -116,7 +116,15 @@ pub async fn start(action: RemoteDriveAction, command_seq: u16) -> Status {
 pub async fn drive_job_task() {
     loop {
         let (claim, command_seq, action) = DRIVE_JOB_REQUESTS.receive().await;
-        run(command_seq, action).await;
+        // Capture the epoch before checking the latch. A stop that lands after
+        // this point bumps the epoch, so the queued step is stale and resolves
+        // Cancelled instead of moving after the stop.
+        let epoch = current_epoch();
+        if claim.is_stop_requested() {
+            publish_outcome(command_seq, action, &CompletionStatus::Cancelled, &NONE_TELEMETRY);
+        } else {
+            run(command_seq, action, epoch, &claim).await;
+        }
         // Manual Drive has no Result Report; for every outcome the terminal
         // call clears the Activity and releases the slot.
         claim.finish().await;
@@ -127,33 +135,25 @@ pub async fn drive_job_task() {
 ///
 /// A build or submit failure is reported as the queue's failed completion, so
 /// the Remote still gets its originating sequence and a reason.
-async fn run(command_seq: u16, action: RemoteDriveAction) {
+async fn run(command_seq: u16, action: RemoteDriveAction, epoch: u32, claim: &Claim) {
     info!("[link] Manual Drive start seq {}", command_seq);
 
     let queue = match build_queue(action) {
         Ok(queue) => queue,
         Err(error) => {
             warn!("[link] drive queue build failed: {}", error.label());
-            publish_outcome(
-                command_seq,
-                action,
-                &CompletionStatus::Failed(error.label()),
-                &NONE_TELEMETRY,
-            );
+            let status = stopped_or(claim, CompletionStatus::Failed(error.label()));
+            publish_outcome(command_seq, action, &status, &NONE_TELEMETRY);
             return;
         }
     };
 
-    let completion = match queue.submit().await {
+    let completion = match queue.submit_at_epoch(epoch).await {
         Ok(completion) => completion,
         Err(error) => {
             warn!("[link] drive queue submit failed: {}", error.label());
-            publish_outcome(
-                command_seq,
-                action,
-                &CompletionStatus::Failed(error.label()),
-                &NONE_TELEMETRY,
-            );
+            let status = stopped_or(claim, CompletionStatus::Failed(error.label()));
+            publish_outcome(command_seq, action, &status, &NONE_TELEMETRY);
             return;
         }
     };
@@ -228,7 +228,7 @@ fn publish_outcome(
             command_seq,
             status: wire_status,
             target_cdeg: cdeg,
-            error_cdeg: rotate_error_cdeg(telemetry),
+            error_cdeg: rotate_error_cdeg(cdeg, telemetry),
             duration_ms: duration_ms(telemetry),
             detail,
         },
@@ -249,37 +249,66 @@ const fn outcome(status: &CompletionStatus) -> (WireCompletionStatus, &'static s
 
 /// The distance actually travelled, in signed centimetres.
 ///
-/// The average of the two achieved track revolutions times the sprocket
-/// circumference; the command's sign is applied, so a backward command reports a
-/// negative distance. Missing telemetry reports zero.
+/// `DistanceDriveState` applies the distance calibration factor to its target
+/// revolutions, so converting achieved revolutions straight to centimetres
+/// would report `requested × factor`. Instead the achieved/target revolution
+/// ratio is scaled by the requested centimetres, which cancels the factor and
+/// matches the distance the operator asked for. The command's sign is applied,
+/// so a backward command reports a negative distance. Missing telemetry reports
+/// zero.
 #[must_use]
+#[allow(clippy::cast_possible_truncation)]
 fn achieved_distance_cm(cm: i16, telemetry: &CompletionTelemetry) -> i32 {
     let CompletionTelemetry::DriveDistance {
         achieved_left_revs,
         achieved_right_revs,
+        target_left_revs,
+        target_right_revs,
         ..
     } = telemetry
     else {
         return 0;
     };
 
-    let average_revs = (achieved_left_revs + achieved_right_revs) / 2.0;
-    let travelled_cm = average_revs * SPROCKET_CIRCUMFERENCE_CM;
-    let signed_cm = if cm >= 0 { travelled_cm } else { -travelled_cm };
-    i32::from(round_i16(signed_cm))
+    let achieved_revs = (achieved_left_revs + achieved_right_revs) / 2.0;
+    let target_revs = (target_left_revs + target_right_revs) / 2.0;
+    if target_revs <= 0.0 {
+        return 0;
+    }
+
+    let fraction = achieved_revs / target_revs;
+    let magnitude_cm = fraction * f32::from(cm.unsigned_abs());
+    let signed_cm = if cm >= 0 { magnitude_cm } else { -magnitude_cm };
+    libm::roundf(signed_cm) as i32
 }
 
-/// The rotation error in clockwise centidegrees, `achieved - target`.
+/// Keep `status` unless the claim has been stopped, in which case report the
+/// cancellation the stop implies.
+#[must_use]
+fn stopped_or(claim: &Claim, status: CompletionStatus) -> CompletionStatus {
+    if claim.is_stop_requested() {
+        CompletionStatus::Cancelled
+    } else {
+        status
+    }
+}
+
+/// The rotation error in clockwise centidegrees, `actual - target`.
 ///
-/// Missing telemetry reports zero.
+/// The drive telemetry reports the error relative to the commanded direction:
+/// an undershoot is negative for both clockwise and counter-clockwise turns.
+/// The wire is actual minus target in clockwise coordinates, so a
+/// counter-clockwise command negates the telemetry. Missing telemetry reports
+/// zero.
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
-fn rotate_error_cdeg(telemetry: &CompletionTelemetry) -> i32 {
+fn rotate_error_cdeg(cdeg: i16, telemetry: &CompletionTelemetry) -> i32 {
     let CompletionTelemetry::RotateExact { angle_error_deg, .. } = telemetry else {
         return 0;
     };
 
-    libm::roundf(angle_error_deg * 100.0) as i32
+    let clockwise_error = if cdeg >= 0 { *angle_error_deg } else { -*angle_error_deg };
+    libm::roundf(clockwise_error * 100.0) as i32
 }
 
 /// The duration in milliseconds, saturated to the wire's `u32`.
@@ -291,12 +320,4 @@ fn duration_ms(telemetry: &CompletionTelemetry) -> u32 {
         CompletionTelemetry::None => 0,
     };
     u32::try_from(millis).unwrap_or(u32::MAX)
-}
-
-/// Round a centimetre value and clamp it to the wire's `i16` target range.
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-fn round_i16(value: f32) -> i16 {
-    let rounded = libm::roundf(value);
-    rounded.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
 }

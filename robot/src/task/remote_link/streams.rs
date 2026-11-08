@@ -183,11 +183,22 @@ pub(super) fn perception_sample() -> Perception {
 ///
 /// The whole conversion and publish run inside [`perception::with_lidar`], so
 /// the cloud's slot array is read under the perception lock and encoded
-/// immediately; nothing is cloned and no other lock is taken.
+/// immediately; nothing is cloned and no other lock is taken. When the sensor
+/// has been cleared (disable or terminal failure), one all-no-return cloud is
+/// published so the core cannot heartbeat the last scan as fresh data, and the
+/// remembered sequence is forgotten so a restarted sensor publishes its first
+/// scan even if its sequence restarts at zero.
 #[allow(clippy::cast_possible_truncation)]
 async fn sample_cloud(core: &mut LinkCore, now_ms: u64) {
     perception::with_lidar(|cloud| {
         let Some(cloud) = cloud else {
+            if LAST_CLOUD_SEQUENCE.load(Ordering::Relaxed) != NO_SEQUENCE {
+                let empty = LidarCloud {
+                    slots: [LidarCloud::NO_RETURN; lidar_cloud::SLOTS],
+                };
+                core.publish_stream(&StreamSample::LidarCloud(empty), 0, now_ms);
+                LAST_CLOUD_SEQUENCE.store(NO_SEQUENCE, Ordering::Relaxed);
+            }
             return;
         };
         let sequence = cloud.sequence() as u32;

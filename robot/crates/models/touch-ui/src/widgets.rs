@@ -6,7 +6,7 @@
 //! error rather than panicking; the caller flushes the framebuffer afterwards.
 
 use embedded_graphics::{
-    draw_target::DrawTarget,
+    draw_target::{DrawTarget, DrawTargetExt},
     mono_font::{MonoFont, MonoTextStyle},
     pixelcolor::Rgb565,
     prelude::*,
@@ -69,12 +69,13 @@ where
         None
     };
 
-    draw_centered_text(
-        d,
-        header_title_rect(action_width),
-        title,
-        MonoTextStyle::new(TITLE_FONT, TEXT),
-    )?;
+    let title_area = header_title_rect(action_width);
+    let title_font = header_title_font(title, title_area);
+    // The fixed status slot leaves a narrow title area. Fall back to the small
+    // font for a long title, and clip as a last resort so the action button on
+    // the left and the status slot on the right can never be overpainted.
+    let mut clipped = d.clipped(&title_area);
+    draw_centered_text(&mut clipped, title_area, title, MonoTextStyle::new(title_font, TEXT))?;
     draw_header_status(d, status)?;
 
     Rectangle::new(
@@ -84,6 +85,26 @@ where
     .into_styled(PrimitiveStyle::with_fill(MUTED))
     .draw(d)?;
     Ok(())
+}
+
+/// The font the header uses for `title` in `area`.
+///
+/// A title that does not fit the title font falls back to the small font. The
+/// caller still clips to `area`, so even a title too long for the small font
+/// cannot paint over the header action or the fixed status slot.
+#[must_use]
+pub fn header_title_font(title: &str, area: Rectangle) -> &'static MonoFont<'static> {
+    let style = MonoTextStyle::new(TITLE_FONT, TEXT);
+    let width = style
+        .measure_string(title, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width;
+    if width <= area.size.width {
+        TITLE_FONT
+    } else {
+        SMALL_FONT
+    }
 }
 
 /// Draw the fixed header status slot: the compact link phase over the battery.

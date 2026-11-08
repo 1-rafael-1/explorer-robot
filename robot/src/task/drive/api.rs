@@ -60,14 +60,32 @@ static COMPLETION_CHANNEL: Channel<CriticalSectionRawMutex, DriveCompletion, 1> 
 
 /// Send a drive command for execution (no completion).
 pub async fn send_drive_command(command: DriveCommand) {
-    send_drive_command_internal(command, false).await;
+    send_drive_command_internal(command, false, current_epoch()).await;
+}
+
+/// The current drive epoch.
+///
+/// A command stamped with an older epoch is cancelled by the drive loop instead
+/// of executed. The Remote drive job captures this before checking the claim's
+/// stop latch, so a stop that lands between the check and the queue enqueue still
+/// invalidates the queued step.
+#[must_use]
+pub fn current_epoch() -> u32 {
+    CURRENT_EPOCH.load(Ordering::Relaxed)
 }
 
 /// Send a drive command and wait for its completion.
 ///
 /// This is an internal helper for the drive queue executor.
 pub(super) async fn complete_drive_command(command: DriveCommand) -> DriveCompletion {
-    send_drive_command_internal(command, true).await;
+    complete_drive_command_at_epoch(command, current_epoch()).await
+}
+
+/// Send a drive command stamped with `epoch` and wait for its completion.
+///
+/// A stale epoch is resolved as `Cancelled` by the drive loop without moving.
+pub(super) async fn complete_drive_command_at_epoch(command: DriveCommand, epoch: u32) -> DriveCompletion {
+    send_drive_command_internal(command, true, epoch).await;
     wait_for_completion_internal().await
 }
 
@@ -76,9 +94,8 @@ pub fn send_drive_interrupt(kind: InterruptKind) {
     DRIVE_INTERRUPT.signal(kind);
 }
 
-/// Enqueue a drive command with an optional completion request.
-async fn send_drive_command_internal(command: DriveCommand, completion_requested: bool) {
-    let epoch = CURRENT_EPOCH.load(Ordering::Relaxed);
+/// Enqueue a drive command with an optional completion request at `epoch`.
+async fn send_drive_command_internal(command: DriveCommand, completion_requested: bool, epoch: u32) {
     let envelope = DriveCommandEnvelope {
         command,
         completion_requested,

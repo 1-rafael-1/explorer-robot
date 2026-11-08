@@ -37,6 +37,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
+use link_state::LinkPhase;
 use touch_ui::{
     CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
     StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
@@ -71,10 +72,18 @@ pub enum UiEvent {
     /// Request to show the main menu (from initialisation or the boot gate).
     ShowMainMenu,
     /// Testing sequence finished; the landing screen comes from the finished
-    /// Procedure's identity.
-    TestingCompleted,
+    /// Procedure's identity, and `generation` identifies the run that finished.
+    TestingCompleted {
+        /// The Procedure that finished.
+        procedure: Procedure,
+        /// The claim generation that owned the run.
+        generation: u32,
+    },
     /// Calibration procedure finished; the outcome is in the activity state.
-    CalibrationCompleted,
+    CalibrationCompleted {
+        /// The claim generation that owned the run.
+        generation: u32,
+    },
     /// The distance calibration's drive step finished; the value screen follows
     /// from the activity state.
     DistanceDriveFinished,
@@ -452,29 +461,29 @@ async fn render_and_flush(panel: &mut Panel, ui: &Ui) -> Result<(), ()> {
     panel.flush().await
 }
 
-/// The screen a just-finished Procedure lands on, read from its identity.
+/// Whether a newer claim replaced the run that raised a terminal event.
 ///
-/// The Activity State still names the Procedure when this is called, so the
-/// landing screen comes from the Menu Entry that started it rather than from a
-/// literal. A completion with no recorded Procedure lands on the Main Menu.
-async fn finished_landing() -> Screen {
-    activity::snapshot()
-        .await
-        .procedure()
-        .map_or(Screen::MainMenu, Procedure::landing_screen)
+/// The claim releases the slot before the event reaches the UI, so a Remote can
+/// start a Manual Drive in that window. Dismissing the terminal record blindly
+/// would clear the newer run's Activity and screen; this guard leaves it alone.
+fn stale_completion(generation: u32) -> bool {
+    procedure::live_generation().is_some_and(|live| live.get() != generation)
 }
 
 /// Apply a lifecycle event to the model.
 async fn handle_event(ui: &mut Ui, event: UiEvent) {
     match event {
         UiEvent::ShowMainMenu => *ui = Ui::new(),
-        UiEvent::TestingCompleted => {
-            let landing = finished_landing().await;
+        UiEvent::TestingCompleted { procedure, generation } => {
+            if stale_completion(generation) {
+                return;
+            }
+            let landing = procedure.landing_screen();
             activity::clear().await;
             *ui = Ui::new();
             ui.show_screen(landing);
         }
-        UiEvent::CalibrationCompleted => hold_or_leave_calibration(ui).await,
+        UiEvent::CalibrationCompleted { generation } => hold_or_leave_calibration(ui, generation).await,
         UiEvent::DistanceDriveFinished => enter_distance_entry(ui).await,
     }
 }
@@ -513,15 +522,22 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
 /// Ask the Link Task to send one Bridge Control request.
 ///
 /// One request is in flight at a time: a pending outcome refuses the tap rather
-/// than queueing it behind the first. The request itself is a non-blocking
-/// `try_send` to the Link Task, so the panel never waits on the link; the next
-/// [`refresh_screens`] tick reads the pending outcome and then the reply or
-/// timeout back out of [`link`]. The Link screen is a `ScreenEntry`, so this takes
-/// no Active Claim and stops no local work; only `ForgetNetwork` fires the Remote
-/// failsafe, and the Link Task does that.
+/// than queueing it behind the first. A Bridge that is off or still waiting for
+/// the board is also refused, so the action cannot become `Pending` with no
+/// frame to time out (and a no-op Forget cannot fire the failsafe). The request
+/// itself is a non-blocking `try_send` to the Link Task, so the panel never waits
+/// on the link; the next [`refresh_screens`] tick reads the pending outcome and
+/// then the reply or timeout back out of [`link`]. The Link screen is a
+/// `ScreenEntry`, so this takes no Active Claim and stops no local work; only
+/// `ForgetNetwork` fires the Remote failsafe, and the Link Task does that.
 async fn request_link_action(action: touch_ui::LinkAction) {
-    if link::snapshot(Instant::now().as_millis()).await.control.is_pending() {
+    let snapshot = link::snapshot(Instant::now().as_millis()).await;
+    if snapshot.control.is_pending() {
         debug!("[ui] link action refused: a bridge control request is already in flight");
+        return;
+    }
+    if !matches!(snapshot.phase, LinkPhase::ReadyNoPeer | LinkPhase::PeerLive) {
+        debug!("[ui] link action refused: the bridge is not ready");
         return;
     }
 
@@ -649,7 +665,11 @@ fn stop_running() {
 
 /// React to a finished calibration: leave a completed one, hold a failed one's
 /// reason on screen until the operator dismisses it.
-async fn hold_or_leave_calibration(ui: &mut Ui) {
+async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
+    if stale_completion(generation) {
+        return;
+    }
+
     let snapshot = activity::snapshot().await;
 
     match snapshot.activity {

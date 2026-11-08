@@ -50,7 +50,8 @@ async fn handle_event(event: Events) {
             procedure,
             stage,
             detail,
-        } => handle_procedure_finished(procedure, stage, detail).await,
+            generation,
+        } => handle_procedure_finished(procedure, stage, detail, generation).await,
         Events::BatteryMeasured { level, voltage } => {
             behavior::battery::handle_battery_measured(level, voltage).await;
         }
@@ -76,20 +77,21 @@ async fn handle_event(event: Events) {
 /// The same decision is the one place that names which Procedures have a panel
 /// lifecycle; the claim raises the event once. The detail is logged so the
 /// terminal line the claim recorded is visible alongside the routing decision.
-async fn handle_procedure_finished(procedure: Procedure, stage: Stage, detail: &'static str) {
+async fn handle_procedure_finished(procedure: Procedure, stage: Stage, detail: &'static str, generation: u32) {
     info!(
-        "Procedure finished: {=str} stage={} detail={=str}",
+        "Procedure finished: {=str} stage={} detail={=str} generation={=u32}",
         procedure.label(),
         stage,
-        detail
+        detail,
+        generation
     );
 
     match procedure {
         Procedure::Turns | Procedure::StraightDrive | Procedure::ArcDrive if stage == Stage::Complete => {
-            ui::send_ui_event(UiEvent::TestingCompleted).await;
+            ui::send_ui_event(UiEvent::TestingCompleted { procedure, generation }).await;
         }
         Procedure::MotorCalibration | Procedure::MagCalibration => {
-            ui::send_ui_event(UiEvent::CalibrationCompleted).await;
+            ui::send_ui_event(UiEvent::CalibrationCompleted { generation }).await;
         }
         Procedure::DistanceCalibration
         | Procedure::CoastAndAvoid

@@ -168,6 +168,7 @@ const fn map_event(event: &Events) -> Option<LinkedEvent> {
             procedure,
             stage,
             detail,
+            generation: _,
         } => match stage {
             Stage::Complete | Stage::Failed => Some(LinkedEvent::ProcedureCompleted {
                 procedure: *procedure,

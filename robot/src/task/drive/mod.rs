@@ -116,7 +116,7 @@ pub mod types;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
-pub use api::{send_drive_command, send_drive_interrupt};
+pub use api::{current_epoch, send_drive_command, send_drive_interrupt};
 use brake_coast::BrakeCoastStepResult;
 use distance::DistanceStepResult;
 use intent::{ActiveIntentOutcome, apply_completion, poll_active_intent, step_idle};

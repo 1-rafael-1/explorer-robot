@@ -25,9 +25,11 @@ use touch_ui::{
         progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
         slider_touch_rect,
     },
+    palette::{SMALL_FONT, TITLE_FONT},
     radar,
     screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
+    widgets::header_title_font,
 };
 
 /// A draw target that discards every pixel, so a test can render a screen without
@@ -115,6 +117,23 @@ fn open_value_entry(flow: ValueFlow) -> Ui {
     }
     assert_eq!(ui.screen(), Screen::ValueEntry(flow));
     ui
+}
+
+/// A title that does not fit the narrowed header falls back to the small font,
+/// so it cannot overpaint the header action or the fixed status slot.
+#[test]
+fn a_long_header_title_falls_back_to_the_small_font() {
+    let area = header_title_rect(Some(BACK_W));
+    assert_eq!(
+        header_title_font("Link", area).character_size,
+        TITLE_FONT.character_size,
+        "a short title keeps the title font"
+    );
+    assert_eq!(
+        header_title_font("Basic Motor Test", area).character_size,
+        SMALL_FONT.character_size,
+        "a long title uses the small font"
+    );
 }
 
 /// Test that the UI opens on the Main Menu with nothing scrolled or selected.

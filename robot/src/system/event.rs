@@ -150,5 +150,11 @@ pub enum Events {
         stage: Stage,
         /// The result line recorded for the run.
         detail: &'static str,
+        /// The claim generation that owned the run.
+        ///
+        /// A terminal event is raised after the claim releases the slot, so a
+        /// later run can start before the UI handles it. The generation lets the
+        /// panel dismiss only the run it actually finished.
+        generation: u32,
     },
 }

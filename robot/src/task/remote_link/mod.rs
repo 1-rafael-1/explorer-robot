@@ -57,7 +57,7 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-use defmt::{Debug2Format, info, warn};
+use defmt::{Debug2Format, debug, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_rp::{
@@ -662,7 +662,9 @@ async fn serve_enabled(session: &mut RemoteLinkSession, core: &mut LinkCore, mut
                     state::link::clear().await;
                     return;
                 }
-                LinkCommand::BridgeControl(action) => handle_bridge_control(core, action).await,
+                LinkCommand::BridgeControl(action) => {
+                    handle_bridge_control(core, action, presence.is_ready()).await;
+                }
             },
             Either3::Second(result) => match result {
                 Ok(read) if read > 0 => core.on_rx(&rx[..read], now_ms()),
@@ -697,11 +699,18 @@ async fn serve_enabled(session: &mut RemoteLinkSession, core: &mut LinkCore, mut
 /// `ForgetNetwork` fires the Deadman first, because it deliberately kills the
 /// station link; a Remote-originated claim must stand down before the link goes
 /// away. Showing and rotating the pairing code stop nothing, so they never call
-/// the failsafe. The core refuses a second request while one is in flight, and
-/// that refusal is deliberately silent state-wise: the panel's pending outcome is
-/// left alone rather than replaced. The request itself is emitted later by
-/// [`flush_tx`], once the board is present.
-async fn handle_bridge_control(core: &mut LinkCore, action: LinkAction) {
+/// the failsafe. A request while the board is not ready is dropped: the core
+/// would queue it without starting its timeout, and the panel would stay
+/// `Pending`. The core refuses a second request while one is in flight, and that
+/// refusal is deliberately silent state-wise: the panel's pending outcome is left
+/// alone rather than replaced. The request itself is emitted later by [`flush_tx`],
+/// once the board is present.
+async fn handle_bridge_control(core: &mut LinkCore, action: LinkAction, ready: bool) {
+    if !ready {
+        debug!("[link] bridge control ignored: the board is not ready");
+        return;
+    }
+
     if matches!(action, LinkAction::ForgetNetwork) {
         failsafe::link_lost();
     }

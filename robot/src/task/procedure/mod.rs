@@ -177,6 +177,7 @@ impl Claim {
                 procedure,
                 stage: Stage::Complete,
                 detail,
+                generation: self.generation.get(),
             })
             .await;
         }
@@ -198,6 +199,7 @@ impl Claim {
                 procedure,
                 stage: Stage::Failed,
                 detail: reason,
+                generation: self.generation.get(),
             })
             .await;
         }
@@ -317,6 +319,16 @@ const ORIGIN_REMOTE: u8 = 2;
 /// actually frees the slot, so a stale owner cannot hide a newer claim's origin.
 /// It is an observation, never authority: stops still go through [`stop`].
 static LIVE_ORIGIN: AtomicU8 = AtomicU8::new(ORIGIN_NONE);
+
+/// The live claim's generation, or `None` when the slot is free.
+///
+/// A terminal event carries the generation that owned the run; the UI uses this
+/// to avoid dismissing a newer run that claimed the slot while the event was in
+/// flight.
+#[must_use]
+pub fn live_generation() -> Option<Generation> {
+    CLAIM_SLOT.generation()
+}
 
 /// The live claim's origin, or `None` when the slot is free.
 ///
