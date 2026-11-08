@@ -302,3 +302,40 @@ library alone. Recorded here as an amendment because the layout is otherwise unc
   runner.
 - They follow the existing host rules unchanged: path dependencies carry a `version`, and each
   crate takes `[lints] workspace = true`.
+
+## Amendment — 2026-11-08: the role tree, the crate buckets and the renames
+
+The layout above places the firmware at the repository root and its shared crates beside it. The
+tree now groups the workspace by role. Recorded here as an amendment because the decision above
+stands; only the homes and three names change.
+
+- The root is a **virtual workspace manifest**: it has no package. Its members are `robot`,
+  `robot/crates/link/*`, `robot/crates/drivers/*`, `robot/crates/models/*` and
+  `robot/crates/hardware-tests`; it excludes `bridge` and `remote`. The profiles and the shared
+  lint table stay in the root manifest, so the robot package and the members keep inheriting them,
+  and `.cargo/config.toml` and `rust-toolchain.toml` keep applying upward from the root.
+- The robot package (`explorer-robot`) and its `src/`, `build.rs` and `memory.x` move into
+  `robot/`. The build script still embeds `memory.x` relative to the package.
+- The crates are grouped into three buckets under `robot/crates/`: `link/` (`link-protocol`,
+  `link-core`), `drivers/` (`coin-d6`, `st7789-async`, `touch-async`) and `models/`
+  (`claim-slot`, `lidar-cloud`, `touch-ui`). `hardware-tests/` stays a member of the robot
+  workspace, beside the buckets, because its examples run on the robot hardware rather than the
+  host bench.
+- The renames: `remote-protocol` → `link-protocol` (package version `1.1.0` unchanged; the
+  wire-version test still couples `PROTOCOL_MAJOR`/`MINOR` to `CARGO_PKG_VERSION_MAJOR`/`MINOR`),
+  and `remote-link` → `link-core` (version `0.1.0` unchanged). Every consumer, path dependency, CI
+  `-p` flag and live doc follows the new names.
+- The Bridge directory `bridge-firmware/` → `bridge/`. The package name `bridge-firmware` and the
+  `bridge` binary stay, so the path changed and the names did not. Its path dependencies and its
+  `build-std` workspace are unchanged.
+- `remote/` keeps its name deliberately: the glossary owns **Remote** for the PC-side client, so
+  the directory named after it stays `remote/`. `bridge-net` stays in the host workspace, as the
+  decision above requires.
+- The hardware folders `assembly/`, `cad files/` and `eda files/` → `hardware/assembly/`,
+  `hardware/cad/` and `hardware/eda/`, with `hardware/README.md` owning the BOM, assembly, print
+  and safety prose.
+- CI keeps the `robot`, `bridge` and `remote` jobs with every step, updating only working
+  directories, cache keys, package flags and step names, and gains one `docs` job that runs the
+  live-Markdown link check. The ADRs stay historical and are excluded from that check.
+- Historical ADRs keep their old paths; this amendment is the path note, and the body above is not
+  rewritten.
