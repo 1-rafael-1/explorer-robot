@@ -11,7 +11,7 @@ use std::{
 };
 
 use bridge_net::{beacon, ports};
-use remote_protocol::{
+use link_protocol::{
     CalibrationKind, CalibrationLoadStatus, CompletionStatus, OBSTACLE_SOURCE_LIDAR, ProcedureId, Stream,
     payload::stream::ActivityStage,
 };

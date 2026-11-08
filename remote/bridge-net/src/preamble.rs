@@ -17,7 +17,7 @@
 //! and allocation-free; transport reads and writes stay in the consuming crates.
 
 use hmac::{Hmac, Mac};
-use remote_protocol::EncodeError;
+use link_protocol::EncodeError;
 use sha2::Sha256;
 
 use crate::{error::DecodeError, identity::Identity};

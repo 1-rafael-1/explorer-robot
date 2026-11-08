@@ -7,7 +7,7 @@
 //! Everything here is `no_std` and allocation-free: the fields are fixed-size arrays and the
 //! identity is a plain `Copy` value.
 
-use remote_protocol::EncodeError;
+use link_protocol::EncodeError;
 
 use crate::{beacon, error::DecodeError};
 

@@ -1,7 +1,7 @@
 # robot-stub
 
 The robot's bench persona (ADR-0040's host-workspace amendment). It puts the **real**
-`remote-link::LinkCore` behind a serial port, replacing the robot on the Bridge's bench: it
+`link-core::LinkCore` behind a serial port, replacing the robot on the Bridge's bench: it
 answers `HELLO`/`PING`, deduplicates commands, ACKs with the robot's rules and retries
 unacknowledged events. The personas only configure rates and load around that core; the wire
 semantics stay the crate's. The library never depends on a port library — that is the binary's
@@ -22,7 +22,7 @@ job.
 - **`Execution`**, **`BridgeControlReport`**, **`OwnedReply`** — the binary's log and report
   types.
 
-`LinkCore` itself is documented in [`../../remote-link/README.md`](../../remote-link/README.md).
+`LinkCore` itself is documented in [`../../robot/crates/link/link-core/README.md`](../../robot/crates/link/link-core/README.md).
 
 ## Personas
 
@@ -92,7 +92,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Known limits
 
-- A bench tool, not the robot firmware: it exercises `remote-link`, not the RP2350 HAL, LiDAR
+- A bench tool, not the robot firmware: it exercises `link-core`, not the RP2350 HAL, LiDAR
   or drive subsystem.
 - Fault knobs act on outbound bytes only; inbound damage is the peer's to inject.
 - Time is the caller's: the library takes `now_ms`, and the binary feeds the wall clock.

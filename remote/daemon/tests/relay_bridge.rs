@@ -2,11 +2,11 @@
 
 mod support;
 
+use link_protocol::{BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags};
 use remote_daemon::{
     relay::Relay,
     schema::{BridgeStation, BridgeStatus, ServerMessage},
 };
-use remote_protocol::{BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags};
 use support::{must, session_with_app, snapshot};
 
 /// A wire status with every field set, one flag set and one clear.

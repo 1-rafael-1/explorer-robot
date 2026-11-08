@@ -78,11 +78,11 @@ jobs:
       - name: Test touch-ui (host)
         run: cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
 
-      - name: Test remote-protocol (host)
-        run: cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
+      - name: Test link-protocol (host)
+        run: cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
 
-      - name: Test remote-link (host)
-        run: cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+      - name: Test link-core (host)
+        run: cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 
       - name: Test claim-slot (host)
         run: cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
@@ -94,7 +94,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: bridge-firmware
+        working-directory: bridge
 
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "bridge-firmware -> target"
+          workspaces: "bridge -> target"
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
@@ -174,3 +174,13 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+  # The live docs: every relative link and image in tracked Markdown must resolve.
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Markdown links
+        run: python3 .github/scripts/check_links.py

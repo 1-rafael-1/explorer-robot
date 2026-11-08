@@ -2,11 +2,11 @@
 //!
 //! The relay is the daemon's deep module. It owns the latest-wins stream slots, the bounded event
 //! ring with its per-app cursors and completion attribution, `last_terminal`, the Catalogue and the
-//! command map. It is transport agnostic: the `link` adapter feeds decoded `remote-protocol`
+//! command map. It is transport agnostic: the `link` adapter feeds decoded `link-protocol`
 //! payloads in through the `on_*` methods and drains [`Relay::poll_link`], while the `app` adapter
 //! registers connections with [`Relay::connect_app`] and drains [`Relay::poll`].
 //!
-//! Like `remote-link`, every entry point takes a plain millisecond timestamp rather than reading a
+//! Like `link-core`, every entry point takes a plain millisecond timestamp rather than reading a
 //! clock, so the whole module is host-tested with a fake link and an in-memory app transport.
 //!
 //! # The three app lanes
@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use remote_protocol::{
+use link_protocol::{
     BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags as WireBridgeFlags,
     Command, CommandMessage, CompletionStatus as WireCompletionStatus, OBSTACLE_SOURCE_LIDAR, ProcedureId,
     Status as WireStatus,
@@ -84,7 +84,7 @@ const FIRST_WIRE_SEQ: u16 = 1;
 
 /// The slot index of a stream name.
 ///
-/// The order matches `remote_protocol::Stream::ALL`, so a snapshot's streams arrive in wire order.
+/// The order matches `link_protocol::Stream::ALL`, so a snapshot's streams arrive in wire order.
 const fn slot_of(name: StreamName) -> usize {
     match name {
         StreamName::Power => 0,
@@ -449,10 +449,10 @@ impl Relay {
     /// Records a `POWER` sample and returns its daemon-sequenced stream entry.
     pub fn on_power(&mut self, power: &Power, now_ms: u64) -> StreamEntry {
         let value = StreamValue::Power {
-            level: unknown_sentinel(power.level, remote_protocol::payload::stream::LEVEL_UNKNOWN),
+            level: unknown_sentinel(power.level, link_protocol::payload::stream::LEVEL_UNKNOWN),
             voltage_mv: unknown_sentinel(
                 u32::from(power.voltage_mv),
-                u32::from(remote_protocol::payload::stream::VOLTAGE_UNKNOWN_MV),
+                u32::from(link_protocol::payload::stream::VOLTAGE_UNKNOWN_MV),
             ),
         };
         self.publish(StreamName::Power, value, now_ms)
@@ -509,10 +509,10 @@ impl Relay {
     /// `LiDAR` cloud is not part of it and stays unseen until a scan arrives.
     pub fn on_status_snapshot(&mut self, status: &StatusSnapshot<'_>, now_ms: u64) {
         let power = StreamValue::Power {
-            level: unknown_sentinel(status.level, remote_protocol::payload::stream::LEVEL_UNKNOWN),
+            level: unknown_sentinel(status.level, link_protocol::payload::stream::LEVEL_UNKNOWN),
             voltage_mv: unknown_sentinel(
                 u32::from(status.voltage_mv),
-                u32::from(remote_protocol::payload::stream::VOLTAGE_UNKNOWN_MV),
+                u32::from(link_protocol::payload::stream::VOLTAGE_UNKNOWN_MV),
             ),
         };
         let _ = self.publish(StreamName::Power, power, now_ms);
@@ -1360,7 +1360,7 @@ pub struct OutboundCommand {
     pub command: Command,
     /// Whether this frame is a retransmission and must carry the `RETRY` flag.
     pub retry: bool,
-    /// The typed payload the adapter encodes with `remote_protocol::encode_command`.
+    /// The typed payload the adapter encodes with `link_protocol::encode_command`.
     pub message: CommandMessage<'static>,
 }
 
@@ -1520,8 +1520,8 @@ fn prepare_rotate(args: &serde_json::Value) -> Result<PreparedCommand, Rejection
         return Err(bad_argument("angle_deg must be finite"));
     }
     let rounded = scaled.round();
-    if !(f64::from(remote_protocol::payload::command::ANGLE_MIN_CDEG)
-        ..=f64::from(remote_protocol::payload::command::ANGLE_MAX_CDEG))
+    if !(f64::from(link_protocol::payload::command::ANGLE_MIN_CDEG)
+        ..=f64::from(link_protocol::payload::command::ANGLE_MAX_CDEG))
         .contains(&rounded)
     {
         return Err(bad_argument("angle_deg must be within [-180, 180] degrees"));
@@ -1615,7 +1615,7 @@ fn signed_field(object: &serde_json::Map<String, serde_json::Value>, key: &str) 
 fn speed_field(object: &serde_json::Map<String, serde_json::Value>) -> Result<u8, Rejection> {
     let raw = signed_field(object, "speed")?;
     match u8::try_from(raw) {
-        Ok(speed) if speed <= remote_protocol::payload::command::SPEED_MAX => Ok(speed),
+        Ok(speed) if speed <= link_protocol::payload::command::SPEED_MAX => Ok(speed),
         _ => Err(bad_argument("speed must be a percentage in [0, 100]")),
     }
 }
@@ -1638,7 +1638,7 @@ fn bad_argument(detail: &str) -> Rejection {
 mod tests {
     //! The relay's pure helpers, proven without an app or a link.
 
-    use remote_protocol::Status as WireStatus;
+    use link_protocol::Status as WireStatus;
 
     use super::{Relay, ack_status, unknown_sentinel};
     use crate::schema::{CommandFrame, Status};

@@ -6,13 +6,13 @@
 
 mod support;
 
+use link_protocol::{
+    Status as WireStatus,
+    payload::event::{CompletionStatus, DriveDistanceCompleted},
+};
 use remote_daemon::{
     relay::Relay,
     schema::{Catalogue, CatalogueProcedure, EventName, EventValue, StreamName},
-};
-use remote_protocol::{
-    Status as WireStatus,
-    payload::event::{CompletionStatus, DriveDistanceCompleted},
 };
 use serde_json::json;
 use support::{
@@ -59,7 +59,7 @@ fn a_same_boot_reconnect_keeps_the_retained_state() {
     let _ = relay.on_activity(
         &activity(
             5,
-            remote_protocol::payload::stream::ActivityStage::Complete,
+            link_protocol::payload::stream::ActivityStage::Complete,
             Some(100),
             "done",
         ),
@@ -109,7 +109,7 @@ fn a_boot_id_change_clears_the_retained_state() {
     let _ = relay.on_activity(
         &activity(
             5,
-            remote_protocol::payload::stream::ActivityStage::Complete,
+            link_protocol::payload::stream::ActivityStage::Complete,
             Some(100),
             "done",
         ),

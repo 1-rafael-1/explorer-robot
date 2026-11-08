@@ -6,8 +6,8 @@
 
 mod support;
 
-use remote_link::timing::EVENT_RETRY_MS;
-use remote_protocol::{
+use link_core::timing::EVENT_RETRY_MS;
+use link_protocol::{
     Caps, Class, Command, Control, Event, Flags, Status, Stream,
     codec::PayloadCodec,
     ids::ProcedureId,
@@ -61,7 +61,7 @@ fn ping_is_answered_through_the_transport() {
 }
 
 /// Without a Session, the baseline persona streams at the shipped baseline rates
-/// (`remote_link::timing::DEFAULT_RATES_CHZ`): the 10 Hz streams every 100 ms, `MOTION` and
+/// (`link_core::timing::DEFAULT_RATES_CHZ`): the 10 Hz streams every 100 ms, `MOTION` and
 /// `ACTIVITY` at 1 Hz, `POWER` and `CALIBRATION` at least every 5 s, counted over a one-second
 /// window. A Session's Requested Rate raises a stream above its baseline (the next test).
 #[test]
@@ -251,7 +251,7 @@ fn baseline_activity_reports_the_idle_procedure() {
         .peer
         .frames_of(Class::Stream, Stream::Activity.wire_id(), None, bench.at());
     assert!(!samples.is_empty(), "ACTIVITY streams at baseline");
-    let activity = remote_protocol::payload::stream::Activity::decode(&samples[0].payload);
+    let activity = link_protocol::payload::stream::Activity::decode(&samples[0].payload);
     assert!(activity.is_ok(), "the ACTIVITY payload must decode");
     if let Ok(activity) = activity {
         assert_eq!(activity.procedure_id, ProcedureId::IDLE);

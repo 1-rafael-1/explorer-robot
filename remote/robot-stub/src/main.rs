@@ -19,7 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use remote_link::timing::BAUD;
+use link_core::timing::BAUD;
 use robot_stub::{BridgeControlReport, Config, FaultKnobs, Persona, Stub, Transport, worst_case_config};
 use serialport::{DataBits, Parity, SerialPort, StopBits};
 

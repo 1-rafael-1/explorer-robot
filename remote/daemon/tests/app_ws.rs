@@ -11,7 +11,7 @@ use app_support::{
     FakeGate, TestServer, a_client_hello, close_code, connect, json_of_type, must, must_some, relay_with_power,
     send_json, wait_for_outbound,
 };
-use remote_protocol::Command;
+use link_protocol::Command;
 use serde_json::json;
 
 /// A headless client receives the server `hello` and then a snapshot through the relay.

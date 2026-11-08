@@ -19,7 +19,7 @@ use bridge_stub::{
     Identity, Scenario, Stub,
     preamble::{DenyReason, Message, NONCE_LEN, bridge_proof, client_proof, proofs_match, read_message, write_message},
 };
-use remote_protocol::{
+use link_protocol::{
     Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event, EventMessage, Flags as LinkFlags,
     Frame, MAX_PC_TO_ROBOT_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, Stream, decode_command, decode_control,
     decode_stream, encode_command, encode_event, encode_hello,
@@ -220,13 +220,13 @@ impl Client {
 
     /// Sends one `STOP_MOTION` command with `ACK_REQUESTED`.
     pub fn send_stop_motion(&mut self, seq: u16, brake: u8) -> Result<(), BenchError> {
-        let message = CommandMessage::StopMotion(remote_protocol::payload::command::StopMotion { brake });
+        let message = CommandMessage::StopMotion(link_protocol::payload::command::StopMotion { brake });
         self.send_command_message(Command::StopMotion, seq, &message)
     }
 
     /// Sends one `GET_STATUS` command with `ACK_REQUESTED`.
     pub fn send_get_status(&mut self, seq: u16) -> Result<(), BenchError> {
-        let message = CommandMessage::GetStatus(remote_protocol::payload::command::GetStatus);
+        let message = CommandMessage::GetStatus(link_protocol::payload::command::GetStatus);
         self.send_command_message(Command::GetStatus, seq, &message)
     }
 
@@ -367,7 +367,7 @@ pub fn denied(addr: SocketAddr, token: &[u8]) -> Result<(DenyReason, Option<u32>
 }
 
 /// Decodes a `HELLO_ACK` payload.
-pub fn hello_ack(payload: &[u8]) -> Result<remote_protocol::HelloAck<'_>, BenchError> {
+pub fn hello_ack(payload: &[u8]) -> Result<link_protocol::HelloAck<'_>, BenchError> {
     match decode_control(Control::Hello, true, payload) {
         Ok(ControlMessage::HelloAck(ack)) => Ok(ack),
         Ok(_) => Err(BenchError::Unexpected(String::from("the reply is not a HELLO_ACK"))),
@@ -378,7 +378,7 @@ pub fn hello_ack(payload: &[u8]) -> Result<remote_protocol::HelloAck<'_>, BenchE
 }
 
 /// Decodes a `PING_ACK` payload.
-pub fn ping_ack(payload: &[u8]) -> Result<remote_protocol::PingAck, BenchError> {
+pub fn ping_ack(payload: &[u8]) -> Result<link_protocol::PingAck, BenchError> {
     match decode_control(Control::Ping, true, payload) {
         Ok(ControlMessage::PingAck(ack)) => Ok(ack),
         Ok(_) => Err(BenchError::Unexpected(String::from("the reply is not a PING_ACK"))),
@@ -428,7 +428,7 @@ pub fn catalogue_page(payload: &[u8]) -> Result<CataloguePage<'_>, BenchError> {
 /// Decodes a `MOTION` sample.
 pub fn motion_sample(payload: &[u8]) -> Result<Motion, BenchError> {
     match decode_stream(Stream::Motion, payload) {
-        Ok(remote_protocol::StreamSample::Motion(sample)) => Ok(sample),
+        Ok(link_protocol::StreamSample::Motion(sample)) => Ok(sample),
         Ok(_) => Err(BenchError::Unexpected(String::from(
             "the payload is not a motion sample",
         ))),

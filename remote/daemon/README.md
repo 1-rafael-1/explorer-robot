@@ -4,7 +4,7 @@ The host relay (ADR-0039). One binary connects to the Bridge over raw TCP with t
 HMAC preamble, owns the robot Session, and serves the static app at `/` and one JSON WebSocket
 at `/ws` (ADR-0038). It is a pure relay in the app-facing sense: it decodes the wire, flips the
 sign of angles, retains latest-wins state and never exposes the wire or its own process to the
-app. Its shared dependencies are `remote-protocol` (wire) and `bridge-net` (preamble, Beacon,
+app. Its shared dependencies are `link-protocol` (wire) and `bridge-net` (preamble, Beacon,
 ports); ADR-0040 records the layout.
 
 ## Running

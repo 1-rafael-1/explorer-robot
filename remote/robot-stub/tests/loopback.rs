@@ -6,8 +6,8 @@
 
 mod support;
 
-use remote_link::timing::DEFAULT_RATES_CHZ;
-use remote_protocol::{
+use link_core::timing::DEFAULT_RATES_CHZ;
+use link_protocol::{
     Caps, Class, Control, Flags, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodec, Status, Stream,
     payload::control::HelloAck,
 };

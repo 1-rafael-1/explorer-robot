@@ -7,8 +7,8 @@ apply to the corresponding portions of this repository.
 
 Applies to:
 
-- `eda files/explorer-robot/rp235xb.pretty/` — footprints
-- `eda files/explorer-robot/rp235xb.3dshapes/` — 3D STEP models
+- `hardware/eda/explorer-robot/rp235xb.pretty/` — footprints
+- `hardware/eda/explorer-robot/rp235xb.3dshapes/` — 3D STEP models
 
 Source: Raspberry Pi Ltd, *RP2350B Minimal* reference design, release R4-S1
 (upstream directory `RPI-RP2350B-MINIMAL_R4-S1_public`). Portions were copied
@@ -50,3 +50,19 @@ The schematic references symbols from KiCad's official libraries (`Device`,
 Commons CC-BY-SA-4.0 with an exception permitting unrestricted use within
 designs. No license obligations propagate to this project's own design files
 from that use; this notice is included for completeness.
+
+## JLCEDA / EasyEDA official library
+
+Applies to:
+
+- `hardware/eda/explorer-robot/easyeda_convertlib.kicad_sym` — imported symbols
+- `hardware/eda/explorer-robot/easyeda_convertlib.pretty/` — imported footprints
+- `hardware/eda/explorer-robot/easyeda_convertlib.3dmodels/` — imported STEP and WRL models
+
+Source: the JLCEDA / EasyEDA official library, fetched and converted with
+EasyKiConverter. The copyright and related rights in that library data (part
+parameters, schematic symbols, PCB footprints, 3D models and related data)
+belong to JLCEDA / EasyEDA. The upstream notice requires attribution to the
+"JLCEDA/EasyEDA official library" and links to the official home pages.
+
+Upstream pages: <https://lceda.cn/>, <https://easyeda.com/>.

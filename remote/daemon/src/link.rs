@@ -27,7 +27,7 @@ use std::{
 };
 
 use bridge_net::preamble::DenyReason;
-use remote_protocol::{
+use link_protocol::{
     BridgeStatus, BridgeStream, Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event,
     EventMessage, Flags as LinkFlags, Frame, MAX_PC_TO_ROBOT_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodec,
     RateEntry, RobotToPcParser, Seq, Status, Stream, StreamSample, decode_command, decode_control, decode_event,
@@ -1184,7 +1184,7 @@ mod tests {
 
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    use remote_protocol::{
+    use link_protocol::{
         BridgeStream, Caps, Class, Flags as LinkFlags, Hello, MAX_PC_TO_ROBOT_FRAME, PayloadCodec, RateEntry, Stream,
     };
 
@@ -1208,8 +1208,8 @@ mod tests {
         let hello = must(Hello::decode(&payload[..length]).ok(), "the HELLO decodes");
 
         assert_eq!(hello.epoch, 0xDEAD_BEEF, "the once-per-process epoch is carried");
-        assert_eq!(hello.major, remote_protocol::PROTOCOL_MAJOR);
-        assert_eq!(hello.minor, remote_protocol::PROTOCOL_MINOR);
+        assert_eq!(hello.major, link_protocol::PROTOCOL_MAJOR);
+        assert_eq!(hello.minor, link_protocol::PROTOCOL_MINOR);
         assert_eq!(hello.caps, Caps::from_bits(0), "v1 requests no optional capability");
         let entries: Vec<RateEntry> = hello.entries().collect();
         assert_eq!(entries.len(), 2, "the two baseline streams are requested");

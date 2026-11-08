@@ -8,7 +8,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use bridge_net::{beacon, ports, preamble as net_preamble};
-use remote_protocol::{
+use link_protocol::{
     Command, EncodeError, Event, EventMessage, ProcedureId, RetryPolicy, Status, Stream, encode_event,
     payload::stream::ActivityStage,
 };
@@ -175,7 +175,7 @@ pub enum ScriptEvent {
         /// The originating command's sequence number.
         command_seq: u16,
         /// The drive outcome.
-        status: remote_protocol::CompletionStatus,
+        status: link_protocol::CompletionStatus,
         /// The requested distance in centimetres.
         target_cm: i16,
         /// The distance actually travelled in centimetres.
@@ -190,7 +190,7 @@ pub enum ScriptEvent {
         /// The originating command's sequence number.
         command_seq: u16,
         /// The rotation outcome.
-        status: remote_protocol::CompletionStatus,
+        status: link_protocol::CompletionStatus,
         /// The requested angle in centidegrees.
         target_cdeg: i16,
         /// The signed angle actually achieved, in centidegrees.
@@ -203,9 +203,9 @@ pub enum ScriptEvent {
     /// A `CALIBRATION_LOADED` event.
     CalibrationLoaded {
         /// Which calibration data the event concerns.
-        kind: remote_protocol::CalibrationKind,
+        kind: link_protocol::CalibrationKind,
         /// Whether it loaded or was missing.
-        status: remote_protocol::CalibrationLoadStatus,
+        status: link_protocol::CalibrationLoadStatus,
     },
     /// An `EVENT_OVERFLOW` event.
     EventOverflow {
@@ -237,16 +237,16 @@ impl ScriptEvent {
     /// represented.
     pub fn encode_into(&self, out: &mut [u8]) -> Result<usize, EncodeError> {
         let message = match self {
-            Self::Obstacle { detected, source } => EventMessage::Obstacle(remote_protocol::Obstacle {
+            Self::Obstacle { detected, source } => EventMessage::Obstacle(link_protocol::Obstacle {
                 detected: *detected,
                 source: *source,
             }),
-            Self::FloorDrop { detected } => EventMessage::FloorDrop(remote_protocol::FloorDrop { detected: *detected }),
+            Self::FloorDrop { detected } => EventMessage::FloorDrop(link_protocol::FloorDrop { detected: *detected }),
             Self::ProcedureCompleted {
                 procedure_id,
                 stage,
                 detail,
-            } => EventMessage::ProcedureCompleted(remote_protocol::ProcedureCompleted {
+            } => EventMessage::ProcedureCompleted(link_protocol::ProcedureCompleted {
                 procedure_id: *procedure_id,
                 stage: *stage,
                 detail,
@@ -258,7 +258,7 @@ impl ScriptEvent {
                 distance_cm,
                 duration_ms,
                 detail,
-            } => EventMessage::DriveDistanceCompleted(remote_protocol::DriveDistanceCompleted {
+            } => EventMessage::DriveDistanceCompleted(link_protocol::DriveDistanceCompleted {
                 command_seq: *command_seq,
                 status: *status,
                 target_cm: *target_cm,
@@ -273,7 +273,7 @@ impl ScriptEvent {
                 error_cdeg,
                 duration_ms,
                 detail,
-            } => EventMessage::RotateCompleted(remote_protocol::RotateCompleted {
+            } => EventMessage::RotateCompleted(link_protocol::RotateCompleted {
                 command_seq: *command_seq,
                 status: *status,
                 target_cdeg: *target_cdeg,
@@ -282,13 +282,13 @@ impl ScriptEvent {
                 detail,
             }),
             Self::CalibrationLoaded { kind, status } => {
-                EventMessage::CalibrationLoaded(remote_protocol::CalibrationLoaded {
+                EventMessage::CalibrationLoaded(link_protocol::CalibrationLoaded {
                     kind: *kind,
                     status: *status,
                 })
             }
             Self::EventOverflow { dropped } => {
-                EventMessage::EventOverflow(remote_protocol::EventOverflow { dropped: *dropped })
+                EventMessage::EventOverflow(link_protocol::EventOverflow { dropped: *dropped })
             }
         };
         encode_event(&message, out)

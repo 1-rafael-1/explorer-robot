@@ -9,7 +9,7 @@
 //! Both sides of the preamble compose [`bridge_net`]'s framing constants and this crate's message
 //! codec, so a Bridge/daemon divergence is a compile error, not a bench finding. The Beacon's
 //! magic, major and flag bits are likewise `bridge-net`'s. The stub never invents Link Protocol
-//! semantics: frames, payloads and the event retry schedule are `remote-protocol`'s.
+//! semantics: frames, payloads and the event retry schedule are `link-protocol`'s.
 //!
 //! The library is plain blocking `std::net`, so a test spins it up in-process without an async
 //! runtime ([`Stub::start`]), and a tokio daemon can import it later without friction. The binary

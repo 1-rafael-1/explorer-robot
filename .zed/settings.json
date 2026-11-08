@@ -3,7 +3,7 @@
     "crates-lsp": {
       "initialization_options": {
         // crates-lsp only resolves crates.io names, so the workspace's path dependencies
-        // (remote-protocol, bridge-net, remote-link) are always reported as "Unknown crate".
+        // (link-protocol, bridge-net, link-core) are always reported as "Unknown crate".
         // Keep its version completion and inlay hints, drop the false-positive diagnostics.
         "diagnostics": false
       }
@@ -18,7 +18,7 @@
         },
         "linkedProjects": [
           "Cargo.toml",
-          "bridge-firmware/Cargo.toml",
+          "bridge/Cargo.toml",
           "remote/Cargo.toml"
         ]
       }

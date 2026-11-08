@@ -8,7 +8,7 @@
 
 mod support;
 
-use remote_protocol::{Caps, Class, Control};
+use link_protocol::{Caps, Class, Control};
 use robot_stub::{Persona, worst_case_config};
 use support::Bench;
 
@@ -50,12 +50,12 @@ fn worst_case_persona_sustains_the_adr_budget() {
     // just a flood of events, and the handshake stays answered while under load.
     let window = (Some(1_000u64), 2_100u64);
     for id in [
-        remote_protocol::Stream::Power.wire_id(),
-        remote_protocol::Stream::Motion.wire_id(),
-        remote_protocol::Stream::Activity.wire_id(),
-        remote_protocol::Stream::Perception.wire_id(),
-        remote_protocol::Stream::LidarCloud.wire_id(),
-        remote_protocol::Stream::Calibration.wire_id(),
+        link_protocol::Stream::Power.wire_id(),
+        link_protocol::Stream::Motion.wire_id(),
+        link_protocol::Stream::Activity.wire_id(),
+        link_protocol::Stream::Perception.wire_id(),
+        link_protocol::Stream::LidarCloud.wire_id(),
+        link_protocol::Stream::Calibration.wire_id(),
     ] {
         let count = bench.peer.frames_of(Class::Stream, id, window.0, window.1).len();
         assert!(count > 0, "stream {id:#06x} must flow under worst-case load");

@@ -5,11 +5,11 @@
 
 mod support;
 
-use remote_daemon::{relay::Relay, schema::MANUAL_DRIVE_ID};
-use remote_protocol::{
+use link_protocol::{
     Command, CommandMessage, Status as WireStatus,
     payload::{command::StopMotion, stream::ActivityStage},
 };
+use remote_daemon::{relay::Relay, schema::MANUAL_DRIVE_ID};
 use serde_json::json;
 use support::{activity, frame, must, session_with_app, snapshot};
 

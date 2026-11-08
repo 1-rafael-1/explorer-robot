@@ -2,8 +2,8 @@
 
 The host workspace for the remote-control effort: the `remote-daemon` relay, the shared
 `bridge-net` network edge, two bench stubs and the static app. It consumes the robot's
-`remote-protocol` and `remote-link` crates by path; the Bridge firmware
-(`../bridge-firmware/`) consumes the same `remote-protocol` and `bridge-net`.
+`link-protocol` and `link-core` crates by path; the Bridge firmware
+(`../bridge/`) consumes the same `link-protocol` and `bridge-net`.
 
 | crate / folder | what it is | README |
 |---|---|---|
@@ -36,8 +36,8 @@ and `pkg-config` (the `remote` CI job installs them). The two shared contract cr
 root-workspace members; test them from the repository root:
 
 ```sh
-cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
 ## Validation
