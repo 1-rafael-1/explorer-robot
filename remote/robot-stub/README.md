@@ -38,6 +38,11 @@ job.
 cargo run -p robot-stub -- --port /dev/ttyUSB0
 ```
 
+The adapter may appear as `/dev/ttyUSB*` or `/dev/ttyACM*` depending on the kernel driver;
+identify it by its `usb-1a86_…` (QinHeng/CH343) entry under `/dev/serial/by-id`, not by the
+device number. Do not point `--port` at the C3's `usb-Espressif_USB_JTAG_serial_debug_unit_…`
+console.
+
 The port opens at **921600 8N1**, the baud all three projects share (ADR-0033), with a 1 ms
 read timeout. The stub steps every 10 ms and prints a one-line summary every 5 s.
 

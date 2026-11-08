@@ -16,8 +16,10 @@ It currently holds two binaries:
 
 ## Bench wiring
 
-The C3's USB connector is the flashing and `defmt` console (`/dev/ttyACM0` on the bench). The
-robot-facing link is **UART1** on the C3 SuperMini harness pins:
+The C3's USB connector is the flashing and `defmt` console. Identify it by its
+`usb-Espressif_USB_JTAG_serial_debug_unit_…` entry under `/dev/serial/by-id`; the number can be
+`/dev/ttyACM0`, `/dev/ttyACM1`, or another `ACM` index. The robot-facing link is **UART1** on the
+C3 SuperMini harness pins:
 
 | signal | C3 SuperMini | connects to |
 |---|---|---|
@@ -36,9 +38,11 @@ high to run, low to reset, and the 10 ms low pulse is ADR-0032's presence-retry.
 (GPIO9), which stays unconnected. Do not connect the C3's 3V3 pin to the robot: each side
 regulates its own 3.3 V.
 
-Use a **3.3 V** USB-TTL adapter; the C3's pins are not 5 V tolerant. The adapter appears as
-`/dev/ttyUSB0` (or similar) and is where the Robot Stub runs. Do not point the stub at
-`/dev/ttyACM0`: that is the C3's console, not the robot-facing UART.
+Use a **3.3 V** USB-TTL adapter; the C3's pins are not 5 V tolerant. Identify the adapter by its
+`usb-1a86_…` (QinHeng/CH343) entry under `/dev/serial/by-id`; depending on the kernel it binds as
+`/dev/ttyUSB*` (`usb-serial`) or `/dev/ttyACM*` (`cdc_acm`). That by-id entry is where the Robot
+Stub runs. Never point the stub at the Espressif console entry: that is the C3's USB console, not
+the robot-facing UART.
 
 For the `stack-soak` regression run, no adapter is needed: jumper **GPIO6 to GPIO7** so its UART1
 loopback works (that binary keeps the C3's default pins). For `bridge`, jumper **GPIO3 to GPIO4**
@@ -112,13 +116,14 @@ bridge` flashes the same explicit set. The equivalent direct command is:
 cd bridge-firmware
 touch src/bin/bridge.rs
 cargo build --release --bin bridge && \
-espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
+espflash flash --monitor --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
     --partition-table partitions.csv --partition-table-offset 0x8000 \
     target/riscv32imc-unknown-none-elf/release/bridge
 ```
 
 `--partition-table` makes `espflash` write the bootloader, the table and the app; it does not
-write `bridge_data`, so the record survives the next flash. If `espflash` reports every section
+write `bridge_data`, so the record survives the next flash. The port in these commands is the C3
+console from `by-id`; on the current bench it is `/dev/ttyACM1`. If `espflash` reports every section
 `Skipped! (checksum matches)`, it does not reset the chip; run `espflash reset` or change the build
 before testing, or the 10-minute window will already be running.
 
@@ -532,6 +537,15 @@ and the daemon reconnect with no operator action; the robot keeps streaming at b
 Boot Id is unchanged (ADR-0035). The daemon/Robot Stub half of that acceptance needs the USB-TTL
 adapter and a provisioned station, as in the ticket-07 notes.
 
+### UART RX recovery
+
+The UHCI RX stream buffer stops the DMA when every descriptor is full. A station join or the
+setup-AP teardown can block the executor long enough for the robot stream to fill the ring, so the
+RX task treats done-and-silent for one second as an exhausted ring: it increments `dma_stalls`,
+cancels the transfer and starts a new one. Frames resume after the restart; a frame split across
+the restart is dropped and the parser resyncs. The task keeps beating throughout, so this is not a
+watchdog event.
+
 ## Running the Robot Stub against it
 
 The stub lives in the host `remote` workspace and opens the USB-TTL adapter at 921600 8N1:
@@ -770,15 +784,16 @@ ruff check tools/bridge_preamble.py tools/link-probe.py tools/auth-probe.py tool
 
 ## Troubleshooting
 
-- **`espflash` cannot open the port.** Check that `/dev/ttyACM0` exists, that the user is in the
-  `dialout` (Debian/Ubuntu) or `uucp` (Arch) group, and that no monitor is holding the port.
+- **`espflash` cannot open the port.** Check that the C3 console port from `by-id` exists, that the
+  user is in the `dialout` (Debian/Ubuntu) or `uucp` (Arch) group, and that no monitor is holding
+  the port.
 - **The board does not enter the bootloader.** Hold **BOOT**, tap **RESET**, release **BOOT**, then
   flash.
 - **Multiple boards.** `espflash` picks the first matching port; pass `--port` explicitly and keep
   `--chip esp32c3`.
-- **The stub opens but the Bridge sees nothing.** Confirm the adapter is on `/dev/ttyUSB*`, not
-  `/dev/ttyACM0`; confirm TX↔RX are crossed (GPIO4 to the adapter's RX, GPIO3 to its TX); confirm
-  both ends are at 921600 8N1 and share ground.
+- **The stub opens but the Bridge sees nothing.** Confirm the adapter is the `usb-1a86_…` entry,
+  not the C3's `usb-Espressif_…` console; confirm TX↔RX are crossed (GPIO4 to the adapter's RX,
+  GPIO3 to its TX); confirm both ends are at 921600 8N1 and share ground.
 - **Record lines are absent or say `no data partition`.** The board was flashed without the custom
   table. Flash again with `--partition-table partitions.csv --partition-table-offset 0x8000`; the
   boot log must show `record: partition bridge_data at 0x310000`.

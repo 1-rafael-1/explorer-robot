@@ -3273,7 +3273,27 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
                         "uart dma: done with no data for {}s; the descriptor ring may be exhausted",
                         DMA_STALL_AFTER.as_secs()
                     );
-                    stall_counted = true;
+                    // The esp-hal stream buffer stops the DMA when every descriptor is full, and
+                    // it does not resume by itself. Restart the transfer; without this the RX task
+                    // keeps beating while no frame is ever received again, which the watchdog
+                    // cannot see.
+                    let (returned_rx, returned_buffer) = transfer.cancel();
+                    rx = returned_rx;
+                    buffer = returned_buffer;
+                    transfer = loop {
+                        match rx.read(buffer) {
+                            Ok(transfer) => break transfer,
+                            Err((error, returned_rx, returned_buffer)) => {
+                                warn!("uart dma: restart failed: {:?}", error);
+                                rx = returned_rx;
+                                buffer = returned_buffer;
+                                Timer::after(Duration::from_secs(1)).await;
+                            }
+                        }
+                    };
+                    done_since = None;
+                    stall_counted = false;
+                    continue;
                 }
             } else {
                 done_since = None;
