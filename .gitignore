@@ -11,6 +11,10 @@ target/
 # scratch files used for handoffs and temp things for my agents
 .scratch/
 
+# Python bytecode caches (the docs and bench scripts)
+__pycache__/
+*.pyc
+
 # FreeCAD auto-generated backup files
 **/*.FCBak
 
