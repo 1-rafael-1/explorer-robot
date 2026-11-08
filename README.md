@@ -8,7 +8,7 @@ LiDAR, two VL53L0X rangefinders, an ICM-20948 IMU over SPI, an ST7789 TFT with a
 resistive touch panel, and a Grove Vision AI V2 camera — as much as fits on custom
 PCB hardware.
 
-![Fully assembled explorer-robot](assembly/fully_assembled.jpg)
+![Fully assembled explorer-robot](hardware/assembly/fully_assembled.jpg)
 
 ## Parts at a glance
 
@@ -23,7 +23,7 @@ the current tree.
 | Bridge — network ⇄ UART1 | `bridge/` | Its own workspace — `riscv32imc-unknown-none-elf` | [Bridge README](bridge/README.md) |
 | Remote — daemon and static app | `remote/` | Host workspace — `x86_64-unknown-linux-gnu` | [remote](remote/README.md) |
 | Bench tools — robot and Bridge personas, link probes | `remote/robot-stub/`, `remote/bridge-stub/`, `bridge/tools/` | Host and Bridge workspaces | [robot-stub](remote/robot-stub/README.md), [bridge-stub](remote/bridge-stub/README.md) |
-| Hardware — CAD, EDA and assembly | `cad files/`, `eda files/`, `assembly/` | No Cargo target | [Assembly notes](README.md#assembly) |
+| Hardware — CAD, EDA and assembly | `hardware/assembly/`, `hardware/cad/`, `hardware/eda/` | No Cargo target | [Hardware notes](hardware/README.md) |
 | Documentation | `docs/` | No Cargo target | [docs/README.md](docs/README.md) |
 
 ## Quickstart
@@ -72,64 +72,11 @@ Known gaps:
   framebuffer, with a resistive touch panel, sharing the SPI1 bus.
 - **Power:** 2S LiPo (8.4 V max).
 
-## Assembly
+## Hardware files
 
-The chassis and running gear are my first CAD design at this level of
-complexity. It works as I planned, but I fully expect to find reasons to change,
-add, or remove parts as I go. I've printed it in PLA on a 0.4 mm nozzle at
-variable layer height with good results — after running the motors for an hour
-straight on a riser, nothing looked worn or abraded, there was no PLA dust
-anywhere, and all the track pins were still in place.
-
-### Parts required
-
-Purchased:
-
-- 2× JGB37-520 motors (with encoders)
-- 2× matching motor brackets (often sold with the motors)
-- 12× 6802-2RS ball bearings (6 per track)
-- 8× M3 8 mm screws
-- 8× M3 40 mm screws
-- 16× M3 nuts
-
-Printed:
-
-- 1× chassis main part
-- 2× inner track pod parts
-- 2× outer track pod parts
-- 2× driven sprockets
-- 4× freewheeling sprockets
-- 6× sprocket holders (one per sprocket)
-- 64× track links (32 per track)
-- 64× track link pins
-
-### Track assembly
-
-![Track assembly](assembly/track_assembly.png)
-
-### Track pod assembly
-
-![Track pod assembly](assembly/track_pod_assembly.png)
-
-### Overall assembly
-
-![Track pods, motors and chassis](<assembly/track_pods_and_motors_and_chassis assembly.png>)
-
-![Fully assembled explorer-robot, rear view](assembly/fully_assembled_rear.jpg)
-
-### Assembly tips
-
-- The driven sprocket's D-shaft hole is a very tight fit on the motor's D-shaft.
-  Push the sprocket onto the shaft at least once before final assembly — the real
-  assembly later will be much easier.
-- The bearings have to be pressed into the pod shells with some force. Keep them
-  even, since everything is a tight fit. I used a rubber mallet, gently.
-- After each step, check that the sprockets turn freely in the pod without
-  scraping. The screws — combined with the pressure needed to fit the D-shaft —
-  can introduce enough strain that something ends up slightly off, causing wobble
-  and scraping. It does fit in the end, but takes a little patience.
-- The 8 mm screws can be fiddly to get in — use tweezers. After a few minutes of
-  colorful cursing they'll go in.
+The FreeCAD chassis and running gear, the KiCad board and the assembly photos
+live under [`hardware/`](hardware/README.md), together with the BOM, print notes,
+assembly steps and safety notes.
 
 ## Read next
 

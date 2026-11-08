@@ -7,8 +7,8 @@ apply to the corresponding portions of this repository.
 
 Applies to:
 
-- `eda files/explorer-robot/rp235xb.pretty/` — footprints
-- `eda files/explorer-robot/rp235xb.3dshapes/` — 3D STEP models
+- `hardware/eda/explorer-robot/rp235xb.pretty/` — footprints
+- `hardware/eda/explorer-robot/rp235xb.3dshapes/` — 3D STEP models
 
 Source: Raspberry Pi Ltd, *RP2350B Minimal* reference design, release R4-S1
 (upstream directory `RPI-RP2350B-MINIMAL_R4-S1_public`). Portions were copied
