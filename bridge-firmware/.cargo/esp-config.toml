@@ -1,6 +1,3 @@
 # Keep user/runtime configuration values in this file.
 [env]
 DEFMT_LOG="info"
-# The Bridge Presence bench GPIO (ticket 08). Override on the command line or in the environment
-# for a different pin: the firmware drives EXP_IRQ high on it once the UART tasks are running.
-BRIDGE_PRESENCE_PIN="10"

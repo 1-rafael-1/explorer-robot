@@ -136,7 +136,7 @@ opt in because the pre-existing `stack-soak` spike is out of scope).
 
 The `bridge` binary keeps only HAL wiring:
 
-- **UART RX**: UHCI RX DMA at 921600 8N1 (`GPIO6` TX, `GPIO7` RX) feeds
+- **UART RX**: UHCI RX DMA at 921600 8N1 (`GPIO4` TX, `GPIO3` RX) feeds
   `remote-protocol::RobotToPcParser`; each frame goes to `pump.on_robot_frame()`. The UART is
   parsed regardless of a client, so `BRIDGE_CONTROL` and the Beacon's eventual link flag stay
   truthful with no Remote attached.

@@ -32,8 +32,9 @@
 //! ## Presence and the watchdog
 //!
 //! Bridge Presence is the `EXP_IRQ` line driven high once the scheduler, the radio controller and
-//! both UART tasks are running; it is not the deadman (ADR-0035), and a reset drops it. The bench
-//! GPIO defaults to GPIO10 and can be overridden with `BRIDGE_PRESENCE_PIN`.
+//! both UART tasks are running; it is not the deadman (ADR-0035), and a reset drops it. On the C3
+//! SuperMini harness it is **GPIO0**, the robot's `EXP_EN` is wired to the C3's `EN` through the
+//! RST button's outer leg, and the robot's `EXP_BOOT` is a spare pulled-down input on **GPIO1**.
 //!
 //! The RTC watchdog (RWDT stage 0, reset the system) is fed only while every covered task has
 //! beaten inside `HEARTBEAT_MAX_AGE_MS`: the two UART pump tasks, both `embassy-net` runners, the
@@ -44,9 +45,9 @@
 //!
 //! ## Wiring
 //!
-//! UART1 runs at ADR-0033's 921600 8N1 with **TX = GPIO6** and **RX = GPIO7**. Connect those two
+//! UART1 runs at ADR-0033's 921600 8N1 with **TX = GPIO4** and **RX = GPIO3**. Connect those two
 //! pins, through a 3.3 V USB-TTL adapter, to the Robot Stub's serial port. The C3's USB connector
-//! stays the flashing and `defmt` console. A GPIO6↔GPIO7 jumper loops the UART back for bench
+//! stays the flashing and `defmt` console. A GPIO3↔GPIO4 jumper loops the UART back for bench
 //! runs without an adapter; a valid robot-side frame then sets the Beacon's link-ready flag.
 //!
 //! ## Provisioning and the pairing token
@@ -108,7 +109,7 @@ use esp_hal::{
     clock::CpuClock,
     dma_rx_stream_buffer,
     efuse::{InterfaceMacAddress, interface_mac_address},
-    gpio::{Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     rng::{Rng, Trng, TrngSource},
     rtc_cntl::{Rtc, Rwdt, RwdtStage, RwdtStageAction},
     time::Duration as HalDuration,
@@ -164,47 +165,22 @@ const UART_BAUD: u32 = 921_600;
 /// headroom at 921600; 32 bytes leaves about 1 ms.
 const UART_RX_THRESHOLD: u16 = 32;
 
-/// UART1's pins on the C3. Keep in step with the `with_tx`/`with_rx` calls below.
-const UART_TX_PIN: u8 = 6;
-const UART_RX_PIN: u8 = 7;
+/// UART1's pins on the C3 SuperMini harness. Keep in step with the `with_tx`/`with_rx` calls below.
+const UART_TX_PIN: u8 = 4;
+const UART_RX_PIN: u8 = 3;
 
-/// The Bridge Presence line's bench GPIO.
+/// The Bridge Presence line's C3 pin.
 ///
-/// The harness is not built, so this is a bench choice rather than a netlist fact: the robot
-/// samples `EXP_IRQ` (GPIO33 on J10) after the expansion branch is powered. GPIO10 is free on the
-/// C3 and is not one of the pins the firmware already owns. The override drives only the exposed
-/// free pins: 0-5, 8-10, 20 and 21. GPIO6/7 are UART1, GPIO11 powers the in-package flash and
-/// GPIO12-17 are its interface, and GPIO18/19 are the USB console; any other value leaves the line
-/// untouched. Override at build time with `BRIDGE_PRESENCE_PIN=<n>` (see `.cargo/esp-config.toml`).
-const PRESENCE_PIN_DEFAULT: u8 = 10;
-const PRESENCE_PIN: Option<u8> = match option_env!("BRIDGE_PRESENCE_PIN") {
-    Some(text) => parse_pin(text),
-    None => Some(PRESENCE_PIN_DEFAULT),
-};
+/// The SuperMini harness wires this to the robot's `EXP_IRQ` (GPIO33 on J10). It is driven high
+/// only once both UART tasks are up and is held for the firmware's lifetime; a reset drops it.
+const PRESENCE_PIN: u8 = 0;
 
-/// Parses the decimal GPIO number in `BRIDGE_PRESENCE_PIN`, returning `None` for a malformed or
-/// out-of-range value. A typo fails closed (the line is left untouched) rather than driving a
-/// different pin.
-const fn parse_pin(text: &str) -> Option<u8> {
-    let bytes = text.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut number = 0u16;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if byte < b'0' || byte > b'9' {
-            return None;
-        }
-        number = number * 10 + (byte - b'0') as u16;
-        if number > 21 {
-            return None;
-        }
-        index += 1;
-    }
-    Some(number as u8)
-}
+/// The spare robot→Bridge line: the robot's `EXP_BOOT` (GPIO35 on J10) into this C3 input.
+///
+/// GPIO1 is an input with a pull-down, reserved for a future hard signal; the firmware does not
+/// read it yet. It is deliberately **not** the C3's BOOT strap (GPIO9), so a low idle level here
+/// cannot select ROM download mode.
+const SPARE_BOOT_PIN: u8 = 1;
 
 /// The RTC watchdog's hardware timeout. It must exceed the longest legitimate block: a flash
 /// record write (a `BlockingAsync` program, possibly with an erase), and the covered tasks' own
@@ -864,7 +840,7 @@ async fn main(spawner: Spawner) -> ! {
         .with_rx(RxConfig::default().with_fifo_full_threshold(UART_RX_THRESHOLD));
 
     let uart = match Uart::new(peripherals.UART1, uart_config) {
-        Ok(uart) => uart.with_rx(peripherals.GPIO7).with_tx(peripherals.GPIO6),
+        Ok(uart) => uart.with_rx(peripherals.GPIO3).with_tx(peripherals.GPIO4),
         Err(error) => {
             warn!("uart: configuration rejected: {:?}", error);
             loop {
@@ -907,74 +883,22 @@ async fn main(spawner: Spawner) -> ! {
     // expansion branch is powered, and this line is not the deadman (ADR-0035).
     let uart_ready = uart_rx_started && uart_tx_started;
     // Hold the driver for the firmware's lifetime; nothing clears the line on purpose.
-    let (presence_pin, _presence) = if uart_ready {
-        match PRESENCE_PIN {
-            Some(0) => (
-                Some(0),
-                Some(Output::new(peripherals.GPIO0, Level::High, OutputConfig::default())),
-            ),
-            Some(1) => (
-                Some(1),
-                Some(Output::new(peripherals.GPIO1, Level::High, OutputConfig::default())),
-            ),
-            Some(2) => (
-                Some(2),
-                Some(Output::new(peripherals.GPIO2, Level::High, OutputConfig::default())),
-            ),
-            Some(3) => (
-                Some(3),
-                Some(Output::new(peripherals.GPIO3, Level::High, OutputConfig::default())),
-            ),
-            Some(4) => (
-                Some(4),
-                Some(Output::new(peripherals.GPIO4, Level::High, OutputConfig::default())),
-            ),
-            Some(5) => (
-                Some(5),
-                Some(Output::new(peripherals.GPIO5, Level::High, OutputConfig::default())),
-            ),
-            Some(8) => (
-                Some(8),
-                Some(Output::new(peripherals.GPIO8, Level::High, OutputConfig::default())),
-            ),
-            Some(9) => (
-                Some(9),
-                Some(Output::new(peripherals.GPIO9, Level::High, OutputConfig::default())),
-            ),
-            Some(10) => (
-                Some(10),
-                Some(Output::new(peripherals.GPIO10, Level::High, OutputConfig::default())),
-            ),
-            Some(20) => (
-                Some(20),
-                Some(Output::new(peripherals.GPIO20, Level::High, OutputConfig::default())),
-            ),
-            Some(21) => (
-                Some(21),
-                Some(Output::new(peripherals.GPIO21, Level::High, OutputConfig::default())),
-            ),
-            Some(pin) => {
-                warn!(
-                    "presence: GPIO{} is not a free C3 output; EXP_IRQ is left untouched",
-                    pin
-                );
-                (None, None)
-            }
-            None => {
-                warn!("presence: BRIDGE_PRESENCE_PIN is not a decimal C3 pin; EXP_IRQ is left untouched");
-                (None, None)
-            }
-        }
+    let _presence = if uart_ready {
+        info!("presence: EXP_IRQ high on GPIO{}", PRESENCE_PIN);
+        Some(Output::new(peripherals.GPIO0, Level::High, OutputConfig::default()))
     } else {
         warn!("presence: the UART tasks did not start; EXP_IRQ is left untouched");
-        (None, None)
+        None
     };
-    if let Some(pin) = presence_pin {
-        info!(
-            "presence: EXP_IRQ high on GPIO{} (bench choice; override with BRIDGE_PRESENCE_PIN)",
-            pin
-        );
-    }
+
+    // The robot's `EXP_BOOT` is a spare robot→Bridge line, not this C3's BOOT strap (GPIO9). The
+    // weak pull-down keeps it defined while the robot's output is high-Z; the firmware does not
+    // read it yet.
+    let _spare_boot = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Down));
+    info!(
+        "spare: EXP_BOOT input on GPIO{} (pull-down; reserved for a future robot→Bridge signal)",
+        SPARE_BOOT_PIN
+    );
 
     // -- Station network edge ----------------------------------------------------------------
 

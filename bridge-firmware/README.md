@@ -17,30 +17,38 @@ It currently holds two binaries:
 ## Bench wiring
 
 The C3's USB connector is the flashing and `defmt` console (`/dev/ttyACM0` on the bench). The
-robot-facing link is **UART1** on two header pins:
+robot-facing link is **UART1** on the C3 SuperMini harness pins:
 
-| signal | C3 pin | connects to |
+| signal | C3 SuperMini | connects to |
 |---|---|---|
-| UART1 TX | GPIO6 | the USB-TTL adapter's RX |
-| UART1 RX | GPIO7 | the USB-TTL adapter's TX |
-| ground | GND | the USB-TTL adapter's GND |
-| Bridge Presence | GPIO10 (default) | the robot's `EXP_IRQ` (GPIO33 on J10) when the harness exists |
+| UART1 TX | GPIO4 | the USB-TTL adapter's RX, or the robot's `EXP_RX` (GPIO37 on J10) |
+| UART1 RX | GPIO3 | the USB-TTL adapter's TX, or the robot's `EXP_TX` (GPIO36 on J10) |
+| ground | GND | the adapter's GND / robot J9.2 |
+| Bridge Presence | GPIO0 | the robot's `EXP_IRQ` (GPIO33 on J10) |
+| Bridge reset | `EN` (RST button's **outer** leg) | the robot's `EXP_EN` (GPIO34 on J10) |
+| spare | GPIO1 | the robot's `EXP_BOOT` (GPIO35 on J10); reserved input |
+| power | 5V | the robot's `EXP_5V` (J9.1) in the sealed build; USB on the bench |
 
-The presence pin is a bench choice until the harness lands: override it at build time with
-`BRIDGE_PRESENCE_PIN=<n>`. See [Bridge Presence and the watchdog](#bridge-presence-and-the-watchdog-ticket-08).
+The presence pin is fixed by the harness at **GPIO0** (no build-time override). The RST button's
+**outer** leg is `EN` (high when powered) and its **inner** leg is GND; the robot drives `EXP_EN`
+high to run, low to reset, and the 10 ms low pulse is ADR-0032's presence-retry. GPIO1 is a spare
+**robot → Bridge** input with a weak pull-down; it is deliberately not the C3's BOOT strap
+(GPIO9), which stays unconnected. Do not connect the C3's 3V3 pin to the robot: each side
+regulates its own 3.3 V.
 
 Use a **3.3 V** USB-TTL adapter; the C3's pins are not 5 V tolerant. The adapter appears as
 `/dev/ttyUSB0` (or similar) and is where the Robot Stub runs. Do not point the stub at
 `/dev/ttyACM0`: that is the C3's console, not the robot-facing UART.
 
-For the `stack-soak` regression run, no adapter is needed: jumper **GPIO6 to GPIO7** so UART1
-transmits into its own receiver. The same jumper is useful with `bridge`: a `link-probe.py`
-`HELLO` is forwarded out of UART1, parsed as a valid robot-side frame on the way back, and sets
-the Discovery Beacon's link-ready flag for five seconds (the router then ignores it, because a
-robot-side `HELLO` without `IS_ACK` is not a legal robot frame).
+For the `stack-soak` regression run, no adapter is needed: jumper **GPIO6 to GPIO7** so its UART1
+loopback works (that binary keeps the C3's default pins). For `bridge`, jumper **GPIO3 to GPIO4**
+instead: a `link-probe.py` `HELLO` is forwarded out of UART1, parsed as a valid robot-side frame on
+the way back, and sets the Discovery Beacon's link-ready flag for five seconds (the router then
+ignores it, because a robot-side `HELLO` without `IS_ACK` is not a legal robot frame).
 
 Both directions run **921600 8N1**, the baud ADR-0033 fixes for the robot, the Bridge and the
-daemon.
+daemon. The ticket-05/06/07 transcripts later in this file predate the ticket-08 harness remap and
+show the old GPIO6/7 pins; use this table for the current image.
 
 ## The credential record and the pairing token
 
@@ -462,24 +470,23 @@ remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueu
 ### Bridge Presence
 
 The Bridge drives its presence line high once the scheduler, the radio controller, the UHCI RX
-task and the UART TX task are up, and leaves it high; only a reset drops it. The bench line is
-**GPIO10** by default (`.cargo/esp-config.toml`). Override it at build time:
+task and the UART TX task are up, and leaves it high; only a reset drops it. The pin is fixed by
+the SuperMini harness at **GPIO0** and wired to the robot's `EXP_IRQ` (GPIO33 on J10). Presence says
+the board is attached, not that a Remote is connected; it is not the deadman (ADR-0035).
 
-```sh
-cd bridge-firmware
-BRIDGE_PRESENCE_PIN=4 cargo build --release --bin bridge
-```
+The robot's `EXP_EN` is wired to the C3's `EN` through the RST button's **outer** leg (the inner
+leg is GND): the robot drives it high to run and low to reset, so ADR-0032's 10 ms presence-retry
+pulse still works. The robot's `EXP_BOOT` is wired to **GPIO1** as a spare **robot → Bridge**
+input with a weak pull-down; it is not the C3's BOOT strap, and GPIO9 stays unconnected. The C3's
+`EN` is the only reset path in the sealed build (no buttons or USB); the RWDT covers a hang and
+the robot's `EXP_EN` pulse covers a silent Bridge.
 
-The override drives only the C3's exposed free pins (0-5, 8-10, 20, 21). GPIO6/7 are UART1,
-GPIO11 powers the in-package flash and GPIO12-17 are its interface, and GPIO18/19 are the USB
-console. Any other value, including a non-numeric typo, leaves the line untouched and logs a
-warning; it never falls back to a different pin. The real pin arrives with the harness: the robot
-samples `EXP_IRQ` (GPIO33 on J10) after the expansion branch is powered. Presence says the board is
-attached, not that a Remote is connected; it is not the deadman (ADR-0035).
-
-Bench check without the harness: a multimeter or LED from GPIO10 to GND reads high a few hundred
+Bench check without the harness: a multimeter or LED from GPIO0 to GND reads high a few hundred
 milliseconds after reset and stays high. `espflash reset` drops it while the chip resets. If either
-UART task fails to spawn, the line is not driven at all.
+UART task fails to spawn, the line is not driven at all. With the harness fitted, verify the 10 ms
+`EXP_EN` pulse actually resets the board through the EN pull-up/RC; lengthen the pulse if not, and
+measure the C3's boot-to-presence time against the robot's `PRESENCE_GRACE` from the `EXP_EN`
+release.
 
 ### The watchdog
 
@@ -619,7 +626,7 @@ BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --dur
 # Stop after one hundred decoded frames.
 BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --count 100 --quiet
 
-# No robot: GPIO6 and GPIO7 jumpered together instead of wired to a USB-TTL adapter.
+# No robot: GPIO3 and GPIO4 jumpered together instead of wired to a USB-TTL adapter.
 BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42 --loopback
 ```
 
@@ -770,7 +777,7 @@ ruff check tools/bridge_preamble.py tools/link-probe.py tools/auth-probe.py tool
 - **Multiple boards.** `espflash` picks the first matching port; pass `--port` explicitly and keep
   `--chip esp32c3`.
 - **The stub opens but the Bridge sees nothing.** Confirm the adapter is on `/dev/ttyUSB*`, not
-  `/dev/ttyACM0`; confirm TX↔RX are crossed (GPIO6 to the adapter's RX, GPIO7 to its TX); confirm
+  `/dev/ttyACM0`; confirm TX↔RX are crossed (GPIO4 to the adapter's RX, GPIO3 to its TX); confirm
   both ends are at 921600 8N1 and share ground.
 - **Record lines are absent or say `no data partition`.** The board was flashed without the custom
   table. Flash again with `--partition-table partitions.csv --partition-table-offset 0x8000`; the
