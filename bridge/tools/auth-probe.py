@@ -128,7 +128,7 @@ def check_silent(args: argparse.Namespace) -> list[str]:
                 early = sock.recv(1)
             except (ConnectionResetError, ConnectionAbortedError):
                 early = b""
-            except socket.timeout:
+            except TimeoutError:
                 return [f"the silent connection was still open after {args.timeout:g}s"]
             if early:
                 return ["the Bridge sent a preamble byte to a connection that sent nothing"]
@@ -159,8 +159,10 @@ def check_supersede(args: argparse.Namespace, token: bytes) -> list[str]:
         elapsed = time.monotonic() - started
     if elapsed > SUPERSEDE_LIMIT:
         return [
-            f"the new client took {elapsed:.1f}s while a silent one was pending; "
-            f"it waited behind the {AUTH_DEADLINE:g}s deadline"
+            (
+                f"the new client took {elapsed:.1f}s while a silent one was pending; "
+                f"it waited behind the {AUTH_DEADLINE:g}s deadline"
+            )
         ]
     print(
         f"  new client {identity['device_id']} authenticated in {elapsed:.2f}s "
@@ -218,7 +220,7 @@ def check_rate_limit(args: argparse.Namespace, token: bytes) -> list[str]:
                     return [f"expected BRIDGE_CHALLENGE, got message {kind}"]
                 sock.sendall(encode_message(KIND_CLIENT_AUTH, bytes(PROOF_LEN)))
                 _major, kind, payload = read_message(sock)
-        except socket.timeout:
+        except TimeoutError:
             return [f"attempt {attempts} timed out instead of being denied"]
         except (OSError, PreambleError) as error:
             return [f"attempt {attempts} failed: {error}"]

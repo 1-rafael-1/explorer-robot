@@ -95,7 +95,7 @@ def main() -> int:
         sock.settimeout(0.5 if args.duration > 0 else None)
         try:
             datagram, source = sock.recvfrom(256)
-        except socket.timeout:
+        except TimeoutError:
             continue
         except OSError as error:
             print(f"beacon-watch: receive failed: {error}", file=sys.stderr)

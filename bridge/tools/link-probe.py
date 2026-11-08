@@ -392,7 +392,7 @@ def run(args: argparse.Namespace) -> int:
 
             try:
                 chunk = sock.recv(65536)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError as error:
                 print(f"link-probe: receive failed: {error}", file=sys.stderr)

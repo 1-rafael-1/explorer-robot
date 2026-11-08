@@ -270,10 +270,14 @@ def check_target(
         broken.append((source, line_number, target, relative))
         return 1
 
-    if fragment and resolved.is_file() and resolved.suffix.lower() == ".md":
-        if fragment not in heading_slugs(resolved):
-            broken.append((source, line_number, target, f"{relative}#{fragment}"))
-            return 1
+    if (
+        fragment
+        and resolved.is_file()
+        and resolved.suffix.lower() == ".md"
+        and fragment not in heading_slugs(resolved)
+    ):
+        broken.append((source, line_number, target, f"{relative}#{fragment}"))
+        return 1
 
     return 1
 
