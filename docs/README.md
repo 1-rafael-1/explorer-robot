@@ -17,5 +17,5 @@ if you are new to the repository.
 - [CONTEXT.md](../CONTEXT.md) — the domain glossary and the canonical component names.
 - [docs/adr/](adr/) — the architecture decision records. Historical records keep
   their original paths.
-- Architecture page — planned, ticket 10. It will hold the repo map and the data-flow
-  tables against the final tree.
+- [Architecture](architecture.md) — the repo map and the data-flow tables against the
+  final tree.

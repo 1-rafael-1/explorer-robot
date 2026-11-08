@@ -81,6 +81,7 @@ assembly steps and safety notes.
 ## Read next
 
 - [Documentation index](docs/README.md)
+- [Architecture — repo map and data flow](docs/architecture.md)
 - [Domain glossary](CONTEXT.md)
 - Component pages: [robot](docs/components/robot.md),
   [bridge](docs/components/bridge.md), [remote](docs/components/remote.md),
