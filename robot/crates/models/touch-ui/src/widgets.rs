@@ -13,6 +13,7 @@ use embedded_graphics::{
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text, renderer::TextRenderer},
 };
+use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, Snapshot};
 
 use crate::{
     buffer::TextBuf,
@@ -31,7 +32,6 @@ use crate::{
     system_info::SystemInfo,
     ui::HeaderStatus,
 };
-use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, Snapshot};
 
 /// Draw the title header with a muted divider along its bottom edge.
 ///

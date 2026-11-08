@@ -19,8 +19,10 @@ use link_core::LinkCore;
 use link_protocol::{
     CalibrationKind as WireCalibrationKind, CalibrationLoadStatus, CalibrationLoaded, EventMessage, FloorDrop,
     OBSTACLE_SOURCE_LIDAR, Obstacle, ProcedureCompleted,
-    payload::event::{CompletionStatus as WireCompletionStatus, DriveDistanceCompleted, RotateCompleted},
-    payload::stream::ActivityStage,
+    payload::{
+        event::{CompletionStatus as WireCompletionStatus, DriveDistanceCompleted, RotateCompleted},
+        stream::ActivityStage,
+    },
 };
 use touch_ui::Procedure;
 
