@@ -7,7 +7,7 @@ description = "The remote relay: raw TCP to the Bridge, one JSON WebSocket and t
 repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [dependencies]
-remote-protocol = { path = "../../remote-protocol", version = "1" }
+remote-protocol = { path = "../../robot/crates/link/remote-protocol", version = "1" }
 bridge-net = { path = "../bridge-net", version = "1" }
 
 # The App Boundary's JSON schema (ADR-0038): the relay serialises, the app adapter deserialises.

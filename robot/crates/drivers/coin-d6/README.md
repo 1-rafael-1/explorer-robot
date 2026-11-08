@@ -55,7 +55,7 @@ cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
 ## Running the example
 
 The bare-metal example uses the `probe-rs` runner from
-`coin-d6/.cargo/config.toml`:
+`robot/crates/drivers/coin-d6/.cargo/config.toml`:
 
 ```sh
 cargo run -p coin-d6 --example example --release

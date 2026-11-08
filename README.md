@@ -18,8 +18,8 @@ the current tree.
 
 | Role | Directory | Workspace or target | README |
 |---|---|---|---|
-| Robot firmware | `src/`, root `Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [README.md](README.md) |
-| Link contract — the wire and the robot-side core | `remote-protocol/`, `remote-link/` | Robot workspace; host tests on `x86_64-unknown-linux-gnu` | [remote-protocol](remote-protocol/README.md), [remote-link](remote-link/README.md) |
+| Robot firmware | `robot/`, `robot/Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [README.md](README.md) |
+| Link contract — the wire and the robot-side core | `robot/crates/link/remote-protocol/`, `robot/crates/link/remote-link/` | Robot workspace; host tests on `x86_64-unknown-linux-gnu` | [remote-protocol](robot/crates/link/remote-protocol/README.md), [remote-link](robot/crates/link/remote-link/README.md) |
 | Bridge — network ⇄ UART1 | `bridge-firmware/` | Its own workspace — `riscv32imc-unknown-none-elf` | [bridge-firmware](bridge-firmware/README.md) |
 | Remote — daemon and static app | `remote/` | Host workspace — `x86_64-unknown-linux-gnu` | [remote](remote/README.md) |
 | Bench tools — robot and Bridge personas, link probes | `remote/robot-stub/`, `remote/bridge-stub/`, `bridge-firmware/tools/` | Host and Bridge workspaces | [robot-stub](remote/robot-stub/README.md), [bridge-stub](remote/bridge-stub/README.md) |

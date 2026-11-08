@@ -340,8 +340,8 @@ The bench tools and hardware tests have their own material:
   scenarios, the Beacon scripts and the deny reasons.
 - [remote-daemon README](../../remote/daemon/README.md) — the current-directory
   rule, the config store and the headless Bridge Stub run.
-- [hardware-tests README](../../hardware-tests/README.md) — standalone sensor
-  checks and their wiring.
+- [hardware-tests README](../../robot/crates/hardware-tests/README.md) — standalone
+  sensor checks and their wiring.
 
 ## Common failures
 
@@ -371,8 +371,8 @@ The bench tools and hardware tests have their own material:
   the bench.
 - [bridge-stub README](../../remote/bridge-stub/README.md) — the daemon's bench
   peer.
-- [hardware-tests README](../../hardware-tests/README.md) — standalone sensor
-  checks and wiring.
+- [hardware-tests README](../../robot/crates/hardware-tests/README.md) — standalone
+  sensor checks and wiring.
 - [remote-daemon README](../../remote/daemon/README.md) — the daemon the bench
   scripts exercise.
 - [bridge-firmware/tools/](../../bridge-firmware/tools/) — `link-probe.py`,

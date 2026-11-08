@@ -2,7 +2,10 @@
 
 The robot firmware: the `explorer-robot` package on the RP2350B, covering the
 drive subsystem, LiDAR perception, the panel UI and the robot side of the Link
-Protocol (the `LinkCore` in [remote-link](../../remote-link/README.md)).
+Protocol (the `LinkCore` in [remote-link](../../robot/crates/link/remote-link/README.md)).
+
+The firmware package's manifest is `robot/Cargo.toml`; the root `Cargo.toml` is
+a virtual workspace manifest that lists `robot` and its crates as members.
 
 Run every command on this page from the **repository root**. Cargo discovers
 `.cargo/config.toml` from the current directory upward, and the root file sets
@@ -28,7 +31,7 @@ workspaces and their build targets are described in
   --locked`) and check it knows the chip with `probe-rs --version`. A version
   that cannot select `RP235x` cannot flash the robot.
 - **`memory.x`.** Lives at the package root and is part of the firmware, not a
-  generated file. [`build.rs`](../../build.rs) reads it with
+  generated file. [`build.rs`](../../robot/build.rs) reads it with
   `include_bytes!("memory.x")` — a path relative to `build.rs`, not to the
   shell's current directory — copies it into `OUT_DIR`, adds `OUT_DIR` to the
   linker search path, and passes `-Tlink.x -Tdefmt.x`. The copy matters in a
@@ -130,7 +133,7 @@ So a plain `cargo run` builds for `thumbv8m.main-none-eabihf`, flashes, resets
 and attaches RTT:
 
 ```sh
-cargo run --release
+cargo run -p explorer-robot --release
 ```
 
 Expected: the release build finishes, `probe-rs` reports the selected probe and
@@ -144,7 +147,7 @@ The firmware logs through `defmt` over RTT (`defmt-rtt` is linked from
 `.cargo/config.toml`; override it in the environment:
 
 ```sh
-DEFMT_LOG=debug cargo run --release
+DEFMT_LOG=debug cargo run -p explorer-robot --release
 ```
 
 Because the log stream is RTT, `probe-rs` must stay attached; closing it stops
@@ -153,16 +156,16 @@ the output. **Bench-required.**
 ### Recovery
 
 If the application is stale but the board still runs, re-running `cargo run
---release` is enough. If `probe-rs` reports a locked or invalid image, or the
+-p explorer-robot --release` is enough. If `probe-rs` reports a locked or invalid image, or the
 firmware will not start, erase the chip and reflash:
 
 ```sh
 probe-rs erase --chip RP235x
-cargo run --release
+cargo run -p explorer-robot --release
 ```
 
 The erase mass-erases the RP2350 flash, including the `FLASH_STORAGE`
-calibration region at the top of flash (see [`memory.x`](../../memory.x)), so
+calibration region at the top of flash (see [`memory.x`](../../robot/memory.x)), so
 calibration data is lost. Both steps are **bench-required**.
 
 ## Common failures
@@ -208,14 +211,16 @@ bench-required.
 ## Source material
 
 - [Root README](../../README.md) — the front door and the hardware summary.
-- [remote-protocol](../../remote-protocol/README.md) — the Link Protocol wire
-  contract.
-- [remote-link](../../remote-link/README.md) — `LinkCore`, the robot side of the
-  protocol.
-- [coin-d6](../../coin-d6/README.md) — the LiDAR driver and its wiring.
-- [st7789-async](../../st7789-async/README.md) — the display driver.
-- [hardware-tests](../../hardware-tests/README.md) — standalone sensor checks that
-  run beside the firmware.
+- [remote-protocol](../../robot/crates/link/remote-protocol/README.md) — the Link
+  Protocol wire contract.
+- [remote-link](../../robot/crates/link/remote-link/README.md) — `LinkCore`, the
+  robot side of the protocol.
+- [coin-d6](../../robot/crates/drivers/coin-d6/README.md) — the LiDAR driver and
+  its wiring.
+- [st7789-async](../../robot/crates/drivers/st7789-async/README.md) — the display
+  driver.
+- [hardware-tests](../../robot/crates/hardware-tests/README.md) — standalone sensor
+  checks that run beside the firmware.
 - [CONTEXT.md](../../CONTEXT.md) — the domain glossary.
 
 Owning decisions:

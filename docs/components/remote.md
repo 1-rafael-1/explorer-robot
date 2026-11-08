@@ -244,8 +244,8 @@ the harness, power and wiring.
   preamble and ports.
 - [robot-stub README](../../remote/robot-stub/README.md) and
   [bridge-stub README](../../remote/bridge-stub/README.md) — the bench personas.
-- [remote-protocol README](../../remote-protocol/README.md) — the wire contract;
-  [remote-link README](../../remote-link/README.md) — the core the Robot Stub
+- [remote-protocol README](../../robot/crates/link/remote-protocol/README.md) — the wire contract;
+  [remote-link README](../../robot/crates/link/remote-link/README.md) — the core the Robot Stub
   runs.
 - [CONTEXT.md](../../CONTEXT.md) — the glossary's Remote, Relay, Session and
   Pairing Token entries.

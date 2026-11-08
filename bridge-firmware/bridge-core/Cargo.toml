@@ -11,7 +11,7 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 std = ["remote-protocol/std"]
 
 [dependencies]
-remote-protocol = { path = "../../remote-protocol", version = "1" }
+remote-protocol = { path = "../../robot/crates/link/remote-protocol", version = "1" }
 bridge-net = { path = "../../remote/bridge-net", version = "1" }
 
 [lints]

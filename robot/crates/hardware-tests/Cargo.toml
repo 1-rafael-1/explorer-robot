@@ -11,9 +11,9 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 workspace = true
 
 [dependencies]
-coin-d6 = { path = "../coin-d6" }
-st7789-async = { path = "../st7789-async" }
-touch-async = { path = "../touch-async" }
+coin-d6 = { path = "../drivers/coin-d6" }
+st7789-async = { path = "../drivers/st7789-async" }
+touch-async = { path = "../drivers/touch-async" }
 embedded-graphics = "0.8.1"
 embedded-hal-bus = { version = "0.1.0", features = ["async"] }
 embedded-hal-async = "1.0.0"

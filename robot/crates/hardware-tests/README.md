@@ -84,7 +84,7 @@ To (re-)measure the panel:
    ```
 
 4. Record the four endpoints as `touch_async::Calibration::MEASURED` in
-   `touch-async/src/calibration.rs`.
+   `robot/crates/drivers/touch-async/src/calibration.rs`.
 
 `Calibration::REFERENCE` keeps the vendor board's uncalibrated values and is what
 `Calibration::default()` returns; `touch_coexistence` uses `Calibration::MEASURED`.

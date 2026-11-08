@@ -22,7 +22,7 @@ job.
 - **`Execution`**, **`BridgeControlReport`**, **`OwnedReply`** — the binary's log and report
   types.
 
-`LinkCore` itself is documented in [`../../remote-link/README.md`](../../remote-link/README.md).
+`LinkCore` itself is documented in [`../../robot/crates/link/remote-link/README.md`](../../robot/crates/link/remote-link/README.md).
 
 ## Personas
 

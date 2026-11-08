@@ -11,7 +11,7 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 workspace = true
 
 [dependencies]
-coin-d6 = { path = "../coin-d6" }
+coin-d6 = { path = "../../drivers/coin-d6" }
 
 [features]
 std = ["coin-d6/std"]
