@@ -61,7 +61,10 @@ pub(super) async fn poll_active_intent(loop_state: &mut DriveLoop) -> Option<Act
                 }
             }
         }
-        Some(super::state::ActiveIntent::DriveDistance { state, .. }) => {
+        Some(
+            super::state::ActiveIntent::DriveDistance { state, .. }
+            | super::state::ActiveIntent::DriveContinuous { state, .. },
+        ) => {
             let interrupt_or_tick = select(DRIVE_INTERRUPT.wait(), distance_tick_ms()).await;
             match interrupt_or_tick {
                 Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),

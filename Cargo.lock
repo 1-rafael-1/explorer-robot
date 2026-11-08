@@ -199,6 +199,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "claim-slot"
+version = "0.1.0"
+
+[[package]]
 name = "codespan-reporting"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -789,6 +793,7 @@ name = "explorer-robot"
 version = "0.1.0"
 dependencies = [
  "assign-resources",
+ "claim-slot",
  "coin-d6",
  "cortex-m-rt",
  "critical-section",
@@ -1690,6 +1695,18 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "remote-link"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "remote-protocol",
+]
+
+[[package]]
+name = "remote-protocol"
+version = "1.1.0"
 
 [[package]]
 name = "rgb"

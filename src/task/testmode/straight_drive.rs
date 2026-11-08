@@ -14,11 +14,10 @@
 //! between the legs. Completion telemetry (achieved left/right revs and status)
 //! is logged per leg.
 
-use defmt::{info, warn};
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
-use touch_ui::Procedure;
 
-use super::{status_label, submit, test_lifecycle};
+use super::{status_label, submit};
 use crate::{
     system::{
         event::{Events, raise_event},
@@ -29,7 +28,7 @@ use crate::{
             CompletionStatus, CompletionTelemetry, DriveAction, DriveCommand, DriveDirection, DriveDistanceKind,
             DriveQueueBuilder, DriveQueueCompletion, send_drive_command, types::DriveQueueBuildError,
         },
-        procedure::Lifecycle,
+        procedure::Claim,
         sensors::imu::{DmpFusionMode, set_dmp_fusion_mode},
     },
 };
@@ -46,28 +45,40 @@ const COUNTDOWN_MS: u64 = 5_000;
 /// Settle time after a brake, in milliseconds.
 const SETTLE_MS: u64 = 500;
 
-/// The straight drive test's lifecycle: the test family's stop latch and slot,
-/// raising `TestingCompleted` when both legs ran.
-const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::StraightDrive);
-
 /// Spawn the straight drive test task via the controller.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner) {
-    spawner.spawn(straight_drive_test_task().unwrap());
+///
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    straight_drive_test_task(claim).map_or_else(
+        |_| {
+            error!("straight: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
-/// Straight drive test task: runs both legs, then reports completion.
+/// Straight drive test task: runs both legs, then reports the claim's terminal
+/// outcome.
 #[embassy_executor::task]
-async fn straight_drive_test_task() {
-    if run_straight_drive_test().await {
-        LIFECYCLE.complete("Straight drive complete").await;
+async fn straight_drive_test_task(claim: Claim) {
+    if run_straight_drive_test(&claim).await {
+        claim.complete("Straight drive complete").await;
     } else {
-        LIFECYCLE.release();
+        // A stop: the owner clears the Activity now that `procedure::stop` does
+        // not. A failure already released the claim, so this is a no-op there.
+        claim.abandon().await;
     }
 }
 
 /// Run the straight-line distance test, reporting whether both legs ran.
-async fn run_straight_drive_test() -> bool {
+async fn run_straight_drive_test(claim: &Claim) -> bool {
     if !calibration::is_initialized().await {
         raise_event(Events::Initialize).await;
     }
@@ -76,7 +87,7 @@ async fn run_straight_drive_test() -> bool {
     info!("straight: setting IMU DMP fusion mode to Axis6");
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
 
-    if LIFECYCLE.wait_or_stop(COUNTDOWN_MS).await {
+    if claim.wait_or_stop(COUNTDOWN_MS).await {
         return false;
     }
 
@@ -86,17 +97,23 @@ async fn run_straight_drive_test() -> bool {
     ];
 
     for (index, (phase, direction)) in legs.iter().enumerate() {
-        if LIFECYCLE.is_stop_requested() {
+        if claim.is_stop_requested() {
             return false;
         }
-        LIFECYCLE
+        claim
             .phase(phase, Some(activity::percent_done(index, legs.len())))
             .await;
 
         match submit(build_leg(*direction)).await {
-            Ok(completion) => report_leg(&completion),
+            Ok(completion) => {
+                report_leg(&completion);
+                // A cancelled leg is a stop, not a completed leg.
+                if completion.status == CompletionStatus::Cancelled || claim.is_stop_requested() {
+                    return false;
+                }
+            }
             Err(reason) => {
-                LIFECYCLE.fail(reason).await;
+                claim.fail(reason).await;
                 return false;
             }
         }
@@ -104,16 +121,20 @@ async fn run_straight_drive_test() -> bool {
         // Brake, then let the robot settle before the operator's next leg or the
         // measurement. The settle is a queue step so a Stop can cancel it.
         match submit(build_settle()).await {
-            Ok(_) => {}
+            Ok(completion) => {
+                if completion.status == CompletionStatus::Cancelled || claim.is_stop_requested() {
+                    return false;
+                }
+            }
             Err(reason) => {
-                LIFECYCLE.fail(reason).await;
+                claim.fail(reason).await;
                 return false;
             }
         }
     }
 
     send_drive_command(DriveCommand::Drive(DriveAction::Coast)).await;
-    true
+    !claim.is_stop_requested()
 }
 
 /// Build one leg's queue: the straight drive alone, so its telemetry is the

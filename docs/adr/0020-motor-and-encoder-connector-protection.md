@@ -9,8 +9,10 @@ This ADR records the protection and noise-mitigation decisions for these
 connectors: transient clamps on the drive side, and encoder signal integrity on the
 signal side.
 
-**Status:** proposed. The protection strategy is settled; the specific parts and
-the RC tuning are provisional pending bring-up.
+**Status:** proposed. The protection strategy is settled. The encoder output type
+is now **verified push-pull** by bench measurement (see *Bring-up result*), so the
+provisioned pull-ups stay unpopulated. The remaining part values and the RC
+tuning are still provisional pending bring-up.
 
 **Considered Options**
 
@@ -73,9 +75,11 @@ the RC tuning are provisional pending bring-up.
   and C ≈ 10 nF to `GND` at the MCU pin (fc ≈ 7 kHz). The series R doubles as the
   ESD/overvoltage current limit into the MCU pin. Lay out a **second pole** as a
   fallback, to populate only if bring-up shows glitches.
-- **A DNP pull-up (10 kΩ to 3V3) on each encoder line**, populated only if the
+- **A pull-up (10 kΩ to 3V3) on each encoder line**, populated only if the
   encoder turns out to be open-collector (in which case C drops to ~2.2 nF);
-  harmless if the encoder is push-pull.
+  harmless if the encoder is push-pull. **Not populated:** the encoder is
+  push-pull (see *Bring-up result*), and the v0.1 released to fabrication carries
+  no pull-up on either encoder line.
 - **A firmware minimum-pulse-width reject** (~20–30 µs). The encoder is slow
   (≤ 3.6 kHz, pulses ≥ ~278 µs) while the interference is PWM-rate, so a
   debounce/glitch filter removes residual glitches. It is the cheapest, most
@@ -93,11 +97,44 @@ the RC tuning are provisional pending bring-up.
 - Reverse-polarity protection is explicitly **out of scope** for these connectors;
   it belongs on the battery input. ADR-0019 records the battery-rail decisions and
   notes that reverse-polarity protection remains a board-level decision.
-- Pull-up and second-pole parts are laid out as DNP so the board supports both
-  encoder output types and both filter orders without a re-spin; bring-up selects
-  which to populate.
+- Pull-up and second-pole parts were intended to be laid out as DNP so one board
+  supports both encoder output types and both filter orders without a re-spin.
+  The v0.1 released to fabrication omits them, so changing the output type or
+  strengthening the filter now needs rework rather than a population variant.
 - Encoder reliability leans on a harness practice (pairing `M+/M−`) that is easy to
   get wrong in assembly; capture it in the build/assembly notes, not only here.
 - Open items: confirm the `P4SMA10CA` clamp against the TB6612 `VM` absolute
-  maximum; confirm the encoder output type (push-pull vs open-collector); tune the
-  RC (add the second pole) from measured glitching at 20 kHz and maximum RPM.
+  maximum; tune the RC (add the second pole) from measured glitching at 20 kHz
+  and maximum RPM. The encoder output type is confirmed push-pull (see
+  *Bring-up result*).
+
+## Bring-up result
+
+The encoder output type was measured on the bench. With the encoder powered from
+3V3 and a scope probe on one output channel, the channel produced a clean
+0–3.3 V square wave as the motor turned. Adding a 1 kΩ from the output to `GND`
+left the high level at **3.28 V**: the output sourced ~3.3 mA with only ~20 mV of
+droop, an apparent source impedance of a few ohms. An open-collector output with
+a 1 kΩ on-board pull-up would have collapsed to ~1.6 V, and the usual 4.7–10 kΩ
+pull-ups to below 0.6 V.
+
+**Conclusion: the encoder outputs are push-pull.** The provisioned pull-up is not
+needed and stays unpopulated.
+
+What v0.1 actually carries, as recorded against the schematic now in fabrication:
+
+- The encoder network is a **2.2 kΩ series resistor** (`R5`, `R7`) and a **2.2 nF
+  shunt capacitor** (`C32`, `C34`) at the MCU pin, with no pull-up. That is the
+  open-collector capacitor value, not the ~10 nF push-pull target above, so its
+  corner is ~33 kHz rather than ~7 kHz.
+- The v0.1 layout also omits the second filter pole and the per-connector 3V3
+  ferrite/decoupling described above.
+
+With a push-pull source the network is electrically safe and counts correctly:
+2.2 kΩ into 2.2 nF settles in a few microseconds against a ≥278 µs pulse. The
+cost is less PWM rejection than the ~10 nF target. Bring-up should watch the
+MCU-side waveform at full RPM with the 20 kHz drive active; if it glitches,
+rework `C32`/`C34` to 10 nF (0603) or add the second pole. The firmware
+minimum-pulse-width reject is not yet implemented, so until it is, the RC and
+the harness are the only glitch defences. The full bench procedure is in
+`.scratch/hardware-integration/spec.md` (§5.2 covers the encoder noise check).

@@ -10,7 +10,7 @@
 //!
 //! Idle, the task selects over three sources:
 //! 1. the [`UiEvent`] channel — lifecycle events from the orchestrator, the boot
-//!    flow, and the distance-calibration drive the UI spawns;
+//!    flow, and the calibrations;
 //! 2. a periodic tick — refreshes the running screen from the activity state and
 //!    the System Info snapshot while that screen is shown;
 //! 3. the pen-down edge — starts a gesture, which is then polled to pen-up.
@@ -31,10 +31,10 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use defmt::{debug, warn};
+use defmt::{debug, error, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use touch_ui::{
     CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
@@ -50,11 +50,9 @@ use crate::{
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
-        drive::{
-            self, DriveCommand, ImuCalibrationKind,
-            calibration::{self as drive_calibration, distance::DriveOutcome},
-        },
+        drive::calibration::{self as drive_calibration, distance::DistanceDecision},
         io::panel::Panel,
+        procedure::{self, Claim, ClaimKind, ScreenKind, StartOutcome},
         sensors::lidar::{self, LidarStatus},
         testmode,
     },
@@ -63,7 +61,7 @@ use crate::{
 // ── UI event channel ────────────────────────────────────────────────────────────
 
 /// Events delivered to the UI controller task from the orchestrator, the boot
-/// flow, and the UI's own distance-calibration drive task.
+/// flow, and the calibrations.
 #[derive(Debug, Clone, Copy)]
 pub enum UiEvent {
     /// Request to show the main menu (from initialisation or the boot gate).
@@ -73,8 +71,8 @@ pub enum UiEvent {
     TestingCompleted,
     /// Calibration procedure finished; the outcome is in the activity state.
     CalibrationCompleted,
-    /// The distance calibration's drive step finished or failed; the value screen
-    /// or the failure reason follows from the activity state.
+    /// The distance calibration's drive step finished; the value screen follows
+    /// from the activity state.
     DistanceDriveFinished,
 }
 
@@ -88,11 +86,13 @@ pub async fn send_ui_event(event: UiEvent) {
     UI_EVENT_CHANNEL.sender().send(event).await;
 }
 
-/// Requests that the distance calibration's drive step run.
-static DISTANCE_DRIVE_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
-
-/// Requests that the coast-and-avoid drive mode start.
-static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
+/// Requests that the coast-and-avoid drive mode start, carrying the claim it runs
+/// under.
+///
+/// The start publishes "Enabling `LiDAR`", then hands the claim to [`coast_avoid_task`]
+/// through this channel. Capacity one: a start is dispatched only after the previous
+/// claim was received, and the one Active Claim already prevents two starts.
+static COAST_AVOID_REQUEST: Channel<CriticalSectionRawMutex, Claim, 1> = Channel::new();
 
 /// Latched intent of the Room Scan screen: `true` while the radar screen wants
 /// the sensor, `false` once it has left.
@@ -108,6 +108,14 @@ static ROOM_SCAN_WANTED: AtomicBool = AtomicBool::new(false);
 /// store-and-signal that lands just before a `wait()` makes that `wait()` return
 /// immediately and no state change can be lost.
 static ROOM_SCAN_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// The Room Scan claim, held while the radar screen is open.
+///
+/// The radar is not a Procedure, so its claim publishes no Activity; it exists so
+/// a Procedure cannot start behind the radar and the radar cannot open behind a
+/// Procedure. `None` while the radar is closed, and the stored claim is the only
+/// one there is: entering again while it is held is refused by the claim slot.
+static ROOM_SCAN_CLAIM: Mutex<CriticalSectionRawMutex, Option<Claim>> = Mutex::new(None);
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +153,10 @@ const GESTURE_DEADLINE_MS: u64 = 30_000;
 /// Backoff before retrying an offline panel, in milliseconds.
 const REINIT_BACKOFF_MS: u64 = 2_000;
 
+/// Interval between `LiDAR` status polls while the coast-and-avoid helper waits
+/// for the sensor to warm up, in milliseconds.
+const LIDAR_STATUS_POLL_MS: u64 = 50;
+
 // ── Initialisation ──────────────────────────────────────────────────────────────
 
 /// Build the panel, spawn the UI controller task, and spawn the helper tasks it
@@ -152,14 +164,12 @@ const REINIT_BACKOFF_MS: u64 = 2_000;
 ///
 /// The controller owns the panel's display, touch controller, and framebuffer
 /// for the lifetime of the firmware. The helper tasks own the procedures that
-/// cannot run on the UI task without freezing the panel: the distance
-/// calibration's fixed-distance drive, and the coast-and-avoid mode's `LiDAR`
-/// enable, which may take several seconds.
+/// cannot run on the UI task without freezing the panel: the coast-and-avoid
+/// mode's `LiDAR` enable, which may take several seconds.
 #[allow(clippy::unwrap_used)]
 pub fn init_ui(spawner: Spawner, pins: PanelResources) {
     spawner.spawn(ui_task(Panel::new(pins)).unwrap());
-    spawner.spawn(distance_calibration_drive_task().unwrap());
-    spawner.spawn(coast_avoid_task().unwrap());
+    spawner.spawn(coast_avoid_task(spawner).unwrap());
     spawner.spawn(room_scan_task().unwrap());
 }
 
@@ -182,35 +192,57 @@ pub async fn show_main_menu() {
     send_ui_event(UiEvent::ShowMainMenu).await;
 }
 
-/// Run the distance calibration's fixed-distance drive step and report back.
+/// Warm up the `LiDAR` for coast-and-avoid, off the UI task, then hand the mode the
+/// claim.
 ///
-/// The step is one-shot per request: the UI asks for it when the operator opens
-/// the Distance entry, and the reply arrives as a [`UiEvent`] so the UI task is
-/// never blocked while the robot drives.
+/// The start already published "Enabling `LiDAR`" and took the one Active Claim, so
+/// the running screen is up from the first frame. Enabling can take seconds, so the
+/// UI task must not await it: it sends the claim here and returns. This task polls
+/// the sensor's lock-free status and makes the terminal claim call itself:
+///
+/// - a stop during the warm-up disables the sensor and abandons the claim;
+/// - a failed bring-up disables the sensor and fails the claim with
+///   "`LiDAR` unavailable";
+/// - once streaming it spawns the mode task with the claim. A spawn failure
+///   disables the sensor and abandons the claim so nothing keeps running.
 #[embassy_executor::task]
-async fn distance_calibration_drive_task() {
+async fn coast_avoid_task(spawner: Spawner) {
     loop {
-        DISTANCE_DRIVE_REQUEST.receive().await;
-        if drive_calibration::distance::run_drive_step().await != DriveOutcome::Stopped {
-            send_ui_event(UiEvent::DistanceDriveFinished).await;
-        }
-    }
-}
+        let claim = COAST_AVOID_REQUEST.receive().await;
 
-/// Start coast-and-avoid when the panel asks, off the UI task.
-///
-/// Enabling the `LiDAR` can take several seconds, so the UI task must not await
-/// it: it dispatches a request and polls the activity state and the sensor's
-/// lock-free status while this task enables the sensor and starts the mode. On
-/// failure the mode records the reason, which the running screen shows, and never
-/// drives.
-#[embassy_executor::task]
-async fn coast_avoid_task() {
-    loop {
-        COAST_AVOID_REQUEST.receive().await;
-        if let Err(error) = coast_obstacle_avoid::start().await {
-            warn!("[ui] coast-and-avoid start failed: {}", error.label());
-            activity::fail(error.label()).await;
+        // [`lidar::enable`] releases a failure latched by a previous run before it
+        // enables, so this run's own bring-up decides the outcome.
+        lidar::enable().await;
+
+        loop {
+            if claim.is_stop_requested() {
+                lidar::disable().await;
+                claim.abandon().await;
+                info!("[ui] coast-and-avoid: stopped during LiDAR warm-up");
+                break;
+            }
+
+            match lidar::status() {
+                LidarStatus::Streaming => {
+                    if !coast_obstacle_avoid::spawn(spawner, claim) {
+                        lidar::disable().await;
+                        claim.abandon().await;
+                        error!("[ui] coast-and-avoid: mode task spawn failed");
+                    }
+                    break;
+                }
+                LidarStatus::Failed => {
+                    // The sensor is powered down and will not retry until a fresh
+                    // disable-then-enable, so clear it and refuse to drive.
+                    lidar::disable().await;
+                    claim.fail("LiDAR unavailable").await;
+                    warn!("[ui] coast-and-avoid: LiDAR unavailable");
+                    break;
+                }
+                LidarStatus::Off | LidarStatus::Warming => {
+                    Timer::after(Duration::from_millis(LIDAR_STATUS_POLL_MS)).await;
+                }
+            }
         }
     }
 }
@@ -435,7 +467,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
         // A menu entry carries its identity, so what it starts does not depend on
         // the screen it was tapped on: the item names its own screen.
         (_, Some(Hit::MenuItem(item))) => handle_menu_item(ui, item).await,
-        (Screen::RoomScan, Some(Hit::Back)) => leave_room_scan(),
+        (Screen::RoomScan, Some(Hit::Back)) => leave_room_scan().await,
         (Screen::ValueEntry(ValueFlow::DistanceCalibration), Some(Hit::Save)) => {
             save_distance_calibration(value_before).await;
         }
@@ -446,7 +478,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
             record_attempt_straight(value_before).await;
         }
         (Screen::Status, Some(Hit::Back)) => activity::clear().await,
-        (Screen::Status, Some(Hit::Stop)) => stop_running().await,
+        (Screen::Status, Some(Hit::Stop)) => stop_running(),
         _ => {}
     }
 }
@@ -458,7 +490,7 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
 /// silent change of which procedure a tap starts.
 async fn handle_menu_item(ui: &mut Ui, item: Item) {
     match item {
-        Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui),
+        Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui).await,
         Item::Procedure(procedure) => match procedure {
             Procedure::BasicMotor
             | Procedure::Turns
@@ -481,71 +513,93 @@ async fn handle_menu_item(ui: &mut Ui, item: Item) {
 
 /// Start the test-mode `procedure`.
 ///
-/// The producer records the identity in the activity state, so the running screen
-/// names it from the entry rather than from a parallel kind enumeration. A refused
-/// start — the family's slot still busy — goes back to the entry's landing screen:
-/// the model navigated to the running screen when the entry was tapped, so leaving
-/// it there would draw a running screen with no test behind it. The landing screen
-/// comes from the entry's identity, not from the stale status view the model still
-/// holds from whatever ran last.
+/// The start claims the one Active Claim and publishes the starting activity, so
+/// the running screen names the procedure from the entry rather than from a
+/// parallel kind enumeration. `Started` hands the claim to [`testmode::start`],
+/// which routes it to the test task. A `Busy` or `Rejected` start goes back to the
+/// entry's landing screen: the model navigated to the running screen when the
+/// entry was tapped, so leaving it there would draw a running screen with no test
+/// behind it. The landing screen comes from the entry's identity, not from the
+/// stale status view the model still holds from whatever ran last.
 async fn start_test(ui: &mut Ui, procedure: Procedure) {
-    if !testmode::start(procedure).await {
-        ui.show_screen(procedure.landing_screen());
-        return;
-    }
+    match procedure::start(procedure).await {
+        StartOutcome::Started(claim) => {
+            testmode::start(claim, procedure).await;
 
-    let snapshot = activity::snapshot().await;
-    ui.show_status(status_view(&snapshot));
+            let snapshot = activity::snapshot().await;
+            ui.show_status(status_view(&snapshot));
+        }
+        StartOutcome::Busy | StartOutcome::Rejected => {
+            ui.show_screen(procedure.landing_screen());
+        }
+    }
 }
 
-/// Enter the Room Scan screen: claim the single-active test-mode slot and enable
-/// the sensor.
+/// Enter the Room Scan screen: claim the one Active Claim and enable the sensor.
 ///
-/// The model has already navigated to the radar screen. If another test owns the
-/// slot the entry is refused and the screen leaves again, so the radar never
-/// opens alongside a running test. The intent is latched for [`room_scan_task`]
-/// to pick up, so this returns immediately and the screen shows the sensor
-/// warming.
-fn enter_room_scan(ui: &mut Ui) {
-    if !testmode::claim_room_scan() {
-        warn!("[ui] room scan refused — another test is active");
+/// The model has already navigated to the radar screen. If another claim holds the
+/// slot the entry is refused and the screen leaves again, so the radar never opens
+/// alongside a running Procedure and the `LiDAR` is left alone. The claim publishes
+/// no Activity; it is stored in [`ROOM_SCAN_CLAIM`] until the screen leaves. The
+/// intent is latched for [`room_scan_task`] to pick up, so this returns immediately
+/// and the screen shows the sensor warming.
+async fn enter_room_scan(ui: &mut Ui) {
+    let Some(claim) = procedure::claim(ClaimKind::Screen(ScreenKind::RoomScan)).await else {
+        warn!("[ui] room scan refused — another claim is held");
         let _ = ui.back();
         return;
-    }
+    };
+
+    *ROOM_SCAN_CLAIM.lock().await = Some(claim);
     ROOM_SCAN_WANTED.store(true, Ordering::Release);
     ROOM_SCAN_SIGNAL.signal(());
 }
 
-/// Leave the Room Scan screen: release the single-active slot and clear the
-/// `LiDAR` need it holds.
+/// Leave the Room Scan screen: abandon the claim and clear the `LiDAR` need it
+/// holds.
 ///
-/// The intent is latched rather than awaited, so the panel never blocks; the
-/// lifecycle task acts on it even if the leave lands while the sensor is still
-/// warming. Called on every exit path, including a failed bring-up, it clears
-/// only the need this screen actually holds, so a failed bring-up powers down
-/// nothing and cannot stop a sensor another mode owns.
-fn leave_room_scan() {
-    testmode::release_room_scan();
+/// The claim is taken from [`ROOM_SCAN_CLAIM`], so one leave releases the slot even
+/// if the screen leaves twice, and a late leave cannot free a newer claim: `abandon`
+/// checks the generation and is otherwise a no-op. The intent is latched rather
+/// than awaited, so the panel never blocks; the lifecycle task acts on it even if
+/// the leave lands while the sensor is still warming. Called on every exit path,
+/// including a failed bring-up, it clears only the need this screen actually holds,
+/// so a failed bring-up powers down nothing and cannot stop a sensor another mode
+/// owns.
+async fn leave_room_scan() {
+    let claim = ROOM_SCAN_CLAIM.lock().await.take();
+    if let Some(claim) = claim {
+        claim.abandon().await;
+    }
+
     ROOM_SCAN_WANTED.store(false, Ordering::Release);
     ROOM_SCAN_SIGNAL.signal(());
 }
 
 /// Start the calibration `procedure`.
 ///
-/// The identity maps to the concrete calibration flow, and the running view takes
-/// its title and parent from that identity. Every other Procedure belongs to
-/// another screen and is not a calibration, so it starts nothing.
+/// Every calibration takes the one Active Claim with [`procedure::start`], which
+/// publishes the starting activity, and hands the claim to
+/// [`drive_calibration::start`], which routes it to the controller's task. Distance
+/// keeps that claim through its value-entry screen, so a second start is refused
+/// until the operator commits or cancels. The running view takes its title and
+/// parent from the Procedure's identity. Every other Procedure belongs to another
+/// screen and is not a calibration, so it starts nothing.
 async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
     match procedure {
-        Procedure::MotorCalibration => {
-            drive::send_drive_command(DriveCommand::RunMotorCalibration).await;
-            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
+        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
+            match procedure::start(procedure).await {
+                StartOutcome::Started(claim) => {
+                    drive_calibration::start(claim, procedure).await;
+
+                    let snapshot = activity::snapshot().await;
+                    ui.show_status(status_view(&snapshot));
+                }
+                StartOutcome::Busy | StartOutcome::Rejected => {
+                    ui.show_screen(procedure.landing_screen());
+                }
+            }
         }
-        Procedure::MagCalibration => {
-            drive::send_drive_command(DriveCommand::RunImuCalibration(ImuCalibrationKind::Mag)).await;
-            ui.show_status(StatusView::for_procedure(procedure, "Starting"));
-        }
-        Procedure::DistanceCalibration => start_distance_calibration(ui).await,
         Procedure::CoastAndAvoid
         | Procedure::AttemptStraight
         | Procedure::BasicMotor
@@ -559,16 +613,31 @@ async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
 
 /// Start coast-and-avoid from the panel without blocking on the `LiDAR` enable.
 ///
-/// The activity is recorded first so the running screen appears immediately and
-/// names the mode; the [`coast_avoid_task`] helper then enables the `LiDAR`,
-/// which the running screen tracks through [`lidar::status`]. If the sensor
-/// cannot be brought up, the helper records the failure reason and the screen
-/// holds it until the operator dismisses it back to the Drive Mode menu.
+/// The start takes the one Active Claim and publishes the starting activity, so the
+/// running screen appears immediately and names the mode. The claim is then handed
+/// to [`coast_avoid_task`], which enables the `LiDAR` and spawns the mode once the
+/// sensor is streaming. A `Busy` or `Rejected` start leaves the entry's landing
+/// screen showing: the model navigated to the running screen when the entry was
+/// tapped, and a running screen with no mode behind it would be a lie. If the
+/// helper's channel refuses the claim, nothing can run it, so abandon it.
 async fn start_coast_and_avoid(ui: &mut Ui) {
-    activity::begin(Activity::Procedure(Procedure::CoastAndAvoid), "Enabling LiDAR").await;
-    let snapshot = activity::snapshot().await;
-    ui.show_status(status_view(&snapshot));
-    COAST_AVOID_REQUEST.try_send(()).ok();
+    match procedure::start(Procedure::CoastAndAvoid).await {
+        StartOutcome::Started(claim) => {
+            claim.phase("Enabling LiDAR", None).await;
+            if COAST_AVOID_REQUEST.try_send(claim).is_err() {
+                claim.abandon().await;
+                ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
+                return;
+            }
+
+            let snapshot = activity::snapshot().await;
+            ui.show_status(status_view(&snapshot));
+        }
+        StartOutcome::Busy | StartOutcome::Rejected => {
+            warn!("[ui] coast-and-avoid refused — another claim is held");
+            ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
+        }
+    }
 }
 
 /// Record the attempt-straight distance the operator set, without starting it.
@@ -581,45 +650,30 @@ async fn record_attempt_straight(value_cm: i32) {
     debug!("[ui] attempt-straight recorded {} cm", target_cm);
 }
 
-/// Back up the distance factor and start the calibration's drive step.
+/// Send the measured distance to the calibration task, which stores the factor.
 ///
-/// The step runs on its own task and reports back through the activity state and
-/// a [`UiEvent`], so the panel stays live while the robot drives.
-async fn start_distance_calibration(ui: &mut Ui) {
-    ui.show_status(StatusView::for_procedure(Procedure::DistanceCalibration, "Starting"));
-
-    drive_calibration::distance::begin().await;
-    DISTANCE_DRIVE_REQUEST.send(()).await;
-}
-
-/// Commit the factor the operator measured, and forget the calibration.
+/// The task holds the claim across the value screen and makes the terminal call, so
+/// the UI sends only the decision: it never writes the factor or clears Activity.
 async fn save_distance_calibration(measured_cm: i32) {
-    let factor = drive_calibration::distance::commit(measured_cm).await;
-    debug!("[ui] distance calibration saved: factor {}", factor);
-    activity::clear().await;
+    drive_calibration::distance::send_decision(DistanceDecision::Commit(measured_cm)).await;
 }
 
-/// Restore the factor in force before the calibration, and forget it.
-async fn cancel_distance_calibration() {
-    drive_calibration::distance::abort().await;
-    activity::clear().await;
-}
-
-/// Stop whatever the running screen is showing, and forget it.
+/// Tell the calibration task to restore the factor in force before the run.
 ///
-/// Every producer latch is set, plus the drive interrupt that cancels a leg in
-/// flight. The panel cannot tell which producer is mid-start — a procedure
-/// requested microseconds ago may not have published itself yet — and a latch the
-/// wrong producer holds is cleared by that producer's own re-arm when its next run
-/// starts, so setting them all is safe and leaves no running procedure
-/// unstoppable. Stopping coast-and-avoid clears its active flag; its task then
-/// brakes, disables the `LiDAR`, and exits on its own. The activity state is
-/// cleared here because the panel is what moved on.
-async fn stop_running() {
-    testmode::stop();
-    drive_calibration::request_stop();
-    coast_obstacle_avoid::stop();
-    activity::clear().await;
+/// The task restores it and abandons the claim; the UI's Cancel has already left the
+/// value screen, and nothing here touches Activity.
+async fn cancel_distance_calibration() {
+    drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
+}
+
+/// Stop whatever the running screen is showing.
+///
+/// `procedure::stop` latches the stop for whichever claim holds the slot and
+/// interrupts a drive in flight. The claim's owner observes the latch, cleans up
+/// and records the terminal outcome — `abandon` for a normal stop or `fail` for a
+/// failsafe — so nothing here clears the Activity.
+fn stop_running() {
+    procedure::stop();
 }
 
 /// React to a finished calibration: leave a completed one, hold a failed one's
@@ -644,13 +698,22 @@ async fn hold_or_leave_calibration(ui: &mut Ui) {
     }
 }
 
-/// Show the distance value screen once the drive step has finished, or hold the
-/// step's failure reason on screen.
+/// Show the distance value screen once the drive step has finished.
+///
+/// The calibration task publishes "Enter measured distance" before it sends the
+/// event, so the snapshot is running with that phase and the value screen takes
+/// over. The guards are defensive: the event is sent only for a completed drive, so
+/// an idle snapshot means the operator left the running screen while the event was
+/// in flight — the task is still waiting on the decision and holds the claim, so it
+/// is told to cancel rather than left holding the slot.
 async fn enter_distance_entry(ui: &mut Ui) {
     let snapshot = activity::snapshot().await;
 
     if snapshot.activity == Activity::Idle {
-        // The operator stopped the step; the panel already left its screen.
+        // The panel already left and cleared Activity; the task still owns the
+        // claim and waits for the decision, so cancel it to restore the factor and
+        // release.
+        drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
         return;
     }
 
@@ -689,8 +752,8 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
 /// The body line a running screen shows for a snapshot.
 ///
 /// A drive mode reports the sensor's state while it runs; once its start has
-/// failed, the reason the producer recorded (the [`coast_obstacle_avoid::StartError`]
-/// label) takes over the line.
+/// failed, the reason the producer recorded through the claim's `fail` takes over
+/// the line.
 fn status_body(snapshot: &Snapshot) -> &'static str {
     match snapshot.activity {
         Activity::Procedure(Procedure::CoastAndAvoid) if snapshot.stage != Stage::Failed => {

@@ -1,0 +1,66 @@
+[package]
+name = "bridge-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The Bridge's HAL-agnostic rules: the pump (coalescing, routing, watermarks, client gate) and the Setup Mode protocol (window, DHCP, DNS, portal codecs)."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[features]
+# Host tests only. The crate itself is always `no_std`.
+std = ["remote-protocol/std"]
+
+[dependencies]
+remote-protocol = { path = "../../remote-protocol", version = "1" }
+bridge-net = { path = "../../remote/bridge-net", version = "1" }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "coalescing"
+required-features = ["std"]
+
+[[test]]
+name = "routing"
+required-features = ["std"]
+
+[[test]]
+name = "watermark"
+required-features = ["std"]
+
+[[test]]
+name = "auth"
+required-features = ["std"]
+
+[[test]]
+name = "pump"
+required-features = ["std"]
+
+[[test]]
+name = "setup"
+required-features = ["std"]
+
+[[test]]
+name = "dhcp"
+required-features = ["std"]
+
+[[test]]
+name = "dns"
+required-features = ["std"]
+
+[[test]]
+name = "portal"
+required-features = ["std"]
+
+[[test]]
+name = "pairing"
+required-features = ["std"]
+
+[[test]]
+name = "record"
+required-features = ["std"]
+
+[[test]]
+name = "heartbeat"
+required-features = ["std"]

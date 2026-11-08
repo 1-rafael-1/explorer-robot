@@ -11,28 +11,22 @@
 //! state; the live pulse counts go to the log. The test is interactive: it runs
 //! until the operator taps Stop on the running screen.
 
-use defmt::info;
+use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use touch_ui::Procedure;
 
-use super::test_lifecycle;
 use crate::{
     system::state::activity,
     task::{
         drive::{clear_encoder_measurement, get_latest_encoder_measurement},
         motor_driver::{self, MotorCommand, Track},
-        procedure::Lifecycle,
+        procedure::Claim,
         sensors::encoders::{self, EncoderCommand},
     },
 };
 
 /// How long one leg (one track, one direction) drives, in milliseconds.
 const LEG_DURATION_MS: u64 = 2_000;
-
-/// The basic motor test's lifecycle: the test family's stop latch and slot, with
-/// no completion event — the test runs until the operator stops it.
-const LIFECYCLE: Lifecycle = test_lifecycle(Procedure::BasicMotor);
 
 /// How often the encoder count is sampled during a leg, in milliseconds.
 const SAMPLE_INTERVAL_MS: u64 = 100;
@@ -82,14 +76,27 @@ const LEGS: [Leg; 4] = [
 ];
 
 /// Spawn the basic motor test task via the controller.
-#[allow(clippy::unwrap_used)]
-pub(super) fn spawn(spawner: Spawner) {
-    spawner.spawn(basic_motor_test_task().unwrap());
+///
+/// The caller's claim travels with the task. Returns `false` when the spawn failed,
+/// so the controller can abandon the claim rather than leave its running screen up
+/// with no task behind it.
+#[must_use]
+pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
+    basic_motor_test_task(claim).map_or_else(
+        |_| {
+            error!("basic-motor: spawn failed");
+            false
+        },
+        |token| {
+            spawner.spawn(token);
+            true
+        },
+    )
 }
 
 /// Basic motor test mode runner.
 #[embassy_executor::task]
-async fn basic_motor_test_task() {
+async fn basic_motor_test_task(claim: Claim) {
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
     Timer::after(Duration::from_millis(10)).await;
@@ -106,13 +113,13 @@ async fn basic_motor_test_task() {
     // The test is interactive: the legs cycle until the operator stops them.
     'cycling: loop {
         for (index, leg) in LEGS.iter().enumerate() {
-            if LIFECYCLE.is_stop_requested() {
+            if claim.is_stop_requested() {
                 break 'cycling;
             }
 
             // Progress done so far, so the bar never claims a leg that has not run.
             let percent = activity::percent_done(index, LEGS.len());
-            LIFECYCLE.phase(leg.phase, Some(percent)).await;
+            claim.phase(leg.phase, Some(percent)).await;
 
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(100)).await;
@@ -126,7 +133,7 @@ async fn basic_motor_test_task() {
             })
             .await;
 
-            run_leg(leg).await;
+            run_leg(leg, &claim).await;
 
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(200)).await;
@@ -136,14 +143,14 @@ async fn basic_motor_test_task() {
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoders::send_command(EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    LIFECYCLE.release();
+    claim.abandon().await;
 }
 
 /// Drive one leg for its duration, logging the encoder count as it goes.
-async fn run_leg(leg: &Leg) {
+async fn run_leg(leg: &Leg, claim: &Claim) {
     let mut elapsed_ms = 0;
     while elapsed_ms < LEG_DURATION_MS {
-        if LIFECYCLE.wait_or_stop(SAMPLE_INTERVAL_MS).await {
+        if claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
             return;
         }
         elapsed_ms += SAMPLE_INTERVAL_MS;

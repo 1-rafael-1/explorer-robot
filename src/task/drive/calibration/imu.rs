@@ -14,9 +14,7 @@
 use defmt::info;
 use embassy_time::{Duration, Instant, Timer};
 use nalgebra::Vector3;
-use touch_ui::Procedure;
 
-use super::calibration_lifecycle;
 use crate::{
     system::state::activity,
     task::{
@@ -26,7 +24,7 @@ use crate::{
         },
         io::flash_storage,
         motor_driver::{self, MotorCommand},
-        procedure::Lifecycle,
+        procedure::Claim,
         sensors::imu as imu_read,
     },
 };
@@ -69,11 +67,6 @@ const MANUAL_PHASES: usize = 3;
 
 /// Countdown before the motor interference phase, in seconds.
 const SETTLE_SECONDS: u64 = 20;
-
-/// The magnetometer calibration's lifecycle: the calibration family's stop latch,
-/// no slot, raising `CalibrationCompleted` on both outcomes. The phase machine,
-/// settle and interference passes stay this module's own body.
-const LIFECYCLE: Lifecycle = calibration_lifecycle(Procedure::MagCalibration);
 
 /// Ensures IMU readings are stopped (and fusion mode restored) after calibration completes.
 struct ImuReadingsGuard {
@@ -417,24 +410,25 @@ enum Outcome {
 
 /// Publish a phase transition: the percent from the phase's place in the
 /// sequence, and `detail` if given, else the phase's own label.
-async fn enter_mag_phase(phase: MagCalibrationPhase, detail: Option<&'static str>) {
+async fn enter_mag_phase(claim: &Claim, phase: MagCalibrationPhase, detail: Option<&'static str>) {
     let percent = phase
         .progress()
         .map(|(index, total)| activity::percent_done(usize::from(index).saturating_sub(1), usize::from(total)));
     let line = detail.unwrap_or_else(|| phase.label());
     info!("Mag phase transition -> {} ({})", phase.label(), line);
-    LIFECYCLE.phase(line, percent).await;
+    claim.phase(line, percent).await;
 }
 
 /// Guide one explicit manual rotation phase and collect coverage.
 #[allow(clippy::too_many_lines)]
 async fn measure_mag_rotation_phase(
+    claim: &Claim,
     phase: MagCalibrationPhase,
     step: &MagRotationStep,
     config: MagCalibrationConfig,
     coverage: &mut MagCoverage,
 ) -> PhaseResult {
-    enter_mag_phase(phase, Some(phase.prompt())).await;
+    enter_mag_phase(claim, phase, Some(phase.prompt())).await;
 
     let step_timeout = (config.max_seconds / MAG_ROTATION_STEPS.len() as u64).max(10);
     let min_step_samples = (config.min_samples / MAG_ROTATION_STEPS.len()).max(1);
@@ -449,7 +443,7 @@ async fn measure_mag_rotation_phase(
     let mut last_log_ms: u32 = 0;
 
     loop {
-        if LIFECYCLE.is_stop_requested() {
+        if claim.is_stop_requested() {
             return PhaseResult::Stopped;
         }
 
@@ -517,8 +511,8 @@ async fn measure_mag_rotation_phase(
                 phase.label(),
                 step_coverage.samples
             );
-            LIFECYCLE.phase("Phase OK", None).await;
-            if LIFECYCLE.wait_or_stop(500).await {
+            claim.phase("Phase OK", None).await;
+            if claim.wait_or_stop(500).await {
                 return PhaseResult::Stopped;
             }
             return PhaseResult::Complete;
@@ -532,7 +526,7 @@ async fn measure_mag_rotation_phase(
 }
 
 /// Guide the user through explicit axis-specific phases and collect coverage.
-async fn measure_mag_coverage(config: MagCalibrationConfig) -> CoverageOutcome {
+async fn measure_mag_coverage(claim: &Claim, config: MagCalibrationConfig) -> CoverageOutcome {
     let mut coverage = MagCoverage::new();
 
     let phases = [
@@ -542,7 +536,7 @@ async fn measure_mag_coverage(config: MagCalibrationConfig) -> CoverageOutcome {
     ];
 
     for (index, (phase, reason)) in phases.iter().enumerate() {
-        match measure_mag_rotation_phase(*phase, &MAG_ROTATION_STEPS[index], config, &mut coverage).await {
+        match measure_mag_rotation_phase(claim, *phase, &MAG_ROTATION_STEPS[index], config, &mut coverage).await {
             PhaseResult::Complete => {}
             PhaseResult::Incomplete => return CoverageOutcome::Incomplete(reason),
             PhaseResult::Stopped => return CoverageOutcome::Stopped,
@@ -570,6 +564,7 @@ async fn set_motor_drivers_enabled(enabled: bool) {
 ///
 /// Returns `None` when the operator stopped the calibration.
 async fn measure_mag_interference(
+    claim: &Claim,
     config: MagCalibrationConfig,
     baseline_mag: Vector3<f32>,
 ) -> Option<InterferenceData> {
@@ -577,11 +572,11 @@ async fn measure_mag_interference(
     let total = INTERFERENCE_STEPS.len();
 
     for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
-        if LIFECYCLE.is_stop_requested() {
+        if claim.is_stop_requested() {
             return None;
         }
         info!("Motor interference step start: {=str}", step.label);
-        LIFECYCLE
+        claim
             .phase(step.label, Some(activity::percent_done(index, total)))
             .await;
 
@@ -590,7 +585,7 @@ async fn measure_mag_interference(
             right_speed: step.right,
         })
         .await;
-        if LIFECYCLE.wait_or_stop(1_000).await {
+        if claim.wait_or_stop(1_000).await {
             return None;
         }
         clear_mag_measurement().await;
@@ -601,7 +596,7 @@ async fn measure_mag_interference(
         info!("Motor interference step done: {=str}", step.label);
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        if LIFECYCLE.wait_or_stop(500).await {
+        if claim.wait_or_stop(500).await {
             return None;
         }
     }
@@ -613,6 +608,7 @@ async fn measure_mag_interference(
 ///
 /// Returns `None` when the operator stopped the calibration.
 async fn verify_mag_interference(
+    claim: &Claim,
     config: MagCalibrationConfig,
     bias: Vector3<f32>,
     scale: Vector3<f32>,
@@ -628,11 +624,11 @@ async fn verify_mag_interference(
     let total = INTERFERENCE_STEPS.len();
 
     for (index, step) in INTERFERENCE_STEPS.iter().enumerate() {
-        if LIFECYCLE.is_stop_requested() {
+        if claim.is_stop_requested() {
             return None;
         }
         info!("Motor verify step {}/{}: {=str}", index + 1, total, step.label);
-        LIFECYCLE
+        claim
             .phase(step.label, Some(activity::percent_done(index, total)))
             .await;
 
@@ -641,7 +637,7 @@ async fn verify_mag_interference(
             right_speed: step.right,
         })
         .await;
-        if LIFECYCLE.wait_or_stop(1_000).await {
+        if claim.wait_or_stop(1_000).await {
             return None;
         }
         clear_mag_measurement().await;
@@ -662,7 +658,7 @@ async fn verify_mag_interference(
         }
 
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        if LIFECYCLE.wait_or_stop(500).await {
+        if claim.wait_or_stop(500).await {
             return None;
         }
     }
@@ -674,16 +670,16 @@ async fn verify_mag_interference(
 /// phase.
 ///
 /// Returns `true` when the operator stopped the calibration.
-async fn run_settle_countdown() -> bool {
-    LIFECYCLE.phase("Hold still, motors soon", Some(0)).await;
+async fn run_settle_countdown(claim: &Claim) -> bool {
+    claim.phase("Hold still, motors soon", Some(0)).await;
     let total = usize::try_from(SETTLE_SECONDS).unwrap_or(1);
 
     for second in 0..SETTLE_SECONDS {
         let elapsed = usize::try_from(second).unwrap_or(0);
-        LIFECYCLE
+        claim
             .phase("Hold still, motors soon", Some(activity::percent_done(elapsed, total)))
             .await;
-        if LIFECYCLE.wait_or_stop(1_000).await {
+        if claim.wait_or_stop(1_000).await {
             return true;
         }
     }
@@ -693,15 +689,15 @@ async fn run_settle_countdown() -> bool {
 
 /// Run the magnetometer calibration flow.
 #[allow(clippy::too_many_lines)]
-async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
+async fn run_mag_calibration_steps(claim: &Claim, config: MagCalibrationConfig) -> Outcome {
     info!("Step 2: Magnetometer Calibration (strict phase machine)");
 
-    LIFECYCLE.phase("Prepare to move", None).await;
-    if LIFECYCLE.wait_or_stop(3_000).await {
+    claim.phase("Prepare to move", None).await;
+    if claim.wait_or_stop(3_000).await {
         return Outcome::Stopped;
     }
 
-    let coverage = match measure_mag_coverage(config).await {
+    let coverage = match measure_mag_coverage(claim, config).await {
         CoverageOutcome::Collected(coverage) => coverage,
         CoverageOutcome::Incomplete(reason) => {
             info!("MAG CAL RESULT: reached_motor_phase=false, reason={}", reason);
@@ -735,8 +731,8 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
         mag_scale.x, mag_scale.y, mag_scale.z
     );
 
-    enter_mag_phase(MagCalibrationPhase::SettleDelay, Some("Set robot down")).await;
-    if run_settle_countdown().await {
+    enter_mag_phase(claim, MagCalibrationPhase::SettleDelay, Some("Set robot down")).await;
+    if run_settle_countdown(claim).await {
         return Outcome::Stopped;
     }
 
@@ -744,20 +740,21 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
     set_motor_drivers_enabled(true).await;
     Timer::after(Duration::from_millis(100)).await;
 
-    enter_mag_phase(MagCalibrationPhase::MotorBaseline, Some("Baseline, motors off")).await;
+    enter_mag_phase(claim, MagCalibrationPhase::MotorBaseline, Some("Baseline, motors off")).await;
     clear_mag_measurement().await;
     Timer::after(Duration::from_millis(500)).await;
     let baseline_mag = measure_mag_average(config.avg_samples).await;
 
-    enter_mag_phase(MagCalibrationPhase::MotorMeasure, Some("Motor interference")).await;
-    let Some(interference) = measure_mag_interference(config, baseline_mag).await else {
+    enter_mag_phase(claim, MagCalibrationPhase::MotorMeasure, Some("Motor interference")).await;
+    let Some(interference) = measure_mag_interference(claim, config, baseline_mag).await else {
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
         set_motor_drivers_enabled(false).await;
         return Outcome::Stopped;
     };
 
-    enter_mag_phase(MagCalibrationPhase::MotorVerify, Some("Verify compensation")).await;
-    let Some(verify_ok) = verify_mag_interference(config, mag_bias, mag_scale, baseline_mag, &interference).await
+    enter_mag_phase(claim, MagCalibrationPhase::MotorVerify, Some("Verify compensation")).await;
+    let Some(verify_ok) =
+        verify_mag_interference(claim, config, mag_bias, mag_scale, baseline_mag, &interference).await
     else {
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
         set_motor_drivers_enabled(false).await;
@@ -774,7 +771,7 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
         return Outcome::Incomplete("Motor verify failed");
     }
 
-    enter_mag_phase(MagCalibrationPhase::Save, Some("Saving")).await;
+    enter_mag_phase(claim, MagCalibrationPhase::Save, Some("Saving")).await;
     info!("MAG CAL RESULT: reached_motor_phase=true, reason=success");
 
     Outcome::Success(MagCalibrationResult {
@@ -790,12 +787,13 @@ async fn run_mag_calibration_steps(config: MagCalibrationConfig) -> Outcome {
 /// Calibrate the magnetometer and persist results.
 ///
 /// The ICM-20948 is connected via a dedicated SPI bus. The `sensors::imu` module
-/// (ticket 04) handles SPI initialization; this function drives the calibration
-/// algorithm and records the outcome in the activity state.
-async fn run_mag_calibration() {
+/// handles SPI initialization; this function drives the calibration algorithm and
+/// records the outcome in the activity state through `claim`, which the Panel
+/// already took and published.
+async fn run_mag_calibration(claim: &Claim) {
     info!("=== Starting IMU Mag Calibration ===");
 
-    let _ = LIFECYCLE.start("Initializing").await;
+    claim.phase("Initializing", None).await;
 
     let _imu_guard =
         ImuReadingsGuard::start_with_fusion_mode(imu_read::DmpFusionMode::Axis9, imu_read::DEFAULT_FUSION_MODE);
@@ -804,16 +802,16 @@ async fn run_mag_calibration() {
     let mut mag_cal = imu_read::MagCalibration::default();
     let mut imu_flags = flash_storage::get_cached_imu_flags().await.unwrap_or_default();
 
-    let mag_result = match run_mag_calibration_steps(MAG_CALIBRATION_CONFIG).await {
+    let mag_result = match run_mag_calibration_steps(claim, MAG_CALIBRATION_CONFIG).await {
         Outcome::Success(result) => result,
         Outcome::Incomplete(reason) => {
             info!("Mag calibration failed; keeping previous values");
-            LIFECYCLE.fail(reason).await;
+            claim.fail(reason).await;
             return;
         }
         Outcome::Stopped => {
             info!("Mag calibration stopped by the operator");
-            LIFECYCLE.abandon().await;
+            claim.abandon().await;
             return;
         }
     };
@@ -843,7 +841,7 @@ async fn run_mag_calibration() {
     );
     info!("  Motor interference patterns captured");
 
-    LIFECYCLE.phase("Saving to flash", None).await;
+    claim.phase("Saving to flash", None).await;
 
     flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
         flash_storage::CalibrationDataKind::ImuFlags(imu_flags),
@@ -855,7 +853,7 @@ async fn run_mag_calibration() {
     info!("Applying mag calibration to IMU task");
     imu_read::load_mag_calibration(mag_cal);
 
-    LIFECYCLE.complete("Calibration saved").await;
+    claim.complete("Calibration saved").await;
     Timer::after(Duration::from_secs(2)).await;
 
     info!("=== IMU Mag Calibration Complete ===");
@@ -864,9 +862,10 @@ async fn run_mag_calibration() {
 /// Dispatch the requested IMU calibration routine.
 ///
 /// The ICM-20948 is connected via a dedicated SPI bus. The sensor module
-/// (`crate::task::sensors::imu`) owns SPI initialization.
-pub async fn run_imu_calibration(kind: ImuCalibrationKind) {
+/// (`crate::task::sensors::imu`) owns SPI initialization. `claim` is the one Active
+/// Claim the caller took and published before routing here.
+pub async fn run_imu_calibration(kind: ImuCalibrationKind, claim: &Claim) {
     match kind {
-        ImuCalibrationKind::Mag => run_mag_calibration().await,
+        ImuCalibrationKind::Mag => run_mag_calibration(claim).await,
     }
 }

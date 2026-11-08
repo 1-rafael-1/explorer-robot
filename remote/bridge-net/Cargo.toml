@@ -1,0 +1,17 @@
+[package]
+name = "bridge-net"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+description = "The Bridge-to-daemon network edge: discovery Beacon, HMAC preamble and fixed ports."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[dependencies]
+remote-protocol = { path = "../../remote-protocol", version = "1" }
+
+# The preamble's proofs (ADR-0039): the same no_std HMAC/SHA-256 pair the Bridge firmware picks.
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[lints]
+workspace = true

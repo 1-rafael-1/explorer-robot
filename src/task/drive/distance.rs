@@ -5,6 +5,11 @@
 //! near completion, and (for curves) applies an IMU-based yaw correction on
 //! top of the nominal encoder-derived ratios.
 //!
+//! It also provides the **continuous** mode of that same straight controller:
+//! a speed and a held heading with no target, no ramp-down and no completion.
+//! Both modes share the encoder reads, the heading hold, and the stall and
+//! encoder-timeout failures; only the end condition differs.
+//!
 //! # Curve Control Model
 //!
 //! For a curve arc, each track follows a different radius. We compute expected
@@ -172,8 +177,19 @@ pub(super) enum DistanceStepResult {
     },
 }
 
+/// How a distance drive ends.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(super) enum DistanceMode {
+    /// Complete when the encoder progress reaches the distance target.
+    Target,
+    /// Run until interrupted: no target, no completion check, no ramp-down.
+    Continuous,
+}
+
 /// Distance drive control state.
 pub(super) struct DistanceDriveState {
+    /// How this drive ends: at its target, or only when interrupted.
+    pub(super) mode: DistanceMode,
     /// Straight or curved distance specification.
     pub(super) kind: types::DriveDistanceKind,
     /// Drive direction (forward or backward).
@@ -266,6 +282,7 @@ impl DistanceDriveState {
         let now_ms = Instant::now().as_millis();
 
         Self {
+            mode: DistanceMode::Target,
             kind,
             direction,
             base_speed,
@@ -289,6 +306,23 @@ impl DistanceDriveState {
         }
     }
 
+    /// Create a continuous drive state: the straight controller with no target.
+    ///
+    /// Built through [`Self::new`] so it shares the straight controller's geometry
+    /// and distance calibration factor. The nominal distance is zero because
+    /// [`DistanceMode::Continuous`] never consults the target or the progress
+    /// ratios: it holds the commanded speed until an interrupt arrives.
+    pub(super) fn new_continuous(direction: types::DriveDirection, base_speed: u8, calibration_factor: f32) -> Self {
+        let mut state = Self::new(
+            types::DriveDistanceKind::Straight { distance_cm: 0.0 },
+            direction,
+            base_speed,
+            calibration_factor,
+        );
+        state.mode = DistanceMode::Continuous;
+        state
+    }
+
     /// Initialise a distance drive intent.
     ///
     /// Gets the calibration distance factor, constructs state, starts sensors,
@@ -299,7 +333,6 @@ impl DistanceDriveState {
     /// The dispatch gate (`ensure_imu_ready`) handles IMU startup + DMP
     /// stabilisation before this is called; this function drains the latest
     /// sample and waits briefly for one if the channel is empty.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     pub(super) async fn init(
         kind: types::DriveDistanceKind,
         direction: types::DriveDirection,
@@ -328,49 +361,95 @@ impl DistanceDriveState {
             return None;
         }
 
-        // Start sensors. IMU is already running + stabilised by the dispatch gate.
-        lifecycle::start_distance_imu(&kind);
-        lifecycle::start_encoder_sampling(CONTROL_INTERVAL_MS, true).await;
-
-        // Capture reference yaw from the already-stabilised IMU.
-        while let Ok(m) = IMU_FEEDBACK_CHANNEL.receiver().try_receive() {
-            state.reference_yaw = Some(m.orientation.yaw);
-        }
-
-        // If the channel was empty (gate just drained it before us), wait up to
-        // 50 ms for a fresh sample so straight drives don't start without a heading.
-        if state.reference_yaw.is_none() {
-            let deadline = Instant::now() + Duration::from_millis(50);
-            while state.reference_yaw.is_none() && Instant::now() < deadline {
-                while let Ok(m) = IMU_FEEDBACK_CHANNEL.receiver().try_receive() {
-                    state.reference_yaw = Some(m.orientation.yaw);
-                }
-                if state.reference_yaw.is_none() {
-                    Timer::after(Duration::from_millis(10)).await;
-                }
-            }
-        }
-
-        // Apply initial speeds.
-        let base_speed = speed.min(MAX_SPEED);
-        let signed_base = match direction {
-            types::DriveDirection::Forward => base_speed as i8,
-            types::DriveDirection::Backward => -(base_speed as i8),
-        };
-        let left_speed = roundf(f32::from(signed_base) * state.left_ratio) as i8;
-        let right_speed = roundf(f32::from(signed_base) * state.right_ratio) as i8;
-
-        motor_driver::send_motor_command(MotorCommand::SetTracks {
-            left_speed,
-            right_speed,
-        })
-        .await;
-        motion::set_track_speeds(left_speed, right_speed).await;
+        start_straight_controller(&mut state).await;
 
         Some(super::state::ActiveIntent::DriveDistance {
             state,
             completion_requested,
         })
+    }
+
+    /// Initialise a continuous drive intent.
+    ///
+    /// The straight controller with no target: it starts the same sensors and
+    /// initial motor speeds as [`Self::init`], but has no trivial-distance
+    /// early exit because it never completes. Only an interrupt can end it.
+    pub(super) async fn init_continuous(
+        direction: types::DriveDirection,
+        speed: u8,
+        completion_requested: bool,
+    ) -> super::state::ActiveIntent {
+        let distance_factor = calibration::get_distance_factor().await;
+        let mut state = Self::new_continuous(direction, speed, distance_factor);
+
+        start_straight_controller(&mut state).await;
+
+        super::state::ActiveIntent::DriveContinuous {
+            state,
+            completion_requested,
+        }
+    }
+}
+
+// ── Shared straight-controller startup ─────────────────────────────────────────
+
+/// Start the straight controller's sensors and apply the initial track speeds.
+///
+/// Shared by a target drive and a continuous drive: both stream heading and
+/// encoder feedback, capture a heading reference, then start the motors at the
+/// state's base speed and ratios.
+///
+/// The dispatch gate (`ensure_imu_ready`) handles IMU startup + DMP
+/// stabilisation before this is called.
+#[allow(clippy::cast_possible_truncation)]
+async fn start_straight_controller(state: &mut DistanceDriveState) {
+    lifecycle::start_distance_imu(&state.kind);
+    lifecycle::start_encoder_sampling(CONTROL_INTERVAL_MS, true).await;
+
+    capture_reference_yaw(state).await;
+
+    let signed_base = signed_speed(state.base_speed, state.direction);
+    let left_speed = roundf(f32::from(signed_base) * state.left_ratio) as i8;
+    let right_speed = roundf(f32::from(signed_base) * state.right_ratio) as i8;
+
+    motor_driver::send_motor_command(MotorCommand::SetTracks {
+        left_speed,
+        right_speed,
+    })
+    .await;
+    motion::set_track_speeds(left_speed, right_speed).await;
+}
+
+/// Capture the IMU heading that a straight drive holds.
+///
+/// Drains the feedback channel and, if it was empty (the gate just drained it
+/// before us), waits up to 50 ms for a fresh sample so the drive does not start
+/// without a heading.
+async fn capture_reference_yaw(state: &mut DistanceDriveState) {
+    while let Ok(m) = IMU_FEEDBACK_CHANNEL.receiver().try_receive() {
+        state.reference_yaw = Some(m.orientation.yaw);
+    }
+
+    if state.reference_yaw.is_none() {
+        let deadline = Instant::now() + Duration::from_millis(50);
+        while state.reference_yaw.is_none() && Instant::now() < deadline {
+            while let Ok(m) = IMU_FEEDBACK_CHANNEL.receiver().try_receive() {
+                state.reference_yaw = Some(m.orientation.yaw);
+            }
+            if state.reference_yaw.is_none() {
+                Timer::after(Duration::from_millis(10)).await;
+            }
+        }
+    }
+}
+
+/// Convert a speed magnitude and direction into a signed track speed.
+#[allow(clippy::cast_possible_wrap)]
+fn signed_speed(speed: u8, direction: types::DriveDirection) -> i8 {
+    let magnitude = speed.min(MAX_SPEED) as i8;
+    match direction {
+        types::DriveDirection::Forward => magnitude,
+        types::DriveDirection::Backward => -magnitude,
     }
 }
 
@@ -379,12 +458,11 @@ impl DistanceDriveState {
 /// Run a single step of the distance control loop.
 ///
 /// 1. Read encoder data (timeout / anomaly checks)
-/// 2. Check if target reached → complete
+/// 2. Target mode only: check if the target is reached → complete
 /// 3. Drain IMU channel, update heading or curve yaw state
-/// 4. Compute ramp-down speed
+/// 4. Target mode only: compute ramp-down speed; a continuous drive holds its base speed
 /// 5. Apply IMU corrections (curve ratio + straight heading)
 /// 6. Send motor commands
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 pub(super) async fn run_distance_control_step(state: &mut DistanceDriveState) -> DistanceStepResult {
     let now_ms = Instant::now().as_millis();
 
@@ -394,38 +472,34 @@ pub(super) async fn run_distance_control_step(state: &mut DistanceDriveState) ->
         Err(early) => return early,
     };
 
-    // ── 2. Check completion ────────────────────────────────────────────────
-    let inner_progress = state.inner_progress();
-    let remaining = (state.target_inner_revs - inner_progress).max(0.0);
+    // ── 2 & 4. Choose the base speed. Only a target drive can finish and ramp. ──
+    let base_speed = match state.mode {
+        DistanceMode::Target => {
+            let inner_progress = state.inner_progress();
+            let remaining = (state.target_inner_revs - inner_progress).max(0.0);
 
-    if remaining <= TOLERANCE_REVS {
-        let telemetry = state.make_telemetry(now_ms);
-        motor_driver::send_motor_command(MotorCommand::SetTracks {
-            left_speed: 0,
-            right_speed: 0,
-        })
-        .await;
-        state::motion::set_track_speeds(0, 0).await;
-        return DistanceStepResult::Completed { telemetry };
-    }
+            if remaining <= TOLERANCE_REVS {
+                let telemetry = state.make_telemetry(now_ms);
+                motor_driver::send_motor_command(MotorCommand::SetTracks {
+                    left_speed: 0,
+                    right_speed: 0,
+                })
+                .await;
+                state::motion::set_track_speeds(0, 0).await;
+                return DistanceStepResult::Completed { telemetry };
+            }
 
-    // ── 3. Drain IMU channel (only after confirming not done) ───────────────
+            ramp_speed(state.base_speed, remaining)
+        }
+        // No target: run at the commanded speed until an interrupt arrives.
+        DistanceMode::Continuous => state.base_speed.min(MAX_SPEED),
+    };
+
+    // ── 3. Drain IMU channel ────────────────────────────────────────────────
     let latest_imu = drain_imu(state);
 
-    // ── 4. Compute ramp-down speed ──────────────────────────────────────────
-    let ramp_speed = if remaining <= RAMP_DOWN_START_REVS {
-        let factor = (remaining / RAMP_DOWN_START_REVS).clamp(0.0, 1.0);
-        let scaled = (f32::from(state.base_speed) * factor).round() as u8;
-        scaled.clamp(MIN_SPEED, MAX_SPEED)
-    } else {
-        state.base_speed.min(MAX_SPEED)
-    };
-    let signed_base = match state.direction {
-        types::DriveDirection::Forward => ramp_speed as i8,
-        types::DriveDirection::Backward => -(ramp_speed as i8),
-    };
-
     // ── 5. Apply IMU corrections ────────────────────────────────────────────
+    let signed_base = signed_speed(base_speed, state.direction);
     let (adjusted_left, adjusted_right) = apply_imu_corrections(state, latest_imu, signed_base, now_ms);
 
     // ── 6. Send motor commands ──────────────────────────────────────────────
@@ -437,6 +511,20 @@ pub(super) async fn run_distance_control_step(state: &mut DistanceDriveState) ->
     state::motion::set_track_speeds(adjusted_left, adjusted_right).await;
 
     DistanceStepResult::InProgress
+}
+
+// ── Helpers: shared speed and completion calculations ──────────────────────
+
+/// Compute the ramp-down speed for a drive approaching its target.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn ramp_speed(base_speed: u8, remaining: f32) -> u8 {
+    if remaining <= RAMP_DOWN_START_REVS {
+        let factor = (remaining / RAMP_DOWN_START_REVS).clamp(0.0, 1.0);
+        let scaled = (f32::from(base_speed) * factor).round() as u8;
+        scaled.clamp(MIN_SPEED, MAX_SPEED)
+    } else {
+        base_speed.min(MAX_SPEED)
+    }
 }
 
 // ── Helper: read encoder data (with timeout / anomaly early exits) ─────────────
@@ -632,13 +720,19 @@ fn apply_imu_corrections(
 
 impl DistanceDriveState {
     /// Build a telemetry snapshot from current state.
+    ///
+    /// A continuous drive has no target, so it reports no distance telemetry;
+    /// only its failure reason is meaningful.
     const fn make_telemetry(&self, now_ms: u64) -> types::CompletionTelemetry {
-        types::CompletionTelemetry::DriveDistance {
-            achieved_left_revs: self.accumulated_left_revs,
-            achieved_right_revs: self.accumulated_right_revs,
-            target_left_revs: self.target_left_revs,
-            target_right_revs: self.target_right_revs,
-            duration_ms: now_ms.saturating_sub(self.started_at_ms),
+        match self.mode {
+            DistanceMode::Target => types::CompletionTelemetry::DriveDistance {
+                achieved_left_revs: self.accumulated_left_revs,
+                achieved_right_revs: self.accumulated_right_revs,
+                target_left_revs: self.target_left_revs,
+                target_right_revs: self.target_right_revs,
+                duration_ms: now_ms.saturating_sub(self.started_at_ms),
+            },
+            DistanceMode::Continuous => types::CompletionTelemetry::None,
         }
     }
 

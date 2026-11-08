@@ -8,7 +8,21 @@ description = "Explorer robot v3 — tracked robot with LiDAR-based autonomous n
 repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [workspace]
-members = ["st7789-async", "coin-d6", "hardware-tests", "touch-async", "lidar-cloud", "touch-ui"]
+members = [
+    "st7789-async",
+    "coin-d6",
+    "claim-slot",
+    "hardware-tests",
+    "touch-async",
+    "lidar-cloud",
+    "touch-ui",
+    "remote-protocol",
+    "remote-link",
+]
+# Separate workspaces with their own targets and runners: `bridge-firmware` is RISC-V and
+# `remote` is a host workspace. Keeping both out of `members` is what stops the robot's
+# `cargo check`/`clippy` from building them on `thumbv8m.main-none-eabihf` (ADR-0040).
+exclude = ["bridge-firmware", "remote"]
 resolver = "3"
 
 [features]
@@ -76,6 +90,7 @@ cortex-m-rt = "0.7.5"
 critical-section = "1.2.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 nanorand = { version = "0.8.0", features = ["wyrand"], default-features = false }
+claim-slot = { path = "claim-slot" }
 st7789-async = { path = "st7789-async" }
 coin-d6 = { path = "coin-d6" }
 lidar-cloud = { path = "lidar-cloud" }

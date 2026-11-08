@@ -1,0 +1,22 @@
+[package]
+name = "bridge-stub"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The daemon's bench peer: the bridge-net preamble server side, the Discovery Beacon and scripted robot traffic."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[dependencies]
+bridge-net = { path = "../bridge-net", version = "1" }
+remote-protocol = { path = "../../remote-protocol", version = "1", features = ["std"] }
+
+# The bridge nonce's source; the daemon uses the same one (ADR-0039).
+getrandom = "0.3"
+
+[dev-dependencies]
+# The stub's proof test computes HMAC-SHA256 straight from the ADR's text.
+hmac = "0.12"
+sha2 = "0.10"
+
+[lints]
+workspace = true

@@ -1,0 +1,54 @@
+[package]
+name = "remote-link"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The robot-side Link Protocol core: parser, stream slots, event ring, lease and dedupe."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[features]
+# Host tests and the simulated link in `remote-protocol`.
+std = ["remote-protocol/std"]
+
+[dependencies]
+heapless = "0.9"
+remote-protocol = { path = "../remote-protocol", version = "1" }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "streams"
+required-features = ["std"]
+
+[[test]]
+name = "commands"
+required-features = ["std"]
+
+[[test]]
+name = "session"
+required-features = ["std"]
+
+[[test]]
+name = "events"
+required-features = ["std"]
+
+[[test]]
+name = "throttle"
+required-features = ["std"]
+
+[[test]]
+name = "bridge_control"
+required-features = ["std"]
+
+[[test]]
+name = "bridge_status"
+required-features = ["std"]
+
+[[test]]
+name = "acceptance"
+required-features = ["std"]
+
+[[test]]
+name = "fault_matrix"
+required-features = ["std"]

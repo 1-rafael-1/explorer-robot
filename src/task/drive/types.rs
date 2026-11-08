@@ -32,14 +32,13 @@ pub enum ImuCalibrationKind {
 }
 
 /// Combined motor control and sensor feedback commands
+///
+/// The wrapper stays even with a single variant: the drive queue and the command
+/// envelope speak one command type.
 #[derive(Debug, Clone)]
 pub enum DriveCommand {
     /// Movement and control commands
     Drive(DriveAction),
-    /// Run motor calibration procedure
-    RunMotorCalibration,
-    /// Run IMU calibration procedure
-    RunImuCalibration(ImuCalibrationKind),
 }
 
 /// Motion control commands with associated parameters.
@@ -67,6 +66,18 @@ pub enum DriveAction {
         /// Drive direction (forward or backward).
         direction: DriveDirection,
         /// Target speed magnitude (0-100).
+        speed: u8,
+    },
+    /// Drive at a speed and hold a heading until interrupted.
+    ///
+    /// This is the straight controller without a target: there is no distance
+    /// to reach, no ramp-down and no successful completion. It ends `Cancelled`
+    /// on any drive interrupt, or `Failed` on a stall, encoder timeout/loss or
+    /// IMU loss.
+    DriveContinuous {
+        /// Drive direction (forward or backward).
+        direction: DriveDirection,
+        /// Speed magnitude (0-100).
         speed: u8,
     },
     /// Active electrical braking.

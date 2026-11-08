@@ -14,7 +14,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  # The robot workspace: thumbv8m firmware plus the two shared `no_std` crates.
+  robot:
     runs-on: ubuntu-latest
 
     steps:
@@ -76,3 +77,100 @@ jobs:
 
       - name: Test touch-ui (host)
         run: cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Test remote-protocol (host)
+        run: cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Test remote-link (host)
+        run: cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Test claim-slot (host)
+        run: cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
+
+  # The Bridge workspace: RISC-V, `no_std`, build-std. This job also compiles both shared crates
+  # for the C3, which is the real cross-target gate (ADR-0040).
+  bridge:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: bridge-firmware
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Bridge toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+          components: rust-src, clippy
+
+      - name: Install latest nightly rustfmt
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "bridge-firmware -> target"
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Build
+        run: cargo build
+
+      # A `no_std` binary cannot build the built-in test harness, so `--all-targets` fails with
+      # "can't find crate for test" and a missing `panic_handler`. Gate the bin target only.
+      - name: Run clippy (bin target only)
+        run: cargo clippy -- -D warnings
+
+      # The pump rules are host-tested behind `bridge-core`'s `std` feature. The explicit host
+      # target overrides this workspace's RISC-V default; `rust-src` above supplies the
+      # `build-std` crates for that target too.
+      - name: Test bridge-core (host)
+        run: cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
+
+      - name: Run clippy (bridge-core, host)
+        run: cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings
+
+  # The host workspace: the daemon, `bridge-net` and their host tests.
+  remote:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: remote
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `robot-stub` depends on `serialport`, which links libudev on Linux.
+      - name: Install libudev build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+
+      - name: Install latest nightly rustfmt
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "remote -> target"
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --workspace

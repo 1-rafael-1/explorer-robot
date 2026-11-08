@@ -103,6 +103,41 @@ Printed:
 - The 8 mm screws can be fiddly to get in — use tweezers. After a few minutes of
   colorful cursing they'll go in.
 
+## Remote control
+
+A separate remote-control build sits beside the robot firmware:
+
+- **Bridge firmware** — `bridge-firmware/` (its own RISC-V workspace): `bridge-core`'s pump
+  rules, the `bridge` firmware binary and the `stack-soak` regression soak.
+- **Host workspace** — `remote/`: the `remote-daemon` relay, the shared `bridge-net` network
+  edge, the `robot-stub` and `bridge-stub` bench personas, and the static app in `remote/app/`.
+- **Shared contract** — `remote-protocol` (the wire) and `remote-link` (the robot-side core),
+  members of the robot workspace and consumed by path.
+
+Three cargo workspaces, one per target, so the robot's `thumbv8m` build never sees the
+RISC-V or host dependencies (ADR-0040).
+
+```sh
+# robot workspace (this directory)
+cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+
+# Bridge workspace
+cd bridge-firmware
+cargo build
+cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
+cd ..
+
+# host workspace
+cd remote
+cargo test --workspace
+cargo run -p remote-daemon
+```
+
+Start with [`remote/README.md`](remote/README.md) for the host side and
+[`docs/adr/0039-remote-daemon-relay.md`](docs/adr/0039-remote-daemon-relay.md) for the
+daemon's contract.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

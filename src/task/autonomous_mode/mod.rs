@@ -1,71 +1,17 @@
 //! Autonomous drive mode tasks.
 //!
-//! Provides on-demand autonomous mode tasks spawned via a controller task.
+//! [`coast_obstacle_avoid`] is the live mode: the UI's `LiDAR` warm-up helper
+//! spawns its task with the one Active Claim.
+//!
+//! [`attempt_straight_line`] and [`gap_analysis`] are deferred and unwired. Nothing
+//! starts the attempt-straight-line task, so its private `ACTIVE` flag is dead code
+//! rather than an authority; when the mode is revived it must take the Active Claim
+//! from [`crate::task::procedure`] instead of keeping a flag. There is no
+//! autonomous-mode controller any more.
 //!
 //! Gap analysis uses the `lidar-cloud` cloud and obstacle detection reads the
 //! lock-free flag the `LiDAR` task drives through that crate's Front Sector test.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-
 pub mod attempt_straight_line;
 pub mod coast_obstacle_avoid;
 pub mod gap_analysis;
-
-#[derive(Clone, Copy)]
-/// Command sent to the autonomous mode controller.
-pub(super) enum AutonomousCommand {
-    /// Spawn coast-and-avoid autonomous mode task.
-    CoastObstacleAvoid,
-    /// Spawn attempt-straight-line autonomous mode task with a target distance.
-    AttemptStraightLine {
-        /// Target travel distance in cm (100–1000).
-        target_distance_cm: u16,
-    },
-}
-
-/// Tracks whether any autonomous mode is currently active.
-static AUTONOMOUS_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// Command channel for autonomous mode spawn requests.
-static AUTONOMOUS_MODE_COMMAND: Channel<CriticalSectionRawMutex, AutonomousCommand, 4> = Channel::new();
-
-/// Initialize autonomous mode support (spawns the controller task).
-#[allow(clippy::unwrap_used)]
-pub fn init_autonomous_mode(spawner: Spawner) {
-    spawner.spawn(autonomous_mode_controller(spawner).unwrap());
-}
-
-/// Request that an autonomous mode be spawned on demand.
-/// Returns true if the request was accepted.
-pub(super) async fn request_start(command: AutonomousCommand) -> bool {
-    if AUTONOMOUS_MODE_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_err()
-    {
-        return false;
-    }
-
-    AUTONOMOUS_MODE_COMMAND.send(command).await;
-    true
-}
-
-/// Mark the autonomous mode controller as idle again.
-pub(super) fn release_autonomous_mode() {
-    AUTONOMOUS_MODE_ACTIVE.store(false, Ordering::Release);
-}
-
-/// Controller task that spawns autonomous mode tasks on demand.
-#[embassy_executor::task]
-async fn autonomous_mode_controller(spawner: Spawner) {
-    loop {
-        match AUTONOMOUS_MODE_COMMAND.receive().await {
-            AutonomousCommand::CoastObstacleAvoid => coast_obstacle_avoid::spawn(spawner),
-            AutonomousCommand::AttemptStraightLine { target_distance_cm } => {
-                attempt_straight_line::spawn(spawner, target_distance_cm);
-            }
-        }
-    }
-}
