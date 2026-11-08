@@ -94,7 +94,7 @@ async fn imu_test_task(claim: Claim) {
     }
 
     stop_imu_readings();
-    claim.abandon().await;
+    claim.finish().await;
 }
 
 /// Log the fused orientation in Euler angles, when there is one.

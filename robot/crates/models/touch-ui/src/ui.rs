@@ -13,13 +13,14 @@
 //! and a tap only then activates.
 
 use embedded_graphics::{draw_target::DrawTarget, pixelcolor::Rgb565, prelude::Point};
+use link_state::{LinkPhase, Snapshot};
 
 use crate::{
     geometry::{
         cancel_button_rect, list_top, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
         save_button_rect, slider_touch_rect, slider_value,
     },
-    hit::{HeaderAction, Hit},
+    hit::{HeaderAction, Hit, link_action_hit},
     palette, radar,
     screens::{Item, Screen, StatusView, ValueFlow},
     sensor::SensorState,
@@ -75,11 +76,23 @@ struct Press {
     target: Option<Hit>,
 }
 
+/// The fixed header status: the compact link phase and the battery.
+///
+/// The header draws it in a constant rectangle on every screen, so a missing or
+/// changing value never moves the title or the header action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeaderStatus {
+    /// The derived link phase.
+    pub link: LinkPhase,
+    /// Battery level percentage, or `None` when unread.
+    pub battery: Option<u8>,
+}
+
 /// The screen/state model.
 ///
 /// Create one with [`Ui::new`], feed it pointer samples, and call [`Ui::render`]
 /// into the display when a call reports a redraw is needed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Ui {
     /// The screen currently rendered.
     screen: Screen,
@@ -107,6 +120,11 @@ pub struct Ui {
     radar_sequence: Option<u64>,
     /// The sensor-state caption shown by [`Screen::RoomScan`].
     sensor_state: SensorState,
+    /// The operator-facing link snapshot shown by [`Screen::Link`] and the
+    /// fixed header slot.
+    link: Snapshot,
+    /// Battery level percentage for the header slot, or `None` when unread.
+    battery: Option<u8>,
     /// The region the most recent completed tap activated, or `None` when the
     /// last gesture was a drag, a release, or a slider drag.
     activated: Option<Hit>,
@@ -114,6 +132,9 @@ pub struct Ui {
 
 impl Ui {
     /// Create a UI showing the Main Menu with no press, scroll, or value.
+    ///
+    /// The link snapshot starts at the disabled baseline ([`link_state::LinkState::new`])
+    /// and the battery is unread.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -126,6 +147,8 @@ impl Ui {
             radar: None,
             radar_sequence: None,
             sensor_state: SensorState::Off,
+            link: link_state::Snapshot::off(),
+            battery: None,
             activated: None,
         }
     }
@@ -172,6 +195,21 @@ impl Ui {
         &self.system_info
     }
 
+    /// The operator-facing link snapshot the Link screen and header slot render.
+    #[must_use]
+    pub const fn link(&self) -> &Snapshot {
+        &self.link
+    }
+
+    /// The compact header status: the link phase and the battery.
+    #[must_use]
+    pub const fn header_status(&self) -> HeaderStatus {
+        HeaderStatus {
+            link: self.link.phase,
+            battery: self.battery,
+        }
+    }
+
     /// The radar frame the Room Scan screen renders, if one was supplied.
     ///
     /// `None` means no snapshot is available, which the screen draws as "No
@@ -214,6 +252,31 @@ impl Ui {
             return false;
         }
         self.system_info = info;
+        true
+    }
+
+    /// Replace the link snapshot, reporting whether it changed.
+    ///
+    /// The snapshot feeds both the Link screen and the header slot, so it is
+    /// stored on every screen and an unchanged snapshot reports no redraw.
+    pub fn set_link(&mut self, snapshot: Snapshot) -> bool {
+        if snapshot == self.link {
+            return false;
+        }
+        self.link = snapshot;
+        true
+    }
+
+    /// Replace the battery level shown in the header slot, reporting whether it
+    /// changed.
+    ///
+    /// `None` is the unread state and stays representable as `--%`; it is a
+    /// real value, not a missing update.
+    pub fn set_battery(&mut self, level: Option<u8>) -> bool {
+        if level == self.battery {
+            return false;
+        }
+        self.battery = level;
         true
     }
 
@@ -336,6 +399,11 @@ impl Ui {
             && action.rect().contains(p)
         {
             return Some(action.hit());
+        }
+        // The Link screen's actions sit below the compact info block; they are
+        // the only interactive regions on it besides the header Back button.
+        if self.screen == Screen::Link {
+            return link_action_hit(p).map(Hit::LinkAction);
         }
         // Items scrolled above the list top must not be reachable through the
         // header region.
@@ -480,6 +548,7 @@ impl Ui {
             Screen::ValueEntry(flow) => widgets::draw_value_entry(d, flow, self.value, pressed)?,
             Screen::Status => widgets::draw_status(d, &self.status)?,
             Screen::RoomScan => widgets::draw_room_scan(d, self.radar.as_ref(), self.sensor_state)?,
+            Screen::Link => widgets::draw_link(d, &self.link, pressed)?,
             Screen::MainMenu | Screen::Calibrate | Screen::DriveMode | Screen::TestMode => {
                 self.render_list(d, pressed)?;
             }
@@ -487,7 +556,7 @@ impl Ui {
 
         let action = self.header_action();
         let action_pressed = action.is_some_and(|a| pressed == Some(a.hit()));
-        widgets::draw_header(d, self.title(), action, action_pressed)
+        widgets::draw_header(d, self.title(), action, action_pressed, self.header_status())
     }
 
     /// The header action for the current screen, or `None` on the Main Menu.
@@ -556,7 +625,9 @@ impl Ui {
             Hit::MenuItem(item) => self.open_item(item),
             Hit::NudgeMinus => self.nudge(-1),
             Hit::NudgePlus => self.nudge(1),
-            Hit::Slider => false,
+            // A Link action is reported to the firmware through last_activation;
+            // the model itself changes nothing on the tap.
+            Hit::Slider | Hit::LinkAction(_) => false,
         }
     }
 

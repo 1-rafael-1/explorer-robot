@@ -12,6 +12,7 @@
 //! - `behavior` — event-driven behavior handlers (battery, obstacle, floor drop)
 //! - `initialization` — boot-time calibration loading coordination
 //! - `procedure` — the lifecycle the test modes and calibrations call
+//! - `remote_link` — the Link Port owner (UART1, power, presence, link core)
 //! - `testmode` — on-demand test mode tasks (motor, turns, IMU, drive)
 //! - `startup` — fires Initialize event at boot
 
@@ -28,6 +29,8 @@ pub mod motor_driver;
 pub mod orchestrate;
 /// The lifecycle the test modes and calibrations call.
 pub mod procedure;
+/// The Link Port task: UART1, EXP power, presence and the link core.
+pub mod remote_link;
 /// Sensor tasks (`IMU`, encoders, `LiDAR` driver, `VL53L0X` stub).
 pub mod sensors;
 pub mod startup;

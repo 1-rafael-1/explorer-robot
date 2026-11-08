@@ -7,7 +7,7 @@
 //!
 //! Pin grouping (ADR-0022): motor/encoders 4–12, RGB 13–15, I2C0 16–17,
 //! IMU 18–22, camera power/UART 23–25, I2C1 26–27, `LiDAR` 28–30,
-//! expansion 32–37, touch 38–39, battery ADC 40, display 41–47, panel power 0,
+//! link port 32–37, touch 38–39, battery ADC 40, display 41–47, panel power 0,
 //! rangefinder control 1–3 and 31. No GPIOs are spare.
 
 #![allow(clippy::missing_docs_in_private_items)]
@@ -207,14 +207,14 @@ assign_resources! {
         dma: DMA_CH0,
     }
 
-    /// Resources for the 7-pin expansion connector (not yet implemented).
+    /// Resources for the Link Port (the 7-pin expansion connector).
     ///
     /// The 5 V branch is switched by a TPS22917 high-side load switch enabled by
     /// `EXP_PWR` on GPIO 32. The connector uses UART1 on GPIO 36/37, with reset/
     /// enable on GPIO 34, boot-mode on GPIO 35, and interrupt/status on GPIO 33.
     /// Its logic is 3.3 V; the 5 V pin is power, not a logic reference. Quiesce
     /// UART1 and hold `en`/`boot` low before switching the branch off (ADR-0023).
-    expansion: ExpansionResources {
+    remote_link: RemoteLinkResources {
         /// UART1 peripheral instance.
         uart: UART1,
         /// UART1 TX DMA channel.
@@ -235,9 +235,11 @@ assign_resources! {
         rx: PIN_37,
     }
 
-    /// The second CPU core, which runs the LiDAR driver.
+    /// The second CPU core and the hardware TRNG.
     core: CoreResources {
         /// Core1 peripheral instance.
         core1: CORE1,
+        /// Hardware true random number generator, used for the Link Boot Id.
+        trng: TRNG,
     }
 }

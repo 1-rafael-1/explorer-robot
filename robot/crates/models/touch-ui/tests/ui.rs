@@ -7,18 +7,58 @@
 //! so a reordering cannot rotate the radar unnoticed; other drawing is not
 //! asserted and is validated on glass.
 
-use embedded_graphics::{prelude::*, primitives::Rectangle};
+use embedded_graphics::{
+    Pixel, draw_target::DrawTarget, geometry::OriginDimensions, pixelcolor::Rgb565, prelude::*, primitives::Rectangle,
+};
+use link_state::{
+    BridgeFlags, BridgeStatus, ControlOutcome, ControlReply, ControlStatus, LinkPhase, LinkState, PairingCode, Peer,
+    Presence, STALE_AFTER_MS, SetupCredentials, Station,
+};
 use touch_ui::{
-    Hit, Item, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    HeaderStatus, Hit, Item, LinkAction, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE,
+    TAP_MIN_DURATION_MS, Ui,
+    buffer::TextBuf,
     geometry::{
-        back_button_rect, cancel_button_rect, info_row_rect, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
-        panel_rect, progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
+        BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
+        back_button_rect, cancel_button_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
+        link_result_rect, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect,
+        progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
         slider_touch_rect,
     },
     radar,
     screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
 };
+
+/// A draw target that discards every pixel, so a test can render a screen without
+/// depending on the panel or asserting its pixels.
+struct DiscardDisplay;
+
+impl OriginDimensions for DiscardDisplay {
+    fn size(&self) -> Size {
+        Size::new(
+            u32::try_from(FB_W).unwrap_or(u32::MAX),
+            u32::try_from(FB_H).unwrap_or(u32::MAX),
+        )
+    }
+}
+
+impl DrawTarget for DiscardDisplay {
+    type Color = Rgb565;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, _pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        Ok(())
+    }
+}
+
+/// Render `ui` into [`DiscardDisplay`], asserting only that drawing succeeds.
+fn render_ok(ui: &Ui) {
+    assert!(ui.render(&mut DiscardDisplay).is_ok());
+}
 
 /// [`TAP_MAX_MOVE`] as the pixels the pointer moves by.
 fn tap_max_move_px() -> i32 {
@@ -85,7 +125,10 @@ fn starts_on_the_main_menu() {
     assert_eq!(ui.title(), "Main Menu");
     assert_eq!(ui.value(), 0);
     assert_eq!(ui.scroll(), 0);
-    assert_eq!(ui.max_scroll(), 0);
+    // Five entries no longer fit the list view, so the Main Menu scrolls from
+    // the top rather than assuming it all fits.
+    assert_eq!(ui.max_scroll(), max_scroll_for(Screen::MainMenu.items().len()));
+    assert!(ui.max_scroll() > 0, "five Main Menu entries overflow the list view");
 }
 
 /// The labels of a screen's entries, in display order.
@@ -104,6 +147,7 @@ fn the_menu_tree_matches_the_robot() {
             Item::Submenu(Submenu::Calibrate),
             Item::Submenu(Submenu::DriveMode),
             Item::Submenu(Submenu::TestMode),
+            Item::ScreenEntry(ScreenEntry::Link),
         ]
         .as_slice()
     );
@@ -141,7 +185,7 @@ fn the_menu_tree_matches_the_robot() {
     // The labels are byte-identical to the strings the screens shipped.
     assert_eq!(
         labels(Screen::MainMenu),
-        ["System Info", "Calibrate", "Drive Mode", "Test Mode"]
+        ["System Info", "Calibrate", "Drive Mode", "Test Mode", "Link"]
     );
     assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "Distance"]);
     assert_eq!(labels(Screen::DriveMode), ["Coast & Avoid", "Attempt Straight"]);
@@ -159,6 +203,7 @@ fn the_menu_tree_matches_the_robot() {
     );
 
     assert!(Screen::SystemInfo.items().is_empty());
+    assert!(Screen::Link.items().is_empty());
     assert!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items().is_empty());
 }
 
@@ -193,6 +238,7 @@ fn every_menu_entry_is_a_listed_item() {
             Item::Submenu(Submenu::Calibrate),
             Item::Submenu(Submenu::DriveMode),
             Item::Submenu(Submenu::TestMode),
+            Item::ScreenEntry(ScreenEntry::Link),
             Item::Procedure(Procedure::MotorCalibration),
             Item::Procedure(Procedure::MagCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
@@ -208,9 +254,11 @@ fn every_menu_entry_is_a_listed_item() {
         ]
     );
 
-    // Room Scan is present and labelled.
+    // Room Scan and Link are present and labelled.
     assert!(listed.contains(&Item::ScreenEntry(ScreenEntry::RoomScan)));
     assert_eq!(Item::ScreenEntry(ScreenEntry::RoomScan).label(), "Room Scan");
+    assert!(listed.contains(&Item::ScreenEntry(ScreenEntry::Link)));
+    assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
 }
 
 /// Test that the menus list eleven Procedures: the ten the firmware runs today
@@ -277,11 +325,12 @@ fn back_returns_from_every_submenu() {
 #[test]
 fn every_entry_names_its_own_title_and_parent() {
     // Every entry the crate ships, with the parent it states for itself.
-    let expected: [(Item, Screen); 16] = [
+    let expected: [(Item, Screen); 17] = [
         (Item::ScreenEntry(ScreenEntry::SystemInfo), Screen::MainMenu),
         (Item::Submenu(Submenu::Calibrate), Screen::MainMenu),
         (Item::Submenu(Submenu::DriveMode), Screen::MainMenu),
         (Item::Submenu(Submenu::TestMode), Screen::MainMenu),
+        (Item::ScreenEntry(ScreenEntry::Link), Screen::MainMenu),
         (Item::Procedure(Procedure::MotorCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::MagCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::DistanceCalibration), Screen::Calibrate),
@@ -429,7 +478,7 @@ fn list_screens_report_their_regions() {
     );
     // Below the last item, and in the gap between two items, is no region.
     assert_eq!(ui.hit_test(Point::new(160, 98)), None);
-    assert_eq!(ui.hit_test(menu_item_rect(4, 0).center()), None);
+    assert_eq!(ui.hit_test(menu_item_rect(5, 0).center()), None);
 
     tap_item(&mut ui, 1);
     assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Back));
@@ -518,6 +567,51 @@ fn a_finished_report_offers_back() {
     // A live procedure still offers the Touch Stop.
     assert!(ui.show_status(StatusView::new("Basic Motor Test", "Running", Screen::TestMode)));
     assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
+}
+
+/// Test that a Manual Drive's running view is a live screen, not a Result
+/// Report: it shows the command label as its body and the header offers Stop.
+#[test]
+fn a_manual_drive_runs_with_stop_and_a_label() {
+    let mut label = TextBuf::new();
+    label.fill(format_args!("Drive 150 cm"));
+    let view = StatusView::new("Manual Drive", "", Screen::MainMenu).with_text_body(label);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    assert_eq!(ui.screen(), Screen::Status);
+    assert_eq!(ui.title(), "Manual Drive");
+
+    let shown = ui.status_view();
+    assert_eq!(shown.as_ref().map(StatusView::body_text), Some("Drive 150 cm"));
+    assert_eq!(shown.map(|view| view.finished), Some(false));
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
+}
+
+/// Test that a runtime-formatted body is part of the view's identity, so a new
+/// label reports a change, and that a finished view keeps the body but offers
+/// Back instead of Stop.
+#[test]
+fn a_runtime_body_changes_with_the_view() {
+    let mut first = TextBuf::new();
+    first.fill(format_args!("Rotate 90 deg"));
+    let first = StatusView::new("Manual Drive", "", Screen::MainMenu).with_text_body(first);
+
+    let mut second = TextBuf::new();
+    second.fill(format_args!("Rotate -45 deg"));
+    let second = StatusView::new("Manual Drive", "", Screen::MainMenu).with_text_body(second);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_status(first));
+    assert!(ui.set_status(second));
+    assert!(!ui.set_status(second));
+    let shown = ui.status_view();
+    assert_eq!(shown.as_ref().map(StatusView::body_text), Some("Rotate -45 deg"));
+
+    assert!(ui.set_status(second.finished()));
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Back));
+    let shown = ui.status_view();
+    assert_eq!(shown.as_ref().map(StatusView::body_text), Some("Rotate -45 deg"));
 }
 
 /// Test that a running screen updates its body and Stop returns to its parent.
@@ -844,6 +938,416 @@ fn the_ui_reports_the_system_info_snapshot_it_was_given() {
     assert!(ui.set_system_info(info));
     assert!(!ui.set_system_info(info));
     assert_eq!(ui.system_info(), &info);
+}
+
+/// A representative Bridge Status for the Link tests.
+const fn sample_bridge_status() -> BridgeStatus {
+    BridgeStatus {
+        rssi_dbm: Some(-57),
+        channel: Some(6),
+        station: Station::Associated,
+        flags: BridgeFlags {
+            provisioned: true,
+            setup_open: false,
+            link_ready: true,
+        },
+        uart_dropped_bytes: 1,
+        dma_stalls: 2,
+        crc_failures: 3,
+        resyncs: 4,
+        wdt_feeds: 5,
+        wdt_withheld: 6,
+    }
+}
+
+/// The Link entry's index in the Main Menu.
+const LINK_INDEX: usize = 4;
+
+/// Open the Link screen by tapping its entry in the Main Menu.
+fn open_link() -> Ui {
+    let mut ui = Ui::new();
+    drag_scroll_to_bottom(&mut ui);
+    tap_item(&mut ui, LINK_INDEX);
+    ui
+}
+
+/// A link state with a live Bridge and a control outcome, ready for a snapshot.
+fn link_with_control(control: ControlOutcome) -> LinkState {
+    let mut state = LinkState::new();
+    state.set_presence(Presence::Ready);
+    state.set_peer(Peer::PeerLive);
+    state.set_control(control);
+    state
+}
+
+/// Test that Link opens from the Main Menu and Back returns to the Main Menu.
+#[test]
+fn link_opens_from_the_main_menu_and_back_returns() {
+    assert_eq!(
+        Screen::MainMenu.items()[LINK_INDEX],
+        Item::ScreenEntry(ScreenEntry::Link)
+    );
+    assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
+    assert_eq!(Screen::Link.parent(), Some(Screen::MainMenu));
+    assert!(Screen::Link.items().is_empty());
+
+    let mut ui = Ui::new();
+    drag_scroll_to_bottom(&mut ui);
+    tap_item(&mut ui, LINK_INDEX);
+    assert_eq!(ui.screen(), Screen::Link);
+    assert_eq!(ui.title(), "Link");
+    // The info rows are not tappable, and the header still offers Back.
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Back));
+    assert_eq!(ui.hit_test(info_row_rect(0).center()), None);
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.screen(), Screen::MainMenu);
+}
+
+/// Test that the three Link actions each have a distinct, on-screen region that
+/// hit-tests to the action it names.
+#[test]
+fn the_link_actions_are_distinct_and_hittable() {
+    let ui = open_link();
+    assert_eq!(ui.screen(), Screen::Link);
+    assert_eq!(LinkAction::ALL.len(), 3);
+
+    let rects: Vec<Rectangle> = (0..LinkAction::ALL.len()).map(link_action_rect).collect();
+    for (index, rect) in rects.iter().enumerate() {
+        assert!(
+            rect.top_left.x >= 0 && rect.top_left.y >= 0,
+            "action {index} starts on screen"
+        );
+        let corner = bottom_right(*rect);
+        assert!(
+            u32::try_from(corner.x).unwrap_or(u32::MAX) < u32::try_from(FB_W).unwrap_or(u32::MAX)
+                && u32::try_from(corner.y).unwrap_or(u32::MAX) < u32::try_from(FB_H).unwrap_or(u32::MAX),
+            "action {index} ends on screen"
+        );
+        assert_eq!(
+            ui.hit_test(rect.center()),
+            Some(Hit::LinkAction(LinkAction::ALL[index]))
+        );
+        for other in &rects[index + 1..] {
+            assert_ne!(rect, other, "action rectangles must stay distinct");
+            assert!(!rect.contains(other.center()), "action rectangles must not overlap");
+        }
+    }
+
+    let result = link_result_rect();
+    assert!(
+        u32::try_from(bottom_right(result).x).unwrap_or(u32::MAX) < u32::try_from(FB_W).unwrap_or(u32::MAX)
+            && u32::try_from(bottom_right(result).y).unwrap_or(u32::MAX) < u32::try_from(FB_H).unwrap_or(u32::MAX),
+        "the result band stays on screen"
+    );
+    for rect in &rects {
+        assert!(!rect.contains(result.center()), "actions sit above the result band");
+    }
+}
+
+/// Test that tapping a Link action reports it as the last activation without
+/// leaving the screen (the firmware owns the request).
+#[test]
+fn tapping_a_link_action_reports_it_and_keeps_the_screen() {
+    for (index, action) in LinkAction::ALL.into_iter().enumerate() {
+        let mut ui = open_link();
+        tap(&mut ui, link_action_rect(index).center());
+        assert_eq!(ui.screen(), Screen::Link);
+        assert_eq!(ui.last_activation(), Some(Hit::LinkAction(action)));
+    }
+}
+
+/// Test that a pending control outcome is held and renders.
+#[test]
+fn a_pending_control_outcome_is_held_and_drawn() {
+    let mut ui = open_link();
+    assert!(ui.set_link(link_with_control(ControlOutcome::Pending).snapshot(0)));
+    assert!(ui.link().control.is_pending());
+    assert_eq!(ui.link().control.label(), "Pending");
+    render_ok(&ui);
+}
+
+/// Test that an answered setup reply keeps the SSID and passphrase, and renders.
+#[test]
+fn an_answered_setup_reply_keeps_its_credentials() {
+    let Some(credentials) = SetupCredentials::new("ExplorerRobot-1A2B", "explorer-setup-passphrase") else {
+        return;
+    };
+    let expected = ControlOutcome::Answered(ControlReply::Setup {
+        status: ControlStatus::Ok,
+        credentials,
+    });
+
+    let mut ui = open_link();
+    assert!(ui.set_link(link_with_control(expected.clone()).snapshot(0)));
+    assert_eq!(ui.link().control, expected);
+    if let ControlOutcome::Answered(ControlReply::Setup { credentials, .. }) = &ui.link().control {
+        assert_eq!(credentials.ssid.as_str(), "ExplorerRobot-1A2B");
+        assert_eq!(credentials.passphrase.as_str(), "explorer-setup-passphrase");
+    }
+    render_ok(&ui);
+}
+
+/// Test that an answered pairing-code reply keeps the twelve-character code and
+/// renders.
+#[test]
+fn an_answered_pairing_code_reply_keeps_its_code() {
+    let Some(code) = PairingCode::new("ABCDEFGHIJKL") else {
+        return;
+    };
+    let expected = ControlOutcome::Answered(ControlReply::PairingCode {
+        status: ControlStatus::Ok,
+        code,
+    });
+
+    let mut ui = open_link();
+    assert!(ui.set_link(link_with_control(expected.clone()).snapshot(0)));
+    assert_eq!(ui.link().control, expected);
+    if let ControlOutcome::Answered(ControlReply::PairingCode { code, .. }) = &ui.link().control {
+        assert_eq!(code.code.as_str(), "ABCDEFGHIJKL");
+    }
+    render_ok(&ui);
+}
+
+/// Test that a timed-out control outcome is held and renders.
+#[test]
+fn a_timed_out_control_outcome_is_held_and_drawn() {
+    let mut ui = open_link();
+    assert!(ui.set_link(link_with_control(ControlOutcome::TimedOut).snapshot(0)));
+    assert_eq!(ui.link().control, ControlOutcome::TimedOut);
+    render_ok(&ui);
+}
+
+/// Test that an absent Bridge keeps the Link screen, its rows and the three
+/// actions usable.
+#[test]
+fn an_absent_bridge_keeps_the_link_actions_hittable() {
+    for presence in [Presence::Off, Presence::WaitingForBoard] {
+        let mut state = LinkState::new();
+        state.set_presence(presence);
+        let mut ui = open_link();
+        // The disabled baseline is already held, so offering it again is no change.
+        ui.set_link(state.snapshot(0));
+        assert!(ui.link().bridge.is_none(), "no Bridge Status is retained");
+        assert_eq!(ui.screen(), Screen::Link);
+
+        for (index, action) in LinkAction::ALL.into_iter().enumerate() {
+            assert_eq!(
+                ui.hit_test(link_action_rect(index).center()),
+                Some(Hit::LinkAction(action))
+            );
+        }
+        render_ok(&ui);
+
+        tap(&mut ui, back_button_rect().center());
+        assert_eq!(ui.screen(), Screen::MainMenu);
+    }
+}
+
+/// Test that the model stores the link snapshot and battery it is given and
+/// reports only real changes.
+#[test]
+fn set_link_and_set_battery_report_changes() {
+    let mut ui = Ui::new();
+
+    // A fresh UI already holds the disabled baseline, so offering it again is
+    // not a change.
+    assert!(!ui.set_link(LinkState::new().snapshot(0)));
+
+    let mut state = LinkState::new();
+    state.set_presence(Presence::Ready);
+    state.set_peer(Peer::PeerLive);
+    let live = state.snapshot(0);
+    assert!(ui.set_link(live.clone()));
+    assert!(!ui.set_link(live));
+    assert_eq!(ui.link().phase, LinkPhase::PeerLive);
+    assert_eq!(
+        ui.header_status(),
+        HeaderStatus {
+            link: LinkPhase::PeerLive,
+            battery: None,
+        }
+    );
+
+    assert!(ui.set_battery(Some(87)));
+    assert!(!ui.set_battery(Some(87)));
+    assert_eq!(ui.header_status().battery, Some(87));
+    assert!(ui.set_battery(None));
+    assert_eq!(ui.header_status().battery, None);
+}
+
+/// Test that a fresh UI starts Off with no battery reading.
+#[test]
+fn a_fresh_ui_has_an_off_link_and_no_battery() {
+    let ui = Ui::new();
+    assert_eq!(
+        ui.header_status(),
+        HeaderStatus {
+            link: LinkPhase::Off,
+            battery: None,
+        }
+    );
+    assert_eq!(ui.link().phase, LinkPhase::Off);
+    assert!(ui.link().bridge.is_none());
+    assert!(!ui.link().bridge_stale);
+}
+
+/// Test that a missing battery stays explicitly unread (`None`) and never
+/// changes the screen.
+#[test]
+fn a_missing_battery_stays_unread_and_leaves_the_screen_alone() {
+    let mut ui = Ui::new();
+    assert_eq!(ui.header_status().battery, None);
+    assert!(!ui.set_battery(None));
+    assert_eq!(ui.screen(), Screen::MainMenu);
+
+    // A later reading is a real change, and losing it returns to the unread
+    // state without disturbing navigation.
+    assert!(ui.set_battery(Some(42)));
+    assert_eq!(ui.header_status().battery, Some(42));
+    assert!(ui.set_battery(None));
+    assert_eq!(ui.header_status().battery, None);
+    assert_eq!(ui.screen(), Screen::MainMenu);
+}
+
+/// Test that the four link phases stay distinct in the snapshot the model holds.
+#[test]
+fn the_four_link_phases_are_distinct_in_the_stored_snapshot() {
+    let mut ui = Ui::new();
+    let mut state = LinkState::new();
+
+    // A fresh UI already holds the disabled baseline, so this is not a change.
+    assert!(!ui.set_link(state.snapshot(0)));
+    assert_eq!(ui.link().phase, LinkPhase::Off);
+
+    state.set_presence(Presence::WaitingForBoard);
+    assert!(ui.set_link(state.snapshot(0)));
+    assert_eq!(ui.link().phase, LinkPhase::WaitingForBoard);
+
+    state.set_presence(Presence::Ready);
+    assert!(ui.set_link(state.snapshot(0)));
+    assert_eq!(ui.link().phase, LinkPhase::ReadyNoPeer);
+
+    state.set_peer(Peer::PeerLive);
+    assert!(ui.set_link(state.snapshot(0)));
+    assert_eq!(ui.link().phase, LinkPhase::PeerLive);
+
+    let phases = [
+        LinkPhase::Off,
+        LinkPhase::WaitingForBoard,
+        LinkPhase::ReadyNoPeer,
+        LinkPhase::PeerLive,
+    ];
+    for (index, phase) in phases.iter().enumerate() {
+        for other in &phases[index + 1..] {
+            assert_ne!(phase, other, "link phases must stay distinct");
+        }
+    }
+}
+
+/// Test that an absent Bridge leaves every other screen reachable and usable.
+#[test]
+fn an_absent_bridge_leaves_every_other_screen_reachable() {
+    let mut ui = Ui::new();
+    let mut state = LinkState::new();
+    state.set_presence(Presence::WaitingForBoard);
+    let absent = state.snapshot(0);
+    assert!(absent.bridge.is_none());
+    assert!(!absent.bridge_stale);
+    assert!(ui.set_link(absent));
+
+    for screen in [
+        Screen::MainMenu,
+        Screen::Calibrate,
+        Screen::DriveMode,
+        Screen::TestMode,
+        Screen::SystemInfo,
+        Screen::RoomScan,
+        Screen::Link,
+        Screen::ValueEntry(ValueFlow::DistanceCalibration),
+        Screen::ValueEntry(ValueFlow::AttemptStraight),
+    ] {
+        assert!(ui.show_screen(screen), "{screen:?} stays reachable");
+        assert_eq!(ui.screen(), screen);
+    }
+
+    // The running screen is reached by its content, not by `show_screen`.
+    assert!(ui.show_status(StatusView::new("Basic Motor Test", "Running", Screen::TestMode)));
+    assert_eq!(ui.screen(), Screen::Status);
+
+    // The Link screen still reports the absent Bridge as no status, not stale.
+    assert!(ui.show_screen(Screen::Link));
+    assert!(ui.link().bridge.is_none());
+    assert!(!ui.link().bridge_stale);
+}
+
+/// Test that a retained Bridge Status survives a no-Remote period, stays
+/// readable when stale, and keeps every field.
+#[test]
+fn a_retained_stale_bridge_status_is_still_readable() {
+    let mut ui = Ui::new();
+    let mut state = LinkState::new();
+    state.set_presence(Presence::Ready);
+    state.set_peer(Peer::PeerLive);
+    state.set_bridge_status(sample_bridge_status(), 1_000);
+
+    let fresh = state.snapshot(1_000 + STALE_AFTER_MS);
+    assert!(fresh.bridge.is_some(), "the status stays readable");
+    assert!(!fresh.bridge_stale, "exactly two seconds old is still fresh");
+    assert!(ui.set_link(fresh));
+
+    state.set_peer(Peer::NoPeer);
+    let retained = state.snapshot(1_001 + STALE_AFTER_MS);
+    assert_eq!(retained.phase, LinkPhase::ReadyNoPeer);
+    assert!(retained.bridge.is_some(), "a stale status is still present");
+    assert!(retained.bridge_stale, "older than two seconds is stale");
+    assert!(ui.set_link(retained));
+    assert!(ui.link().bridge_stale);
+
+    let Some(bridge) = ui.link().bridge else {
+        return;
+    };
+    assert_eq!(bridge.rssi_dbm, Some(-57));
+    assert_eq!(bridge.channel, Some(6));
+    assert_eq!(bridge.station, Station::Associated);
+    assert!(bridge.flags.provisioned);
+    assert!(!bridge.flags.setup_open);
+    assert!(bridge.flags.link_ready);
+    assert_eq!(bridge.uart_dropped_bytes, 1);
+    assert_eq!(bridge.dma_stalls, 2);
+    assert_eq!(bridge.crc_failures, 3);
+    assert_eq!(bridge.resyncs, 4);
+    assert_eq!(bridge.wdt_feeds, 5);
+    assert_eq!(bridge.wdt_withheld, 6);
+}
+
+/// Test that the header status slot is a constant rectangle and the title area
+/// is bounded by it, so a missing or changing value cannot move the header.
+#[test]
+fn the_header_status_slot_is_fixed() {
+    let slot = header_status_rect();
+    assert_eq!(slot.size.width, HEADER_STATUS_W);
+    assert_eq!(slot.top_left.y, i32::try_from(BACK_MARGIN).unwrap_or(i32::MAX));
+    assert_eq!(slot.size.height, HEADER_H - 2 * BACK_MARGIN);
+    assert_eq!(slot, header_status_rect(), "the slot geometry takes no state");
+    let right_edge = u32::try_from(FB_W).unwrap_or(u32::MAX) - SCROLL_MARGIN - 1;
+    assert_eq!(
+        bottom_right(slot).x,
+        i32::try_from(right_edge).unwrap_or(i32::MAX),
+        "the slot is flush with the right margin"
+    );
+
+    assert_eq!(header_title_rect(None).top_left.x, 0);
+    let with_action = header_title_rect(Some(BACK_W));
+    assert_eq!(
+        with_action.top_left.x,
+        i32::try_from(SIDE_MARGIN + BACK_W + HEADER_ACTION_GAP).unwrap_or(i32::MAX),
+        "the title starts after the action"
+    );
+    assert_eq!(
+        with_action.top_left.x + i32::try_from(with_action.size.width).unwrap_or(i32::MAX),
+        slot.top_left.x,
+        "the title area ends at the fixed slot"
+    );
 }
 
 /// Open the Room Scan screen by tapping its entry in the Test Mode menu.

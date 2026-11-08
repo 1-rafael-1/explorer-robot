@@ -22,7 +22,7 @@
 //! # Usage Example
 //! ```rust
 //! // Sending an event
-//! raise_event(Events::TestingCompleted).await;
+//! raise_event(Events::Initialize).await;
 //!
 //! // Receiving an event (in orchestrator)
 //! let event = wait().await;
@@ -30,6 +30,9 @@
 
 use defmt::Format;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use touch_ui::Procedure;
+
+use crate::system::state::activity::Stage;
 
 /// Multi-producer, single-consumer event channel.
 ///
@@ -85,13 +88,18 @@ pub enum Events {
 
     /// The obstacle flag changed.
     ///
-    /// This is an edge, not a state copy: the payload names which sensor
-    /// changed the flag, and a handler reads the flag for the current state
-    /// rather than trusting a value carried here. Raised by the `LiDAR` task
-    /// when its Front Sector test flips the flag.
+    /// This is an edge, not a periodic state copy: it is raised on both the
+    /// detection and the clear transition. The payload names which sensor
+    /// changed the flag and carries the value the producer measured, so the
+    /// Link Task can translate it without reading the live flag (ADR-0031). A
+    /// handler still reads the flag for the current state when the safety
+    /// decision must not trust a queued edge. Raised by the `LiDAR` task when
+    /// its Front Sector test flips the flag and when a disable clears it.
     ObstacleDetected {
         /// Sensor source reporting the change.
         source: ObstacleSource,
+        /// The flag's new value: `true` on detection, `false` on the clear edge.
+        detected: bool,
     },
 
     /// Floor-drop detection status changed (stairs, ledges).
@@ -127,13 +135,20 @@ pub enum Events {
         voltage: f32,
     },
 
-    /// Testing sequence finished.
-    TestingCompleted,
-
-    /// Calibration procedure finished (success or failure).
+    /// A Procedure reached a terminal outcome.
     ///
-    /// The result itself is not carried here: the procedure records its phase,
-    /// percent and outcome in [`crate::system::state::activity`], and the UI
-    /// reads that to decide what to show.
-    CalibrationCompleted,
+    /// Raised by the Active Claim that owns the run for both success and
+    /// failure, carrying the identity, stage and detail directly: reading
+    /// Activity State after the claim has been released would race with the
+    /// next run (ADR-0032). A normal stop raises nothing. The UI still reads
+    /// Activity for the landing screen, and the Link Task translates this event
+    /// onto the wire.
+    ProcedureFinished {
+        /// The Procedure that finished.
+        procedure: Procedure,
+        /// Whether it completed or failed.
+        stage: Stage,
+        /// The result line recorded for the run.
+        detail: &'static str,
+    },
 }

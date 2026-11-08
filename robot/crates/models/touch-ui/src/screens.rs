@@ -13,6 +13,8 @@
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
+use crate::buffer::TextBuf;
+
 /// One entry in a list screen.
 ///
 /// This is the single enumeration of every menu entry the crate ships, across the
@@ -302,6 +304,8 @@ pub enum ScreenEntry {
     SystemInfo,
     /// Test Mode: the Room Scan radar screen.
     RoomScan,
+    /// Main Menu: the read-only Link status screen.
+    Link,
 }
 
 impl ScreenEntry {
@@ -311,6 +315,7 @@ impl ScreenEntry {
         match self {
             Self::SystemInfo => "System Info",
             Self::RoomScan => "Room Scan",
+            Self::Link => "Link",
         }
     }
 
@@ -320,6 +325,7 @@ impl ScreenEntry {
         match self {
             Self::SystemInfo => Screen::SystemInfo,
             Self::RoomScan => Screen::RoomScan,
+            Self::Link => Screen::Link,
         }
     }
 
@@ -327,18 +333,22 @@ impl ScreenEntry {
     #[must_use]
     pub const fn parent(self) -> Option<Screen> {
         match self {
-            Self::SystemInfo => Some(Screen::MainMenu),
+            Self::SystemInfo | Self::Link => Some(Screen::MainMenu),
             Self::RoomScan => Some(Screen::TestMode),
         }
     }
 }
 
 /// The Main Menu's entries, in display order.
-const MAIN_MENU_ITEMS: [Item; 4] = [
+///
+/// Link is appended after Test Mode so the existing entries keep their indices;
+/// the five entries overflow the list view and scroll.
+const MAIN_MENU_ITEMS: [Item; 5] = [
     Item::ScreenEntry(ScreenEntry::SystemInfo),
     Item::Submenu(Submenu::Calibrate),
     Item::Submenu(Submenu::DriveMode),
     Item::Submenu(Submenu::TestMode),
+    Item::ScreenEntry(ScreenEntry::Link),
 ];
 
 /// The Calibrate submenu's entries, in display order.
@@ -394,6 +404,12 @@ pub enum Screen {
     /// It is not a running procedure: its header offers Back, and the firmware
     /// enables the `LiDAR` on entry and disables it on exit.
     RoomScan,
+    /// The Link screen: a read-only status view of the link state.
+    ///
+    /// It is not a running procedure and takes no Active Claim: its header
+    /// offers Back, and an absent Bridge leaves it and every other screen
+    /// usable.
+    Link,
 }
 
 impl Screen {
@@ -412,6 +428,7 @@ impl Screen {
             Self::TestMode => Some(Item::Submenu(Submenu::TestMode)),
             Self::SystemInfo => Some(Item::ScreenEntry(ScreenEntry::SystemInfo)),
             Self::RoomScan => Some(Item::ScreenEntry(ScreenEntry::RoomScan)),
+            Self::Link => Some(Item::ScreenEntry(ScreenEntry::Link)),
             Self::ValueEntry(ValueFlow::DistanceCalibration) => Some(Item::Procedure(Procedure::DistanceCalibration)),
             Self::ValueEntry(ValueFlow::AttemptStraight) => Some(Item::Procedure(Procedure::AttemptStraight)),
         }
@@ -445,8 +462,8 @@ impl Screen {
     /// what the screen draws and what a caller resolves through
     /// [`Item::destination`].
     ///
-    /// System Info, status, and value-entry screens are not lists, so they have
-    /// none.
+    /// System Info, Link, status, and value-entry screens are not lists, so they
+    /// have none.
     #[must_use]
     pub const fn items(self) -> &'static [Item] {
         match self {
@@ -454,7 +471,7 @@ impl Screen {
             Self::Calibrate => &CALIBRATE_ITEMS,
             Self::DriveMode => &DRIVE_MODE_ITEMS,
             Self::TestMode => &TEST_MODE_ITEMS,
-            Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan => &[],
+            Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan | Self::Link => &[],
         }
     }
 
@@ -537,14 +554,19 @@ impl ValueFlow {
 /// percent the widget draws as a bar when the procedure can report one, and
 /// `finished` marks the view as a Result Report — a procedure that has already
 /// completed or failed and only waits to be dismissed, rather than one still
-/// running. The model never formats a number, so no dynamic text crosses this
-/// boundary.
+/// running. `body` is a compile-time line; a runtime-formatted line (such as a
+/// Manual Drive's command label) travels in a fixed-capacity [`TextBuf`] and is
+/// drawn instead of `body`. The model never formats a number, so no dynamic text
+/// is produced here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatusView {
     /// The header title.
     pub title: &'static str,
-    /// The body line: the procedure's phase or the sensor's state.
+    /// The compile-time body line: the procedure's phase or the sensor's state.
     pub body: &'static str,
+    /// A runtime-formatted body line, drawn instead of [`StatusView::body`] when
+    /// present.
+    text_body: Option<TextBuf>,
     /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
     pub progress: Option<u8>,
     /// The screen the header action returns to.
@@ -561,6 +583,7 @@ impl StatusView {
         Self {
             title,
             body,
+            text_body: None,
             progress: None,
             parent,
             finished: false,
@@ -578,10 +601,31 @@ impl StatusView {
         Self {
             title: procedure.label(),
             body,
+            text_body: None,
             progress: None,
             parent: procedure.landing_screen(),
             finished: false,
         }
+    }
+
+    /// Give the view a runtime-formatted body line, drawn instead of [`Self::body`].
+    ///
+    /// A Manual Drive's command label is the case this exists for: the label is
+    /// built from the drive value, so it cannot be a `&'static str`. Existing
+    /// constructors keep their behaviour by leaving this empty.
+    #[must_use]
+    pub const fn with_text_body(self, body: TextBuf) -> Self {
+        Self {
+            text_body: Some(body),
+            ..self
+        }
+    }
+
+    /// The body line to draw: the runtime-formatted one when present, otherwise
+    /// the compile-time [`Self::body`].
+    #[must_use]
+    pub fn body_text(&self) -> &str {
+        self.text_body.as_ref().map_or(self.body, |body| body.as_str())
     }
 
     /// The same view carrying a percent progress bar.

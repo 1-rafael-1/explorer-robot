@@ -105,7 +105,7 @@ pub async fn send_decision(decision: DistanceDecision) {
 /// Wait for the value-entry screen's decision or a stop.
 ///
 /// Called by the calibration task, which holds the claim across the screen. A stop
-/// returns `None` so the task can restore the previous factor and abandon the
+/// returns `None` so the task can restore the previous factor and finish the
 /// claim; the latch is re-checked between decision polls.
 pub(super) async fn wait_for_decision_or_stop(claim: &Claim) -> Option<DistanceDecision> {
     loop {
@@ -193,7 +193,7 @@ fn take_previous_factor() -> Option<f32> {
 /// Counts down, drives [`DRIVE_DISTANCE_CM`] forward, and brakes, publishing each
 /// phase to the activity state through the claim. The step is interruptible from
 /// the panel: the Stop latches the claim and interrupts the drive, and a stopped
-/// step restores the previous factor and abandons the claim. On success the claim
+/// step restores the previous factor and finishes the claim. On success the claim
 /// stays held, so the value screen's decision can make the terminal call.
 pub async fn run_drive_step(claim: &Claim) -> DriveOutcome {
     claim.phase("Driving 150 cm", None).await;
@@ -251,11 +251,11 @@ pub async fn run_drive_step(claim: &Claim) -> DriveOutcome {
     DriveOutcome::Complete
 }
 
-/// Restore the previous factor, abandon the claim, and report the stop.
+/// Restore the previous factor, finish the claim, and report the stop.
 async fn stopped(claim: &Claim) -> DriveOutcome {
     info!("Distance calibration: drive step stopped");
     abort().await;
-    claim.abandon().await;
+    claim.finish().await;
     DriveOutcome::Stopped
 }
 

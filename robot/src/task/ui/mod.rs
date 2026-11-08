@@ -11,8 +11,9 @@
 //! Idle, the task selects over three sources:
 //! 1. the [`UiEvent`] channel — lifecycle events from the orchestrator, the boot
 //!    flow, and the calibrations;
-//! 2. a periodic tick — refreshes the running screen from the activity state and
-//!    the System Info snapshot while that screen is shown;
+//! 2. a periodic tick — refreshes the running screen from the activity state, the
+//!    System Info snapshot while that screen is shown, and the fixed header's
+//!    link and battery indicators on every screen;
 //! 3. the pen-down edge — starts a gesture, which is then polled to pen-up.
 //!
 //! # Starting procedures
@@ -46,15 +47,18 @@ use crate::{
     system::state::{
         CalibrationStatus,
         activity::{self, Activity, Snapshot, Stage},
-        calibration, perception, power,
+        calibration, link, perception, power,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
-        drive::calibration::{self as drive_calibration, distance::DistanceDecision},
+        drive::{
+            InterruptKind,
+            calibration::{self as drive_calibration, distance::DistanceDecision},
+        },
         io::panel::Panel,
-        procedure::{self, Claim, ClaimKind, ScreenKind, StartOutcome},
+        procedure::{self, Claim, ClaimKind, ClaimOrigin, ScreenKind, StartOutcome, StopOutcome},
+        remote_link,
         sensors::lidar::{self, LidarStatus},
-        testmode,
     },
 };
 
@@ -192,6 +196,24 @@ pub async fn show_main_menu() {
     send_ui_event(UiEvent::ShowMainMenu).await;
 }
 
+/// Publish "Enabling `LiDAR`" and hand `claim` to [`coast_avoid_task`].
+///
+/// This is the coast-and-avoid arm of `procedure::dispatch`: the claim is already
+/// taken and the starting Activity published, so this only replaces the phase
+/// line with the warm-up message and hands the claim over. The enable can take
+/// seconds, so it runs on the helper task and this returns at once.
+///
+/// Returns `false` when the hand-off channel refused the claim; the claim is
+/// abandoned in that case so work that cannot run leaves no Activity behind.
+pub async fn request_coast_and_avoid(claim: Claim) -> bool {
+    claim.phase("Enabling LiDAR", None).await;
+    if COAST_AVOID_REQUEST.try_send(claim).is_err() {
+        claim.abandon().await;
+        return false;
+    }
+    true
+}
+
 /// Warm up the `LiDAR` for coast-and-avoid, off the UI task, then hand the mode the
 /// claim.
 ///
@@ -200,7 +222,7 @@ pub async fn show_main_menu() {
 /// UI task must not await it: it sends the claim here and returns. This task polls
 /// the sensor's lock-free status and makes the terminal claim call itself:
 ///
-/// - a stop during the warm-up disables the sensor and abandons the claim;
+/// - a stop during the warm-up disables the sensor and finishes the claim;
 /// - a failed bring-up disables the sensor and fails the claim with
 ///   "`LiDAR` unavailable";
 /// - once streaming it spawns the mode task with the claim. A spawn failure
@@ -217,7 +239,7 @@ async fn coast_avoid_task(spawner: Spawner) {
         loop {
             if claim.is_stop_requested() {
                 lidar::disable().await;
-                claim.abandon().await;
+                claim.finish().await;
                 info!("[ui] coast-and-avoid: stopped during LiDAR warm-up");
                 break;
             }
@@ -283,6 +305,7 @@ async fn ui_task(mut panel: Panel) {
     }
 
     let mut ui = Ui::new();
+    let mut last_activity = Activity::Idle;
     let mut ticker = Ticker::every(Duration::from_millis(TICK_INTERVAL_MS));
 
     loop {
@@ -291,7 +314,10 @@ async fn ui_task(mut panel: Panel) {
             Timer::after(Duration::from_millis(REINIT_BACKOFF_MS)).await;
             continue;
         }
-        if run_ui(&mut panel, &mut ui, &mut ticker).await.is_err() {
+        if run_ui(&mut panel, &mut ui, &mut last_activity, &mut ticker)
+            .await
+            .is_err()
+        {
             warn!("panel went offline; re-initialising");
         }
         Timer::after(Duration::from_millis(REINIT_BACKOFF_MS)).await;
@@ -302,7 +328,7 @@ async fn ui_task(mut panel: Panel) {
 ///
 /// Returns `Err(())` when the panel went offline, so the caller can re-run
 /// bring-up.
-async fn run_ui(panel: &mut Panel, ui: &mut Ui, ticker: &mut Ticker) -> Result<(), ()> {
+async fn run_ui(panel: &mut Panel, ui: &mut Ui, last_activity: &mut Activity, ticker: &mut Ticker) -> Result<(), ()> {
     // A bring-up (or a re-bring-up) always repaints the current screen.
     render_and_flush(panel, ui).await?;
 
@@ -319,7 +345,7 @@ async fn run_ui(panel: &mut Panel, ui: &mut Ui, ticker: &mut Ticker) -> Result<(
                 render_and_flush(panel, ui).await?;
             }
             Either3::Second(()) => {
-                if refresh_screens(ui).await {
+                if refresh_screens(ui, last_activity).await {
                     render_and_flush(panel, ui).await?;
                 }
             }
@@ -479,7 +505,28 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
         }
         (Screen::Status, Some(Hit::Back)) => activity::clear().await,
         (Screen::Status, Some(Hit::Stop)) => stop_running(),
+        (Screen::Link, Some(Hit::LinkAction(action))) => request_link_action(action).await,
         _ => {}
+    }
+}
+
+/// Ask the Link Task to send one Bridge Control request.
+///
+/// One request is in flight at a time: a pending outcome refuses the tap rather
+/// than queueing it behind the first. The request itself is a non-blocking
+/// `try_send` to the Link Task, so the panel never waits on the link; the next
+/// [`refresh_screens`] tick reads the pending outcome and then the reply or
+/// timeout back out of [`link`]. The Link screen is a `ScreenEntry`, so this takes
+/// no Active Claim and stops no local work; only `ForgetNetwork` fires the Remote
+/// failsafe, and the Link Task does that.
+async fn request_link_action(action: touch_ui::LinkAction) {
+    if link::snapshot(Instant::now().as_millis()).await.control.is_pending() {
+        debug!("[ui] link action refused: a bridge control request is already in flight");
+        return;
+    }
+
+    if !remote_link::request_control(action).await {
+        warn!("[ui] link action dropped: the link task command channel is full");
     }
 }
 
@@ -487,45 +534,33 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
 ///
 /// The match is exhaustive over the crate's [`Item`], so adding an entry — or
 /// moving one to another screen — is a compile-time question rather than a
-/// silent change of which procedure a tap starts.
+/// silent change of which procedure a tap starts. Every startable Procedure
+/// goes through the one `procedure::dispatch` seam that the Link Task will also
+/// call; Attempt Straight is a value-entry flow, so tapping it starts nothing.
 async fn handle_menu_item(ui: &mut Ui, item: Item) {
     match item {
         Item::ScreenEntry(ScreenEntry::RoomScan) => enter_room_scan(ui).await,
-        Item::Procedure(procedure) => match procedure {
-            Procedure::BasicMotor
-            | Procedure::Turns
-            | Procedure::StraightDrive
-            | Procedure::ArcDrive
-            | Procedure::Imu6Axis
-            | Procedure::Imu9Axis => start_test(ui, procedure).await,
-            Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
-                start_calibration(ui, procedure).await;
-            }
-            Procedure::CoastAndAvoid => start_coast_and_avoid(ui).await,
-            // The attempt-straight value only feeds the deferred mode: nothing
-            // starts here.
-            Procedure::AttemptStraight => {}
-        },
-        // The entries the model opens on its own: nothing starts here.
-        Item::Submenu(_) | Item::ScreenEntry(ScreenEntry::SystemInfo) => {}
+        // Attempt Straight is a value-entry flow, and the submenus and System Info
+        // are opened by the model on its own: nothing starts here.
+        Item::Procedure(Procedure::AttemptStraight)
+        | Item::Submenu(_)
+        | Item::ScreenEntry(ScreenEntry::SystemInfo | ScreenEntry::Link) => {}
+        Item::Procedure(procedure) => start_procedure(ui, procedure).await,
     }
 }
 
-/// Start the test-mode `procedure`.
+/// Start `procedure` through the shared dispatch seam and show its running view.
 ///
-/// The start claims the one Active Claim and publishes the starting activity, so
-/// the running screen names the procedure from the entry rather than from a
-/// parallel kind enumeration. `Started` hands the claim to [`testmode::start`],
-/// which routes it to the test task. A `Busy` or `Rejected` start goes back to the
-/// entry's landing screen: the model navigated to the running screen when the
-/// entry was tapped, so leaving it there would draw a running screen with no test
-/// behind it. The landing screen comes from the entry's identity, not from the
-/// stale status view the model still holds from whatever ran last.
-async fn start_test(ui: &mut Ui, procedure: Procedure) {
-    match procedure::start(procedure).await {
-        StartOutcome::Started(claim) => {
-            testmode::start(claim, procedure).await;
-
+/// The model has already navigated to the entry's destination. A `Started`
+/// dispatch has taken the one Active Claim and routed it to its controller, so
+/// the running screen follows from Activity State. A `Busy` or `Rejected` start
+/// goes back to the entry's landing screen: leaving the running screen up would
+/// draw a procedure with nothing behind it. The landing screen comes from the
+/// entry's identity, not from the stale status view the model still holds from
+/// whatever ran last.
+async fn start_procedure(ui: &mut Ui, procedure: Procedure) {
+    match procedure::dispatch(procedure, ClaimOrigin::Panel).await {
+        StartOutcome::Started(_) => {
             let snapshot = activity::snapshot().await;
             ui.show_status(status_view(&snapshot));
         }
@@ -544,7 +579,7 @@ async fn start_test(ui: &mut Ui, procedure: Procedure) {
 /// intent is latched for [`room_scan_task`] to pick up, so this returns immediately
 /// and the screen shows the sensor warming.
 async fn enter_room_scan(ui: &mut Ui) {
-    let Some(claim) = procedure::claim(ClaimKind::Screen(ScreenKind::RoomScan)).await else {
+    let Some(claim) = procedure::claim(ClaimKind::Screen(ScreenKind::RoomScan), ClaimOrigin::Panel).await else {
         warn!("[ui] room scan refused — another claim is held");
         let _ = ui.back();
         return;
@@ -574,70 +609,6 @@ async fn leave_room_scan() {
 
     ROOM_SCAN_WANTED.store(false, Ordering::Release);
     ROOM_SCAN_SIGNAL.signal(());
-}
-
-/// Start the calibration `procedure`.
-///
-/// Every calibration takes the one Active Claim with [`procedure::start`], which
-/// publishes the starting activity, and hands the claim to
-/// [`drive_calibration::start`], which routes it to the controller's task. Distance
-/// keeps that claim through its value-entry screen, so a second start is refused
-/// until the operator commits or cancels. The running view takes its title and
-/// parent from the Procedure's identity. Every other Procedure belongs to another
-/// screen and is not a calibration, so it starts nothing.
-async fn start_calibration(ui: &mut Ui, procedure: Procedure) {
-    match procedure {
-        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
-            match procedure::start(procedure).await {
-                StartOutcome::Started(claim) => {
-                    drive_calibration::start(claim, procedure).await;
-
-                    let snapshot = activity::snapshot().await;
-                    ui.show_status(status_view(&snapshot));
-                }
-                StartOutcome::Busy | StartOutcome::Rejected => {
-                    ui.show_screen(procedure.landing_screen());
-                }
-            }
-        }
-        Procedure::CoastAndAvoid
-        | Procedure::AttemptStraight
-        | Procedure::BasicMotor
-        | Procedure::Turns
-        | Procedure::StraightDrive
-        | Procedure::ArcDrive
-        | Procedure::Imu6Axis
-        | Procedure::Imu9Axis => {}
-    }
-}
-
-/// Start coast-and-avoid from the panel without blocking on the `LiDAR` enable.
-///
-/// The start takes the one Active Claim and publishes the starting activity, so the
-/// running screen appears immediately and names the mode. The claim is then handed
-/// to [`coast_avoid_task`], which enables the `LiDAR` and spawns the mode once the
-/// sensor is streaming. A `Busy` or `Rejected` start leaves the entry's landing
-/// screen showing: the model navigated to the running screen when the entry was
-/// tapped, and a running screen with no mode behind it would be a lie. If the
-/// helper's channel refuses the claim, nothing can run it, so abandon it.
-async fn start_coast_and_avoid(ui: &mut Ui) {
-    match procedure::start(Procedure::CoastAndAvoid).await {
-        StartOutcome::Started(claim) => {
-            claim.phase("Enabling LiDAR", None).await;
-            if COAST_AVOID_REQUEST.try_send(claim).is_err() {
-                claim.abandon().await;
-                ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
-                return;
-            }
-
-            let snapshot = activity::snapshot().await;
-            ui.show_status(status_view(&snapshot));
-        }
-        StartOutcome::Busy | StartOutcome::Rejected => {
-            warn!("[ui] coast-and-avoid refused — another claim is held");
-            ui.show_screen(Procedure::CoastAndAvoid.landing_screen());
-        }
-    }
 }
 
 /// Record the attempt-straight distance the operator set, without starting it.
@@ -670,10 +641,10 @@ async fn cancel_distance_calibration() {
 ///
 /// `procedure::stop` latches the stop for whichever claim holds the slot and
 /// interrupts a drive in flight. The claim's owner observes the latch, cleans up
-/// and records the terminal outcome — `abandon` for a normal stop or `fail` for a
-/// failsafe — so nothing here clears the Activity.
+/// and records the terminal outcome through `finish`, so nothing here clears the
+/// Activity. A panel Stop is an operator stop; it coasts, as it always has.
 fn stop_running() {
-    procedure::stop();
+    procedure::stop(StopOutcome::Operator, InterruptKind::Stop);
 }
 
 /// React to a finished calibration: leave a completed one, hold a failed one's
@@ -692,7 +663,7 @@ async fn hold_or_leave_calibration(ui: &mut Ui) {
                 ui.show_screen(landing);
             }
         }
-        Activity::Procedure(_) | Activity::Booting | Activity::Idle => {
+        Activity::Procedure(_) | Activity::ManualDrive(_) | Activity::Booting | Activity::Idle => {
             // A stopped or already-dismissed calibration: the panel has moved on.
         }
     }
@@ -738,7 +709,14 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
     // entry, so they fall back to their own title and the Main Menu.
     let body = status_body(snapshot);
     let view = snapshot.procedure().map_or_else(
-        || StatusView::new(snapshot.title(), body, Screen::MainMenu),
+        || {
+            // A Manual Drive has no Menu Entry; its dynamic command label is the
+            // body line, and Back returns to the Main Menu.
+            let base = StatusView::new(snapshot.title(), body, Screen::MainMenu);
+            snapshot
+                .manual_drive_label()
+                .map_or(base, |label| base.with_text_body(label))
+        },
         |procedure| StatusView::for_procedure(procedure, body),
     );
     let view = snapshot.percent.map_or(view, |percent| view.with_progress(percent));
@@ -759,7 +737,7 @@ fn status_body(snapshot: &Snapshot) -> &'static str {
         Activity::Procedure(Procedure::CoastAndAvoid) if snapshot.stage != Stage::Failed => {
             map_sensor_state(lidar::status()).label()
         }
-        Activity::Idle | Activity::Booting | Activity::Procedure(_) => snapshot.detail,
+        Activity::Idle | Activity::Booting | Activity::ManualDrive(_) | Activity::Procedure(_) => snapshot.detail,
     }
 }
 
@@ -775,13 +753,41 @@ const fn map_sensor_state(status: LidarStatus) -> SensorState {
 
 // ── System Info ─────────────────────────────────────────────────────────────────
 
-/// Refresh the tick's screens: the running screen from the activity state, the
-/// System Info snapshot while that screen is shown, and the Room Scan radar and
-/// sensor caption while the radar screen is shown.
+/// Refresh the tick's screens and follow a newly started Activity.
+///
+/// The running screen is refreshed from the one Activity snapshot read here, so
+/// a remote-started Procedure or Manual Drive appears without the operator
+/// navigating there. Following is gated by `last_activity`: only a transition
+/// from Idle pulls the panel onto the running screen, so leaving it is not undone
+/// by the next tick. When a followed Activity goes Idle the panel leaves the
+/// running screen for its parent. Booting is deliberately not followed.
+///
+/// The header indicator is refreshed on every tick from `state::link` and
+/// `state::power` alone, so an absent Link Task leaves the panel fully usable.
 ///
 /// Reports whether anything on screen changed.
-async fn refresh_screens(ui: &mut Ui) -> bool {
-    let mut redraw = refresh_running_screen(ui).await;
+async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
+    let snapshot = activity::snapshot().await;
+    let previous = *last_activity;
+    let mut redraw = refresh_running_screen(ui, &snapshot);
+
+    // The header indicator reads only the link state and power, never the Link
+    // Task or the port power, so its values cannot block the panel.
+    redraw |= ui.set_link(link::snapshot(Instant::now().as_millis()).await);
+    redraw |= ui.set_battery(power::get_battery_snapshot().await.level);
+
+    if ui.screen() != Screen::Status {
+        if previous == Activity::Idle && matches!(snapshot.activity, Activity::Procedure(_) | Activity::ManualDrive(_))
+        {
+            redraw |= ui.show_status(status_view(&snapshot));
+        }
+    } else if snapshot.activity == Activity::Idle
+        && matches!(previous, Activity::Procedure(_) | Activity::ManualDrive(_))
+    {
+        redraw |= ui.back();
+    }
+
+    *last_activity = snapshot.activity;
 
     if ui.screen() == Screen::SystemInfo {
         redraw |= ui.set_system_info(read_system_info().await);
@@ -808,21 +814,18 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
     redraw
 }
 
-/// Re-render the running screen from the activity state, reporting a change.
+/// Re-render the running screen from `snapshot`, reporting a change.
 ///
 /// A no-op off the running screen, and while nothing is recorded — a producer
-/// that has not published its first phase yet leaves the screen as it was.
-async fn refresh_running_screen(ui: &mut Ui) -> bool {
-    if ui.screen() != Screen::Status {
+/// that has not published its first phase yet leaves the screen as it was. The
+/// caller has already read the snapshot, so the follow rule and this refresh
+/// share one Activity read.
+fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
+    if ui.screen() != Screen::Status || snapshot.activity == Activity::Idle {
         return false;
     }
 
-    let snapshot = activity::snapshot().await;
-    if snapshot.activity == Activity::Idle {
-        return false;
-    }
-
-    ui.set_status(status_view(&snapshot))
+    ui.set_status(status_view(snapshot))
 }
 
 /// Refresh the System Info snapshot when the model is showing that screen.

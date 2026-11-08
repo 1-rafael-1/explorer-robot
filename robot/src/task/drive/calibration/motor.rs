@@ -231,13 +231,13 @@ async fn measure_track(claim: &Claim, side: Side, step: usize) -> Option<u16> {
 }
 
 /// Stop the procedure cleanly after the operator's Stop: release the motors and
-/// the encoder sampler, and clear the activity the UI is already leaving.
+/// the encoder sampler, then record the latched stop outcome on the claim.
 async fn finish_stopped(claim: &Claim) {
     info!("Motor calibration stopped by the operator");
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    claim.abandon().await;
+    claim.finish().await;
 }
 
 /// Release the hardware and record why the procedure could not continue.

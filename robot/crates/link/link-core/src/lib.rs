@@ -981,6 +981,13 @@ pub struct LinkCore {
     bridge: BridgeControlState,
     /// The latest Bridge status received over the UART.
     bridge_status: Option<BridgeStatus>,
+    /// How many Bridge status snapshots have been accepted, including byte-identical repeats.
+    ///
+    /// The value itself coalesces, so a consumer that only compares the snapshot cannot tell a
+    /// fresh 1 Hz repeat from a frozen one. This counter is the receipt cadence: it advances on
+    /// every accepted frame and lets the Link Task refresh its received-at timestamp without
+    /// changing the wire or guessing from changing counters.
+    bridge_status_updates: u32,
     /// The encoded event ring and its retransmission schedule.
     events: EventRing,
     /// The merged advisory `THROTTLE` hints.
@@ -1021,6 +1028,7 @@ impl LinkCore {
             controls: ControlState::new(),
             bridge: BridgeControlState::new(),
             bridge_status: None,
+            bridge_status_updates: 0,
             events: EventRing::new(&config, boot_id),
             throttle: Throttle::new(),
             invalid_throttles: 0,
@@ -1134,6 +1142,16 @@ impl LinkCore {
     #[must_use]
     pub const fn bridge_status(&self) -> Option<BridgeStatus> {
         self.bridge_status
+    }
+
+    /// Returns how many accepted Bridge status snapshots have been received.
+    ///
+    /// Byte-identical repeats advance the counter, so the Link Task can refresh the status's
+    /// received-at time on every Bridge cadence tick instead of inferring arrival from a changed
+    /// payload. A malformed or version-mismatched snapshot does not advance it.
+    #[must_use]
+    pub const fn bridge_status_updates(&self) -> u32 {
+        self.bridge_status_updates
     }
 
     /// Publishes one telemetry sample into its per-stream latest-wins slot.
@@ -1498,6 +1516,7 @@ impl LinkCore {
             controls,
             bridge,
             bridge_status,
+            bridge_status_updates,
             events,
             unknown_streams,
             throttle,
@@ -1574,10 +1593,7 @@ impl LinkCore {
                         if session.mismatch {
                             return;
                         }
-                        let Ok(status) = BridgeStatus::decode(frame.payload) else {
-                            return;
-                        };
-                        *bridge_status = Some(status);
+                        store_bridge_status(bridge_status, bridge_status_updates, frame.payload);
                     } else if frame.header.id == Control::BridgeControl.wire_id() {
                         // The robot is the sender of BRIDGE_CONTROL; only the Bridge's ACK is
                         // meaningful here. An inbound request is ignored.
@@ -1616,6 +1632,18 @@ impl LinkCore {
             self.has_sample &= !bit;
         }
     }
+}
+
+/// Stores one decoded Bridge status and advances its receipt counter.
+///
+/// A malformed snapshot is ignored and leaves the last good value and its counter untouched, so
+/// the panel's freshness signal only advances on an accepted `BRIDGE_STATUS` frame.
+fn store_bridge_status(status: &mut Option<BridgeStatus>, updates: &mut u32, payload: &[u8]) {
+    let Ok(snapshot) = BridgeStatus::decode(payload) else {
+        return;
+    };
+    *status = Some(snapshot);
+    *updates = updates.saturating_add(1);
 }
 
 /// Encodes a fixed-size payload into its slot, clearing the slot if encoding fails.
