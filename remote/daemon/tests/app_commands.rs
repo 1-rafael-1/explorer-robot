@@ -59,6 +59,9 @@ async fn a_command_does_not_renew_liveness() {
     let mut client = greet(&server).await;
 
     send_json(&mut client, &json!({"type": "heartbeat"})).await;
+    // Age the heartbeat, so the first command is clearly later than it in time. Without the gap the
+    // two timestamps coincide and the second command is stale under either implementation.
+    tokio::time::sleep(Duration::from_secs(1)).await;
     send_json(&mut client, &drive(10, 1)).await;
     let outbound = must_some(
         wait_for_outbound(&watched).await,
@@ -67,8 +70,9 @@ async fn a_command_does_not_renew_liveness() {
     assert_eq!(outbound.command, Command::DriveDistance);
     assert_eq!(outbound.wire_seq, 1);
 
-    // No heartbeat since the first command: the command itself must not have refreshed it.
-    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    // More than two seconds after the heartbeat, but less than two seconds after the first command:
+    // only a command that renewed liveness could still be fresh here.
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
     send_json(&mut client, &drive(20, 2)).await;
     let result = json_of_type(&mut client, "command_result").await;
     assert_eq!(result["command_seq"], 2);

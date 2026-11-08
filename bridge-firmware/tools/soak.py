@@ -18,6 +18,9 @@ Examples:
 The firmware forces a station disconnect every two minutes after the first ten. Run this client
 over the station interface to observe the reconnect; run it over the setup AP to confirm the AP
 survives.
+
+The exit status is non-zero when any echo mismatched **or** when no frame completed: a Bridge that
+was never reachable must fail the soak, not report a clean run.
 """
 
 import argparse
@@ -139,7 +142,9 @@ def run(host: str, port: int, duration: float, frame_size: int) -> int:
         f"reconnects={reconnects} mismatches={mismatches} max_gap={max_gap * 1000:.0f}ms",
         flush=True,
     )
-    return 0 if mismatches == 0 else 1
+    if frames == 0:
+        print("no frame completed; the soak never exercised the Bridge", flush=True)
+    return 0 if mismatches == 0 and frames > 0 else 1
 
 
 def main() -> int:

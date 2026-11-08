@@ -151,7 +151,7 @@ async fn session(mut socket: WebSocket, state: AppState, peer: SocketAddr) {
 /// Performs the auth gate: `auth` against the stored token, or `pair`, within the 5 s deadline.
 ///
 /// Anything else, a wrong code, a refusal window or silence returns `false`. A success clears the
-/// peer's failure count (ADR-0037).
+/// address's failure count (ADR-0037).
 async fn authenticate(socket: &mut WebSocket, state: &AppState, ip: IpAddr) -> bool {
     if state.limiter.is_refused(ip) {
         return false;

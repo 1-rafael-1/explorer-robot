@@ -169,16 +169,19 @@ path, because the schema is additive-only. The server's `hello` uses a stable se
 `"explorer-remote"`, not a process name; `robot.model` is `null` unless the Bridge advertises one.
 Nothing in the app-facing contract names the daemon, its files or its CLI.
 
-Auth is decided **per peer address**, not per bind: a loopback peer needs no token (the PC user
-account is the boundary, per ADR-0037), and a non-loopback peer does. The server advertises
+Auth is decided **per address**, not per bind: a loopback connection needs no token (the PC user
+account is the boundary, per ADR-0037), and a non-loopback one does. The server advertises
 `auth_required` in `hello`. When required, the first app message must be `auth` (a stored token) or
 `pair` (a new code, which also stores it); anything else, a wrong code, or 5 s of silence gets
 `connection{state:"unauthorized"}` and close code **4401**. Failures are constant-time compared
-and rate-limited per IP. A protocol mismatch closes **4426**; shutdown is **1001**. The 2 s
-app-liveness timer and the robot Session start only after auth: an auth-pending browser must not
-hold the Bridge's single-client slot or look like a live operator. The app sends a 1 Hz
-`heartbeat`; commands are accepted only from a connection whose heartbeat is fresh (within 2 s),
-and a command does not itself renew liveness.
+and rate-limited per IP, by a tracked-address map bounded at 1024 addresses: expired records are
+reaped, and if every record is still live the least recently active one is evicted, so a connection
+rotating its source address cannot grow the daemon's memory while a new address is still counted.
+A protocol mismatch closes **4426**; shutdown is **1001**. The 2 s app-liveness timer and the robot
+Session start only after auth: an auth-pending browser must not hold the Bridge's single-client
+slot or look like a live operator. The app sends a 1 Hz `heartbeat`; commands are accepted only
+from a connection whose heartbeat is fresh (within 2 s), and a command does not itself renew
+liveness.
 
 The WebSocket upgrade checks `Origin` before accepting: it must match the request's `Host`, or be
 one of the shell's origins (`tauri://localhost`, `http://tauri.localhost`). A missing `Origin` is

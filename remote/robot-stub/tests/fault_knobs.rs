@@ -86,12 +86,11 @@ fn corrupt_knob_breaks_the_outbound_frames() {
         corrupt_every: 1,
         ..FaultKnobs::default()
     });
+    let before = bench.peer.bytes_read();
     let _ = bench.peer.send_ping();
     bench.run_until(200);
-    assert!(
-        bench.peer.bytes_read() > 0,
-        "corruption does not remove bytes from the seam"
-    );
+    let read = bench.peer.bytes_read() - before;
+    assert!(read > 0, "corruption does not remove bytes from the seam");
     assert!(
         bench
             .peer
