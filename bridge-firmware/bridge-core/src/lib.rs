@@ -9,6 +9,7 @@
 //! - the routing filter over the Link Protocol's class rules ([`routing`]),
 //! - the watermark to `THROTTLE` decisions ([`flow`]),
 //! - the single-client authentication gate ([`auth`]),
+//! - the watchdog's task-liveness policy ([`heartbeat`]),
 //! - the bounded Setup Mode window ([`setup`]),
 //! - the portal's DHCP, DNS and HTTP/HTML codecs ([`dhcp`], [`dns`], [`portal`]),
 //! - the credential record and the pairing token ([`record`], [`pairing`]).
@@ -29,6 +30,7 @@ pub mod coalescing;
 pub mod dhcp;
 pub mod dns;
 pub mod flow;
+pub mod heartbeat;
 pub mod pairing;
 pub mod portal;
 pub mod pump;
@@ -39,6 +41,7 @@ pub mod setup;
 pub use auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent};
 pub use coalescing::{Entry, EntryKind, PushError, PushOutcome, Ring};
 pub use flow::WatermarkPolicy;
+pub use heartbeat::{CoveredTask, HeartbeatSet};
 pub use pump::{BridgePump, Decision};
 pub use record::{CredentialRecord, RecordError};
 pub use remote_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};

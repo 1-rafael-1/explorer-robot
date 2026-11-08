@@ -8,7 +8,7 @@ It currently holds two binaries:
 
 | binary | purpose |
 |---|---|
-| `bridge` | the ticket-07 firmware: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, the persisted credential record and pairing token, the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal, and the panel's `BRIDGE_CONTROL` actions |
+| `bridge` | the ticket-07/08 firmware: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, the persisted credential record and pairing token, the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal, the panel's `BRIDGE_CONTROL` actions, Bridge Presence and the task watchdog |
 | `stack-soak` | the ticket-09 language spike, kept as the regression soak: APSTA, a UART loopback and a TCP echo |
 
 `bridge-core` is the host-testable pump crate the `bridge` binary wires to the HAL (see
@@ -24,6 +24,10 @@ robot-facing link is **UART1** on two header pins:
 | UART1 TX | GPIO6 | the USB-TTL adapter's RX |
 | UART1 RX | GPIO7 | the USB-TTL adapter's TX |
 | ground | GND | the USB-TTL adapter's GND |
+| Bridge Presence | GPIO10 (default) | the robot's `EXP_IRQ` (GPIO33 on J10) when the harness exists |
+
+The presence pin is a bench choice until the harness lands: override it at build time with
+`BRIDGE_PRESENCE_PIN=<n>`. See [Bridge Presence and the watchdog](#bridge-presence-and-the-watchdog-ticket-08).
 
 Use a **3.3 V** USB-TTL adapter; the C3's pins are not 5 V tolerant. The adapter appears as
 `/dev/ttyUSB0` (or similar) and is where the Robot Stub runs. Do not point the stub at
@@ -453,6 +457,74 @@ on hardware yet. The wire contract is covered by `remote/robot-stub/tests/bridge
 `remote-link`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
 remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueue).
 
+## Bridge Presence and the watchdog (ticket 08)
+
+### Bridge Presence
+
+The Bridge drives its presence line high once the scheduler, the radio controller, the UHCI RX
+task and the UART TX task are up, and leaves it high; only a reset drops it. The bench line is
+**GPIO10** by default (`.cargo/esp-config.toml`). Override it at build time:
+
+```sh
+cd bridge-firmware
+BRIDGE_PRESENCE_PIN=4 cargo build --release --bin bridge
+```
+
+The override drives only the C3's exposed free pins (0-5, 8-10, 20, 21). GPIO6/7 are UART1,
+GPIO11 powers the in-package flash and GPIO12-17 are its interface, and GPIO18/19 are the USB
+console. Any other value, including a non-numeric typo, leaves the line untouched and logs a
+warning; it never falls back to a different pin. The real pin arrives with the harness: the robot
+samples `EXP_IRQ` (GPIO33 on J10) after the expansion branch is powered. Presence says the board is
+attached, not that a Remote is connected; it is not the deadman (ADR-0035).
+
+Bench check without the harness: a multimeter or LED from GPIO10 to GND reads high a few hundred
+milliseconds after reset and stays high. `espflash reset` drops it while the chip resets. If either
+UART task fails to spawn, the line is not driven at all.
+
+### The watchdog
+
+The RTC watchdog (RWDT stage 0) resets the system after **20 s** without a feed. The watchdog task
+feeds it only while every covered task has beaten within **12 s**, and it checks once a second.
+Covered:
+
+| slot | task |
+|---|---|
+| `uart-rx` | `uart_rx_dma_task`, the robot→PC pump |
+| `uart-tx` | `uart_tx_task`, the PC→robot pump |
+| `net-station` | the station `embassy-net` runner |
+| `net-ap` | the setup AP `embassy-net` runner |
+| `beacon` | the Discovery Beacon |
+| `client-0`, `client-1`, `client-2` | the three Link Protocol connection workers |
+
+Deliberately **not** covered: the portal's DHCP, DNS and HTTP workers (they block on captive-portal
+traffic and only run in the bounded setup window; a reset there would drop the operator's session),
+and the supervisory loop (its station joins and scan sweeps legitimately exceed the budget, and
+covering it would force a much longer timeout). A slot is covered only after its task's spawn
+succeeds, so a pool exhaustion logs and does not boot-loop.
+
+The longest legitimate silence is the 5 s preamble deadline; the 3 s Beacon period and the 10 s
+socket timeout sit below the 12 s maximum age. A record write blocks the executor briefly but is
+well inside the 20 s hardware timeout.
+
+### The stall hook (bench only)
+
+Compile in a deliberate stall with:
+
+```sh
+BRIDGE_STALL_TASK=uart-rx cargo build --release --bin bridge
+# uart-tx, net-station, net-ap, beacon, client-0; aliases: pump, net
+```
+
+The named task logs `watchdog: the … stall hook is armed; stopping the beat` and awaits forever.
+The watchdog then logs `watchdog: … has not beaten for over 12s; withholding the feed` and stops
+feeding, so the RWDT resets the board. In the 10 s status line, `wdt_feeds` stops rising and
+`wdt_withheld` rises. The default image has no armed hook.
+
+After the reset expect the normal boot banner with the **same** `pairing_code`, the station rejoin
+and the daemon reconnect with no operator action; the robot keeps streaming at baseline and its
+Boot Id is unchanged (ADR-0035). The daemon/Robot Stub half of that acceptance needs the USB-TTL
+adapter and a provisioned station, as in the ticket-07 notes.
+
 ## Running the Robot Stub against it
 
 The stub lives in the host `remote` workspace and opens the USB-TTL adapter at 921600 8N1:
@@ -593,6 +665,7 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
         beacons=… beacon_errors=… link_ready=…
         setup_open=… provisioned=… dhcp_offers=… dhcp_acks=… dns=…
         portal_reqs=… provisions=… forgets=… scan_sweeps=… scan_aps=…
+        wdt_feeds=… wdt_withheld=…
 ```
 
 | field | meaning |
@@ -626,6 +699,7 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
 | `dns` | DNS catch-all answers sent |
 | `portal_reqs` / `provisions` / `forgets` | HTTP requests read / valid provisioning submits / Forget actions |
 | `scan_sweeps` / `scan_aps` | best-of-N sweeps completed / AP observations merged into the scan cache |
+| `wdt_feeds` / `wdt_withheld` | RTC watchdog feeds / checks that found a stale covered task and withheld the feed (the second should stay zero in a healthy run) |
 
 `uart_drop=0` on a sustained run is the ticket-04 "zero loss" observation.
 

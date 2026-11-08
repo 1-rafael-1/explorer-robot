@@ -63,6 +63,17 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
 The firmware implements the `sequential-storage` `Value`/`Key` glue and the `esp-storage`
 partition adapter; neither appears here, so the codec stays host-testable.
 
+## The watchdog's liveness policy (ticket 08)
+
+- **`heartbeat`** — a fixed set of covered tasks, each owning one slot, plus the rule that a task
+  is alive while its silence is at most the caller's maximum age. The firmware stamps beats from
+  each task's own loop and the watchdog feeds the RTC watchdog only when `HeartbeatSet::stale`
+  names no task. Wrapping subtraction keeps the rule correct across the `u32` millisecond
+  boundary. `HeartbeatSet::seed` starts the window after the covered tasks are spawned.
+
+A task can only be marked stale if it is covered, so the firmware covers a task only after its
+spawn succeeds. No clock, timer, HAL or allocator is involved; everything is host-tested.
+
 ## Public API map
 
 `BridgePump`:
@@ -96,6 +107,8 @@ Decision and state types:
   `bridge-net` computes.
 - `WatermarkPolicy`, `PushOutcome`, `PushError`, `BridgeControlRequest`, `BridgeReply`, `Status`,
   `Class`, `Flags`, `Frame`, `Seq`, `Direction` — the remaining public surface.
+- `HeartbeatSet`, `CoveredTask` — the watchdog's coverage and last-beat table and the tasks it
+  can cover.
 
 Constants are the ADR numbers, not tuning knobs: `CAPACITY` 8 KiB, `EVENT_RESERVED_BYTES` 512,
 `STREAM_CAPACITY` 7.5 KiB, `HIGH_WATERMARK_BYTES` 6 KiB, `LOW_WATERMARK_BYTES` 2 KiB,
@@ -111,8 +124,10 @@ cd bridge-firmware
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
-The suites are `tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal}.rs`. They exercise the crate's
-external contract — frames in, decisions and drained entries out — not its internals. The
+The suites are
+`tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal,pairing,record,heartbeat}.rs`.
+They exercise the crate's external contract — frames in, decisions and drained entries out — not
+its internals. The
 `bridge-firmware` CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's
 pedantic/nursery table to `bridge-core` (the root `bridge-firmware` package deliberately does not
 opt in because the pre-existing `stack-soak` spike is out of scope).

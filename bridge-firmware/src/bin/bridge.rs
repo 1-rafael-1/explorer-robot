@@ -7,7 +7,8 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 07 — the persisted credential record and the Setup Mode lifecycle.
+//! Ticket 07 (the persisted credential record and the Setup Mode lifecycle) and ticket 08 (Bridge
+//! Presence and the task watchdog).
 //!
 //! The Bridge is the trust boundary for the robot (ADR-0037): the `bridge-net` HMAC preamble
 //! completes before a single Link Protocol byte crosses, exactly one authenticated client holds the
@@ -27,6 +28,19 @@
 //! `esp-storage`. A missing or unusable record fails closed into Setup Mode; a reflash of the app
 //! leaves the partition alone; the portal's submit path and the panel's `BRIDGE_CONTROL` actions
 //! are the record's write points.
+//!
+//! ## Presence and the watchdog
+//!
+//! Bridge Presence is the `EXP_IRQ` line driven high once the scheduler, the radio controller and
+//! both UART tasks are running; it is not the deadman (ADR-0035), and a reset drops it. The bench
+//! GPIO defaults to GPIO10 and can be overridden with `BRIDGE_PRESENCE_PIN`.
+//!
+//! The RTC watchdog (RWDT stage 0, reset the system) is fed only while every covered task has
+//! beaten inside `HEARTBEAT_MAX_AGE_MS`: the two UART pump tasks, both `embassy-net` runners, the
+//! Beacon and the three connection workers. A stalled task therefore reboots the Bridge, which is
+//! benign by design: the credential record survives, the station is rejoined, the daemon
+//! reconnects, and the robot's Boot Id is unaffected. `BRIDGE_STALL_TASK=<task>` arms a bench-only
+//! hook that stops one covered task's beat; the default image leaves it unarmed.
 //!
 //! ## Wiring
 //!
@@ -61,6 +75,7 @@ use core::cell::RefCell;
 use bridge_core::{
     BridgeControlRequest, BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome,
     Seq, TimerEvent, dhcp, dns,
+    heartbeat::{CoveredTask, HeartbeatSet},
     pairing::{self, GROUPED_LEN, write_grouped},
     portal::{self, Credentials, ScanCache, Status},
     record::{self, CredentialRecord},
@@ -93,7 +108,10 @@ use esp_hal::{
     clock::CpuClock,
     dma_rx_stream_buffer,
     efuse::{InterfaceMacAddress, interface_mac_address},
+    gpio::{Level, Output, OutputConfig},
     rng::{Rng, Trng, TrngSource},
+    rtc_cntl::{Rtc, Rwdt, RwdtStage, RwdtStageAction},
+    time::Duration as HalDuration,
     timer::timg::TimerGroup,
     uart::{
         Config as UartConfig, RxConfig, TxError, Uart, UartTx,
@@ -149,6 +167,112 @@ const UART_RX_THRESHOLD: u16 = 32;
 /// UART1's pins on the C3. Keep in step with the `with_tx`/`with_rx` calls below.
 const UART_TX_PIN: u8 = 6;
 const UART_RX_PIN: u8 = 7;
+
+/// The Bridge Presence line's bench GPIO.
+///
+/// The harness is not built, so this is a bench choice rather than a netlist fact: the robot
+/// samples `EXP_IRQ` (GPIO33 on J10) after the expansion branch is powered. GPIO10 is free on the
+/// C3 and is not one of the pins the firmware already owns. The override drives only the exposed
+/// free pins: 0-5, 8-10, 20 and 21. GPIO6/7 are UART1, GPIO11 powers the in-package flash and
+/// GPIO12-17 are its interface, and GPIO18/19 are the USB console; any other value leaves the line
+/// untouched. Override at build time with `BRIDGE_PRESENCE_PIN=<n>` (see `.cargo/esp-config.toml`).
+const PRESENCE_PIN_DEFAULT: u8 = 10;
+const PRESENCE_PIN: Option<u8> = match option_env!("BRIDGE_PRESENCE_PIN") {
+    Some(text) => parse_pin(text),
+    None => Some(PRESENCE_PIN_DEFAULT),
+};
+
+/// Parses the decimal GPIO number in `BRIDGE_PRESENCE_PIN`, returning `None` for a malformed or
+/// out-of-range value. A typo fails closed (the line is left untouched) rather than driving a
+/// different pin.
+const fn parse_pin(text: &str) -> Option<u8> {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut number = 0u16;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte < b'0' || byte > b'9' {
+            return None;
+        }
+        number = number * 10 + (byte - b'0') as u16;
+        if number > 21 {
+            return None;
+        }
+        index += 1;
+    }
+    Some(number as u8)
+}
+
+/// The RTC watchdog's hardware timeout. It must exceed the longest legitimate block: a flash
+/// record write (a `BlockingAsync` program, possibly with an erase), and the covered tasks' own
+/// bounded waits. The station join (30 s) and the scan sweeps are not covered, so they do not
+/// enter this budget.
+const WATCHDOG_TIMEOUT_MS: u64 = 20_000;
+
+/// How often the watchdog task checks the covered tasks' beats.
+const WATCHDOG_POLL: Duration = Duration::from_secs(1);
+
+/// The oldest silence a covered task may have. It sits above the 5 s preamble deadline, the 3 s
+/// Beacon period and the 10 s socket timeout with margin for executor scheduling jitter.
+const HEARTBEAT_MAX_AGE_MS: u32 = 12_000;
+
+/// The longest a covered task may wait on one I/O operation before it has to check in. Tasks whose
+/// loop already wakes faster (`uart-rx`, `uart-tx`, the client poll) use their own cadence.
+const HEARTBEAT_PERIOD: Duration = Duration::from_secs(2);
+
+/// The bench-only stall hook: a covered task selected at build time that awaits forever, so the
+/// watchdog stops being fed and resets the Bridge. It is `None` in the default image.
+const STALL_TASK: Option<CoveredTask> = parse_stall_task(option_env!("BRIDGE_STALL_TASK"));
+
+/// Maps the build-time `BRIDGE_STALL_TASK` value to the covered task it stalls.
+///
+/// The canonical names come from [`CoveredTask::label`], so a new slot cannot publish a label the
+/// hook does not understand; `pump` and `net` are the handoff's short aliases.
+const fn parse_stall_task(value: Option<&str>) -> Option<CoveredTask> {
+    let text = match value {
+        Some(text) => text,
+        None => return None,
+    };
+    if str_eq(text, CoveredTask::UartRx.label()) || str_eq(text, "pump") {
+        return Some(CoveredTask::UartRx);
+    }
+    if str_eq(text, CoveredTask::UartTx.label()) {
+        return Some(CoveredTask::UartTx);
+    }
+    if str_eq(text, CoveredTask::NetStation.label()) || str_eq(text, "net") {
+        return Some(CoveredTask::NetStation);
+    }
+    if str_eq(text, CoveredTask::NetAccessPoint.label()) {
+        return Some(CoveredTask::NetAccessPoint);
+    }
+    if str_eq(text, CoveredTask::Beacon.label()) {
+        return Some(CoveredTask::Beacon);
+    }
+    if str_eq(text, CoveredTask::Client0.label()) {
+        return Some(CoveredTask::Client0);
+    }
+    None
+}
+
+/// Compares two strings byte by byte in a constant context.
+const fn str_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 
 /// The UHCI RX stream buffer and descriptor chunk size (ADR-0033's 4 KiB).
 const DMA_RX_BUFFER: usize = 4096;
@@ -319,6 +443,10 @@ static CREDENTIAL_STORE: AsyncMutex<CriticalSectionRawMutex, Option<CredentialSt
 /// Whether the station is associated and holds an address; the Beacon is sent only then.
 static STATION_UP: AtomicBool = AtomicBool::new(false);
 
+/// The watchdog's coverage and last-beat table. Every covered task writes its own slot from its
+/// own loop; the watchdog task reads the whole set.
+static HEARTBEATS: Mutex<RefCell<HeartbeatSet>> = Mutex::new(RefCell::new(HeartbeatSet::new()));
+
 /// When the last valid Link Protocol frame arrived from the robot, in `now_ms`'s scale.
 static LAST_ROBOT_FRAME_MS: AtomicU32 = AtomicU32::new(NO_ROBOT_FRAME);
 
@@ -391,14 +519,74 @@ fn store_device_id(bytes: [u8; 6]) {
 }
 
 /// Spawns a task, logging the failure instead of panicking on a pool exhaustion.
+///
+/// Returns whether the task was spawned. The watchdog only covers tasks that started, so a pool
+/// exhaustion cannot turn into a boot loop that resets before the log line is read.
 fn spawn_or_warn<T>(
     spawner: &Spawner,
     token: Result<embassy_executor::SpawnToken<T>, embassy_executor::SpawnError>,
     label: &str,
-) {
+) -> bool {
     match token {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => warn!("executor: failed to spawn the {} task", label),
+        Ok(token) => {
+            spawner.spawn(token);
+            true
+        }
+        Err(_) => {
+            warn!("executor: failed to spawn the {} task", label);
+            false
+        }
+    }
+}
+
+/// Adds one task to the watchdog's coverage set.
+fn cover_task(task: CoveredTask) {
+    critical_section::with(|cs| HEARTBEATS.borrow(cs).borrow_mut().cover(task));
+}
+
+/// Spawns a task and, if it started, adds it to the watchdog's coverage set.
+fn spawn_covered<T>(
+    spawner: &Spawner,
+    token: Result<embassy_executor::SpawnToken<T>, embassy_executor::SpawnError>,
+    label: &str,
+    task: CoveredTask,
+) -> bool {
+    let started = spawn_or_warn(spawner, token, label);
+    if started {
+        cover_task(task);
+    }
+    started
+}
+
+/// Records one heartbeat for a covered task at the shared millisecond clock.
+fn beat_task(task: CoveredTask) {
+    let now = now_ms();
+    critical_section::with(|cs| HEARTBEATS.borrow(cs).borrow_mut().beat(task, now));
+}
+
+/// Stops at the build-time stall hook when it is armed, then records this task's beat.
+async fn check_in(task: CoveredTask) {
+    stall_if_armed(task).await;
+    beat_task(task);
+}
+
+/// Returns whether the build-time stall hook selects `task`.
+const fn stall_selected(task: CoveredTask) -> bool {
+    match STALL_TASK {
+        Some(selected) => selected as u8 == task as u8,
+        None => false,
+    }
+}
+
+/// Awaits forever when the build-time stall hook selects `task`; a no-op in the default image.
+///
+/// The hook uses an await rather than a busy loop on purpose: the rest of the executor keeps
+/// running, so the test proves the heartbeat policy withholds the feed, not merely that a starved
+/// executor stops feeding it.
+async fn stall_if_armed(task: CoveredTask) {
+    if stall_selected(task) {
+        warn!("watchdog: the {} stall hook is armed; stopping the beat", task.label());
+        core::future::pending::<()>().await;
     }
 }
 
@@ -440,6 +628,8 @@ static PORTAL_PROVISIONS: AtomicU32 = AtomicU32::new(0);
 static PORTAL_FORGETS: AtomicU32 = AtomicU32::new(0);
 static SCAN_SWEEPS_RUN: AtomicU32 = AtomicU32::new(0);
 static SCAN_APS_SEEN: AtomicU32 = AtomicU32::new(0);
+static WATCHDOG_FEEDS: AtomicU32 = AtomicU32::new(0);
+static WATCHDOG_WITHHELD: AtomicU32 = AtomicU32::new(0);
 
 /// An action the portal queues for the supervisory loop, which owns the radio controller.
 #[derive(Clone, Copy)]
@@ -650,8 +840,22 @@ async fn main(spawner: Spawner) -> ! {
         0x0fed_cba9_8765_4321,
     );
 
-    spawn_or_warn(&spawner, net_task(station_runner), "station network");
-    spawn_or_warn(&spawner, net_task(ap_runner), "AP network");
+    // The liveness window starts here, immediately before the first covered task spawns, so a
+    // slow radio init cannot make the tasks look stale before they have had a chance to run.
+    critical_section::with(|cs| HEARTBEATS.borrow(cs).borrow_mut().seed(now_ms()));
+
+    spawn_covered(
+        &spawner,
+        net_task(station_runner, CoveredTask::NetStation),
+        "station network",
+        CoveredTask::NetStation,
+    );
+    spawn_covered(
+        &spawner,
+        net_task(ap_runner, CoveredTask::NetAccessPoint),
+        "AP network",
+        CoveredTask::NetAccessPoint,
+    );
 
     // -- UART --------------------------------------------------------------------------------
 
@@ -693,8 +897,84 @@ async fn main(spawner: Spawner) -> ! {
         DMA_RX_BUFFER, DMA_RX_CHUNK, UART_RX_THRESHOLD
     );
 
-    spawn_or_warn(&spawner, uart_rx_dma_task(uhci_rx), "UART RX DMA");
-    spawn_or_warn(&spawner, uart_tx_task(uhci_tx.uart_tx), "UART TX");
+    let uart_rx_started = spawn_covered(&spawner, uart_rx_dma_task(uhci_rx), "UART RX DMA", CoveredTask::UartRx);
+    let uart_tx_started = spawn_covered(&spawner, uart_tx_task(uhci_tx.uart_tx), "UART TX", CoveredTask::UartTx);
+
+    // -- Bridge Presence ---------------------------------------------------------------------
+    // Drive `EXP_IRQ` high only now that the scheduler, the radio controller and both UART tasks
+    // are up. The driver is kept for the firmware's lifetime; nothing clears the line on purpose,
+    // so only a reset (including the watchdog's) drops it. The robot samples the level after the
+    // expansion branch is powered, and this line is not the deadman (ADR-0035).
+    let uart_ready = uart_rx_started && uart_tx_started;
+    // Hold the driver for the firmware's lifetime; nothing clears the line on purpose.
+    let (presence_pin, _presence) = if uart_ready {
+        match PRESENCE_PIN {
+            Some(0) => (
+                Some(0),
+                Some(Output::new(peripherals.GPIO0, Level::High, OutputConfig::default())),
+            ),
+            Some(1) => (
+                Some(1),
+                Some(Output::new(peripherals.GPIO1, Level::High, OutputConfig::default())),
+            ),
+            Some(2) => (
+                Some(2),
+                Some(Output::new(peripherals.GPIO2, Level::High, OutputConfig::default())),
+            ),
+            Some(3) => (
+                Some(3),
+                Some(Output::new(peripherals.GPIO3, Level::High, OutputConfig::default())),
+            ),
+            Some(4) => (
+                Some(4),
+                Some(Output::new(peripherals.GPIO4, Level::High, OutputConfig::default())),
+            ),
+            Some(5) => (
+                Some(5),
+                Some(Output::new(peripherals.GPIO5, Level::High, OutputConfig::default())),
+            ),
+            Some(8) => (
+                Some(8),
+                Some(Output::new(peripherals.GPIO8, Level::High, OutputConfig::default())),
+            ),
+            Some(9) => (
+                Some(9),
+                Some(Output::new(peripherals.GPIO9, Level::High, OutputConfig::default())),
+            ),
+            Some(10) => (
+                Some(10),
+                Some(Output::new(peripherals.GPIO10, Level::High, OutputConfig::default())),
+            ),
+            Some(20) => (
+                Some(20),
+                Some(Output::new(peripherals.GPIO20, Level::High, OutputConfig::default())),
+            ),
+            Some(21) => (
+                Some(21),
+                Some(Output::new(peripherals.GPIO21, Level::High, OutputConfig::default())),
+            ),
+            Some(pin) => {
+                warn!(
+                    "presence: GPIO{} is not a free C3 output; EXP_IRQ is left untouched",
+                    pin
+                );
+                (None, None)
+            }
+            None => {
+                warn!("presence: BRIDGE_PRESENCE_PIN is not a decimal C3 pin; EXP_IRQ is left untouched");
+                (None, None)
+            }
+        }
+    } else {
+        warn!("presence: the UART tasks did not start; EXP_IRQ is left untouched");
+        (None, None)
+    };
+    if let Some(pin) = presence_pin {
+        info!(
+            "presence: EXP_IRQ high on GPIO{} (bench choice; override with BRIDGE_PRESENCE_PIN)",
+            pin
+        );
+    }
 
     // -- Station network edge ----------------------------------------------------------------
 
@@ -709,25 +989,28 @@ async fn main(spawner: Spawner) -> ! {
     let client_tx_1: &'static mut [u8] = CLIENT_TX_1.init([0u8; TCP_TX_BUFFER]);
     let client_tx_2: &'static mut [u8] = CLIENT_TX_2.init([0u8; TCP_TX_BUFFER]);
 
-    spawn_or_warn(&spawner, beacon_task(station_stack), "Beacon");
+    spawn_covered(&spawner, beacon_task(station_stack), "Beacon", CoveredTask::Beacon);
     info!(
         "tcp: listening on port {} (station interface only, three preamble workers)",
         LINK_TCP_DEFAULT
     );
-    spawn_or_warn(
+    spawn_covered(
         &spawner,
-        client_task(station_stack, client_rx_0, client_tx_0),
+        client_task(station_stack, client_rx_0, client_tx_0, CoveredTask::Client0),
         "TCP client 0",
+        CoveredTask::Client0,
     );
-    spawn_or_warn(
+    spawn_covered(
         &spawner,
-        client_task(station_stack, client_rx_1, client_tx_1),
+        client_task(station_stack, client_rx_1, client_tx_1, CoveredTask::Client1),
         "TCP client 1",
+        CoveredTask::Client1,
     );
-    spawn_or_warn(
+    spawn_covered(
         &spawner,
-        client_task(station_stack, client_rx_2, client_tx_2),
+        client_task(station_stack, client_rx_2, client_tx_2, CoveredTask::Client2),
         "TCP client 2",
+        CoveredTask::Client2,
     );
 
     // -- Setup AP portal ---------------------------------------------------------------------
@@ -765,6 +1048,16 @@ async fn main(spawner: Spawner) -> ! {
         ),
         "portal HTTP 1",
     );
+
+    // -- Watchdog ----------------------------------------------------------------------------
+    // The RTC watchdog covers the pump and network tasks that were spawned above. The portal
+    // workers are deliberately not covered: they block on captive-portal traffic by design, and a
+    // reset during the bounded setup window would throw away the operator's session. See the
+    // ticket for the full scope decision.
+    let rwdt = Rtc::new(peripherals.RTC_TIMER).rwdt;
+    if !spawn_or_warn(&spawner, watchdog_task(rwdt), "watchdog") {
+        warn!("watchdog: the supervisor did not start; the RTC watchdog is not running");
+    }
 
     // -- Supervisory loop --------------------------------------------------------------------
 
@@ -1078,7 +1371,7 @@ async fn main(spawner: Spawner) -> ! {
                 });
 
             info!(
-                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={}",
+                "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={} wdt_feeds={} wdt_withheld={}",
                 now.duration_since(started).as_secs(),
                 rssi,
                 uart_rx,
@@ -1129,6 +1422,8 @@ async fn main(spawner: Spawner) -> ! {
                 PORTAL_FORGETS.load(Ordering::Relaxed),
                 SCAN_SWEEPS_RUN.load(Ordering::Relaxed),
                 SCAN_APS_SEEN.load(Ordering::Relaxed),
+                WATCHDOG_FEEDS.load(Ordering::Relaxed),
+                WATCHDOG_WITHHELD.load(Ordering::Relaxed),
             );
 
             last_uart_rx = uart_rx;
@@ -1846,10 +2141,63 @@ fn kbps(bytes: u32, interval: Duration) -> u32 {
 // ---------------------------------------------------------------------------------------------
 
 /// One `embassy-net` stack's runner (station or AP).
+///
+/// `runner.run()` never returns and may not wake while the stack is idle, so it is polled in
+/// [`HEARTBEAT_PERIOD`] slices. Every slice ends with a beat, and cancelling the poll between
+/// slices is safe: the runner keeps its state in the stack and the driver, not in the future.
 #[embassy_executor::task(pool_size = 2)]
-async fn net_task(mut runner: Runner<'static, Interface>) {
-    info!("net: stack runner started");
-    runner.run().await;
+async fn net_task(mut runner: Runner<'static, Interface>, task: CoveredTask) {
+    info!("net: {} stack runner started", task.label());
+    loop {
+        check_in(task).await;
+        let _ = with_timeout(HEARTBEAT_PERIOD, runner.run()).await;
+    }
+}
+
+/// The RTC watchdog supervisor.
+///
+/// Stage 0 resets the whole system. The feed is withheld while any covered task is stale, so a
+/// stalled task turns into one benign Bridge reboot instead of a permanent hang. A reboot is
+/// benign by design: `bridge_data` is outside the flashed set, the supervisory loop rejoins the
+/// station, the daemon reconnects, and ADR-0035 keeps the robot's Boot Id and motion unaffected.
+#[embassy_executor::task]
+async fn watchdog_task(mut rwdt: Rwdt) {
+    rwdt.set_timeout(RwdtStage::Stage0, HalDuration::from_millis(WATCHDOG_TIMEOUT_MS));
+    rwdt.set_stage_action(RwdtStage::Stage0, RwdtStageAction::ResetSystem);
+    rwdt.enable();
+    rwdt.feed();
+    info!(
+        "watchdog: rwdt stage 0 resets after {}s; poll {}s; max task silence {}s",
+        WATCHDOG_TIMEOUT_MS / 1_000,
+        WATCHDOG_POLL.as_secs(),
+        HEARTBEAT_MAX_AGE_MS / 1_000
+    );
+
+    let mut reported = None;
+    loop {
+        Timer::after(WATCHDOG_POLL).await;
+        let stale = critical_section::with(|cs| HEARTBEATS.borrow(cs).borrow().stale(now_ms(), HEARTBEAT_MAX_AGE_MS));
+        match stale {
+            None => {
+                if reported.take().is_some() {
+                    info!("watchdog: every covered task is beating again");
+                }
+                WATCHDOG_FEEDS.fetch_add(1, Ordering::Relaxed);
+                rwdt.feed();
+            }
+            Some(task) => {
+                WATCHDOG_WITHHELD.fetch_add(1, Ordering::Relaxed);
+                if reported != Some(task) {
+                    warn!(
+                        "watchdog: {} has not beaten for over {}s; withholding the feed",
+                        task.label(),
+                        HEARTBEAT_MAX_AGE_MS / 1_000
+                    );
+                    reported = Some(task);
+                }
+            }
+        }
+    }
 }
 
 /// The setup AP's hand-rolled DHCP server (RFC 2131): DISCOVER/OFFER and REQUEST/ACK, broadcast
@@ -2087,12 +2435,18 @@ async fn write_portal_response(socket: &mut TcpSocket<'_>, data: &[u8]) -> bool 
     reason = "the task owns a socket, a parser and a 1 KiB frame buffer for its lifetime"
 )]
 #[embassy_executor::task(pool_size = 3)]
-async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buffer: &'static mut [u8]) {
+async fn client_task(
+    stack: Stack<'static>,
+    rx_buffer: &'static mut [u8],
+    tx_buffer: &'static mut [u8],
+    task: CoveredTask,
+) {
     let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
     let mut client_buffer = alloc::vec![0u8; CLIENT_READ_CHUNK];
     let mut parser = PcToRobotParser::new(Direction::PcToRobot, UART_BAUD);
 
     loop {
+        check_in(task).await;
         // Setup Mode serves the portal, not the Link Protocol: the Beacon advertises
         // `PORTAL_ONLY` and no new client is admitted. An already-authenticated session is left
         // alone, matching ADR-0036's "the Link Protocol still on STA if associated".
@@ -2101,9 +2455,15 @@ async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buf
             continue;
         }
         socket.set_timeout(Some(SOCKET_TIMEOUT));
-        if socket.accept(LINK_TCP_DEFAULT).await.is_err() {
-            Timer::after(Duration::from_secs(1)).await;
-            continue;
+        // The accept wait is sliced so an idle worker still checks in; a timeout is simply the
+        // next heartbeat slice, while a real accept error keeps the old one-second backoff.
+        match with_timeout(HEARTBEAT_PERIOD, socket.accept(LINK_TCP_DEFAULT)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                Timer::after(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(_) => continue,
         }
         TCP_ACCEPTS.fetch_add(1, Ordering::Relaxed);
 
@@ -2130,6 +2490,9 @@ async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buf
             continue;
         };
 
+        // The preamble has its own five-second deadline; beat first so the longest silent stretch
+        // in this worker stays inside the watchdog's maximum age.
+        beat_task(task);
         match run_preamble(&mut socket, connection, &token).await {
             PreambleOutcome::Accepted => {
                 AUTH_ACCEPTED.fetch_add(1, Ordering::Relaxed);
@@ -2137,7 +2500,7 @@ async fn client_task(stack: Stack<'static>, rx_buffer: &'static mut [u8], tx_buf
                 // A previous client may have left a partial candidate in the parser; discard it so
                 // its bytes cannot be glued to this client's first frame.
                 parser.reset();
-                serve_client(&mut socket, &mut parser, &mut client_buffer, connection).await;
+                serve_client(&mut socket, &mut parser, &mut client_buffer, connection, task).await;
             }
             PreambleOutcome::Rejected => {
                 AUTH_REJECTED.fetch_add(1, Ordering::Relaxed);
@@ -2173,8 +2536,10 @@ async fn serve_client(
     parser: &mut PcToRobotParser,
     client_buffer: &mut [u8],
     connection: u32,
+    task: CoveredTask,
 ) {
     loop {
+        check_in(task).await;
         // A rotated pairing code disconnects the authenticated connection from the supervisory
         // loop; observe it here so the socket closes instead of serving the old token's session.
         if with_pump(|pump| pump.authenticated_connection()) != Some(connection) {
@@ -2454,6 +2819,7 @@ async fn beacon_task(stack: Stack<'static>) {
 
     let mut bytes = [0u8; beacon::ENCODED_LEN];
     loop {
+        check_in(CoveredTask::Beacon).await;
         if STATION_UP.load(Ordering::Relaxed) {
             let tcp_port = if SETUP_OPEN.load(Ordering::Relaxed) {
                 beacon::PORTAL_ONLY
@@ -2911,6 +3277,7 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
     let mut stall_counted = false;
 
     loop {
+        check_in(CoveredTask::UartRx).await;
         let done = transfer.is_done();
 
         let total = {
@@ -2997,6 +3364,7 @@ async fn uart_rx_dma_task(mut rx: UhciRx<'static, Async>) {
 #[embassy_executor::task]
 async fn uart_tx_task(mut tx: UartTx<'static, Async>) {
     loop {
+        check_in(CoveredTask::UartTx).await;
         let frame = with_uart_queue(|queue| queue.dequeue());
         let Some(frame) = frame else {
             Timer::after(Duration::from_millis(1)).await;
