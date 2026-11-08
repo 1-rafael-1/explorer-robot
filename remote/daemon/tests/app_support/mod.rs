@@ -20,12 +20,12 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
+use link_protocol::payload::stream::Power;
 use remote_daemon::{
     app::{App, AppHooks, Assets, PeerPolicy, ShutdownHandle, TokenGate},
     clock,
     relay::{OutboundCommand, Relay},
 };
-use link_protocol::payload::stream::Power;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

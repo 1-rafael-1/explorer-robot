@@ -13,7 +13,7 @@ The Wi-Fi credentials and Pairing Token are device state on the `bridge_data`
 partition, not repository files.
 
 **Verified:** 2026-11-08 on Linux x86_64 with stable Rust 1.99.1 and espflash
-4.1.0. From `bridge-firmware/`: `cargo build` (dev profile, cached, 0.48 s);
+4.1.0. From `bridge/`: `cargo build` (dev profile, cached, 0.48 s);
 `cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests`
 (176 tests in 12 suites, 0 failed); `cargo clippy -- -D warnings` and
 `cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings`
@@ -25,13 +25,13 @@ bench wiring, first boot, Setup Mode and the portal were **not** run — they ar
 
 ## Prerequisites
 
-All commands below start at the repository root and enter `bridge-firmware/`; run
+All commands below start at the repository root and enter `bridge/`; run
 the workspace commands from there. Cargo reads `.cargo/config.toml` from the
 current directory upward, and this workspace owns its target, `build-std` and
 flash runner; the repository root does not.
 
 - **Stable Rust, the RISC-V target and `rust-src`.** The workspace pins them in
-  [`rust-toolchain.toml`](../../bridge-firmware/rust-toolchain.toml): channel
+  [`rust-toolchain.toml`](../../bridge/rust-toolchain.toml): channel
   `stable`, component `rust-src`, target `riscv32imc-unknown-none-elf`. `rustup`
   installs them when you enter the directory. If a component is missing:
 
@@ -40,7 +40,7 @@ flash runner; the repository root does not.
   rustup target add riscv32imc-unknown-none-elf
   ```
 
-- **`build-std`.** [`bridge-firmware/.cargo/config.toml`](../../bridge-firmware/.cargo/config.toml)
+- **`build-std`.** [`bridge/.cargo/config.toml`](../../bridge/.cargo/config.toml)
   sets `[unstable] build-std = ["alloc", "core"]` and the target, so no `-Z
   build-std` or `--target` flag is needed by hand. `rust-src` supplies those
   sources; the first clean build compiles them and takes several minutes.
@@ -59,17 +59,17 @@ flash runner; the repository root does not.
 
 ## Build and host tests
 
-The device workspace build, from `bridge-firmware/`:
+The device workspace build, from `bridge/`:
 
 ```sh
-cd bridge-firmware
+cd bridge
 cargo build
 ```
 
 Expected output on a warm tree:
 
 ```text
-   Compiling bridge-firmware v0.1.0 (/path/to/bridge-firmware)
+   Compiling bridge-firmware v0.1.0 (/path/to/bridge)
     Finished `dev` profile [optimized + debuginfo] target(s) in 0.48s
 ```
 
@@ -83,7 +83,7 @@ The host tests exercise the HAL-free pump and provisioning rules in
 the `std` feature is what makes the crate testable on `x86_64`.
 
 ```sh
-cd bridge-firmware
+cd bridge
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
@@ -101,14 +101,14 @@ The suites and their counts are `auth` (10), `coalescing` (10), `dhcp` (15),
 `dns` (11), `heartbeat` (11), `pairing` (7), `portal` (39), `pump` (11), `record`
 (12), `routing` (18), `setup` (23) and `watermark` (9): **176 passed, 0 failed**.
 The rules themselves are described in the
-[bridge-core README](../../bridge-firmware/bridge-core/README.md); this page does
+[bridge-core README](../../bridge/bridge-core/README.md); this page does
 not restate them.
 
 The Bridge CI job also gates clippy and formatting. These are the exact gates from
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml):
 
 ```sh
-cd bridge-firmware
+cd bridge
 cargo clippy -- -D warnings
 cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings
 cargo +nightly fmt --all -- --check
@@ -122,7 +122,7 @@ harness, so `--all-targets` would fail with a missing `test` crate and
 
 ## Flash and the partition table
 
-[`partitions.csv`](../../bridge-firmware/partitions.csv) is the ESP-IDF table the
+[`partitions.csv`](../../bridge/partitions.csv) is the ESP-IDF table the
 firmware expects:
 
 | partition | type | subtype | offset | size |
@@ -153,10 +153,10 @@ for the `Verified:` line.
 
 ### Flash and monitor — bench-required
 
-The invocation used by the [Bridge README](../../bridge-firmware/README.md#flash-and-monitor):
+The invocation used by the [Bridge README](../../bridge/README.md#flash-and-monitor):
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/bridge.rs
 cargo build --release --bin bridge && \
 espflash flash --monitor --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
@@ -172,7 +172,7 @@ The build half runs anywhere; flashing and monitoring require the board and are
   resets. If every section reports `Skipped! (checksum matches)`, it does not
   reset the chip: run `espflash reset`, or change the build, before testing.
 - `cargo run --bin bridge` is the same explicit set: the runner in
-  [`bridge-firmware/.cargo/config.toml`](../../bridge-firmware/.cargo/config.toml)
+  [`bridge/.cargo/config.toml`](../../bridge/.cargo/config.toml)
   passes the custom partition table. It is also **bench-required**.
 - The monitor resets the board when it attaches and holds the serial port. Stop it
   with `Ctrl-C` before the next flash. Expect the boot banner, the
@@ -180,11 +180,11 @@ The build half runs anywhere; flashing and monitoring require the board and are
   every ten seconds.
 - The exact boot lines and probe output for the network edge, Setup Mode and the
   record/token are in the README's
-  [ticket 05](../../bridge-firmware/README.md#bench-acceptance-run-ticket-05),
-  [ticket 06](../../bridge-firmware/README.md#bench-acceptance-run-ticket-06) and
-  [ticket 07](../../bridge-firmware/README.md#bench-acceptance-run-ticket-07)
+  [ticket 05](../../bridge/README.md#bench-acceptance-run-ticket-05),
+  [ticket 06](../../bridge/README.md#bench-acceptance-run-ticket-06) and
+  [ticket 07](../../bridge/README.md#bench-acceptance-run-ticket-07)
   acceptance runs. The probes live in
-  [`bridge-firmware/tools/`](../../bridge-firmware/tools/): `link-probe.py`,
+  [`bridge/tools/`](../../bridge/tools/): `link-probe.py`,
   `auth-probe.py`, `beacon-watch.py`, `soak.py` and the shared preamble module.
 
 ## The credential record, first boot and Setup Mode
@@ -206,7 +206,7 @@ CRC-16/CCITT-FALSE), so the codec is host-tested; the firmware owns the
 `I`, `L`, `O` and `U` so the Pairing Token is unambiguous when read from the
 panel. See
 [ADR-0036](../../docs/adr/0036-wifi-provisioning.md) and the
-[bridge-core README](../../bridge-firmware/bridge-core/README.md).
+[bridge-core README](../../bridge/bridge-core/README.md).
 
 **First boot.** A blank or erased `bridge_data` boots **unprovisioned**. The
 Bridge mints a 60-bit Pairing Token from the hardware TRNG (`TrngSource` plus
@@ -263,7 +263,7 @@ All commands here are **bench-required**.
 **Erase only the credential record** (keeps the app and bootloader), then reset:
 
 ```sh
-cd bridge-firmware
+cd bridge
 espflash erase-parts --chip esp32c3 --port /dev/ttyACM1 \
     --partition-table partitions.csv --after no-reset bridge_data
 espflash reset --chip esp32c3 --port /dev/ttyACM1
@@ -276,7 +276,7 @@ token, and a Setup Mode window. The old token is invalid immediately.
 **Erase the whole chip and reflash:**
 
 ```sh
-cd bridge-firmware
+cd bridge
 espflash erase-flash --chip esp32c3 --port /dev/ttyACM1
 cargo build --release --bin bridge
 espflash flash --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
@@ -306,7 +306,7 @@ the bootloader, table and app only. The boot log must show
 The C3's USB connector is the flashing and `defmt` console. The robot-facing link
 is **UART1** on the C3 SuperMini harness pins. The full rules — the RST button's
 outer leg, the 3.3 V limit, the unconnected BOOT strap — are in the
-[Bridge README](../../bridge-firmware/README.md#bench-wiring); this is the signal
+[Bridge README](../../bridge/README.md#bench-wiring); this is the signal
 map:
 
 | signal | C3 SuperMini | connects to |
@@ -341,7 +341,7 @@ network configuration comes from the credential record and the portal. They are
 set on the command line at build time, so touch the source when changing one:
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/stack-soak.rs
 SPIKE_STA_SSID='your-ssid' SPIKE_STA_PASSWORD='your-passphrase' \
     cargo run --release --bin stack-soak
@@ -361,9 +361,9 @@ SPIKE_STA_SSID='your-ssid' SPIKE_STA_PASSWORD='your-passphrase' \
 | `SPIKE_RECONNECT_SECS` | `120` | reconnect period |
 
 The source of truth is
-[`bridge-firmware/src/bin/stack-soak.rs`](../../bridge-firmware/src/bin/stack-soak.rs);
+[`bridge/src/bin/stack-soak.rs`](../../bridge/src/bin/stack-soak.rs);
 the bench procedure is in the README's
-[`stack-soak` regression soak](../../bridge-firmware/README.md#the-stack-soak-regression-soak).
+[`stack-soak` regression soak](../../bridge/README.md#the-stack-soak-regression-soak).
 Running the soak is **bench-required**.
 
 ## Common failures
@@ -385,15 +385,15 @@ Running the soak is **bench-required**.
 - **The listener is unreachable.** The Bridge logs `sta: address=…` only once
   DHCP completes, and the listener binds to the station interface only.
 
-The [Bridge README's troubleshooting](../../bridge-firmware/README.md#troubleshooting)
+The [Bridge README's troubleshooting](../../bridge/README.md#troubleshooting)
 covers the full list, including DMA stalls and UART RX recovery.
 
 ## Source material
 
-- [bridge-firmware README](../../bridge-firmware/README.md) — bench wiring, the
+- [Bridge README](../../bridge/README.md) — bench wiring, the
   credential record, the partition table, flash and monitor, and the acceptance
   runs.
-- [bridge-core README](../../bridge-firmware/bridge-core/README.md) — the
+- [bridge-core README](../../bridge/bridge-core/README.md) — the
   host-testable pump rules, the Setup Mode codecs and the record/token codec.
 - [bridge-net README](../../remote/bridge-net/README.md) — the shared Discovery
   Beacon, preamble and ports.

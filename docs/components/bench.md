@@ -6,10 +6,10 @@ UART1, and the host tools that replace the robot or the Bridge. Every wiring,
 serial-port and radio step here is **bench-required**: the bench has no
 hardware-in-the-loop rig, so CI cannot run it.
 
-**Verified:** 2026-11-08 — `python3 bridge-firmware/tools/link-probe.py --help`,
-`python3 bridge-firmware/tools/auth-probe.py --help`,
-`python3 bridge-firmware/tools/beacon-watch.py --help` and
-`python3 bridge-firmware/tools/soak.py --help` (all printed usage, exit 0);
+**Verified:** 2026-11-08 — `python3 bridge/tools/link-probe.py --help`,
+`python3 bridge/tools/auth-probe.py --help`,
+`python3 bridge/tools/beacon-watch.py --help` and
+`python3 bridge/tools/soak.py --help` (all printed usage, exit 0);
 `cd remote && cargo run -q -p bridge-stub -- --help` and
 `cd remote && cargo run -q -p remote-daemon -- --help` (usage, exit 0);
 `cd remote && cargo run -q -p robot-stub -- --help` (no help flag; the parser
@@ -110,7 +110,7 @@ The Robot Stub examples name `/dev/ttyUSB0` for the robot-side adapter and
 at the `usb-Espressif_…` console entry; that is the C3's USB console, not the
 robot-facing UART.
 
-Run the probes from `bridge-firmware/` and the stubs and daemon from `remote/`.
+Run the probes from `bridge/` and the stubs and daemon from `remote/`.
 Cargo reads `.cargo/config.toml` upward, so the current directory selects the
 workspace's target and build settings (ADR-0040).
 
@@ -129,7 +129,7 @@ line. The Pairing Token is the twelve characters printed at boot as
 `XXXX-XXXX-XXXX`, with the separators removed; it is never a command-line flag.
 
 ```sh
-cd bridge-firmware
+cd bridge
 
 # One HELLO/HELLO_ACK round trip, then the five-second idle timeout.
 BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/link-probe.py 192.168.1.42
@@ -149,7 +149,7 @@ python3 tools/link-probe.py 192.168.1.42 --token-file ~/.config/explorer-bench-t
 
 Exit status is `0` only when a `HELLO_ACK` arrived (and `--count`, if given, was
 reached). The full option list and the round-trip expectations are in the
-[Bridge README](../../bridge-firmware/README.md#the-link-probepy-round-trip-and-soak).
+[Bridge README](../../bridge/README.md#the-link-probepy-round-trip-and-soak).
 
 ### `auth-probe.py`
 
@@ -159,7 +159,7 @@ Bridge's failure budget, so run it last; the `ratelimit` check leaves a 60 s
 refusal window.
 
 ```sh
-cd bridge-firmware
+cd bridge
 
 # The full matrix against the Bridge's station address.
 BRIDGE_BENCH_TOKEN='XXXXXXXXXXXX' python3 tools/auth-probe.py 192.168.1.42
@@ -180,7 +180,7 @@ needs no token, but it does need a station address (a Beacon is sent only while
 the station is associated).
 
 ```sh
-cd bridge-firmware
+cd bridge
 python3 tools/beacon-watch.py --count 3
 python3 tools/beacon-watch.py --duration 15
 ```
@@ -195,7 +195,7 @@ Protocol client. It sends self-identifying frames to port 9000 and requires each
 one back unchanged.
 
 ```sh
-cd bridge-firmware
+cd bridge
 
 # Terminal 1: the APSTA spike image, with its UART1 pins jumpered GPIO6 to GPIO7.
 SPIKE_STA_SSID='your-ssid' SPIKE_STA_PASSWORD='your-passphrase' \
@@ -208,7 +208,7 @@ python3 tools/soak.py 192.168.1.42 9000 600 1024
 On the spike's setup AP (`explorer-spike`), point it at `192.168.4.1` instead.
 Exit status is `0` only when at least one frame completed and every echo
 matched; a Bridge that was never reachable fails the soak. See
-[the `stack-soak` regression soak](../../bridge-firmware/README.md#the-stack-soak-regression-soak).
+[the `stack-soak` regression soak](../../bridge/README.md#the-stack-soak-regression-soak).
 
 ### `robot-stub`
 
@@ -305,31 +305,31 @@ WPA2-PSK `explorer-setup`, on `192.168.4.1/24`. The portal is the only service;
 the Link Protocol listener is never on the AP interface. The successful
 provisioning submit needs the owner's home SSID and passphrase and is not part
 of this page: follow the
-[ticket-06 run](../../bridge-firmware/README.md#bench-acceptance-run-ticket-06)
-or the current [ticket-07 record run](../../bridge-firmware/README.md#bench-acceptance-run-ticket-07).
+[ticket-06 run](../../bridge/README.md#bench-acceptance-run-ticket-06)
+or the current [ticket-07 record run](../../bridge/README.md#bench-acceptance-run-ticket-07).
 
 ## Bench acceptance runs and further detail
 
 These are **bench-required** and are the source material for the sequences above:
 
-- [Bench wiring](../../bridge-firmware/README.md#bench-wiring) — the current pin
+- [Bench wiring](../../bridge/README.md#bench-wiring) — the current pin
   table, levels and loopback jumpers.
-- [Bench acceptance run (ticket 05)](../../bridge-firmware/README.md#bench-acceptance-run-ticket-05)
+- [Bench acceptance run (ticket 05)](../../bridge/README.md#bench-acceptance-run-ticket-05)
   — the network edge and the gate matrix (historical build inputs; the measured
   output is still the reference).
-- [Bench acceptance run (ticket 06)](../../bridge-firmware/README.md#bench-acceptance-run-ticket-06)
+- [Bench acceptance run (ticket 06)](../../bridge/README.md#bench-acceptance-run-ticket-06)
   — Setup Mode and the portal.
-- [Bench acceptance run (ticket 07)](../../bridge-firmware/README.md#bench-acceptance-run-ticket-07)
+- [Bench acceptance run (ticket 07)](../../bridge/README.md#bench-acceptance-run-ticket-07)
   — the credential record, the Pairing Token and the `BRIDGE_CONTROL` actions.
-- [Browser provisioning round-trip (ticket 14)](../../bridge-firmware/README.md#browser-provisioning-round-trip-ticket-14)
+- [Browser provisioning round-trip (ticket 14)](../../bridge/README.md#browser-provisioning-round-trip-ticket-14)
   — the full portal and rejoin sequence.
-- [Bridge Presence and the watchdog (ticket 08)](../../bridge-firmware/README.md#bridge-presence-and-the-watchdog-ticket-08)
+- [Bridge Presence and the watchdog (ticket 08)](../../bridge/README.md#bridge-presence-and-the-watchdog-ticket-08)
   — presence, the RWDT and the bench-only stall hook.
-- [The `link-probe.py` round trip and soak](../../bridge-firmware/README.md#the-link-probepy-round-trip-and-soak)
+- [The `link-probe.py` round trip and soak](../../bridge/README.md#the-link-probepy-round-trip-and-soak)
   — the probe's output and exit status.
-- [Running the Robot Stub against it](../../bridge-firmware/README.md#running-the-robot-stub-against-it)
+- [Running the Robot Stub against it](../../bridge/README.md#running-the-robot-stub-against-it)
   — the serial side of the Bridge.
-- [Troubleshooting](../../bridge-firmware/README.md#troubleshooting) — the
+- [Troubleshooting](../../bridge/README.md#troubleshooting) — the
   failure symptoms and their fixes.
 
 The bench tools and hardware tests have their own material:
@@ -348,7 +348,7 @@ The bench tools and hardware tests have their own material:
 - **`denied: unauthorized`, or `token=MISSING` on boot.** The probe's token
   differs from the one in the Bridge's record, or the record is not provisioned.
   Rotate or re-read the code on the panel, then retry; see
-  [Troubleshooting](../../bridge-firmware/README.md#troubleshooting).
+  [Troubleshooting](../../bridge/README.md#troubleshooting).
 - **The listener is unreachable.** The Bridge logs `sta: address=…` only after
   DHCP; the listener exists on the station interface only, never on the setup
   AP.
@@ -363,9 +363,9 @@ The bench tools and hardware tests have their own material:
 
 ## Source material
 
-- [bridge-firmware README](../../bridge-firmware/README.md) — bench wiring, the
+- [Bridge README](../../bridge/README.md) — bench wiring, the
   power rules and the acceptance runs.
-- [bridge-core README](../../bridge-firmware/bridge-core/README.md) — the
+- [bridge-core README](../../bridge/bridge-core/README.md) — the
   host-testable pump rules.
 - [robot-stub README](../../remote/robot-stub/README.md) — the robot persona on
   the bench.
@@ -375,7 +375,7 @@ The bench tools and hardware tests have their own material:
   sensor checks and wiring.
 - [remote-daemon README](../../remote/daemon/README.md) — the daemon the bench
   scripts exercise.
-- [bridge-firmware/tools/](../../bridge-firmware/tools/) — `link-probe.py`,
+- [bridge/tools/](../../bridge/tools/) — `link-probe.py`,
   `auth-probe.py`, `beacon-watch.py`, `soak.py` and the shared preamble module.
 - [CONTEXT.md](../../CONTEXT.md) — the glossary's Link Port, Bridge, Remote,
   Setup Mode and Pairing Token entries.

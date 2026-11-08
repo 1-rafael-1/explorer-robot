@@ -126,12 +126,12 @@ use esp_radio::wifi::{
     sta::StationConfig,
 };
 use heapless::spsc::Queue;
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use link_protocol::{
     BridgeControlAction, BridgeControlReply, BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, Control,
     ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec,
     PcToRobotParser, RobotToPcParser, SetupCredentials, ThrottleHint, encode_bridge_control_ack, encode_control,
 };
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use sequential_storage::{
     cache::NoCache,
     map::{Key, MapConfig, MapStorage, SerializationError, Value},
@@ -1910,7 +1910,7 @@ fn open_record_store(flash: esp_hal::peripherals::FLASH<'static>) -> Option<Cred
 
     let Some(partition) = table.iter().find(|entry| entry.label_as_str() == DATA_PARTITION_LABEL) else {
         warn!(
-            "record: no {} partition; flash the custom partition table from bridge-firmware/partitions.csv",
+            "record: no {} partition; flash the custom partition table from bridge/partitions.csv",
             DATA_PARTITION_LABEL
         );
         return None;

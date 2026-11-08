@@ -94,7 +94,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: bridge-firmware
+        working-directory: bridge
 
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "bridge-firmware -> target"
+          workspaces: "bridge -> target"
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check

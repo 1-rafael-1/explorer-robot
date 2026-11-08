@@ -6,13 +6,13 @@
 
 mod support;
 
-use remote_daemon::{
-    relay::Relay,
-    schema::{Catalogue, CatalogueProcedure, EventName, EventValue, StreamName},
-};
 use link_protocol::{
     Status as WireStatus,
     payload::event::{CompletionStatus, DriveDistanceCompleted},
+};
+use remote_daemon::{
+    relay::Relay,
+    schema::{Catalogue, CatalogueProcedure, EventName, EventValue, StreamName},
 };
 use serde_json::json;
 use support::{

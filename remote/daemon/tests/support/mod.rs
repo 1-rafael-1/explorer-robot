@@ -6,10 +6,6 @@
 
 #![allow(dead_code)]
 
-use remote_daemon::{
-    relay::Relay,
-    schema::{CommandFrame, CommandResult, EventEntry, EventName, ServerMessage, Snapshot, StreamEntry, StreamName},
-};
 use link_protocol::{
     ids::ProcedureId,
     payload::{
@@ -19,6 +15,10 @@ use link_protocol::{
             Perception, Power,
         },
     },
+};
+use remote_daemon::{
+    relay::Relay,
+    schema::{CommandFrame, CommandResult, EventEntry, EventName, ServerMessage, Snapshot, StreamEntry, StreamName},
 };
 
 /// Extracts a value, failing the test if it is absent.

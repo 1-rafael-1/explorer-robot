@@ -22,13 +22,13 @@ use bridge_net::{
     identity::{DeviceId, Flags, Name},
 };
 use bridge_stub::{Scenario, StreamRate, Stub};
+use link_protocol::Stream;
 use remote_daemon::{
     app::Assets,
     config::Store,
     discovery::{Discovery, DiscoveryConfig},
     host::Host,
 };
-use link_protocol::Stream;
 use serde_json::{Value, json};
 
 /// The token the daemon stores and the stub verifies.

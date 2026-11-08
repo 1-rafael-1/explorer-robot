@@ -3,7 +3,7 @@
 The host workspace for the remote-control effort: the `remote-daemon` relay, the shared
 `bridge-net` network edge, two bench stubs and the static app. It consumes the robot's
 `link-protocol` and `link-core` crates by path; the Bridge firmware
-(`../bridge-firmware/`) consumes the same `link-protocol` and `bridge-net`.
+(`../bridge/`) consumes the same `link-protocol` and `bridge-net`.
 
 | crate / folder | what it is | README |
 |---|---|---|

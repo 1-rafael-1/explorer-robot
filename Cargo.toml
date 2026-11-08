@@ -6,10 +6,10 @@ members = [
     "robot/crates/models/*",
     "robot/crates/hardware-tests",
 ]
-# Separate workspaces with their own targets and runners: `bridge-firmware` is RISC-V and
+# Separate workspaces with their own targets and runners: `bridge` is RISC-V and
 # `remote` is a host workspace. Keeping both out of `members` is what stops the robot's
 # `cargo check`/`clippy` from building them on `thumbv8m.main-none-eabihf` (ADR-0040).
-exclude = ["bridge-firmware", "remote"]
+exclude = ["bridge", "remote"]
 resolver = "3"
 
 [profile.dev]

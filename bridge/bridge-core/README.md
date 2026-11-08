@@ -126,7 +126,7 @@ Constants are the ADR numbers, not tuning knobs: `CAPACITY` 8 KiB, `EVENT_RESERV
 The tests use the explicit-target pattern so the host and firmware builds never share artifacts:
 
 ```sh
-cd bridge-firmware
+cd bridge
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
@@ -134,7 +134,7 @@ The suites are
 `tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal,pairing,record,heartbeat}.rs`.
 They exercise the crate's external contract — frames in, decisions and drained entries out — not
 its internals. The
-`bridge-firmware` CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's
+Bridge CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's
 pedantic/nursery table to `bridge-core` (the root `bridge-firmware` package deliberately does not
 opt in because the pre-existing `stack-soak` spike is out of scope).
 

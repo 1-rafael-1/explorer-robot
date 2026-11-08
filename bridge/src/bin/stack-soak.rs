@@ -58,8 +58,8 @@ use esp_radio::wifi::{
     ap::AccessPointConfig, scan::ScanConfig, sta::StationConfig,
 };
 use heapless::spsc::{Consumer, Producer, Queue};
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use link_protocol as _;
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
 extern crate alloc;

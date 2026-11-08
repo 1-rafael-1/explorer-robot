@@ -5,12 +5,6 @@
 
 mod support;
 
-use remote_daemon::{
-    relay::Relay,
-    schema::{
-        CalibrationStatus as JsonCalibrationStatus, CompletionStatus, EventName, EventValue, Stage, Status, StreamValue,
-    },
-};
 use link_protocol::{
     CommandMessage, Status as WireStatus,
     payload::{
@@ -19,6 +13,12 @@ use link_protocol::{
             DriveDistanceCompleted, RotateCompleted,
         },
         stream::ActivityStage,
+    },
+};
+use remote_daemon::{
+    relay::Relay,
+    schema::{
+        CalibrationStatus as JsonCalibrationStatus, CompletionStatus, EventName, EventValue, Stage, Status, StreamValue,
     },
 };
 use serde_json::json;

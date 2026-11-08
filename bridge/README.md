@@ -113,7 +113,7 @@ The repository's runner in `.cargo/config.toml` now passes the custom table, so 
 bridge` flashes the same explicit set. The equivalent direct command is:
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/bridge.rs
 cargo build --release --bin bridge && \
 espflash flash --monitor --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
@@ -154,7 +154,7 @@ logs; a DHCP lease can change it.
 Stop any running monitor first (`Ctrl-C`) so `/dev/ttyACM0` is free.
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/bridge.rs
 
 BRIDGE_STA_SSID='your-ssid' \
@@ -187,7 +187,7 @@ Put the token on each command (inline environment); no token file is needed. Rep
 with the one from Terminal 1.
 
 ```sh
-cd bridge-firmware
+cd bridge
 
 # 1. Baseline Beacon: needs no Link credentials.
 python3 tools/beacon-watch.py --count 3
@@ -276,7 +276,7 @@ token either; Setup Mode does not use it.
 ### Terminal 1 — build, flash and monitor
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/bridge.rs
 
 cargo build --release --bin bridge && \
@@ -374,7 +374,7 @@ bench (see the note at the end).
 ### Build, flash and boot
 
 ```sh
-cd bridge-firmware
+cd bridge
 touch src/bin/bridge.rs
 cargo build --release --bin bridge && \
 espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
@@ -490,7 +490,7 @@ drives the radio and the browser; no agent is involved.
 Start the monitor in one terminal:
 
 ```sh
-cd bridge-firmware
+cd bridge
 espflash monitor --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
     --elf target/riscv32imc-unknown-none-elf/release/bridge
 ```
@@ -580,7 +580,7 @@ The app's `connection` message and the bench's headless client both report
 On the bench LAN:
 
 ```sh
-cd bridge-firmware
+cd bridge
 python3 tools/beacon-watch.py --count 3
 ```
 
@@ -851,7 +851,7 @@ pattern on UART1 (jumper GPIO6 to GPIO7), echoes TCP bytes on port 9000 on both 
 forces station disconnects after ten minutes.
 
 ```sh
-cd bridge-firmware
+cd bridge
 SPIKE_STA_SSID='your-ssid' SPIKE_STA_PASSWORD='your-passphrase' \
     cargo run --release --bin stack-soak
 ```
@@ -868,7 +868,7 @@ framing, no robot lifecycle and no auth.
 
 ## Validation
 
-From `bridge-firmware/`:
+From `bridge/`:
 
 ```sh
 cargo build --release

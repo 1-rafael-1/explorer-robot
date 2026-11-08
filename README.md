@@ -20,9 +20,9 @@ the current tree.
 |---|---|---|---|
 | Robot firmware | `robot/`, `robot/Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [README.md](README.md) |
 | Link contract — the wire and the robot-side core | `robot/crates/link/link-protocol/`, `robot/crates/link/link-core/` | Robot workspace; host tests on `x86_64-unknown-linux-gnu` | [link-protocol](robot/crates/link/link-protocol/README.md), [link-core](robot/crates/link/link-core/README.md) |
-| Bridge — network ⇄ UART1 | `bridge-firmware/` | Its own workspace — `riscv32imc-unknown-none-elf` | [bridge-firmware](bridge-firmware/README.md) |
+| Bridge — network ⇄ UART1 | `bridge/` | Its own workspace — `riscv32imc-unknown-none-elf` | [Bridge README](bridge/README.md) |
 | Remote — daemon and static app | `remote/` | Host workspace — `x86_64-unknown-linux-gnu` | [remote](remote/README.md) |
-| Bench tools — robot and Bridge personas, link probes | `remote/robot-stub/`, `remote/bridge-stub/`, `bridge-firmware/tools/` | Host and Bridge workspaces | [robot-stub](remote/robot-stub/README.md), [bridge-stub](remote/bridge-stub/README.md) |
+| Bench tools — robot and Bridge personas, link probes | `remote/robot-stub/`, `remote/bridge-stub/`, `bridge/tools/` | Host and Bridge workspaces | [robot-stub](remote/robot-stub/README.md), [bridge-stub](remote/bridge-stub/README.md) |
 | Hardware — CAD, EDA and assembly | `cad files/`, `eda files/`, `assembly/` | No Cargo target | [Assembly notes](README.md#assembly) |
 | Documentation | `docs/` | No Cargo target | [docs/README.md](docs/README.md) |
 
@@ -31,7 +31,7 @@ the current tree.
 | Role | Start here | First command or step |
 |---|---|---|
 | Robot | [Robot page](docs/components/robot.md) | `cargo build --workspace --release --target thumbv8m.main-none-eabihf` from the repository root |
-| Bridge | [Bridge page](docs/components/bridge.md) | `cd bridge-firmware && cargo build` |
+| Bridge | [Bridge page](docs/components/bridge.md) | `cd bridge && cargo build` |
 | Remote | [Remote page](docs/components/remote.md) | `cd remote && cargo test --workspace` |
 | Bench | [Bench page](docs/components/bench.md) | Wire the bench first, then `cd remote && cargo run -p bridge-stub -- --help` |
 

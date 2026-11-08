@@ -5,16 +5,16 @@
 
 mod support;
 
-use remote_daemon::{
-    relay::Relay,
-    schema::{EventName, EventValue, Outcome, Status},
-};
 use link_protocol::{
     Command, CommandMessage, Status as WireStatus,
     payload::{
         command::{DriveDistance, StopMotion},
         event::{CompletionStatus, DriveDistanceCompleted},
     },
+};
+use remote_daemon::{
+    relay::Relay,
+    schema::{EventName, EventValue, Outcome, Status},
 };
 use serde_json::json;
 use support::{event_named, frame, must, results, session_with_app, snapshot};

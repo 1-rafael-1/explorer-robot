@@ -12,12 +12,12 @@ use std::{
 };
 
 use bridge_stub::{Deny, Scenario, ScriptEvent, StreamRate, Stub, preamble::DenyReason};
+use link_protocol::{Command, OBSTACLE_SOURCE_LIDAR, RetryPolicy, Status as WireStatus, Stream};
 use remote_daemon::{
     link::{Link, LinkConfig, LinkHandle, LinkState},
     relay::Relay,
     schema::{CommandFrame, EventName, Outcome, ServerMessage, Status, StreamName},
 };
-use link_protocol::{Command, OBSTACLE_SOURCE_LIDAR, RetryPolicy, Status as WireStatus, Stream};
 
 /// The token the tests pair with.
 const TOKEN: &[u8] = b"pairing-token-01";
