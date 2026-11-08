@@ -10,7 +10,7 @@ use remote_daemon::{
     relay::Relay,
     schema::{CommandFrame, CommandResult, EventEntry, EventName, ServerMessage, Snapshot, StreamEntry, StreamName},
 };
-use remote_protocol::{
+use link_protocol::{
     ids::ProcedureId,
     payload::{
         event::{EventOverflow, FloorDrop, Obstacle},

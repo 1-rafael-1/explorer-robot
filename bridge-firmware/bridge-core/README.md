@@ -2,7 +2,7 @@
 
 The Bridge's HAL-agnostic rules, proven on the host without the C3. The crate is `no_std`,
 allocation-free and I/O-free: it owns no UART, socket, radio or clock. The firmware parses frames
-with `remote-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
+with `link-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
 what is dropped and when to ask the robot to slow down. It also owns the Setup Mode protocol and
 the credential record's codec, which need no HAL: the bounded window, the DHCP, DNS and portal
 codecs, the versioned record and the pairing-code alphabet.
@@ -143,7 +143,7 @@ opt in because the pre-existing `stack-soak` spike is out of scope).
 The `bridge` binary keeps only HAL wiring:
 
 - **UART RX**: UHCI RX DMA at 921600 8N1 (`GPIO4` TX, `GPIO3` RX) feeds
-  `remote-protocol::RobotToPcParser`; each frame goes to `pump.on_robot_frame()`. The UART is
+  `link-protocol::RobotToPcParser`; each frame goes to `pump.on_robot_frame()`. The UART is
   parsed regardless of a client, so `BRIDGE_CONTROL` and the Beacon's eventual link flag stay
   truthful with no Remote attached.
 - **TCP RX**: one client at a time on the station stack. On accept the firmware calls

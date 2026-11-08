@@ -81,7 +81,7 @@ fn forward(bytes: &[u8]) -> Result<(), bridge_net::error::DecodeError> {
     Ok(())
 }
 
-fn encode(beacon: &Beacon, out: &mut [u8]) -> Result<usize, remote_protocol::EncodeError> {
+fn encode(beacon: &Beacon, out: &mut [u8]) -> Result<usize, link_protocol::EncodeError> {
     beacon.encode_into(out)
 }
 ```

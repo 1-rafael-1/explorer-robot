@@ -467,7 +467,7 @@ code and session live.
 
 **Blocked on the bench:** no 3.3 V USB-TTL adapter is present, so this last item is not observed
 on hardware yet. The wire contract is covered by `remote/robot-stub/tests/bridge_control.rs` and
-`remote-link`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
+`link-core`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
 remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueue).
 
 ## Browser provisioning round-trip (ticket 14)

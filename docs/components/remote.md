@@ -58,7 +58,7 @@ package) and `robot-stub`; `app/` is a static folder, not a Cargo package. All
 three commands build for `x86_64-unknown-linux-gnu`, the target set by
 `remote/.cargo/config.toml`.
 
-The shared `remote-protocol` and `remote-link` crates are root-workspace
+The shared `link-protocol` and `link-core` crates are root-workspace
 members and are tested by the robot workspace's host tests, not by the command
 below; the [remote README](../../remote/README.md) has those commands.
 
@@ -244,8 +244,8 @@ the harness, power and wiring.
   preamble and ports.
 - [robot-stub README](../../remote/robot-stub/README.md) and
   [bridge-stub README](../../remote/bridge-stub/README.md) — the bench personas.
-- [remote-protocol README](../../robot/crates/link/remote-protocol/README.md) — the wire contract;
-  [remote-link README](../../robot/crates/link/remote-link/README.md) — the core the Robot Stub
+- [link-protocol README](../../robot/crates/link/link-protocol/README.md) — the wire contract;
+  [link-core README](../../robot/crates/link/link-core/README.md) — the core the Robot Stub
   runs.
 - [CONTEXT.md](../../CONTEXT.md) — the glossary's Remote, Relay, Session and
   Pairing Token entries.

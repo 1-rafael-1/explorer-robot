@@ -8,7 +8,7 @@ use bridge_core::{
     BridgeControlRequest, BridgePump, Class, ConnectOutcome, Decision, EntryKind, Flags, Frame, Proof, ProofOutcome,
     Seq,
 };
-use remote_protocol::{
+use link_protocol::{
     BridgeControl, BridgeControlAction, BridgeStream, Control, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME,
     PROTOCOL_MAJOR, PayloadCodec, PcToRobotParser, RobotToPcParser, ThrottleAction,
 };

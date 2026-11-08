@@ -11,7 +11,7 @@
 
 use std::vec::Vec;
 
-use remote_protocol::{
+use link_protocol::{
     Caps, Class, Command, CommandMessage, Control, Direction, Event, EventMessage, Flags, Frame, MAX_PC_TO_ROBOT_FRAME,
     PROTOCOL_MAJOR, PROTOCOL_MINOR, Seq, Status, encode_bridge_control_ack, encode_command, encode_event, encode_hello,
     parser::RobotToPcParser,
@@ -198,7 +198,7 @@ impl Peer {
     }
 
     /// Acknowledges the outstanding `BRIDGE_CONTROL` request as the Bridge would.
-    pub fn ack_bridge_control(&mut self, seq: u16, reply: &remote_protocol::BridgeControlReply<'_>) {
+    pub fn ack_bridge_control(&mut self, seq: u16, reply: &link_protocol::BridgeControlReply<'_>) {
         let mut payload = [0u8; MAX_PC_TO_ROBOT_FRAME];
         let written = encode_bridge_control_ack(reply, &mut payload).unwrap_or(0);
         assert!(written > 0, "the BRIDGE_CONTROL ACK payload must encode");

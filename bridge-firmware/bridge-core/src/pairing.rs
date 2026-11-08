@@ -10,7 +10,7 @@
 
 /// The number of characters in a pairing code (ADR-0037), taken from the wire codec so the
 /// record and `PairingCode` cannot disagree.
-pub const CODE_LEN: usize = remote_protocol::PAIRING_CODE_LEN;
+pub const CODE_LEN: usize = link_protocol::PAIRING_CODE_LEN;
 
 /// The number of significant bits a pairing code carries.
 pub const CODE_BITS: u32 = 60;

@@ -2,7 +2,7 @@
 
 The robot firmware: the `explorer-robot` package on the RP2350B, covering the
 drive subsystem, LiDAR perception, the panel UI and the robot side of the Link
-Protocol (the `LinkCore` in [remote-link](../../robot/crates/link/remote-link/README.md)).
+Protocol (the `LinkCore` in [link-core](../../robot/crates/link/link-core/README.md)).
 
 The firmware package's manifest is `robot/Cargo.toml`; the root `Cargo.toml` is
 a virtual workspace manifest that lists `robot` and its crates as members.
@@ -63,8 +63,8 @@ A cold cache compiles the whole workspace; a warm cache compiles only what
 changed. Either way the last line is the invariant:
 
 ```text
-   Compiling remote-protocol v1.1.0 (...)
-   Compiling remote-link v0.1.0 (...)
+   Compiling link-protocol v1.1.0 (...)
+   Compiling link-core v0.1.0 (...)
     Finished `release` profile [optimized + debuginfo] target(s) in 0.61s
 ```
 
@@ -106,8 +106,8 @@ cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-async --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p lidar-cloud --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
@@ -197,8 +197,8 @@ cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-async --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p lidar-cloud --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p remote-protocol --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p remote-link --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
@@ -211,9 +211,9 @@ bench-required.
 ## Source material
 
 - [Root README](../../README.md) — the front door and the hardware summary.
-- [remote-protocol](../../robot/crates/link/remote-protocol/README.md) — the Link
+- [link-protocol](../../robot/crates/link/link-protocol/README.md) — the Link
   Protocol wire contract.
-- [remote-link](../../robot/crates/link/remote-link/README.md) — `LinkCore`, the
+- [link-core](../../robot/crates/link/link-core/README.md) — `LinkCore`, the
   robot side of the protocol.
 - [coin-d6](../../robot/crates/drivers/coin-d6/README.md) — the LiDAR driver and
   its wiring.

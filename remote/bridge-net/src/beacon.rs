@@ -6,7 +6,7 @@
 //! and does not connect to. The codec is `no_std` and allocation-free; the socket stays in the
 //! consumer.
 
-use remote_protocol::EncodeError;
+use link_protocol::EncodeError;
 
 use crate::{
     error::DecodeError,
@@ -21,7 +21,7 @@ pub const INTERVAL_MS: u64 = 3_000;
 
 /// The Link Protocol major advertised in the Beacon, so an old daemon can filter rather than
 /// misparse.
-pub const LINK_MAJOR: u8 = remote_protocol::PROTOCOL_MAJOR;
+pub const LINK_MAJOR: u8 = link_protocol::PROTOCOL_MAJOR;
 
 /// A `tcp_port` of zero advertises a portal-only Bridge with no Link listener; the daemon treats it
 /// as Setup Mode and does not connect.

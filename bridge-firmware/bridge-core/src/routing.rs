@@ -13,7 +13,7 @@
 //! ignores the `BRIDGE_STATUS` control message. The Bridge injects its snapshot into the pump's
 //! ring directly instead.
 
-use remote_protocol::{
+use link_protocol::{
     BridgeControlAction, BridgeStream, Class, Control, ControlMessage, Flags, Frame, Seq, decode_control,
 };
 

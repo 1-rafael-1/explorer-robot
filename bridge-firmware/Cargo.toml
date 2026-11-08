@@ -32,7 +32,7 @@ version      = "0.1.0"
 # binary joins it here when ticket 04 lands.
 
 [dependencies]
-remote-protocol = { path = "../robot/crates/link/remote-protocol", version = "1" }
+link-protocol = { path = "../robot/crates/link/link-protocol", version = "1" }
 bridge-net = { path = "../remote/bridge-net", version = "1" }
 bridge-core = { path = "bridge-core", version = "0.1.0" }
 

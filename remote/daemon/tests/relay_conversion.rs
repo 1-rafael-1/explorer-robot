@@ -11,7 +11,7 @@ use remote_daemon::{
         CalibrationStatus as JsonCalibrationStatus, CompletionStatus, EventName, EventValue, Stage, Status, StreamValue,
     },
 };
-use remote_protocol::{
+use link_protocol::{
     CommandMessage, Status as WireStatus,
     payload::{
         event::{
@@ -96,10 +96,10 @@ fn calibration_statuses_map() {
     let mut relay = Relay::new();
     let entry = relay.on_calibration(
         &calibration(
-            remote_protocol::payload::stream::CalibrationStatus::Unknown,
-            remote_protocol::payload::stream::CalibrationStatus::Loaded,
-            remote_protocol::payload::stream::CalibrationStatus::Missing,
-            remote_protocol::payload::stream::CalibrationStatus::Loaded,
+            link_protocol::payload::stream::CalibrationStatus::Unknown,
+            link_protocol::payload::stream::CalibrationStatus::Loaded,
+            link_protocol::payload::stream::CalibrationStatus::Missing,
+            link_protocol::payload::stream::CalibrationStatus::Loaded,
         ),
         10,
     );

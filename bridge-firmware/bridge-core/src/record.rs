@@ -10,10 +10,10 @@
 //! outside the pairing alphabet. The caller fails closed into Setup Mode, so a changed layout is
 //! a recoverable re-provision instead of a misread.
 //!
-//! The CRC is the Link Protocol's CRC-16/CCITT-FALSE ([`remote_protocol::crc16`]), reused rather
+//! The CRC is the Link Protocol's CRC-16/CCITT-FALSE ([`link_protocol::crc16`]), reused rather
 //! than inventing a second checksum for the same board.
 
-use remote_protocol::crc16;
+use link_protocol::crc16;
 
 use crate::{
     pairing::{self, CODE_LEN},

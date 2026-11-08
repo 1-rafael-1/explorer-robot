@@ -9,7 +9,7 @@ use remote_daemon::{
     relay::Relay,
     schema::{EventName, EventValue, Outcome, Status},
 };
-use remote_protocol::{
+use link_protocol::{
     Command, CommandMessage, Status as WireStatus,
     payload::{
         command::{DriveDistance, StopMotion},

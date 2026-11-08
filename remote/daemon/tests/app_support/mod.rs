@@ -25,7 +25,7 @@ use remote_daemon::{
     clock,
     relay::{OutboundCommand, Relay},
 };
-use remote_protocol::payload::stream::Power;
+use link_protocol::payload::stream::Power;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

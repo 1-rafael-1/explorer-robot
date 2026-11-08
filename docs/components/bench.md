@@ -23,7 +23,7 @@ board or Wi-Fi link was touched.
 | Bench piece | Replaces | What runs there |
 |---|---|---|
 | C3 SuperMini on the harness | — | the real Bridge image, on UART1 and Wi-Fi |
-| Robot Stub over a 3.3 V USB-TTL adapter | the robot | the real `remote-link` `LinkCore` behind a serial port |
+| Robot Stub over a 3.3 V USB-TTL adapter | the robot | the real `link-core` `LinkCore` behind a serial port |
 | Bridge Stub on loopback | the Bridge | the `bridge-net` preamble, Discovery Beacon and scripted robot traffic |
 | `remote-daemon` plus the probes | the Remote | discovery, the HMAC preamble and the Link Protocol |
 
@@ -212,7 +212,7 @@ matched; a Bridge that was never reachable fails the soak. See
 
 ### `robot-stub`
 
-The robot persona for the Bridge's bench: the real `remote-link` `LinkCore`
+The robot persona for the Bridge's bench: the real `link-core` `LinkCore`
 behind a 3.3 V USB-TTL adapter, opening the port at 921600 8N1. It has no
 `--help`; its parser rejects an unknown flag by name.
 

@@ -9,7 +9,7 @@ use app_support::{
     FakeGate, TestServer, a_client_hello, connect, json_of_type, must, must_some, relay_with_session, send_json,
     wait_for_outbound,
 };
-use remote_protocol::Command;
+use link_protocol::Command;
 use serde_json::{Value, json};
 
 /// The `drive_distance` command frame.

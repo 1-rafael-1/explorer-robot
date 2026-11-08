@@ -6,7 +6,7 @@
 //! being parsed regardless, which is what lets a `BRIDGE_CONTROL` and the Beacon's link flag stay
 //! truthful with no client attached.
 
-use remote_protocol::{BridgeStream, Class, Flags, Frame, Seq, ThrottleHint};
+use link_protocol::{BridgeStream, Class, Flags, Frame, Seq, ThrottleHint};
 
 use crate::{
     auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent},

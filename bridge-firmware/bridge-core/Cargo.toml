@@ -8,10 +8,10 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [features]
 # Host tests only. The crate itself is always `no_std`.
-std = ["remote-protocol/std"]
+std = ["link-protocol/std"]
 
 [dependencies]
-remote-protocol = { path = "../../robot/crates/link/remote-protocol", version = "1" }
+link-protocol = { path = "../../robot/crates/link/link-protocol", version = "1" }
 bridge-net = { path = "../../remote/bridge-net", version = "1" }
 
 [lints]

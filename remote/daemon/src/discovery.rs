@@ -242,7 +242,7 @@ impl Discovery {
                         };
                         // ADR-0037: the Beacon's major lets a daemon filter a future layout rather
                         // than misparse it. Ignore it entirely: do not cache and do not connect.
-                        if beacon.major != remote_protocol::PROTOCOL_MAJOR {
+                        if beacon.major != link_protocol::PROTOCOL_MAJOR {
                             continue;
                         }
                         let entry = BeaconEntry {

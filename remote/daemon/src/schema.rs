@@ -185,14 +185,14 @@ impl StreamName {
     ///
     /// The wire's `LIDAR_CLOUD` is the app's `lidar`; every other name matches its stream.
     #[must_use]
-    pub const fn from_wire(stream: remote_protocol::Stream) -> Self {
+    pub const fn from_wire(stream: link_protocol::Stream) -> Self {
         match stream {
-            remote_protocol::Stream::Power => Self::Power,
-            remote_protocol::Stream::Motion => Self::Motion,
-            remote_protocol::Stream::Activity => Self::Activity,
-            remote_protocol::Stream::Perception => Self::Perception,
-            remote_protocol::Stream::LidarCloud => Self::Lidar,
-            remote_protocol::Stream::Calibration => Self::Calibration,
+            link_protocol::Stream::Power => Self::Power,
+            link_protocol::Stream::Motion => Self::Motion,
+            link_protocol::Stream::Activity => Self::Activity,
+            link_protocol::Stream::Perception => Self::Perception,
+            link_protocol::Stream::LidarCloud => Self::Lidar,
+            link_protocol::Stream::Calibration => Self::Calibration,
         }
     }
 }

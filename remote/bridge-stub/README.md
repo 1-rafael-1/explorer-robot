@@ -3,7 +3,7 @@
 The daemon's bench peer (ADR-0040's host-workspace amendment). It serves the server side of
 `bridge-net`'s HMAC preamble — the challenge with identity, client-proof verification,
 `ACCEPT` and the `DENY` variants — plus the Discovery Beacon and scripted robot traffic behind
-an accepted connection. Both sides compose `bridge-net`'s framing and `remote-protocol`'s
+an accepted connection. Both sides compose `bridge-net`'s framing and `link-protocol`'s
 payload codecs, so the stub never invents wire semantics. It replaces the Bridge, not the
 robot; see [`../robot-stub/README.md`](../robot-stub/README.md) for the robot end.
 

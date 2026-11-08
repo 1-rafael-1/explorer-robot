@@ -8,7 +8,7 @@
 //! firmware can forward frames without inventing an implied header. These tests pin that fidelity.
 
 use bridge_core::{Class, EntryKind, Flags, PushError, PushOutcome, Ring};
-use remote_protocol::Seq;
+use link_protocol::Seq;
 
 /// The ADR-0033 ring size: 8 KiB.
 const EIGHT_KIB: usize = 8 * 1024;

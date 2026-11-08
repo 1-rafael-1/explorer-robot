@@ -5,7 +5,7 @@
 //! are at least 500 ms apart, and a pause is refreshed while the ring stays above the low marks.
 
 use bridge_core::{WatermarkPolicy, flow};
-use remote_protocol::{ThrottleAction, ThrottleHint};
+use link_protocol::{ThrottleAction, ThrottleHint};
 
 /// Builds an occupancy from bytes and queued entries.
 const fn occupancy(bytes: usize, entries: usize) -> flow::Occupancy {

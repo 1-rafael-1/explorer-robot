@@ -17,7 +17,7 @@ use std::{
 };
 
 use bridge_net::{beacon::LINK_MAJOR, preamble as net_preamble};
-use remote_protocol::{
+use link_protocol::{
     AckOutcome, AckTracker, Caps, Class, Command, CommandMessage, Control, ControlMessage, Direction, Event,
     Flags as LinkFlags, Frame, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PROTOCOL_MINOR, PayloadCodec, Ping, PingAck,
     ProcedureId, RateEntry, RateFlags, Seq, Status, Stream, StreamSample, encode_command, encode_control,
@@ -584,7 +584,7 @@ fn handle_frame(stream: &mut TcpStream, scenario: &Scenario, state: &mut Traffic
 fn handle_control(stream: &mut TcpStream, scenario: &Scenario, frame: Frame<'_>) {
     match Control::from_wire(frame.header.id) {
         Some(Control::Hello) => {
-            if remote_protocol::decode_control(Control::Hello, false, frame.payload).is_err() {
+            if link_protocol::decode_control(Control::Hello, false, frame.payload).is_err() {
                 return;
             }
             let entries = scenario.traffic.streams.iter().map(|rate| RateEntry {

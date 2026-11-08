@@ -397,7 +397,7 @@ covers the full list, including DMA stalls and UART RX recovery.
   host-testable pump rules, the Setup Mode codecs and the record/token codec.
 - [bridge-net README](../../remote/bridge-net/README.md) — the shared Discovery
   Beacon, preamble and ports.
-- [remote-protocol README](../../robot/crates/link/remote-protocol/README.md) — the wire contract
+- [link-protocol README](../../robot/crates/link/link-protocol/README.md) — the wire contract
   the Bridge parses and forwards.
 - [CONTEXT.md](../../CONTEXT.md) — the glossary's Bridge, Link Port, Setup Mode
   and Pairing Token entries.

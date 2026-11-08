@@ -6,8 +6,8 @@
 
 mod support;
 
-use remote_link::timing::CONTROL_TIMEOUT_MS;
-use remote_protocol::{
+use link_core::timing::CONTROL_TIMEOUT_MS;
+use link_protocol::{
     BridgeControlAction, BridgeControlReply, Class, Control, Flags, Status,
     payload::control::{PairingCode, SetupCredentials},
 };
@@ -149,7 +149,7 @@ fn actions_one_and_two_return_the_pairing_code() {
 }
 
 /// A request the Bridge never acknowledges is reported as a timeout on the shipped schedule
-/// (ADR-0030's control timeout, [`remote_link::timing::CONTROL_TIMEOUT_MS`]).
+/// (ADR-0030's control timeout, [`link_core::timing::CONTROL_TIMEOUT_MS`]).
 #[test]
 fn an_unacknowledged_request_is_reported_as_a_timeout() {
     let mut bench = Bench::new(Config::default(), BOOT_ID, Persona::BridgeControl);

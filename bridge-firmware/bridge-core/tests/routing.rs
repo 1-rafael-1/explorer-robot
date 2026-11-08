@@ -1,11 +1,11 @@
 //! Host tests for the routing filter (ADR-0030, ADR-0036, ADR-0037).
 //!
-//! Every route is observed at the crate's public API using `remote-protocol`'s real frame and
+//! Every route is observed at the crate's public API using `link-protocol`'s real frame and
 //! payload types. The filter has exactly two control exceptions: `THROTTLE` out to the robot and
 //! `BRIDGE_CONTROL` in, which the Bridge consumes and answers.
 
 use bridge_core::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
-use remote_protocol::{
+use link_protocol::{
     BridgeControl, BridgeControlAction, BridgeStream, Class, Control, Flags, Frame, PROTOCOL_MAJOR, PayloadCodec, Seq,
     Stream, ThrottleAction, ThrottleHint,
 };

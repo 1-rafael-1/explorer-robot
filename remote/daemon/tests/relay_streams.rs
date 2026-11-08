@@ -9,7 +9,7 @@ use remote_daemon::{
     relay::Relay,
     schema::{PROTOCOL, Stage, StreamName, StreamValue},
 };
-use remote_protocol::{
+use link_protocol::{
     ids::ProcedureId,
     payload::{
         command::StatusSnapshot,
@@ -29,7 +29,7 @@ fn a_snapshot_carries_only_seen_streams() {
     let _ = relay.on_power(&power(80, 7_400), 1_100);
     let _ = relay.on_power(&power(81, 7_500), 1_200);
     let _ = relay.on_motion(
-        &remote_protocol::payload::stream::Motion { left: 10, right: -10 },
+        &link_protocol::payload::stream::Motion { left: 10, right: -10 },
         1_300,
     );
 
@@ -210,7 +210,7 @@ fn a_status_snapshot_seeds_its_five_streams() {
 fn a_snapshot_assembled_later_does_not_repeat_its_streams() {
     let mut relay = Relay::new();
     let app = session_with_app(&mut relay, 7, 0);
-    let _ = relay.on_motion(&remote_protocol::payload::stream::Motion { left: 1, right: 2 }, 10);
+    let _ = relay.on_motion(&link_protocol::payload::stream::Motion { left: 1, right: 2 }, 10);
 
     let assembled = must(relay.snapshot(app, 20), "snapshot");
     assert_eq!(assembled.streams.len(), 1);

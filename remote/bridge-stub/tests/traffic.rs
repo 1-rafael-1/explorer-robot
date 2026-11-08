@@ -5,7 +5,7 @@ mod support;
 use std::time::Duration;
 
 use bridge_stub::{Scenario, ScriptEvent, StreamRate};
-use remote_protocol::{Class, Command, Event, Flags as LinkFlags, OBSTACLE_SOURCE_LIDAR, RetryPolicy, Status, Stream};
+use link_protocol::{Class, Command, Event, Flags as LinkFlags, OBSTACLE_SOURCE_LIDAR, RetryPolicy, Status, Stream};
 use support::BenchError;
 
 /// The token the tests pair with.
@@ -19,7 +19,7 @@ fn hello_is_answered_with_hello_ack() -> Result<(), BenchError> {
     let seq = client.send_hello(0xABCD_1234)?;
     client.pump(Duration::from_millis(300))?;
 
-    let replies = client.frames_of(Class::Control, remote_protocol::Control::Hello.wire_id());
+    let replies = client.frames_of(Class::Control, link_protocol::Control::Hello.wire_id());
     assert_eq!(replies.len(), 1, "exactly one HELLO_ACK is sent");
     let reply = &replies[0];
     assert!(
@@ -31,8 +31,8 @@ fn hello_is_answered_with_hello_ack() -> Result<(), BenchError> {
     let ack = support::hello_ack(&reply.payload)?;
     assert_eq!(ack.boot_id, 1, "the stub's Boot Id is served");
     assert_eq!(ack.status, Status::Ok);
-    assert_eq!(ack.major, remote_protocol::PROTOCOL_MAJOR);
-    assert_eq!(ack.minor, remote_protocol::PROTOCOL_MINOR);
+    assert_eq!(ack.major, link_protocol::PROTOCOL_MAJOR);
+    assert_eq!(ack.minor, link_protocol::PROTOCOL_MINOR);
     Ok(())
 }
 
@@ -44,7 +44,7 @@ fn ping_is_answered_with_ping_ack() -> Result<(), BenchError> {
     let seq = client.send_ping()?;
     client.pump(Duration::from_millis(300))?;
 
-    let replies = client.frames_of(Class::Control, remote_protocol::Control::Ping.wire_id());
+    let replies = client.frames_of(Class::Control, link_protocol::Control::Ping.wire_id());
     assert_eq!(replies.len(), 1, "exactly one PING_ACK is sent");
     let reply = &replies[0];
     assert!(

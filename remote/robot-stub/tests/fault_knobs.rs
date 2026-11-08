@@ -6,7 +6,7 @@
 
 mod support;
 
-use remote_protocol::{Class, Control};
+use link_protocol::{Class, Control};
 use robot_stub::{Config, FaultKnobs, Persona};
 use support::Bench;
 

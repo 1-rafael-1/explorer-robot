@@ -28,7 +28,7 @@ use remote_daemon::{
     discovery::{Discovery, DiscoveryConfig},
     host::Host,
 };
-use remote_protocol::Stream;
+use link_protocol::Stream;
 use serde_json::{Value, json};
 
 /// The token the daemon stores and the stub verifies.

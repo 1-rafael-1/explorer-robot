@@ -44,6 +44,6 @@ pub use flow::WatermarkPolicy;
 pub use heartbeat::{CoveredTask, HeartbeatSet};
 pub use pump::{BridgePump, Decision, PumpStats};
 pub use record::{CredentialRecord, RecordError};
-pub use remote_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
+pub use link_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
 pub use routing::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
 pub use setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow};

@@ -1,7 +1,7 @@
 //! The Robot Stub (ticket 02): the robot's real `LinkCore` behind a serial port.
 //!
 //! The stub replaces the robot on the Bridge's bench. It owns no wire semantics of its own:
-//! [`remote_link::LinkCore`] answers `HELLO` and `PING`, deduplicates commands, re-ACKs the last
+//! [`link_core::LinkCore`] answers `HELLO` and `PING`, deduplicates commands, re-ACKs the last
 //! sequence without re-executing, answers older ones with `STALE` and retries unacknowledged
 //! events. The personas only configure rates and load around that core, and the fault knobs
 //! drop, delay or corrupt bytes on the serial side, on demand.
@@ -20,9 +20,9 @@ pub mod transport;
 
 use std::{collections::VecDeque, string::String, vec::Vec};
 
-pub use remote_link::timing::Config;
-use remote_link::{Inbound, LinkCore, PeerState};
-use remote_protocol::{
+pub use link_core::timing::Config;
+use link_core::{Inbound, LinkCore, PeerState};
+use link_protocol::{
     Command, CommandMessage, CompletionStatus, EventMessage, MAX_ROBOT_TO_PC_FRAME, Status, StreamSample,
     ThrottleState,
     ids::{ProcedureId, Stream},

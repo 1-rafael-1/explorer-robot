@@ -154,7 +154,7 @@ name = "bridge-net"
 version = "1.0.0"
 dependencies = [
  "hmac",
- "remote-protocol",
+ "link-protocol",
  "sha2",
 ]
 
@@ -165,7 +165,7 @@ dependencies = [
  "bridge-net",
  "getrandom 0.3.4",
  "hmac",
- "remote-protocol",
+ "link-protocol",
  "sha2",
 ]
 
@@ -694,6 +694,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "link-core"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "link-protocol",
+]
+
+[[package]]
+name = "link-protocol"
+version = "1.1.0"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -907,8 +919,8 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "include_dir",
+ "link-protocol",
  "open",
- "remote-protocol",
  "serde",
  "serde_json",
  "tempfile",
@@ -918,23 +930,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "remote-link"
-version = "0.1.0"
-dependencies = [
- "heapless",
- "remote-protocol",
-]
-
-[[package]]
-name = "remote-protocol"
-version = "1.1.0"
-
-[[package]]
 name = "robot-stub"
 version = "0.1.0"
 dependencies = [
- "remote-link",
- "remote-protocol",
+ "link-core",
+ "link-protocol",
  "serialport",
 ]
 

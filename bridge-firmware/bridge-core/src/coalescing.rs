@@ -13,7 +13,7 @@
 //! re-encoded exactly as it arrived. Coalescing replaces an older stream sample with a newer one;
 //! the surviving entry always describes the most recently pushed frame, header included.
 
-use remote_protocol::{Class, Flags, Seq};
+use link_protocol::{Class, Flags, Seq};
 
 /// The ring's total byte capacity: ADR-0033's 8 KiB.
 pub const CAPACITY: usize = 8 * 1024;

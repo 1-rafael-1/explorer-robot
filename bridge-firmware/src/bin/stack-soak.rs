@@ -59,7 +59,7 @@ use esp_radio::wifi::{
 };
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
-use remote_protocol as _;
+use link_protocol as _;
 use static_cell::StaticCell;
 
 extern crate alloc;

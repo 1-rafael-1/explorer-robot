@@ -127,7 +127,7 @@ use esp_radio::wifi::{
 };
 use heapless::spsc::Queue;
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
-use remote_protocol::{
+use link_protocol::{
     BridgeControlAction, BridgeControlReply, BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, Control,
     ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec,
     PcToRobotParser, RobotToPcParser, SetupCredentials, ThrottleHint, encode_bridge_control_ack, encode_control,
@@ -3110,9 +3110,9 @@ async fn handle_panel_request(request: BridgeControlRequest) {
             }
             let queued = queue_panel_command(PanelCommand::Forget);
             let status = if persisted && minted.is_some() && queued {
-                remote_protocol::Status::Ok
+                link_protocol::Status::Ok
             } else {
-                remote_protocol::Status::Internal
+                link_protocol::Status::Internal
             };
             let (ssid_bytes, ssid_len) = setup_ssid();
             let ssid = core::str::from_utf8(&ssid_bytes[..ssid_len]).unwrap_or("");
@@ -3132,9 +3132,9 @@ async fn handle_panel_request(request: BridgeControlRequest) {
             let code = current.unwrap_or([b'0'; pairing::CODE_LEN]);
             let code = core::str::from_utf8(&code).unwrap_or("");
             let status = if current.is_some() {
-                remote_protocol::Status::Ok
+                link_protocol::Status::Ok
             } else {
-                remote_protocol::Status::Internal
+                link_protocol::Status::Internal
             };
             enqueue_bridge_ack(
                 request.seq,
@@ -3150,7 +3150,7 @@ async fn handle_panel_request(request: BridgeControlRequest) {
                 enqueue_bridge_ack(
                     request.seq,
                     &BridgeControlReply::PairingCode(PairingCode {
-                        status: remote_protocol::Status::Internal,
+                        status: link_protocol::Status::Internal,
                         code,
                     }),
                 );
@@ -3163,7 +3163,7 @@ async fn handle_panel_request(request: BridgeControlRequest) {
                 enqueue_bridge_ack(
                     request.seq,
                     &BridgeControlReply::PairingCode(PairingCode {
-                        status: remote_protocol::Status::Ok,
+                        status: link_protocol::Status::Ok,
                         code,
                     }),
                 );
@@ -3177,7 +3177,7 @@ async fn handle_panel_request(request: BridgeControlRequest) {
                 enqueue_bridge_ack(
                     request.seq,
                     &BridgeControlReply::PairingCode(PairingCode {
-                        status: remote_protocol::Status::Internal,
+                        status: link_protocol::Status::Internal,
                         code,
                     }),
                 );

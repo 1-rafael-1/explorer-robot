@@ -14,7 +14,7 @@
 //! The policy owns no ring and no clock: the caller passes an [`Occupancy`] and a monotonic
 //! millisecond timestamp, and encodes the returned hint as a `THROTTLE` control frame.
 
-use remote_protocol::{ThrottleAction, ThrottleHint};
+use link_protocol::{ThrottleAction, ThrottleHint};
 
 use crate::coalescing::CAPACITY_ENTRIES;
 
