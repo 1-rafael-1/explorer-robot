@@ -42,7 +42,7 @@ pub use auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent};
 pub use coalescing::{Entry, EntryKind, PushError, PushOutcome, Ring};
 pub use flow::WatermarkPolicy;
 pub use heartbeat::{CoveredTask, HeartbeatSet};
-pub use pump::{BridgePump, Decision};
+pub use pump::{BridgePump, Decision, PumpStats};
 pub use record::{CredentialRecord, RecordError};
 pub use remote_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
 pub use routing::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};

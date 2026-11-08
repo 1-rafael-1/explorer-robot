@@ -56,6 +56,14 @@ fn main() -> ExitCode {
     }
 }
 
+/// Prints a one-line report the first time `value` differs from the last one seen.
+fn report_transition<T: Copy + PartialEq>(last: &mut T, value: T, print: impl FnOnce(T)) {
+    if *last != value {
+        print(value);
+        *last = value;
+    }
+}
+
 /// Opens the port, builds the stub and runs the bench loop until interrupted.
 fn run() -> Result<(), String> {
     let args = parse_args()?;
@@ -123,14 +131,12 @@ fn run() -> Result<(), String> {
         // summary alone would miss the induced-stall window.
         let paused = stub.paused_streams();
         let hints = stub.throttle_hints();
-        if hints != last_hints {
+        report_transition(&mut last_hints, hints, |hints| {
             println!("robot-stub: THROTTLE hint {hints} received, {paused} streams paused ({now_ms} ms)");
-            last_hints = hints;
-        }
-        if paused != last_paused {
+        });
+        report_transition(&mut last_paused, paused, |paused| {
             println!("robot-stub: THROTTLE pause now {paused} streams ({now_ms} ms)");
-            last_paused = paused;
-        }
+        });
 
         if now_ms >= next_stats {
             println!(

@@ -23,9 +23,10 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
    `BRIDGE_STATUS` is Bridge-originated (ADR-0042) and is not a forwarding exception: the router
    ignores it. A `BRIDGE_CONTROL` arriving from the client is dropped and counted. A frame
    travelling the wrong way is ignored.
-3. **Flow** (`flow`) — ring occupancy to `THROTTLE`: at 6 KiB the robot is told to
-   `PAUSE(ALL_STREAMS, 1000 ms)`, at 2 KiB it is told to `RESUME`, and hints are at least 500 ms
-   apart. The hint is advisory and time-limited.
+3. **Flow** (`flow`) — ring occupancy to `THROTTLE`: at 6 KiB **or** 12 queued entries the robot
+   is told to `PAUSE(ALL_STREAMS, 1000 ms)`; it resumes only at or below 2 KiB **and** 4 entries,
+   and the pause is refreshed every 500 ms while either mark stays above its low watermark. Hints
+   are at least 500 ms apart. The hint is advisory and time-limited.
 4. **Authentication** (`auth`) — the single-client gate. A connection has five seconds to
    authenticate, a new unauthenticated connection supersedes an older one, and exactly one
    authenticated client holds the slot. Five failed proofs within a minute close a one-minute
@@ -93,7 +94,8 @@ spawn succeeds. No clock, timer, HAL or allocator is involved; everything is hos
 | `poll_throttle(now_ms) -> Option<ThrottleHint>` | observe ring occupancy and return a hint |
 | `offer_bridge_status(seq, payload) -> Decision` | queue the Bridge's own `BRIDGE_STATUS` for the daemon, coalesced as stream `0x0007`; `Ignored` without an authenticated client |
 | `pop() -> Option<Entry>` / `drain(sink)` | take client-bound entries |
-| `used_bytes()` / `reserved_bytes()` | ring occupancy and the event reservation |
+| `used_bytes()` / `used_entries()` / `reserved_bytes()` | ring occupancy and the event reservation |
+| `stats() -> PumpStats` | the seven occupancy and drop counters as one snapshot |
 | `dropped_streams()` / `dropped_reliable()` | ring discard counters |
 | `dropped_without_client()` | robot frames dropped while no client was authenticated |
 | `dropped_bridge_controls()` | client-side `BRIDGE_CONTROL` frames dropped |
@@ -114,10 +116,10 @@ Decision and state types:
   can cover.
 
 Constants are the ADR numbers, not tuning knobs: `CAPACITY` 8 KiB, `EVENT_RESERVED_BYTES` 512,
-`STREAM_CAPACITY` 7.5 KiB, `HIGH_WATERMARK_BYTES` 6 KiB, `LOW_WATERMARK_BYTES` 2 KiB,
-`HIGH_WATERMARK_ENTRIES` 12, `LOW_WATERMARK_ENTRIES` 4,
-`PAUSE_TTL_MS` 1000, `MIN_HINT_INTERVAL_MS` 500, `DEADLINE_MS` 5000, `FAILURE_LIMIT` 5,
-`FAILURE_WINDOW_MS` 60_000 and `REFUSAL_MS` 60_000.
+`STREAM_CAPACITY` 7.5 KiB, `CAPACITY_ENTRIES` 16, `HIGH_WATERMARK_BYTES` 6 KiB,
+`LOW_WATERMARK_BYTES` 2 KiB, `HIGH_WATERMARK_ENTRIES` 12 (three quarters of the descriptor table),
+`LOW_WATERMARK_ENTRIES` 4 (one quarter), `PAUSE_TTL_MS` 1000, `MIN_HINT_INTERVAL_MS` 500,
+`DEADLINE_MS` 5000, `FAILURE_LIMIT` 5, `FAILURE_WINDOW_MS` 60_000 and `REFUSAL_MS` 60_000.
 
 ## Host tests
 

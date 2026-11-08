@@ -11,7 +11,7 @@ use remote_protocol::{BridgeStream, Class, Flags, Frame, Seq, ThrottleHint};
 use crate::{
     auth::{ClientAuth, ConnectOutcome, Proof, ProofOutcome, TimerEvent},
     coalescing::{Entry, PushOutcome, Ring},
-    flow::WatermarkPolicy,
+    flow::{Occupancy, WatermarkPolicy},
     routing::{BridgeControlRequest, Destination, Route, Router, Side},
 };
 
@@ -32,6 +32,28 @@ pub enum Decision {
     DroppedBridgeControl,
     /// No rule applies; the frame is ignored.
     Ignored,
+}
+
+/// The pump's ring occupancy and drop counters, as one status snapshot.
+///
+/// The firmware prints this once per status period; keeping the seven values together stops the
+/// status line and the accessors drifting apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PumpStats {
+    /// The ring's used bytes.
+    pub used_bytes: usize,
+    /// The number of queued entries.
+    pub used_entries: usize,
+    /// The bytes reserved for reliable entries.
+    pub reserved_bytes: usize,
+    /// How many stream samples the ring discarded.
+    pub dropped_streams: u32,
+    /// How many client-bound frames were dropped without a client.
+    pub dropped_without_client: u32,
+    /// How many reliable entries the ring discarded or rejected.
+    pub dropped_reliable: u32,
+    /// How many client-side `BRIDGE_CONTROL` frames were dropped.
+    pub dropped_bridge_controls: u32,
 }
 
 /// The Bridge's pump rules and their counters.
@@ -131,7 +153,13 @@ impl BridgePump {
     /// Observes the ring's occupancy and returns the `THROTTLE` hint to emit, if any.
     #[must_use]
     pub const fn poll_throttle(&mut self, now_ms: u32) -> Option<ThrottleHint> {
-        self.flow.observe(self.ring.used_bytes(), self.ring.entries(), now_ms)
+        self.flow.observe(
+            Occupancy {
+                bytes: self.ring.used_bytes(),
+                entries: self.ring.used_entries(),
+            },
+            now_ms,
+        )
     }
 
     /// Queues a Bridge-originated status snapshot for the authenticated client.
@@ -171,8 +199,22 @@ impl BridgePump {
 
     /// Returns the number of queued client-bound entries.
     #[must_use]
-    pub const fn entries(&self) -> usize {
-        self.ring.entries()
+    pub const fn used_entries(&self) -> usize {
+        self.ring.used_entries()
+    }
+
+    /// Returns the ring's occupancy and drop counters as one snapshot.
+    #[must_use]
+    pub const fn stats(&self) -> PumpStats {
+        PumpStats {
+            used_bytes: self.ring.used_bytes(),
+            used_entries: self.ring.used_entries(),
+            reserved_bytes: self.ring.reserved_bytes(),
+            dropped_streams: self.ring.dropped_streams(),
+            dropped_without_client: self.dropped_without_client,
+            dropped_reliable: self.ring.dropped_reliable(),
+            dropped_bridge_controls: self.router.dropped_bridge_controls(),
+        }
     }
 
     /// Returns the ring's reserved bytes.

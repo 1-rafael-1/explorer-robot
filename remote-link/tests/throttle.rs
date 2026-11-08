@@ -199,7 +199,7 @@ fn pause_beats_rate_and_resume_clears_it() {
     assert_eq!(
         core.throttle_hints(),
         2,
-        "the rate hint and the pause hint were received"
+        "the rate hint and the pause hint were applied"
     );
 
     publish_power(&mut core, 1, 0);
@@ -385,6 +385,11 @@ fn unknown_streams_and_malformed_payloads_are_ignored() {
         return;
     };
     feed_at(&mut core, &mut wire, 0);
+    assert_eq!(
+        core.throttle_hints(),
+        0,
+        "a hint for an unknown stream is not an applied hint"
+    );
     publish_power(&mut core, 1, 0);
     assert_eq!(emit_stream(&mut core), Some(StreamId::Power));
     publish_power(&mut core, 2, 100);

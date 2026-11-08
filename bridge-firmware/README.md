@@ -470,6 +470,125 @@ on hardware yet. The wire contract is covered by `remote/robot-stub/tests/bridge
 `remote-link`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
 remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueue).
 
+## Browser provisioning round-trip (ticket 14)
+
+This is the browser-driven version of the portal round trip: forget the station over UART1, join the
+Bridge's setup AP, provision the throwaway network from the page, and rejoin the bench AP. A human
+drives the radio and the browser; no agent is involved.
+
+### Prerequisites
+
+- The C3 console on `/dev/ttyACM1` and the CH343G UART adapter on `/dev/ttyACM0`.
+- The `robot-stub` binary: `cd remote && cargo build -p robot-stub`.
+- The throwaway AP's SSID and passphrase, and the bench AP's saved NetworkManager connection (named
+  `PandorasMesh` here). Keep the throwaway passphrase out of this repository, shell history and
+  saved logs; use a placeholder such as `<throwaway-ap-passphrase>` anywhere you write it down.
+
+### 1. Monitor the Bridge and forget the network
+
+Start the monitor in one terminal:
+
+```sh
+cd bridge-firmware
+espflash monitor --chip esp32c3 --port /dev/ttyACM1 --log-format defmt \
+    --elf target/riscv32imc-unknown-none-elf/release/bridge
+```
+
+Wait for the boot banner (`pairing_code=XXXX-XXXX-XXXX`) and the ten-second `status:` lines. In a
+second terminal, send `BRIDGE_CONTROL` action 0 (Forget) from the robot-facing UART:
+
+```sh
+cd remote
+cargo run -p robot-stub -- --port /dev/ttyACM0 --persona bridge-control --action 0
+```
+
+Expect the stub's ACK and the Bridge raising Setup Mode:
+
+```text
+robot-stub: BRIDGE_CONTROL action 0 seq 1 replied: Setup { status: Ok, ssid: "ExplorerRobot-D064", passphrase: "explorer-setup" }
+panel: forgot the network; acknowledging with the setup identity
+panel: forgot the network and raised Setup Mode
+ap: setup ssid=ExplorerRobot-D064 channel=1 max_clients=2 address=192.168.4.1/24
+```
+
+### 2. Arm the safety timer before joining the setup AP
+
+`ExplorerRobot-D064` has no Internet. Arm a detached timer **before** the radio leaves the bench AP,
+so a forgotten step cannot strand the host offline:
+
+```sh
+setsid bash -c 'sleep 300; nmcli connection up <internet-connection>' </dev/null >/dev/null 2>&1 &
+```
+
+Use whichever saved connection has Internet (`PandorasStarMobile` or `PandorasMesh` here). The guard
+restores only Internet; it does not restore the bench AP or recover a lost portal session. Keep the
+five minutes in mind.
+
+### 3. Provision through the portal
+
+Join `ExplorerRobot-D064` with the setup passphrase `explorer-setup` in the GUI network menu, then
+open `http://192.168.4.1/` and submit the throwaway AP's SSID and passphrase. The page's status line
+advances `unprovisioned` → `connecting` → `connected at <ip>`; the first poll after the submit can
+time out for a few seconds while the single radio scans off-channel. On the monitor:
+
+```text
+portal: joining … while the AP stays up
+sta: associated … channel=…
+sta: address=<bench-subnet address>   # e.g. 10.48.199.94; 192.168.4.100 is the laptop on the setup AP
+```
+
+About 30 s after the association is stable the setup window closes and the setup AP disappears.
+
+### 4. Rejoin the bench AP and repair the daemon
+
+The guard restores an Internet connection; rejoin the bench AP (`PandorasStarMobile`) for the
+daemon. Action 0 rotated the pairing token, so the daemon's stored code is stale. Learn the new code
+from the boot banner
+(`pairing_code=XXXX-XXXX-XXXX`) after a reset, or ask the panel to rotate it again:
+
+```sh
+cd remote
+cargo run -p robot-stub -- --port /dev/ttyACM0 --persona bridge-control --action 2
+```
+
+Action 2 replies `PairingCode { …, code: "YYYYYYYYYYYY" }`; use that reply (or the boot banner) as
+the new key. The config stores the twelve characters **without dashes**. Update
+`~/.config/explorer-remote/config.toml` — or the file passed with `--config` — under the Bridge's
+twelve-hex device id:
+
+```toml
+[devices."<device-id-hex>"]
+token = "<new-pairing-code>"
+name = "Explorer-D064"
+```
+
+Then start the daemon and a `/ws` client:
+
+```sh
+cd remote
+cargo run -p remote-daemon -- --no-open
+# Open the printed http://127.0.0.1:8765 URL, or point any WebSocket client at
+# ws://127.0.0.1:8765/ws, send {"type":"hello","protocol":1}, then a 1 Hz heartbeat.
+```
+
+The app's `connection` message and the bench's headless client both report
+`connection state=connected` once the Session comes up.
+
+### 5. Confirm the Beacon and the Bridge status
+
+On the bench LAN:
+
+```sh
+cd bridge-firmware
+python3 tools/beacon-watch.py --count 3
+```
+
+A provisioned Bridge advertises `tcp_port=9000` with `flags=0x01 (provisioned)`; while the setup
+window is open it advertises `tcp_port=0` with the `setup_mode` bit. The monitor's next `status:`
+line carries `ring_used`, `ring_entries` and the drop counters, and `auth_ok` / `tcp_accepts` rise as
+the daemon connects. Never commit the throwaway passphrase, the pairing code or a filled-in
+`config.toml`.
+
 ## Bridge Presence and the watchdog (ticket 08)
 
 ### Bridge Presence
@@ -697,7 +816,7 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
 | `crc` / `resync` | rejected candidates for a bad CRC / every rejected candidate |
 | `good` / `bad` | valid robot-to-PC frames / candidate rejections |
 | `tcp_rx` / `tcp_tx` | bytes read from / written to the client |
-| `ring_used` / `ring_entries` / `ring_reserved` | the pump's coalescing-ring bytes, queued descriptors and event reservation; the 16-entry table fills before 6 KiB under the worst-case robot mix, so both bytes and entries drive `THROTTLE` |
+| `ring_used` / `ring_entries` / `ring_reserved` | the pump's coalescing-ring bytes, queued descriptors and event reservation; `THROTTLE` pauses at 6 KiB or 12 entries and resumes only at or below 2 KiB and 4 entries, refreshing the pause every 500 ms while either mark stays above its low watermark |
 | `drop_stream` | stream samples the ring discarded (latest-wins pressure) |
 | `drop_no_client` | robot frames dropped because no client was authenticated |
 | `drop_reliable` | reliable entries the ring had to discard |

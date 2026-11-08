@@ -987,7 +987,9 @@ pub struct LinkCore {
     throttle: Throttle,
     /// The number of malformed `THROTTLE` payloads ignored so far.
     invalid_throttles: u32,
-    /// The number of well-formed `THROTTLE` hints received (pause, resume or rate).
+    /// The number of well-formed `THROTTLE` hints that addressed an implemented stream.
+    ///
+    /// Hints for an unknown stream id are well-formed but not applied, so they do not count.
     throttle_hints: u32,
     /// The most recent time observed through [`LinkCore::publish_stream`], [`LinkCore::tick`] or
     /// [`LinkCore::on_rx`].
@@ -1106,9 +1108,11 @@ impl LinkCore {
         self.invalid_throttles
     }
 
-    /// Returns how many well-formed `THROTTLE` hints have been received.
+    /// Returns how many well-formed `THROTTLE` hints have been applied.
     ///
-    /// Hints are advisory; this is the observation point for the bench's induced-stall run.
+    /// A hint for an unknown stream is well-formed but addresses no implemented stream, so it is
+    /// not counted. Hints are advisory; this is the observation point for the bench's
+    /// induced-stall run.
     #[must_use]
     pub const fn throttle_hints(&self) -> u32 {
         self.throttle_hints
@@ -1561,8 +1565,9 @@ impl LinkCore {
                             *invalid_throttles = (*invalid_throttles).saturating_add(1);
                             return;
                         };
-                        let _ = throttle.apply(&hint, now_ms);
-                        *throttle_hints = (*throttle_hints).saturating_add(1);
+                        if throttle.apply(&hint, now_ms) {
+                            *throttle_hints = (*throttle_hints).saturating_add(1);
+                        }
                     } else if frame.header.id == Control::BridgeStatus.wire_id() {
                         // The Bridge's unacknowledged snapshot. A malformed one is ignored and the
                         // last good value is kept; there is no reply.

@@ -28,7 +28,7 @@ pub const STREAM_CAPACITY: usize = CAPACITY - EVENT_RESERVED_BYTES;
 const MAX_PAYLOAD: usize = 1024;
 
 /// The largest number of entries the descriptor table can hold.
-const MAX_ENTRIES: usize = 16;
+pub const CAPACITY_ENTRIES: usize = 16;
 
 /// The identity and wire header of one queued entry.
 ///
@@ -86,6 +86,8 @@ pub enum PushOutcome {
 pub enum PushError {
     /// The payload is larger than one robot-to-PC frame can carry.
     TooLarge,
+    /// The ring is full of reliable entries and none may be evicted for a new one.
+    Full,
 }
 
 /// One descriptor in the ring's table, pointing at bytes in the arena.
@@ -119,7 +121,7 @@ pub struct Ring {
     /// A copy target for [`Ring::pop`], so a drained payload can outlive its arena slot.
     scratch: [u8; MAX_PAYLOAD],
     /// The descriptor table, ordered by arrival.
-    slots: [Slot; MAX_ENTRIES],
+    slots: [Slot; CAPACITY_ENTRIES],
     /// The number of valid descriptors in `slots`.
     count: usize,
     /// The bytes in use across every entry.
@@ -148,7 +150,7 @@ impl Ring {
         Self {
             bytes: [0; CAPACITY],
             scratch: [0; MAX_PAYLOAD],
-            slots: [Slot::EMPTY; MAX_ENTRIES],
+            slots: [Slot::EMPTY; CAPACITY_ENTRIES],
             count: 0,
             used: 0,
             stream_used: 0,
@@ -178,14 +180,8 @@ impl Ring {
 
     /// Returns the number of queued entries.
     #[must_use]
-    pub const fn entries(&self) -> usize {
+    pub const fn used_entries(&self) -> usize {
         self.count
-    }
-
-    /// Returns the ring's descriptor capacity.
-    #[must_use]
-    pub const fn capacity_entries(&self) -> usize {
-        MAX_ENTRIES
     }
 
     /// Returns the bytes currently used by stream samples.
@@ -243,7 +239,7 @@ impl Ring {
             return PushOutcome::Replaced;
         }
 
-        if self.count < MAX_ENTRIES && self.used + len <= CAPACITY && self.stream_used + len <= STREAM_CAPACITY {
+        if self.count < CAPACITY_ENTRIES && self.used + len <= CAPACITY && self.stream_used + len <= STREAM_CAPACITY {
             self.append(
                 EntryKind::Stream {
                     id: stream_id,
@@ -263,20 +259,22 @@ impl Ring {
     ///
     /// # Errors
     ///
-    /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame.
+    /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame, or
+    /// [`PushError::Full`] when the ring is full of reliable entries.
     pub fn push_event(&mut self, event_id: u16, seq: Seq, flags: Flags, payload: &[u8]) -> Result<(), PushError> {
         self.push_reliable(Class::Event, event_id, seq, flags, payload)
     }
 
     /// Queues a reliable robot-to-PC payload without coalescing it.
     ///
-    /// Reliable entries are not coalesced. When the ring is full, the oldest stream is evicted
-    /// first and the oldest reliable entry only after that, so stream pressure yields before a
-    /// reliable entry does.
+    /// Reliable entries are not coalesced. When the ring is full, the oldest stream is evicted to
+    /// make room; a queued reliable entry is never displaced. If there is no stream to evict, the
+    /// new reliable is rejected and the caller retries it later.
     ///
     /// # Errors
     ///
-    /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame.
+    /// Returns [`PushError::TooLarge`] when the payload cannot fit one robot-to-PC frame, or
+    /// [`PushError::Full`] when the ring holds only reliable entries and cannot take another.
     pub fn push_reliable(
         &mut self,
         class: Class,
@@ -292,19 +290,16 @@ impl Ring {
         }
 
         loop {
-            if self.count < MAX_ENTRIES && self.used + len <= CAPACITY {
+            if self.count < CAPACITY_ENTRIES && self.used + len <= CAPACITY {
                 self.append(EntryKind::Reliable { class, id, seq, flags }, payload);
                 return Ok(());
             }
-            let Some(index) = self.oldest_stream().or_else(|| self.oldest_reliable()) else {
+            let Some(index) = self.oldest_stream() else {
                 self.dropped_reliable += 1;
-                return Err(PushError::TooLarge);
+                return Err(PushError::Full);
             };
-            let evicted = self.remove_at(index);
-            match evicted.kind {
-                EntryKind::Stream { .. } => self.dropped_streams += 1,
-                EntryKind::Reliable { .. } => self.dropped_reliable += 1,
-            }
+            let _ = self.remove_at(index);
+            self.dropped_streams += 1;
         }
     }
 
@@ -342,13 +337,6 @@ impl Ring {
         self.slots[..self.count]
             .iter()
             .position(|slot| matches!(slot.kind, EntryKind::Stream { .. }))
-    }
-
-    /// Returns the descriptor index of the oldest reliable entry.
-    fn oldest_reliable(&self) -> Option<usize> {
-        self.slots[..self.count]
-            .iter()
-            .position(|slot| matches!(slot.kind, EntryKind::Reliable { .. }))
     }
 
     /// Appends a payload; the caller has already checked the capacity and descriptor space.

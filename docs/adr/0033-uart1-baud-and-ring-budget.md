@@ -115,8 +115,10 @@ The ring's descriptor table is also a limit: it holds 16 entries, and the robot'
 well below the 6 KiB byte watermark. A byte-only policy therefore drops frames without ever
 asking the robot to slow down — ticket 14's induced-stall run caught exactly that
 (`ring_entries=16`, `ring_used=736B`, no hint). The Bridge now watches both dimensions: it pauses
-at 12 entries or 6 KiB and resumes only below 4 entries **and** 2 KiB. The byte watermarks are
-unchanged; the entry watermarks are the descriptor table's three-quarters and one-quarter marks.
+at 12 entries or 6 KiB and resumes only at or below 4 entries **and** 2 KiB; while it stays above
+the low marks the `PAUSE` is refreshed every 500 ms so a stall longer than the 1 s TTL cannot let
+the robot resume into a full ring. The byte watermarks are unchanged; the entry watermarks are the
+descriptor table's three-quarters and one-quarter marks.
 
 *The ESP32-C3 side.*
 

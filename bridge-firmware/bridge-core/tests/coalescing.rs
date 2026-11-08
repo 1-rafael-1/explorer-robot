@@ -7,7 +7,7 @@
 //! The ring also stores the wire frame's sequence number and flags with every entry, so the
 //! firmware can forward frames without inventing an implied header. These tests pin that fidelity.
 
-use bridge_core::{Class, EntryKind, Flags, PushOutcome, Ring};
+use bridge_core::{Class, EntryKind, Flags, PushError, PushOutcome, Ring};
 use remote_protocol::Seq;
 
 /// The ADR-0033 ring size: 8 KiB.
@@ -223,6 +223,48 @@ fn a_reliable_entry_preserves_its_flags() {
         },
         "the wire flags survive the ring"
     );
+}
+
+/// A full ring of reliable entries rejects the new one instead of evicting a queued reliable, so
+/// already-accepted entries survive and the caller can retry the rejected event.
+#[test]
+fn a_full_ring_of_reliable_entries_rejects_the_new_one() {
+    let capacity = u16::try_from(bridge_core::coalescing::CAPACITY_ENTRIES).unwrap_or(0);
+    let mut ring = Ring::new();
+    for seq in 0..capacity {
+        assert!(
+            ring.push_reliable(Class::Event, 0x0001, Seq::new(seq), Flags::default(), &bytes(1, 0))
+                .is_ok(),
+            "entry {seq} fits the descriptor table"
+        );
+    }
+    assert_eq!(
+        ring.used_entries(),
+        usize::from(capacity),
+        "the ring is full of reliable entries"
+    );
+    assert_eq!(ring.dropped_reliable(), 0);
+
+    assert_eq!(
+        ring.push_reliable(Class::Event, 0x0001, Seq::new(capacity), Flags::default(), &bytes(1, 0),),
+        Err(PushError::Full),
+        "the new reliable is rejected, not a queued one"
+    );
+    assert_eq!(ring.dropped_reliable(), 1);
+    assert_eq!(
+        ring.used_entries(),
+        usize::from(capacity),
+        "the original entries survived"
+    );
+
+    let mut sequences = Vec::new();
+    ring.drain(|entry| {
+        if let EntryKind::Reliable { seq, .. } = entry.kind {
+            sequences.push(seq.get());
+        }
+    });
+    let expected: Vec<u16> = (0..capacity).collect();
+    assert_eq!(sequences, expected, "the queued entries are still in arrival order");
 }
 
 /// The drain yields entries in arrival order, one at a time, and the ring empties.
