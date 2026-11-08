@@ -225,3 +225,7 @@ truncating, stalling simulated link. Codecs stay hand-written: no `postcard`, no
   Bridge work.
 - Revisit the single-client and takeover behaviour in tickets 05 and 15; this task only
   exposes the seam.
+
+**Amendment (2026-11-08, ticket 15).** The Link Task also publishes `LinkCore::bridge_status()` into
+`state::link` for the panel. It does not re-emit the payload; the Bridge sends the daemon stream
+directly (ADR-0042). The panel's `Link` screen and header indicator extend ADR-0036.

@@ -210,3 +210,9 @@ with it; that is the trigger, not a requirement to design now.
   switch.
 - Decide whether the enclosure keeps the C3's USB port reachable; the design assumes one of USB
   access or a removable board for the out-of-band recovery path.
+
+**Amendment (2026-11-08, ticket 15).** The panel's `Link` screen now also shows the Bridge Status
+— RSSI, channel and station state — and the header gains a connectivity/battery indicator shown
+across screens (ADR-0042). The existing Bridge-present / Remote-connected / **"Forget Wi-Fi & set
+up"** content and the pairing-code show/rotate actions remain. The screen is a `ScreenEntry`
+(ADR-0032).
