@@ -60,6 +60,47 @@ battery or RSSI value, and a reload that reconstructs the snapshot, the last
 terminal Result Report and the replayed Events. The real Relay and Bridge Stub
 chain is covered by the daemon's `host_chain` and `link_stub` suites.
 
+## Accessibility and phone check
+
+The repeatable part of this pass is `tests/accessible.html`. It fetches the real
+`index.html`, parses it with `DOMParser`, and then adopts the same markup to
+mount the view layer with a fake transport and planner:
+
+```sh
+WEB_TESTS_FILTER=accessible .github/scripts/run_web_tests.sh
+```
+
+Checked in this pass:
+
+- **Keyboard and focus.** Every control is a native button, input or summary and
+  no element asks for a positive `tabindex`. The canvas, Stop and the numeric
+  form are reachable; the compact tabs are a roving `tablist`. The runtime
+  checks open Events and Robot/Link and assert that focus moves into the panel,
+  that Escape closes it and restores focus to the opener, and that Escape
+  cancels the Target Point preview without ever sending Stop.
+- **Focus ring and contrast.** `:focus-visible` is a 3 px `#8ad4ff` ring, and the
+  audit asserts the rule. Palette pairs measure at least 4.5:1 for text; control
+  boundaries use `--control-line` (`#55708a`) at 3:1 or better against the panel,
+  with stronger states for Primary and Stop.
+- **Targets.** Every button, input and summary keeps a computed and rendered
+  target of at least 34×34 CSS px, including `.small` and the phone drive bar.
+- **Layout.** The real markup was measured at 844×390, at 500×195 (the narrowest
+  headless Chrome window) and with the app constrained to a 422 px content width
+  (844 at 200% zoom). None forced horizontal scroll; the battery and Bridge slots
+  stayed fixed with a missing value; a long Activity label ellipsised without
+  changing the panel height; Stop stayed visible.
+- **Meaning without colour.** Connection, station, battery, Activity status,
+  perception and the selected tab all carry words; the selected tab is also bold
+  and underlined. The radar suite renders the scans, and the layers differ by
+  stroke, dots, dashed preview, crosshair and the robot icon as well as hue.
+
+Still manual:
+
+- A real screen-reader pass over announcement order and live-region timing. The
+  audit checks the DOM and focus behaviour, not a screen reader's output.
+- A real-phone pinch and pan pass. The 844×390 and 422 px checks are layout
+  checks, not touch tests.
+
 ## Limits
 
 - The real-phone pinch pass is an open item; the 844×390 viewport is a layout

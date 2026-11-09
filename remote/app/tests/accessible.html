@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title></title>Remote App — accessibility tests</title>
+    <!-- The real stylesheet is linked so the runtime checks can read computed
+         target sizes; the app markup itself is fetched, parsed and audited. -->
+    <link rel="stylesheet" href="../styles.css">
+  </head>
+  <body>
+    <h1>Accessibility</h1> tests</h1>
+    <p id="status">running</p>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+    <script type="module" src="./accessible.js"></script>
+  </body>
+</html>

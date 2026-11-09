@@ -51,9 +51,10 @@
           </div>
           <div class="status-strip">
             <span id="connection-chip" class="chip" data-state="searching" role="status">Searching</span>
-            <span id="bridge-chip" class="chip chip-bridge" data-station="unknown">
-              <span id="bridge-chip-station">Bridge</span>
-              <span id="bridge-chip-rssi" aria-hidden="true">—</span>
+            <span id="bridge-chip" class="chip chip-bridge" data-station="unknown" role="status">
+              <span class="slot-label">Bridge</span>
+              <span id="bridge-chip-station">Unknown</span>
+              <span id="bridge-chip-rssi">—</span>
             </span>
             <span class="slot"><span class="slot-label">Battery</span><span id="battery-level">—</span><span id="power-age" class="slot-age"></span></span>
             <span class="slot"><span class="slot-label">Pack</span><span id="battery-voltage">—</span></span>
@@ -95,7 +96,7 @@
               <button id="center-view" type="button" class="cluster-button" aria-label="Center on the robot">◎</button>
             </div>
 
-            <div id="target-card" class="target-card" hidden>
+            <div id="target-card" class="target-card" role="region" aria-label="Target Point preview" hidden>
               <p class="target-title">Target Point</p>
               <dl class="target-values">
                 <div><dt>Bearing</dt><dd id="target-bearing">—</dd></div>
@@ -121,7 +122,7 @@
                 </span>
               </header>
               <p id="activity-detail" class="panel-detail"></p>
-              <progress id="activity-progress" max="100" value="0" hidden></progress>
+              <progress id="activity-progress" max="100" value="0" aria-label="Activity progress" hidden></progress>
               <p id="perception-line" class="perception">
                 <span class="slot-label">Perception</span>
                 <span id="perception-obstacle">Obstacle unknown</span>
@@ -132,7 +133,7 @@
               <button id="activity-dismiss" type="button" class="secondary small" hidden>Dismiss</button>
             </section>
 
-            <section id="events-panel" class="panel overlay-panel" aria-labelledby="events-heading" hidden>
+            <section id="events-panel" class="panel overlay-panel" aria-labelledby="events-heading" tabindex="-1" hidden>
               <header class="panel-head">
                 <h2 id="events-heading">Events</h2>
                 <button id="events-close" type="button" class="icon-button" aria-label="Close Events">Close</button>
@@ -140,7 +141,7 @@
               <ol id="events-list" class="events-list"></ol>
             </section>
 
-            <section id="bridge-panel" class="panel overlay-panel" aria-labelledby="bridge-heading" hidden>
+            <section id="bridge-panel" class="panel overlay-panel" aria-labelledby="bridge-heading" tabindex="-1" hidden>
               <header class="panel-head"><h2 id="bridge-heading">Robot / Link</h2></header>
               <dl class="fields">
                 <div><dt>RSSI</dt><dd><span id="bridge-rssi">—</span> <span id="bridge-rssi-bucket"></span></dd></div>
@@ -158,7 +159,7 @@
               </dl>
               <button id="calibration-toggle" type="button" class="secondary small"
                       aria-expanded="false" aria-controls="calibration-panel">Calibration</button>
-              <section id="calibration-panel" class="subpanel" aria-label="Calibration" hidden>
+              <section id="calibration-panel" class="subpanel" aria-label="Calibration" tabindex="-1" hidden>
                 <dl class="fields">
                   <div><dt>Motor</dt><dd id="calibration-motor">Unknown</dd></div>
                   <div><dt>IMU</dt><dd id="calibration-imu">Unknown</dd></div>
@@ -171,23 +172,28 @@
         </main>
 
         <footer id="drive-bar" class="drive-bar" data-stage="idle">
-          <form id="numeric-drive-form" class="numeric-drive" novalidate>
+          <form id="numeric-drive-form" class="numeric-drive" novalidate aria-label="Numeric drive">
             <label for="numeric-bearing">Bearing</label>
-            <input id="numeric-bearing" name="bearing" inputmode="decimal" autocomplete="off" placeholder="0">
+            <input id="numeric-bearing" name="bearing" inputmode="decimal" autocomplete="off"
+                   placeholder="0" aria-describedby="numeric-hint">
             <label for="numeric-distance">Distance</label>
-            <input id="numeric-distance" name="distance" inputmode="decimal" autocomplete="off" placeholder="100">
+            <input id="numeric-distance" name="distance" inputmode="decimal" autocomplete="off"
+                   placeholder="100" aria-describedby="numeric-hint">
             <button type="submit" class="secondary">Preview</button>
           </form>
           <p id="numeric-hint" class="hint" aria-live="polite"></p>
-          <div id="drive-report" class="drive-report" hidden>
+          <div id="drive-report" class="drive-report" role="status" hidden>
             <strong id="drive-report-title"></strong>
             <span id="drive-report-text"></span>
             <button id="drive-dismiss" type="button" class="secondary small">Dismiss</button>
           </div>
-          <nav class="sheet-tabs" aria-label="Panels">
-            <button id="tab-activity" type="button" aria-selected="true">Activity</button>
-            <button id="tab-events" type="button" aria-selected="false">Events</button>
-            <button id="tab-robot" type="button" aria-selected="false">Robot</button>
+          <nav class="sheet-tabs" role="tablist" aria-label="Panels">
+            <button id="tab-activity" type="button" role="tab" aria-selected="true"
+                    aria-controls="activity-panel" tabindex="0">Activity</button>
+            <button id="tab-events" type="button" role="tab" aria-selected="false"
+                    aria-controls="events-panel" tabindex="-1">Events</button>
+            <button id="tab-robot" type="button" role="tab" aria-selected="false"
+                    aria-controls="bridge-panel" tabindex="-1">Robot</button>
           </nav>
         </footer>
       </div>

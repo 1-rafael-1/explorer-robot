@@ -10,6 +10,9 @@
   --panel-2: #172230;
   --line: #24354a;
   --line-soft: #1b2a3a;
+  /* A control boundary needs 3:1 against the panel it sits on; --line is a
+     decorative rule and is deliberately quieter. */
+  --control-line: #55708a;
   --text: #dce7f2;
   --muted: #9db0c3;
   --accent: #46c2ff;
@@ -55,7 +58,7 @@ select {
 button {
   min-width: var(--target);
   min-height: var(--target);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 9px;
   background: var(--panel-2);
   cursor: pointer;
@@ -77,8 +80,9 @@ button:disabled {
 }
 
 input {
+  min-width: var(--target);
   min-height: var(--target);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 9px;
   background: var(--bg-soft);
   padding: 6px 10px;
@@ -86,7 +90,7 @@ input {
 
 .primary {
   background: #0f3b55;
-  border-color: #1d6f9a;
+  border-color: #2b8fc7;
   font-weight: 650;
 }
 
@@ -95,7 +99,7 @@ input {
 }
 
 .small {
-  min-height: 30px;
+  min-height: var(--target);
   padding: 4px 10px;
   font-size: 0.86rem;
 }
@@ -175,9 +179,15 @@ input {
 .manual summary {
   cursor: pointer;
   color: var(--accent);
+  min-width: var(--target);
   min-height: var(--target);
   display: flex;
   align-items: center;
+}
+
+.manual summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .manual form {
@@ -212,6 +222,7 @@ input {
   min-height: 44px;
   padding: 4px 6px;
   flex-wrap: wrap;
+  grid-row: 1;
 }
 
 .brand {
@@ -243,7 +254,14 @@ input {
   gap: 10px;
   flex: 1;
   min-width: 0;
+  /* Fixed slots never shrink: they wrap instead, so a narrow viewport cannot
+     force horizontal page scroll. */
+  flex-wrap: wrap;
   overflow: hidden;
+}
+
+.status-strip > * {
+  flex: 0 0 auto;
 }
 
 .chip {
@@ -315,6 +333,39 @@ input {
 #zoom-level {
   font-family: var(--mono);
   font-size: 0.82rem;
+  display: inline-block;
+}
+
+/* Fixed value cells keep a missing battery or RSSI from shrinking its slot. */
+#battery-level {
+  min-width: 5ch;
+}
+
+#battery-voltage {
+  min-width: 8ch;
+}
+
+#motion-left,
+#motion-right {
+  min-width: 5ch;
+  text-align: right;
+}
+
+#scan-age {
+  min-width: 10ch;
+}
+
+#zoom-level {
+  min-width: 5ch;
+}
+
+#bridge-chip-station {
+  display: inline-block;
+  min-width: 10ch;
+}
+
+#bridge-chip-rssi {
+  min-width: 6ch;
 }
 
 #battery-level.is-unknown,
@@ -358,7 +409,7 @@ input {
 
 .stop {
   background: #5a1717;
-  border-color: #a33a3a;
+  border-color: #c25b5b;
   color: #fff;
   font-weight: 750;
   min-width: 76px;
@@ -376,6 +427,7 @@ input {
   border: 1px solid #8a6a1e;
   color: #ffe7b0;
   font-size: 0.86rem;
+  grid-row: 2;
 }
 
 /* Wide: radar-first with the panels to its right. */
@@ -384,6 +436,7 @@ input {
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
   gap: 8px;
   min-height: 0;
+  grid-row: 3;
 }
 
 .radar-pane {
@@ -531,10 +584,13 @@ input {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
+  min-width: 0;
 }
 
 .panel-head h2 {
   margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 1rem;
   max-width: 70%;
   overflow: hidden;
@@ -546,6 +602,9 @@ input {
   color: var(--muted);
   font-size: 0.8rem;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .slot-age {
@@ -553,6 +612,11 @@ input {
   font-family: var(--mono);
   font-size: 0.7rem;
   white-space: nowrap;
+  display: inline-block;
+  min-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .slot-age.is-stale,
@@ -698,9 +762,11 @@ progress {
 
 .fields dd {
   margin: 0;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 0.82rem;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .subpanel {
@@ -720,6 +786,7 @@ progress {
   border-radius: var(--radius);
   background: var(--panel);
   flex-wrap: wrap;
+  grid-row: 4;
 }
 
 .numeric-drive {
@@ -815,6 +882,10 @@ progress {
 .sheet-tabs button[aria-selected="true"] {
   color: var(--text);
   border-color: var(--accent);
+  /* Selection is not hue alone: the selected tab is also bold and underlined. */
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 /* Compact: a status strip, radar, drive bar and a tabbed sheet. */
@@ -824,19 +895,29 @@ progress {
   }
 
   .shell {
-    grid-template-rows: auto auto minmax(240px, 1fr) auto auto;
+    grid-template-rows: auto auto minmax(240px, 1fr) auto;
     height: auto;
     min-height: 100%;
   }
 
   .topbar {
     gap: 8px;
+    /* Stop must stay visible while the compact page scrolls to the sheet. */
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
   }
 
   .status-strip {
     order: 3;
+    /* A full-width basis puts the strip on its own row, so fixed slots wrap
+       inside it rather than overflowing the space left beside the brand. */
+    flex: 1 0 100%;
     width: 100%;
-    overflow-x: auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    overflow: visible;
     padding-bottom: 2px;
   }
 
@@ -864,10 +945,16 @@ progress {
   .numeric-drive {
     flex: 1;
     flex-wrap: wrap;
+    min-width: 0;
   }
 
   .drive-bar {
     gap: 8px;
+  }
+
+  .drive-report {
+    flex-basis: 100%;
+    min-width: 0;
   }
 
   .sheet-tabs {

@@ -22,9 +22,23 @@ export function bindShell({ retry = () => {}, onTab = () => {} } = {}) {
   const retryButton = byId('retry');
   if (retryButton) retryButton.addEventListener('click', () => retry());
 
-  for (const tab of SHEET_TABS) {
-    const button = byId(`tab-${tab}`);
-    if (button) button.addEventListener('click', () => onTab(tab));
+  const tabs = SHEET_TABS.map((tab) => byId(`tab-${tab}`)).filter(Boolean);
+  for (const [index, button] of tabs.entries()) {
+    button.addEventListener('click', () => onTab(SHEET_TABS[index]));
+  }
+  // A tablist is one tab stop; arrow keys move between tabs (ARIA tabs model).
+  for (const [index, button] of tabs.entries()) {
+    button.addEventListener('keydown', (event) => {
+      let next = null;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      if (next == null) return;
+      event.preventDefault();
+      tabs[next].focus();
+      onTab(SHEET_TABS[next]);
+    });
   }
 }
 
@@ -75,6 +89,7 @@ export function renderTabs(tab) {
     if (button) {
       const selected = name === tab;
       button.setAttribute('aria-selected', String(selected));
+      button.setAttribute('tabindex', selected ? '0' : '-1');
       setClass(button, 'is-selected', selected);
       setData(byId('app'), 'tab', tab);
     }
