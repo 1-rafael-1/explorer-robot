@@ -263,3 +263,12 @@ Unknown fields and message types remain tolerated.
   must keep validating click-to-drive against the live scan even when a map is available.
 - Test the pan/zoom and pinch gestures on a real phone in landscape; the prototype's 844x390 frame
   is a layout check, not a touch test.
+
+**Amendment 2026-11-09 (ADR-0043: point-and-go)**
+
+The *Click-to-drive* policy above is superseded by
+[ADR-0043](0043-remote-app-drive-policy.md): the 3 m cap, 18 cm clearance, 30 cm refusal floor,
+1.5 degree rotate skip, 2 degree / 5 cm invalidation, 350 ms Go gate and fixed completion timeout
+are withdrawn; the app commits to a Target Point, the live scan is display-only, and the robot's
+drive protection owns motion safety. Stop is context-sensitive. The JSON boundary, the world-frame
+renderer, the two-tap preview, the two-claim sequence and the no-map rule still stand.
