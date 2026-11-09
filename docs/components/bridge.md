@@ -12,8 +12,7 @@ artifact. You build the image from source and write it over USB with `espflash`.
 The Wi-Fi credentials and Pairing Token are device state on the `bridge_data`
 partition, not repository files.
 
-**Verified:** 2026-11-08 on Linux x86_64 with stable Rust 1.99.1 and espflash
-4.1.0. From `bridge/`: `cargo build` (dev profile, cached, 0.48 s);
+**Verified:** 2026-11-09 on Linux x86_64 with Rust 1.99.1 and espflash 4.1.0. From `bridge/`: `cargo build` (dev profile, cached, 0.48 s);
 `cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests`
 (176 tests in 12 suites, 0 failed); `cargo clippy -- -D warnings` and
 `cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings`
@@ -30,10 +29,12 @@ the workspace commands from there. Cargo reads `.cargo/config.toml` from the
 current directory upward, and this workspace owns its target, `build-std` and
 flash runner; the repository root does not.
 
-- **Stable Rust, the RISC-V target and `rust-src`.** The workspace pins them in
-  [`rust-toolchain.toml`](../../bridge/rust-toolchain.toml): channel
-  `stable`, component `rust-src`, target `riscv32imc-unknown-none-elf`. `rustup`
-  installs them when you enter the directory. If a component is missing:
+- **Rust 1.99.1, the RISC-V target and `rust-src`.** The repository-root
+  [`rust-toolchain.toml`](../../rust-toolchain.toml) pins them for every
+  workspace: channel `1.99.1`, components `rustfmt`, `clippy` and `rust-src`,
+  targets `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf`. The
+  Bridge has no toolchain file of its own, so `rustup` installs the root pin when
+  you enter the repository. If a component is missing:
 
   ```sh
   rustup component add rust-src
@@ -56,6 +57,19 @@ flash runner; the repository root does not.
   `/dev/serial/by-id`; the port may be `/dev/ttyACM0`, `/dev/ttyACM1`, or another
   `ACM` index. A **3.3 V** USB-TTL adapter is only needed for the robot-facing
   UART1 link — see [Bench wiring](#bench-wiring).
+
+## Dependency pin
+
+`esp-hal` 1.2.2, `esp-radio` 1.0.0-beta.1 and `esp-rtos` 0.4.0 are the released
+Espressif crates, and they pin the released embassy crates. That is deliberate:
+`embassy-net` stays on the released 0.9.1 (smoltcp-backed) version even though
+embassy master's `embassy-net` is xarxa-backed. `esp-radio` implements the
+crates.io `xarxa-driver` 0.1.0 API, while embassy master's `embassy-net` pins a
+git `xarxa-driver` with a different buffer-ownership and driver-trait API.
+Taking embassy master here would put two incompatible `xarxa-driver` crates in
+the graph, and the Wi-Fi `Interface` could not be handed to the stack. Revisit
+this once `esp-hal`/`esp-radio` ship the newer `xarxa-driver` generation; the
+robot workspace is already on embassy master.
 
 ## Build and host tests
 

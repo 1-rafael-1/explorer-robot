@@ -73,7 +73,7 @@ fn a_bridge_status_is_emitted_once_per_app() {
 
     let messages = relay.poll(second, 13);
     assert_eq!(bridges(&messages), vec![expected(10)], "each tab sees its own copy");
-    assert!(relay.poll(second, 14).is_empty());
+    assert_eq!(relay.poll(second, 14), Vec::new());
 }
 
 /// A snapshot carries the latest status and advances the app past it.

@@ -18,9 +18,10 @@ use embassy_rp::{
     block::ImageDef,
     config::Config,
     dma::InterruptHandler as DmaInterruptHandler,
-    flash::{Async, Flash},
+    flash::Flash,
     gpio::{Level, Output, Pull},
     i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler},
+    mode::Async,
     multicore::{Stack, spawn_core1},
     peripherals::{
         ADC, DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, DMA_CH7, FLASH, I2C0, I2C1, PIN_16, PIN_17,
@@ -33,6 +34,7 @@ use embassy_rp::{
     },
     pwm::{Config as PwmConfig, InputMode, Pwm},
     spi::{self, Spi},
+    time::Hertz,
     trng::InterruptHandler as TrngInterruptHandler,
     uart,
 };
@@ -55,14 +57,14 @@ mod task;
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
 /// Reserved for the front VL53L0X rangefinder on core0.
-pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C0, embassy_rp::i2c::Async>>;
+pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
 
 /// Shared I2C1 bus protected by a critical-section mutex.
 ///
 /// Reserved for the rear VL53L0X rangefinder on core0. Keeping the two
 /// sensors on separate buses avoids an address clash when both use the default
 /// `0x29` address.
-pub type I2c1BusShared = Mutex<CriticalSectionRawMutex, I2c<'static, I2C1, embassy_rp::i2c::Async>>;
+pub type I2c1BusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
 
 // ── Interrupt bindings ─────────────────────────────────────────────────────────
 
@@ -105,7 +107,7 @@ static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 /// Initialise the shared I2C0 bus for the front VL53L0X rangefinder.
 ///
-/// Must be called on core0 so that `I2c::new_async` enables `I2C0_IRQ` on
+/// Must be called on core0 so that `I2c::new` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
 fn init_i2c_bus(
     i2c0: embassy_rp::Peri<'static, I2C0>,
@@ -115,15 +117,15 @@ fn init_i2c_bus(
     static I2C_BUS: StaticCell<I2cBusShared> = StaticCell::new();
 
     let mut i2c_config = I2cConfig::default();
-    i2c_config.frequency = 400_000;
+    i2c_config.frequency = Hertz(400_000);
 
-    let i2c = I2c::new_async(i2c0, scl, sda, Irqs, i2c_config);
+    let i2c = I2c::new(i2c0, scl, sda, Irqs, i2c_config);
     I2C_BUS.init(Mutex::new(i2c))
 }
 
 /// Initialise the shared I2C1 bus for the rear VL53L0X rangefinder.
 ///
-/// Must be called on core0 so that `I2c::new_async` enables `I2C1_IRQ` on
+/// Must be called on core0 so that `I2c::new` enables `I2C1_IRQ` on
 /// core0's NVIC. The two sensors may share the same 7-bit address because they
 /// are on electrically separate buses.
 fn init_i2c1_bus(
@@ -134,9 +136,9 @@ fn init_i2c1_bus(
     static I2C1_BUS: StaticCell<I2c1BusShared> = StaticCell::new();
 
     let mut i2c_config = I2cConfig::default();
-    i2c_config.frequency = 400_000;
+    i2c_config.frequency = Hertz(400_000);
 
-    let i2c = I2c::new_async(i2c1, scl, sda, Irqs, i2c_config);
+    let i2c = I2c::new(i2c1, scl, sda, Irqs, i2c_config);
     I2C1_BUS.init(Mutex::new(i2c))
 }
 
@@ -150,7 +152,7 @@ fn motor_pwm_config() -> PwmConfig {
     let period = (clock_freq_hz / (desired_freq_hz * u32::from(divider))) as u16 - 1;
 
     let mut cfg = PwmConfig::default();
-    cfg.divider = divider.into();
+    cfg.divider_x16 = u16::from(divider) * 16;
     cfg.top = period;
     cfg
 }
@@ -158,7 +160,7 @@ fn motor_pwm_config() -> PwmConfig {
 /// Encoder PWM input configuration (no divider, no phase-correct).
 fn encoder_pwm_config() -> PwmConfig {
     let mut cfg = PwmConfig::default();
-    cfg.divider = 1.into();
+    cfg.divider_x16 = 16;
     cfg.phase_correct = false;
     cfg
 }
@@ -262,7 +264,7 @@ fn init_flash_storage(
     flash: embassy_rp::Peri<'static, FLASH>,
     dma_ch: embassy_rp::Peri<'static, DMA_CH0>,
 ) {
-    let flash = Flash::<_, Async, { 2048 * 1024 }>::new(flash, dma_ch, Irqs);
+    let flash = Flash::<Async, { 2048 * 1024 }>::new(flash, dma_ch, Irqs);
     spawner.spawn(task::io::flash_storage::flash_storage(flash).unwrap());
 }
 
@@ -287,6 +289,12 @@ fn init_ui(spawner: Spawner, panel_pins: PanelResources) {
 /// Initialise the dedicated SPI0 bus and chip-select for the IMU.
 ///
 /// Returns the SPI bus and CS pin for passing to [`init_imu`].
+///
+/// # Panics
+///
+/// Panics if the fixed SPI configuration is rejected. The constants above are
+/// valid for the RP2350's peripheral clock, so this is a programming error.
+#[allow(clippy::unwrap_used)]
 fn init_imu_spi(
     spi0: embassy_rp::Peri<'static, SPI0>,
     sck: embassy_rp::Peri<'static, PIN_18>,
@@ -295,10 +303,10 @@ fn init_imu_spi(
     cs: embassy_rp::Peri<'static, PIN_21>,
     dma_ch1: embassy_rp::Peri<'static, DMA_CH1>,
     dma_ch2: embassy_rp::Peri<'static, DMA_CH2>,
-) -> (Spi<'static, SPI0, spi::Async>, Output<'static>) {
+) -> (Spi<'static, Async>, Output<'static>) {
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = 7_000_000;
-    let imu_spi = Spi::new(spi0, sck, mosi, miso, dma_ch1, dma_ch2, Irqs, spi_config);
+    spi_config.frequency = Hertz(7_000_000);
+    let imu_spi = Spi::new(spi0, sck, mosi, miso, dma_ch1, dma_ch2, Irqs, spi_config).unwrap();
     let imu_cs = Output::new(cs, embassy_rp::gpio::Level::High);
     (imu_spi, imu_cs)
 }
@@ -308,8 +316,8 @@ fn init_imu_spi(
 /// The IMU task owns the SPI bus exclusively — the `Mutex` wrapper is a
 /// formality (single user, never contended) that satisfies the `SpiDevice` API.
 #[allow(clippy::unwrap_used)]
-fn init_imu(spawner: Spawner, spi: Spi<'static, SPI0, spi::Async>, cs: Output<'static>) {
-    static SPI_BUS: StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, SPI0, spi::Async>>> = StaticCell::new();
+fn init_imu(spawner: Spawner, spi: Spi<'static, Async>, cs: Output<'static>) {
+    static SPI_BUS: StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, Async>>> = StaticCell::new();
     let spi_bus = SPI_BUS.init(Mutex::new(spi));
     spawner.spawn(task::sensors::imu::inertial_measurement_read(spi_bus, cs).unwrap());
 }
@@ -433,7 +441,7 @@ fn main() -> ! {
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
         // I2C0 bus reserved for the front VL53L0X rangefinder stub.
-        // Initialised inside the closure so I2c::new_async enables I2C0_IRQ
+        // Initialised inside the closure so I2c::new enables I2C0_IRQ
         // on core0's NVIC.
         let _i2c_bus = init_i2c_bus(rangefinder0.i2c, rangefinder0.sda, rangefinder0.scl);
 

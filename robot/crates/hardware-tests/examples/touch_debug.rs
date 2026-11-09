@@ -85,12 +85,13 @@ async fn main(_spawner: Spawner) {
 
     // Full-duplex SPI0 with per-transaction DMA, Mode 3 at 200 kHz.
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = TOUCH_FREQ;
+    spi_config.frequency = embassy_rp::time::Hertz(TOUCH_FREQ);
     spi_config.phase = spi::Phase::CaptureOnSecondTransition;
     spi_config.polarity = spi::Polarity::IdleHigh;
     let spi = Spi::new(
         p.SPI0, p.PIN_18, p.PIN_19, p.PIN_16, p.DMA_CH6, p.DMA_CH7, Irqs, spi_config,
-    );
+    )
+    .unwrap();
     let mut dev = ExclusiveDevice::new(spi, cs, Delay);
 
     info!("PENIRQ low before any read: {}", irq.is_low());

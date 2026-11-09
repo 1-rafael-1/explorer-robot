@@ -13,7 +13,7 @@ The repository is one tree with three Cargo workspaces, split by build target so
 | Workspace | Directory | Cargo target | What it builds | Why it is separate |
 |---|---|---|---|---|
 | Robot workspace (root virtual manifest) | `/`; the package is `robot/` | `thumbv8m.main-none-eabihf`, from the root `.cargo/config.toml` | `explorer-robot` firmware, the shared `link-protocol` and `link-core`, the drivers and models | The root `cargo check --workspace` must never load the host or RISC-V packages ([ADR-0040](adr/0040-repo-and-build-layout.md)). |
-| Bridge workspace | `bridge/` | `riscv32imc-unknown-none-elf` with `build-std`, espflash runner | `bridge-firmware` (the `bridge` binary) and `bridge-core` | It needs its own toolchain, runner and lockfile, so it is excluded from the root ([ADR-0040](adr/0040-repo-and-build-layout.md)). |
+| Bridge workspace | `bridge/` | `riscv32imc-unknown-none-elf` with `build-std`, espflash runner | `bridge-firmware` (the `bridge` binary) and `bridge-core` | It needs its own runner and lockfile, so it is excluded from the root; the root toolchain pin supplies its target and `rust-src` ([ADR-0040](adr/0040-repo-and-build-layout.md)). |
 | Remote workspace | `remote/` | `x86_64-unknown-linux-gnu`, overridden in `remote/.cargo/config.toml` | `remote-daemon`, `bridge-net`, `robot-stub`, `bridge-stub`, and the static `app/` | It is a host `std` graph. Cargo reads its config from the current directory upward, so its commands run from `remote/` ([ADR-0040](adr/0040-repo-and-build-layout.md)). |
 
 `link-protocol` is the one crate consumed by all three workspaces; `link-core` is consumed by the

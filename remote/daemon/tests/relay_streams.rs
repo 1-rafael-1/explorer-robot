@@ -74,7 +74,7 @@ fn stream_sequences_are_the_daemons_and_only_the_latest_wins() {
     assert_eq!(entries.len(), 1, "two samples coalesce into one latest-wins slot");
     assert_eq!(entries[0].seq, 2);
     assert_eq!(entries[0].ts, 11);
-    assert!(relay.poll(app, 13).is_empty());
+    assert_eq!(relay.poll(app, 13), Vec::new());
 
     let _ = relay.on_power(&power(82, 7_600), 20);
     let messages = relay.poll(app, 21);
@@ -211,5 +211,5 @@ fn a_snapshot_assembled_later_does_not_repeat_its_streams() {
 
     let assembled = must(relay.snapshot(app, 20), "snapshot");
     assert_eq!(assembled.streams.len(), 1);
-    assert!(relay.poll(app, 21).is_empty());
+    assert_eq!(relay.poll(app, 21), Vec::new());
 }

@@ -112,7 +112,6 @@ dependencies = [
  "link-protocol",
  "portable-atomic",
  "sequential-storage",
- "smoltcp 0.14.0",
  "static_cell",
 ]
 
@@ -133,7 +132,7 @@ checksum = "8f3c66fd0a41a3b3a5906847b1bf5516048ce083e24fa9341a0fa31d3b4cd73d"
 dependencies = [
  "btuuid",
  "defmt 1.2.0",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.7.2",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
  "futures-intrusive",
@@ -569,7 +568,7 @@ dependencies = [
  "embedded-nal-async",
  "heapless 0.9.3",
  "managed",
- "smoltcp 0.13.1",
+ "smoltcp",
 ]
 
 [[package]]
@@ -2003,20 +2002,6 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "defmt 0.3.101",
- "heapless 0.9.3",
- "managed",
-]
-
-[[package]]
-name = "smoltcp"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f8b28ad56c6e35524a37dd492af5d1a47e31e1a4d175cd12f89c075f01980f"
-dependencies = [
- "bitflags",
- "byteorder",
- "cfg-if",
- "defmt 1.2.0",
  "heapless 0.9.3",
  "managed",
 ]

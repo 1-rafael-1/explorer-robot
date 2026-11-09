@@ -700,7 +700,6 @@ impl Throttle {
                     };
                     self.clear_pauses(Some(scope));
                 }
-                true
             }
             ThrottleAction::Pause => {
                 let Some(scope) = Scope::from_wire(hint.stream_id) else {
@@ -712,7 +711,6 @@ impl Throttle {
                     rate_chz: 0,
                     expires_ms,
                 });
-                true
             }
             ThrottleAction::SetRate if hint.rate_chz == 0 => {
                 let Some(scope) = Scope::from_wire(hint.stream_id) else {
@@ -724,7 +722,6 @@ impl Throttle {
                     rate_chz: 0,
                     expires_ms,
                 });
-                true
             }
             ThrottleAction::SetRate => {
                 let Some(scope) = Scope::from_wire(hint.stream_id) else {
@@ -736,9 +733,9 @@ impl Throttle {
                     rate_chz: hint.rate_chz,
                     expires_ms,
                 });
-                true
             }
         }
+        true
     }
 
     /// Forgets every hint that has expired at `now_ms`.

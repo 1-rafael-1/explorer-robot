@@ -339,3 +339,34 @@ stands; only the homes and three names change.
   live-Markdown link check. The ADRs stay historical and are excluded from that check.
 - Historical ADRs keep their old paths; this amendment is the path note, and the body above is not
   rewritten.
+
+## Amendment — 2026-11-09: one Rust pin, and embassy master in the robot
+
+The three workspaces still have three targets and three lockfiles; they no longer have three Rust
+versions. The robot and host workspaces were pinned to 1.96.0 while the Bridge followed `stable`
+(1.99.1 at the time of writing). Recorded here because the toolchain is part of the layout above.
+
+- The **root** `rust-toolchain.toml` is the only pin: channel `1.99.1`, components `rustfmt`,
+  `clippy` and `rust-src`, targets `thumbv8m.main-none-eabihf` and
+  `riscv32imc-unknown-none-elf`. `bridge/rust-toolchain.toml` is deleted, so the Bridge inherits the
+  root pin like `remote/` does. Every CI job installs 1.99.1; the `bridge` job also asks for
+  `rust-src` and the RISC-V target, which `build-std` needs.
+- The **robot** workspace follows embassy's "use git when there is no release" policy. Root
+  `[patch.crates-io]` pins `embassy-rp`, `embassy-embedded-hal`, `embassy-sync`, `embassy-executor`,
+  `embassy-time` and `embassy-futures` to embassy commit
+  `9b0680bdd75c6a665aabb3e760ef08ea576abaae` (2026-11-09). All six move together; the revision lives
+  in `Cargo.lock` so builds stay reproducible.
+- The **Bridge** cannot follow that pin yet. `esp-hal` 1.2.2 and `esp-radio` 1.0.0-beta.1 implement
+  the crates.io `xarxa-driver` 0.1.0 API, while embassy master's `embassy-net` depends on a git
+  `xarxa-driver` at revision `8f6f33b` whose buffer-ownership and driver-trait API is different. A
+  graph with both would contain two packages named `xarxa-driver` 0.1.0 from different sources, and
+  the Wi-Fi `Interface` would implement the registry trait rather than the git trait the stack
+  accepts. The Bridge therefore keeps the released embassy crates and `embassy-net` 0.9.1
+  (smoltcp-backed) until Espressif ships a compatible `xarxa-driver` generation. The direct, unused
+  `smoltcp` dependency is removed; smoltcp remains a transitive dependency of released
+  `embassy-net` only.
+- Consequences: a single `rustup` pin and one stable toolchain cover the whole repository, so a
+  contributor no longer enters `bridge/` to get a different compiler. The robot can take embassy
+  fixes and API changes immediately; the Bridge waits on its HAL rather than carrying a second
+  xarxa driver or a packet-copying adapter. Revisit the Bridge pin when `esp-hal`/`esp-radio` update
+  `xarxa-driver`, and re-check the embassy commit then.

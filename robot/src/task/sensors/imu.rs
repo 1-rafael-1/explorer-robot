@@ -57,10 +57,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use defmt::{info, warn};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as SpiDev;
 use embassy_futures::select::{Either, select};
-use embassy_rp::{
-    gpio::Output,
-    spi::{Async as SpiAsync, Spi},
-};
+use embassy_rp::{gpio::Output, mode::Async, spi::Spi};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948::{
@@ -75,7 +72,7 @@ use crate::{system::state::motion, task::drive};
 // ── Type aliases ─────────────────────────────────────────────────────────────
 
 /// SPI peripheral type for the dedicated ICM-20948 bus.
-type SpiPeripheral = Spi<'static, embassy_rp::peripherals::SPI0, SpiAsync>;
+type SpiPeripheral = Spi<'static, Async>;
 
 /// CS pin type.
 type CsOutput = Output<'static>;

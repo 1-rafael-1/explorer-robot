@@ -111,10 +111,10 @@ async fn main(_spawner: Spawner) {
 
     // Write-only async SPI (SPI0, no MISO).
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = DISPLAY_FREQ;
+    spi_config.frequency = embassy_rp::time::Hertz(DISPLAY_FREQ);
     spi_config.phase = spi::Phase::CaptureOnSecondTransition;
     spi_config.polarity = spi::Polarity::IdleHigh;
-    let spi = Spi::new_txonly(p.SPI0, clk, mosi, p.DMA_CH6, Irqs, spi_config);
+    let spi = Spi::new_txonly(p.SPI0, clk, mosi, p.DMA_CH6, Irqs, spi_config).unwrap();
 
     // Exclusive CS-toggling device on the dedicated bus.
     let cs = Output::new(cs, Level::High);

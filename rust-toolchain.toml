@@ -1,4 +1,7 @@
 [toolchain]
-channel = "1.96.0"
-components = ["rustfmt", "clippy"]
-targets = ["thumbv8m.main-none-eabihf"]
+channel = "1.99.1"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = [
+    "thumbv8m.main-none-eabihf",
+    "riscv32imc-unknown-none-elf",
+]

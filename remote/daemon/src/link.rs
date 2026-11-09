@@ -203,7 +203,7 @@ pub fn backoff_delay(attempt: u8) -> Duration {
 pub fn jittered(delay: Duration, jitter: f64, sample: u16) -> Duration {
     let jitter = jitter.clamp(0.0, 1.0);
     let unit = f64::from(sample) / f64::from(u16::MAX);
-    let factor = 1.0 + jitter * unit.mul_add(2.0, -1.0);
+    let factor = jitter.mul_add(unit.mul_add(2.0, -1.0), 1.0);
     Duration::from_secs_f64(delay.as_secs_f64() * factor)
 }
 

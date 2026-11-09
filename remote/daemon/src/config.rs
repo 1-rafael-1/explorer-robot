@@ -366,7 +366,7 @@ fn unhex(text: &str) -> Option<[u8; 6]> {
         return None;
     }
     let mut bytes = [0u8; 6];
-    for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let pair = std::str::from_utf8(chunk).ok()?;
         bytes[index] = u8::from_str_radix(pair, 16).ok()?;
     }

@@ -737,13 +737,13 @@ impl DistanceDriveState {
     }
 
     /// Compute inner-track progress (the limiting track for completion).
-    fn inner_progress(&self) -> f32 {
+    const fn inner_progress(&self) -> f32 {
         match self.kind {
             types::DriveDistanceKind::Straight { .. } => self.accumulated_left_revs.min(self.accumulated_right_revs),
             types::DriveDistanceKind::CurveArc { .. } => match self.inner_left {
                 Some(true) => self.accumulated_left_revs,
                 Some(false) => self.accumulated_right_revs,
-                None => (self.accumulated_left_revs + self.accumulated_right_revs) * 0.5,
+                None => self.accumulated_left_revs.midpoint(self.accumulated_right_revs),
             },
         }
     }

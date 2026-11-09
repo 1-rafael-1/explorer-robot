@@ -43,7 +43,8 @@ use embassy_executor::Spawner;
 use embassy_rp::{
     bind_interrupts,
     gpio::{Input, Level, Output, Pull},
-    peripherals::{DMA_CH6, DMA_CH7, SPI0},
+    mode::Async,
+    peripherals::{DMA_CH6, DMA_CH7},
     spi::{self, Spi},
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
@@ -101,7 +102,7 @@ type Fb = [u8; FB_W * FB_H * 2];
 static FB: ConstStaticCell<Fb> = ConstStaticCell::new([0; FB_W * FB_H * 2]);
 
 /// Mutable SPI bus shared by the display and the touch controller.
-type SpiBus = Mutex<NoopRawMutex, Spi<'static, SPI0, spi::Async>>;
+type SpiBus = Mutex<NoopRawMutex, Spi<'static, Async>>;
 
 /// Statically-allocated home for the shared SPI bus.
 static SPI_BUS: StaticCell<SpiBus> = StaticCell::new();
@@ -113,7 +114,7 @@ static SPI_BUS: StaticCell<SpiBus> = StaticCell::new();
 /// transaction.
 fn display_spi_config() -> spi::Config {
     let mut config = spi::Config::default();
-    config.frequency = DISPLAY_FREQ;
+    config.frequency = embassy_rp::time::Hertz(DISPLAY_FREQ);
     config.phase = spi::Phase::CaptureOnSecondTransition;
     config.polarity = spi::Polarity::IdleHigh;
     config
@@ -122,7 +123,7 @@ fn display_spi_config() -> spi::Config {
 /// Build the touch controller's bus configuration: Mode 3 at [`TOUCH_FREQ`].
 fn touch_spi_config() -> spi::Config {
     let mut config = spi::Config::default();
-    config.frequency = TOUCH_FREQ;
+    config.frequency = embassy_rp::time::Hertz(TOUCH_FREQ);
     config.phase = spi::Phase::CaptureOnSecondTransition;
     config.polarity = spi::Polarity::IdleHigh;
     config
@@ -211,7 +212,8 @@ async fn main(_spawner: Spawner) {
         p.DMA_CH7,
         Irqs,
         touch_spi_config(),
-    );
+    )
+    .unwrap();
     let spi_bus: &'static SpiBus = SPI_BUS.init(Mutex::new(spi));
 
     // Both devices arbitrate on the shared bus; their CS pins select which is

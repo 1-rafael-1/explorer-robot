@@ -28,7 +28,8 @@ use embassy_executor::Spawner;
 use embassy_rp::{
     bind_interrupts,
     gpio::{Level, Output},
-    peripherals::{DMA_CH6, SPI0},
+    mode::Async,
+    peripherals::DMA_CH6,
     spi::{self, Spi},
 };
 use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
@@ -79,8 +80,7 @@ const ANIM_INTERVAL_MS: u64 = 30;
 type Fb = [u8; FB_W * FB_H * 2];
 
 /// The concrete display type built by this example.
-type Display =
-    St7789<'static, ExclusiveDevice<Spi<'static, SPI0, spi::Async>, Output<'static>, Delay>, Output<'static>>;
+type Display = St7789<'static, ExclusiveDevice<Spi<'static, Async>, Output<'static>, Delay>, Output<'static>>;
 
 /// Statically-allocated framebuffer (`153_600` bytes of zeroed `.bss`).
 static FB: ConstStaticCell<Fb> = ConstStaticCell::new([0; FB_W * FB_H * 2]);
@@ -174,10 +174,10 @@ async fn main(_spawner: Spawner) {
 
     // Write-only async SPI (SPI0, no MISO).
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = DISPLAY_FREQ;
+    spi_config.frequency = embassy_rp::time::Hertz(DISPLAY_FREQ);
     spi_config.phase = spi::Phase::CaptureOnSecondTransition;
     spi_config.polarity = spi::Polarity::IdleHigh;
-    let spi = Spi::new_txonly(p.SPI0, clk, mosi, p.DMA_CH6, Irqs, spi_config);
+    let spi = Spi::new_txonly(p.SPI0, clk, mosi, p.DMA_CH6, Irqs, spi_config).unwrap();
 
     // Exclusive CS-toggling device on the dedicated bus.
     let cs = Output::new(cs, Level::High);

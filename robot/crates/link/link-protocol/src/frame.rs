@@ -431,13 +431,13 @@ impl<'a> Frame<'a> {
 }
 
 /// Writes a little-endian `u16` at `offset`; the caller has already checked the length.
-fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
+const fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
     let [low, high] = value.to_le_bytes();
     buffer[offset] = low;
     buffer[offset + 1] = high;
 }
 
 /// Reads a little-endian `u16` at `offset`; the caller has already checked the length.
-fn read_u16_le(bytes: &[u8], offset: usize) -> u16 {
+const fn read_u16_le(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
 }

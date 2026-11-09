@@ -302,8 +302,8 @@ impl<'a> PayloadCodec<'a> for LidarCloud {
             return Err(CodecError::Length);
         }
         let mut slots = [0u16; LIDAR_SLOTS];
-        for (slot, chunk) in slots.iter_mut().zip(bytes.chunks_exact(2)) {
-            *slot = u16::from_le_bytes([chunk[0], chunk[1]]);
+        for (slot, chunk) in slots.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *slot = u16::from_le_bytes(*chunk);
         }
         Ok(Self { slots })
     }
@@ -312,8 +312,8 @@ impl<'a> PayloadCodec<'a> for LidarCloud {
         if out.len() < Self::ENCODED_LEN {
             return Err(EncodeError::BufferTooSmall);
         }
-        for (chunk, slot) in out.chunks_exact_mut(2).zip(self.slots.iter()) {
-            chunk.copy_from_slice(&slot.to_le_bytes());
+        for (chunk, slot) in out.as_chunks_mut::<2>().0.iter_mut().zip(self.slots.iter()) {
+            *chunk = slot.to_le_bytes();
         }
         Ok(Self::ENCODED_LEN)
     }

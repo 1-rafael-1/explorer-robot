@@ -7,7 +7,7 @@ protocol; the app draws pixels. Nothing here is built for the robot's target.
 There is no installer or release artifact: the operator path is a clone plus
 the commands below.
 
-**Verified:** 2026-11-08 — from `remote/`: `cargo test --workspace` (every
+**Verified:** 2026-11-09 — from `remote/`: `cargo test --workspace` (every
 suite `ok`, 0 failed), `cargo build --workspace` (`Finished` the dev profile,
 exit 0), and `cargo run -p remote-daemon -- --help` (usage printed, exit 0).
 Steps that need a real robot or Bridge, a **Pairing Token**, serial adapters or
@@ -15,7 +15,7 @@ provisioning are **bench-required** and were not verified here.
 
 ## Prerequisites
 
-- Rust stable **1.96.0** (the version CI pins for this workspace) with `cargo`.
+- Rust stable **1.99.1** (the repository-root pin, which this workspace inherits) with `cargo`.
 - On Linux, the `libudev` and `pkg-config` development packages, because
   `robot-stub` depends on `serialport`, which links `libudev`. CI installs the
   Debian/Ubuntu packages with:

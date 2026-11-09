@@ -49,7 +49,10 @@
 //! - Battery voltage is shared with motor driver for voltage compensation
 //! - Motor driver uses this to maintain consistent 6V output as battery drains
 
-use embassy_rp::adc::{Adc, Async as AdcAsync, Channel};
+use embassy_rp::{
+    adc::{Adc, Channel},
+    mode::Async as AdcAsync,
+};
 use embassy_time::{Duration, Timer};
 
 use crate::system::{event, state::power};

@@ -16,7 +16,7 @@ use support::{event_named, events, must, obstacle, overflow, session_with_app, s
 fn an_event_keeps_the_wire_boot_id_and_sequence() {
     let mut relay = Relay::new();
     let app = session_with_app(&mut relay, 7, 0);
-    assert!(events(&relay.poll(app, 0)).is_empty());
+    assert_eq!(events(&relay.poll(app, 0)), Vec::new());
 
     relay.on_obstacle(1, &obstacle(1, 0), 10);
     let messages = relay.poll(app, 11);
@@ -38,7 +38,7 @@ fn an_event_keeps_the_wire_boot_id_and_sequence() {
 fn the_ring_is_bounded_and_reports_how_many_were_dropped() {
     let mut relay = Relay::new();
     let app = session_with_app(&mut relay, 7, 0);
-    assert!(events(&relay.poll(app, 0)).is_empty());
+    assert_eq!(events(&relay.poll(app, 0)), Vec::new());
 
     for seq in 1..=305_u16 {
         relay.on_obstacle(seq, &obstacle(1, 0), u64::from(seq));
@@ -64,7 +64,7 @@ fn the_ring_is_bounded_and_reports_how_many_were_dropped() {
 fn a_new_app_receives_the_bounded_replay_in_its_snapshot() {
     let mut relay = Relay::new();
     let app_a = session_with_app(&mut relay, 7, 0);
-    assert!(events(&relay.poll(app_a, 0)).is_empty());
+    assert_eq!(events(&relay.poll(app_a, 0)), Vec::new());
     relay.on_obstacle(1, &obstacle(1, 0), 10);
     relay.on_floor_drop(2, &support::floor_drop(1), 11);
     relay.on_obstacle(3, &obstacle(0, 0), 12);
@@ -85,9 +85,9 @@ fn a_new_app_receives_the_bounded_replay_in_its_snapshot() {
 fn every_app_has_its_own_cursor() {
     let mut relay = Relay::new();
     let app_a = session_with_app(&mut relay, 7, 0);
-    assert!(events(&relay.poll(app_a, 0)).is_empty());
+    assert_eq!(events(&relay.poll(app_a, 0)), Vec::new());
     let app_b = relay.connect_app(1);
-    assert!(events(&relay.poll(app_b, 2)).is_empty());
+    assert_eq!(events(&relay.poll(app_b, 2)), Vec::new());
 
     relay.on_obstacle(1, &obstacle(1, 0), 10);
     relay.on_obstacle(2, &obstacle(0, 0), 11);
@@ -104,7 +104,7 @@ fn every_app_has_its_own_cursor() {
 fn the_robots_overflow_event_keeps_its_wire_sequence() {
     let mut relay = Relay::new();
     let app = session_with_app(&mut relay, 7, 0);
-    assert!(events(&relay.poll(app, 0)).is_empty());
+    assert_eq!(events(&relay.poll(app, 0)), Vec::new());
 
     relay.on_robot_event_overflow(9, &overflow(3), 40);
     let messages = relay.poll(app, 41);
@@ -122,6 +122,6 @@ fn an_event_outside_a_session_is_ignored() {
     relay.session_up(7, 20);
     let app = relay.connect_app(20);
     let assembled = must(snapshot(&relay.poll(app, 30)), "snapshot");
-    assert!(assembled.events.is_empty());
+    assert_eq!(assembled.events, Vec::new());
     assert_eq!(assembled.event_cursor, None);
 }

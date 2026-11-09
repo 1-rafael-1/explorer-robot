@@ -41,3 +41,14 @@ missing_docs_in_private_items = "warn"
 cargo_common_metadata = "allow"
 future_not_send = "allow"
 multiple_crate_versions = "allow"
+
+# Embassy does not cut releases for every crate. The robot absorbs current embassy
+# master instead of the released snapshots, pinned to one commit so the build is
+# reproducible. Keep every patched crate on this same revision.
+[patch.crates-io]
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "9b0680bdd75c6a665aabb3e760ef08ea576abaae" }

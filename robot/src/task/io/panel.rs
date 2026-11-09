@@ -23,8 +23,10 @@ use defmt::info;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_rp::{
     gpio::{Input, Level, Output, Pull},
+    mode::Async,
     peripherals::{DMA_CH6, DMA_CH7, PIN_42, PIN_43, PIN_44, SPI1},
     spi::{self, Spi},
+    time::Hertz,
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Duration, Timer};
@@ -39,11 +41,10 @@ use crate::{Irqs, resources::PanelResources};
 // ── Bus and framebuffer ───────────────────────────────────────────────────────
 
 /// The shared full-duplex `SPI1` bus carrying both panel devices.
-pub type PanelBus = Mutex<CriticalSectionRawMutex, Spi<'static, SPI1, spi::Async>>;
+pub type PanelBus = Mutex<CriticalSectionRawMutex, Spi<'static, Async>>;
 
 /// The chip-select-aware SPI device both panel drivers speak through.
-pub type PanelDevice =
-    SpiDeviceWithConfig<'static, CriticalSectionRawMutex, Spi<'static, SPI1, spi::Async>, Output<'static>>;
+pub type PanelDevice = SpiDeviceWithConfig<'static, CriticalSectionRawMutex, Spi<'static, Async>, Output<'static>>;
 
 /// The ST7789 display driver, exposed so the UI task can draw into it.
 pub type Display = St7789<'static, PanelDevice, Output<'static>>;
@@ -91,7 +92,7 @@ static PANEL_SPI_BUS: StaticCell<PanelBus> = StaticCell::new();
 /// its own transactions.
 fn display_spi_config() -> spi::Config {
     let mut config = spi::Config::default();
-    config.frequency = DISPLAY_FREQ;
+    config.frequency = Hertz(DISPLAY_FREQ);
     config.phase = spi::Phase::CaptureOnSecondTransition;
     config.polarity = spi::Polarity::IdleHigh;
     config
@@ -100,7 +101,7 @@ fn display_spi_config() -> spi::Config {
 /// Build the touch controller's bus configuration: Mode 3 at [`TOUCH_FREQ`].
 fn touch_spi_config() -> spi::Config {
     let mut config = spi::Config::default();
-    config.frequency = TOUCH_FREQ;
+    config.frequency = Hertz(TOUCH_FREQ);
     config.phase = spi::Phase::CaptureOnSecondTransition;
     config.polarity = spi::Polarity::IdleHigh;
     config
@@ -112,7 +113,13 @@ fn touch_spi_config() -> spi::Config {
 /// [`SpiDeviceWithConfig`] reconfigures it before its own transactions, so the
 /// initial configuration is immaterial. Transmit and receive each own a DMA
 /// channel because the bus is full duplex.
+///
+/// # Panics
+///
+/// Panics if the fixed SPI configuration is rejected. The constants above are
+/// valid for the RP2350's peripheral clock, so this is a programming error.
 #[must_use]
+#[allow(clippy::unwrap_used)]
 pub fn new_shared_bus(
     spi: embassy_rp::Peri<'static, SPI1>,
     sck: embassy_rp::Peri<'static, PIN_42>,
@@ -122,7 +129,7 @@ pub fn new_shared_bus(
     rx_dma: embassy_rp::Peri<'static, DMA_CH7>,
     irqs: Irqs,
 ) -> PanelBus {
-    Mutex::new(Spi::new(spi, sck, mosi, miso, tx_dma, rx_dma, irqs, touch_spi_config()))
+    Mutex::new(Spi::new(spi, sck, mosi, miso, tx_dma, rx_dma, irqs, touch_spi_config()).unwrap())
 }
 
 /// Build the panel's display configuration.

@@ -22,11 +22,17 @@ update or installer. The operator path is a clone, the pinned toolchain and
 
 ## Prerequisites
 
-- **Rust 1.96.0.** [`rust-toolchain.toml`](../../rust-toolchain.toml) pins the
-  channel and requests the `rustfmt` and `clippy` components and the
-  `thumbv8m.main-none-eabihf` target. `rustup` selects and installs it
+- **Rust 1.99.1.** [`rust-toolchain.toml`](../../rust-toolchain.toml) pins one
+  channel for the whole repository and requests the `rustfmt`, `clippy` and
+  `rust-src` components plus the `thumbv8m.main-none-eabihf` and
+  `riscv32imc-unknown-none-elf` targets. `rustup` selects and installs it
   automatically inside the repository; confirm with `rustup show
-  active-toolchain`. If the target is ever missing, add it explicitly.
+  active-toolchain`. If a target is ever missing, add it explicitly.
+- **Embassy master.** The robot follows embassy's own advice to use git when a
+  needed change has no release: the root manifest's `[patch.crates-io]` pins
+  `embassy-rp`, `embassy-embedded-hal`, `embassy-sync`, `embassy-executor`,
+  `embassy-time` and `embassy-futures` to one commit (`9b0680bd`, 2026-11-09).
+  Update every patched crate together and let the lockfile record the revision.
 - **Nightly rustfmt.** The formatting gate deliberately invokes nightly
   (`cargo +nightly fmt`), not the pinned stable toolchain; install a nightly
   toolchain with the `rustfmt` component.
@@ -180,18 +186,18 @@ calibration data is lost. Both steps are **bench-required**.
 | Host tests try to build for `thumbv8m...` | `--target x86_64-unknown-linux-gnu` was omitted, or the command ran from `remote/`. |
 | `probe-rs` finds no probe or cannot attach | Check the SWD wiring and that the probe is connected; this step is bench-required. |
 | Linker cannot find `memory.x` or a memory region | `memory.x` was moved or removed from the package root; `build.rs` embeds it from there. |
-| `cargo +nightly fmt` cannot find the toolchain | Install a nightly toolchain with `rustfmt`; the pin only supplies stable 1.96.0. |
+| `cargo +nightly fmt` cannot find the toolchain | Install a nightly toolchain with `rustfmt`; the pin only supplies stable 1.99.1. |
 | Host test crate cannot resolve `std` | The `--features std` flag was omitted; the feature is host-only. |
 
 ## Verified
 
-**Verified:** 2026-11-08 — the commands below were run from the repository root
+**Verified:** 2026-11-09 — the commands below were run from the repository root
 on this host; the build, lint and test gates passed, and the hardware steps were
 not run and are bench-required.
 
 ```sh
-rustup target list --installed           # thumbv8m.main-none-eabihf present
-rustup toolchain list                    # 1.96.0 active
+rustup target list --installed           # thumbv8m.main-none-eabihf and riscv32imc-unknown-none-elf present
+rustup toolchain list                    # 1.99.1 active
 probe-rs --version                       # probe-rs 0.31.0
 cargo +nightly fmt --version             # rustfmt 1.11.0-nightly
 cargo build --workspace --release --target thumbv8m.main-none-eabihf
@@ -206,8 +212,8 @@ cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
-Outcomes: the build finished in 0.61 s, the formatting check exited 0 with no
-output, clippy finished with no warnings, and every host suite ended
+Outcomes: the build finished successfully, the formatting check exited 0 with
+no output, clippy finished with no warnings, and every host suite ended
 `test result: ok.` with `0 failed`. Flashing, RTT/`defmt` output, sensor
 bring-up, bench wiring and the recovery erase were **not** run — all
 bench-required.
