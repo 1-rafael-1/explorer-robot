@@ -5,7 +5,7 @@
 // Ephemeral view state (overlay, tab, form inputs, camera) lives in the views,
 // not here. `apply` never mutates its argument.
 
-import { EVENT_LIMIT, labelForActivity } from './protocol.js';
+import { BOOTING_ID, EVENT_LIMIT, IDLE_ID, labelForActivity } from './protocol.js';
 
 /** Returns a fresh initial state. */
 export function initialState() {
@@ -33,6 +33,7 @@ export function initialState() {
     commands: {},
     activityStopped: null,
     eventGap: false,
+    eventGapAt: null,
     overflowAt: null,
     drive: { plan: null, stage: 'idle', report: null, sequence: null },
   };
@@ -61,19 +62,36 @@ export function latestPose(state) {
   };
 }
 
+/** Returns the id of a live, non-Idle Activity, or `null`. */
+export function liveActivityId(state) {
+  const live = state.streams.activity?.v;
+  if (!live || live.id === IDLE_ID || live.stage !== 'running') return null;
+  return live.id;
+}
+
+/**
+ * Returns whether a live Activity the app did not start holds the robot. The
+ * app's own drive legs are not a foreign claim; Idle and Booting are not claims.
+ */
+export function activityBusy(state) {
+  const id = liveActivityId(state);
+  if (id == null || id === BOOTING_ID) return false;
+  return state.drive.stage !== 'rotate' && state.drive.stage !== 'drive';
+}
+
 /** Returns the live Activity, the last terminal, the Stopped card, or Idle. */
 export function activityView(state) {
-  const live = state.streams.activity?.v;
-  if (live && live.id !== 0 && live.stage === 'running') {
-    return { kind: 'live', data: live };
+  const entry = state.streams.activity;
+  const live = entry?.v;
+  if (live && live.id !== IDLE_ID && live.stage === 'running') {
+    return { kind: 'live', data: live, ts: entry.ts ?? null, busy: activityBusy(state) };
   }
-  if (state.lastTerminal) {
-    return { kind: 'result', data: state.lastTerminal.v, ts: state.lastTerminal.ts };
-  }
-  if (live && live.id !== 0) {
-    return { kind: 'result', data: live };
-  }
-  if (state.activityStopped) {
+  // A run that leaves `running` with no terminal stage and no completion Event is
+  // a Stopped card; it is newer than any earlier Result Report.
+  if (
+    state.activityStopped &&
+    (!state.lastTerminal || (state.activityStopped.ts ?? 0) >= (state.lastTerminal.ts ?? 0))
+  ) {
     return {
       kind: 'stopped',
       data: {
@@ -83,9 +101,21 @@ export function activityView(state) {
         percent: null,
         detail: 'Stopped by an operator',
       },
+      ts: state.activityStopped.ts ?? null,
     };
   }
-  return { kind: 'idle', data: { id: 0, label: 'Idle', stage: 'running', percent: null, detail: '' } };
+  if (state.lastTerminal) {
+    return { kind: 'result', data: state.lastTerminal.v, ts: state.lastTerminal.ts ?? null };
+  }
+  if (live && live.id !== IDLE_ID) {
+    return { kind: 'result', data: live, ts: entry?.ts ?? null };
+  }
+  return {
+    kind: 'idle',
+    data: { id: IDLE_ID, label: 'Idle', stage: 'running', percent: null, detail: '' },
+    ts: null,
+    busy: false,
+  };
 }
 
 /** Returns the power values, preserving `null` as unknown. */
@@ -95,6 +125,47 @@ export function powerView(state) {
     level: value.level ?? null,
     voltage_mv: value.voltage_mv ?? null,
     ts: state.streams.power?.ts ?? null,
+  };
+}
+
+/** Returns the motor outputs, preserving `null` as unknown and `0` as a value. */
+export function motionView(state) {
+  const entry = state.streams.motion;
+  const value = entry?.v ?? {};
+  return { left: value.left ?? null, right: value.right ?? null, ts: entry?.ts ?? null };
+}
+
+/** Returns the perception flags; `null` is unknown and `false` is clear. */
+export function perceptionView(state) {
+  const entry = state.streams.perception;
+  const value = entry?.v ?? {};
+  return {
+    obstacle: value.obstacle ?? null,
+    floor_drop: value.floor_drop ?? null,
+    ts: entry?.ts ?? null,
+  };
+}
+
+/** Returns the latest LiDAR sample, or an all-unknown view when it is absent. */
+export function lidarView(state) {
+  const entry = state.streams.lidar;
+  if (!entry?.v) {
+    return {
+      present: false,
+      ts: null,
+      ranges_cm: null,
+      first_deg: null,
+      step_deg: null,
+      clockwise: null,
+    };
+  }
+  return {
+    present: true,
+    ts: entry.ts ?? null,
+    ranges_cm: entry.v.ranges_cm ?? null,
+    first_deg: entry.v.first_deg ?? null,
+    step_deg: entry.v.step_deg ?? null,
+    clockwise: entry.v.clockwise ?? null,
   };
 }
 
@@ -108,11 +179,22 @@ export function controlEnabled(state) {
   return isConnected(state) && state.connection.state === 'connected';
 }
 
-/** Returns the unread Event count after the replay cursor. */
+/** Returns the unread Event count after the operator's read cursor. */
 export function unreadEvents(state) {
   return state.events.filter(
     (event) => event.seq != null && event.boot_id === state.bootId && event.seq > state.seenEventSeq,
   ).length;
+}
+
+/**
+ * Returns whether a live Volatile Command's outcome is unknown: an Event
+ * sequence gap or an overflow notice at or after `since`. A gap or overflow
+ * before the command does not taint it.
+ */
+export function outcomeUnknown(state, since = 0) {
+  const gapAt = state.eventGap ? (state.eventGapAt ?? 0) : null;
+  const overflowAt = state.overflowAt ?? null;
+  return (gapAt != null && gapAt >= since) || (overflowAt != null && overflowAt >= since);
 }
 
 /** Marks every current Event as read. */
@@ -165,22 +247,47 @@ function resetForBoot(state, bootId, bridge) {
 /** Merges Events by `(boot_id, seq)`, keeping a bounded, ordered replay. */
 function mergeEvents(state, incoming) {
   if (!Array.isArray(incoming) || incoming.length === 0) return state;
-  const seen = new Set(
-    state.events.map((event) => (event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`)),
+  const keyOf = (event) =>
+    event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
+  const seen = new Set(state.events.map(keyOf));
+  const ordered = [...incoming].sort(
+    (a, b) => (a.ts ?? 0) - (b.ts ?? 0) || (a.seq ?? 0) - (b.seq ?? 0),
   );
   const merged = [...state.events];
-  for (const event of incoming) {
-    const key = event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
+  let overflowAt = state.overflowAt ?? null;
+  let eventGap = state.eventGap;
+  let eventGapAt = state.eventGapAt ?? null;
+  let top = Math.max(
+    state.seenEventSeq ?? 0,
+    state.events.reduce(
+      (max, event) =>
+        event.boot_id != null && event.boot_id === state.bootId && event.seq != null
+          ? Math.max(max, event.seq)
+          : max,
+      0,
+    ),
+  );
+
+  for (const event of ordered) {
+    const key = keyOf(event);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(event);
     if (event.name === 'event_overflow') {
-      state = { ...state, overflowAt: Math.max(state.overflowAt ?? 0, event.ts ?? 0) };
+      overflowAt = Math.max(overflowAt ?? 0, event.ts ?? 0);
+    }
+    if (event.boot_id != null && event.boot_id === state.bootId && event.seq != null) {
+      if (top > 0 && event.seq > top + 1) {
+        eventGap = true;
+        eventGapAt = Math.max(eventGapAt ?? 0, event.ts ?? 0);
+      }
+      top = Math.max(top, event.seq);
     }
   }
+
   merged.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || (a.seq ?? 0) - (b.seq ?? 0));
   while (merged.length > EVENT_LIMIT) merged.shift();
-  return { ...state, events: merged };
+  return { ...state, events: merged, overflowAt, eventGap, eventGapAt };
 }
 
 /** Applies a daemon message; unknown types pass through unchanged. */
@@ -249,14 +356,15 @@ function applySnapshot(state, message) {
   if (message.boot_id != null && state.bootId != null && message.boot_id !== state.bootId) {
     next = resetForBoot(state, message.boot_id, message.bridge ?? state.bridge);
   }
+  const bootId = message.boot_id ?? next.bootId;
   const streams = {};
   for (const entry of message.streams ?? []) {
     if (entry?.name) streams[entry.name] = entry;
   }
-  const firstSnapshot = next.eventCursor == null;
   const merged = mergeEvents(
     {
       ...next,
+      bootId,
       streams,
       lastTerminal: message.last_terminal ?? null,
       catalogue: message.catalogue?.procedures ?? [],
@@ -266,22 +374,17 @@ function applySnapshot(state, message) {
   );
   return {
     ...merged,
-    bootId: message.boot_id ?? next.bootId,
+    bootId,
     // A snapshot is reload-safe state, not proof that the robot Session is live;
     // only a `connection` message may say `connected`.
-    connection: {
-      ...next.connection,
-      boot_id: message.boot_id ?? next.bootId,
-    },
+    connection: { ...next.connection, boot_id: bootId },
+    // The scalar cursor is the Relay's replay cursor; the unread badge counts
+    // after it, so the replayed history is not re-flagged on every reload.
     eventCursor: message.event_cursor ?? next.eventCursor,
-    seenEventSeq: firstSnapshot
-      ? Math.max(next.seenEventSeq, message.event_cursor ?? 0)
-      : next.seenEventSeq,
-    // A same-Boot-Id snapshot preserves the in-flight plan; a Boot Id change already reset it.
-    drive:
-      next.bootId === message.boot_id || message.boot_id == null
-        ? next.drive
-        : emptyDrive(),
+    seenEventSeq: Math.max(next.seenEventSeq, message.event_cursor ?? 0),
+    // A same-Boot-Id snapshot preserves the in-flight plan; a Boot Id change was
+    // already reset by `resetForBoot`, which marks in-flight work unknown.
+    drive: next.drive,
   };
 }
 
@@ -295,17 +398,23 @@ function applyStream(state, message) {
   if (message.name === 'activity') {
     const before = previous?.v;
     const after = message.v;
-    if (after && after.id !== 0 && after.stage === 'running') {
+    if (after && after.id !== IDLE_ID && after.stage === 'running') {
       const started = !before || before.id !== after.id || before.stage !== 'running';
       if (started) next = { ...next, activityStopped: null, lastTerminal: null };
-    } else if (after && after.id !== 0 && (after.stage === 'complete' || after.stage === 'failed')) {
+    } else if (after && after.id !== IDLE_ID && (after.stage === 'complete' || after.stage === 'failed')) {
       next = { ...next, lastTerminal: entry, activityStopped: null };
-    } else if (after && after.id === 0 && before && before.id !== 0 && before.stage === 'running') {
+    } else if (
+      after &&
+      after.id === IDLE_ID &&
+      before &&
+      before.id !== IDLE_ID &&
+      before.stage === 'running'
+    ) {
       const completed = state.events.some(
         (event) =>
           event.name === 'procedure_completed' &&
           event.v?.id === before.id &&
-          event.ts >= (message.ts ?? 0) - 5000,
+          (event.ts ?? 0) >= (previous.ts ?? 0) - 5000,
       );
       next = {
         ...next,
@@ -330,17 +439,24 @@ function applyEvent(state, message) {
   );
   if (exists) return state;
 
-  const topSeq = state.events.reduce(
-    (max, event) =>
-      event.boot_id === message.boot_id && event.seq != null ? Math.max(max, event.seq) : max,
-    0,
+  const topSeq = Math.max(
+    state.seenEventSeq,
+    state.events.reduce(
+      (max, event) =>
+        event.boot_id === message.boot_id && event.seq != null ? Math.max(max, event.seq) : max,
+      0,
+    ),
   );
-  const gap = message.seq != null && message.seq > topSeq + 1 ? true : state.eventGap;
+  const gap = message.seq != null && message.seq > topSeq + 1;
   let next = {
     ...state,
     events: [...state.events, message].slice(-EVENT_LIMIT),
-    eventGap: gap,
-    overflowAt: message.name === 'event_overflow' ? Math.max(state.overflowAt ?? 0, message.ts ?? 0) : state.overflowAt,
+    eventGap: gap ? true : state.eventGap,
+    eventGapAt: gap ? Math.max(state.eventGapAt ?? 0, message.ts ?? 0) : state.eventGapAt,
+    overflowAt:
+      message.name === 'event_overflow'
+        ? Math.max(state.overflowAt ?? 0, message.ts ?? 0)
+        : state.overflowAt,
   };
   if (message.name === 'procedure_completed') {
     next = {

@@ -10,6 +10,7 @@ import { renderDrive, bindDrive } from './drive.js';
 import { renderEvents, bindEvents } from './events.js';
 import { renderPairing, bindPairing } from './pairing.js';
 import { renderPower } from './power.js';
+import { renderStreams } from './streams.js';
 import { bindShell, renderShell } from './shell.js';
 import { byId, setHidden, setText } from './dom.js';
 
@@ -46,6 +47,7 @@ export function mountApp({ store, transport, planner, radar = createRadar(byId('
     const state = store.state;
     renderShell(state, ui);
     renderPower(state);
+    renderStreams(state, Date.now());
     renderPairing(state);
     renderActivity(state);
     renderEvents(state, ui);
@@ -127,6 +129,7 @@ export function startRenderLoop(store, radar, frame = globalThis.requestAnimatio
   });
   const tick = (time) => {
     if (dirty || time - lastDraw > 250) {
+      renderStreams(store.state, Date.now());
       radar.render(store.state, Date.now());
       dirty = false;
       lastDraw = time;

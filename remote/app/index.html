@@ -55,11 +55,12 @@
               <span id="bridge-chip-station">Bridge</span>
               <span id="bridge-chip-rssi" aria-hidden="true">—</span>
             </span>
-            <span class="slot"><span class="slot-label">Battery</span><span id="battery-level">—</span></span>
+            <span class="slot"><span class="slot-label">Battery</span><span id="battery-level">—</span><span id="power-age" class="slot-age"></span></span>
             <span class="slot"><span class="slot-label">Pack</span><span id="battery-voltage">—</span></span>
             <span class="slot">
               <span class="slot-label">Motion</span>
               <span id="motion-left">—</span><span aria-hidden="true">/</span><span id="motion-right">—</span>
+              <span id="motion-age" class="slot-age"></span>
             </span>
             <span class="slot"><span class="slot-label">Scan</span><span id="scan-age">No scan</span></span>
             <span class="slot"><span class="slot-label">Zoom</span><span id="zoom-level">1.0×</span></span>
@@ -112,10 +113,21 @@
             <section id="activity-panel" class="panel" aria-labelledby="activity-label">
               <header class="panel-head">
                 <h2 id="activity-label">Idle</h2>
-                <span id="activity-stage" class="panel-stage"></span>
+                <span class="panel-stage">
+                  <span id="activity-busy" class="panel-busy" hidden>Busy</span>
+                  <span id="activity-stage"></span>
+                  <span id="activity-age" class="slot-age"></span>
+                </span>
               </header>
               <p id="activity-detail" class="panel-detail"></p>
               <progress id="activity-progress" max="100" value="0" hidden></progress>
+              <p id="perception-line" class="perception">
+                <span class="slot-label">Perception</span>
+                <span id="perception-obstacle">Obstacle unknown</span>
+                <span aria-hidden="true">·</span>
+                <span id="perception-floor-drop">Floor drop unknown</span>
+                <span id="perception-age" class="slot-age"></span>
+              </p>
               <button id="activity-dismiss" type="button" class="secondary small" hidden>Dismiss</button>
             </section>
 

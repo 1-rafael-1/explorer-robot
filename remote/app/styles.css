@@ -537,6 +537,57 @@ input {
   white-space: nowrap;
 }
 
+.slot-age {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.slot-age.is-stale,
+.slot-age[data-stale="true"] {
+  color: var(--warn);
+}
+
+.panel-busy {
+  margin-right: 6px;
+  padding: 1px 7px;
+  border: 1px solid #8a6a1e;
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.perception {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+  min-height: 1.4em;
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.perception .slot-label {
+  min-width: 100%;
+}
+
+#perception-obstacle[data-detected="true"],
+#perception-floor-drop[data-detected="true"] {
+  color: var(--warn);
+}
+
+#perception-obstacle[data-detected="unknown"],
+#perception-floor-drop[data-detected="unknown"],
+#motion-left[data-unknown="true"],
+#motion-right[data-unknown="true"] {
+  color: var(--muted);
+}
+
 .panel-detail {
   margin: 0 0 8px;
   min-height: 1.4em;
