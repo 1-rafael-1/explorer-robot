@@ -3,12 +3,12 @@
 //! Replaces the synthetic `lidar_stub` task. A single long-lived embassy task on
 //! **core1** owns a [`LidarSession`], which retains the UART0/GPIO28/GPIO29
 //! [`Peri`] handles, the `LIDAR_PWR` enable and the static buffers. The UART
-//! exists only while the switched 5 V branch is powered: [`LidarPort::power_up`]
+//! exists only while the switched 5 V branch is powered: [`UartResources::power_up`]
 //! asserts the enable, waits for the switch rise and constructs the buffered
-//! UART; [`quiesce`] drains and drops it, and [`LidarControl::complete_power_down`]
-//! releases TX and RX
-//! to high-Z, clears `UARTCR.EN`/`TXE`/`RXE`, and only then deasserts
-//! `LIDAR_PWR` (ADR-0023). The task is driven by a one-way command channel.
+//! UART; [`quiesce`] drains and drops it; then [`PowerControl::complete_power_down`]
+//! releases TX and RX to high-Z through [`UartResources::release_pads`], clears
+//! `UARTCR.EN`/`TXE`/`RXE`, and only then deasserts `LIDAR_PWR` (ADR-0023). The
+//! task is driven by a one-way command channel.
 //!
 //! # The model
 //!
@@ -156,19 +156,19 @@ type LidarDriver<'a, 'p> = CoinD6<'a, BufferedUart<'p>, Output<'static>>;
 ///
 /// The session keeps the raw [`Peri`] handles, one `Output` for `LIDAR_PWR`
 /// (held low while off) and the `'static` TX/RX buffers. It does not store the
-/// driver: [`LidarPort::power_up`] returns one that borrows the caller's ingest
+/// driver: [`UartResources::power_up`] returns one that borrows the caller's ingest
 /// chunk for the powered period, and [`quiesce`] consumes it again. That
 /// keeps the UART — and the pads muxed to it — alive only while the branch is
 /// powered.
 pub struct LidarSession {
     /// UART handles and ring buffers, borrowed for one powered period.
-    port: LidarPort,
+    port: UartResources,
     /// Power line, usable while the driver borrows the port.
-    control: LidarControl,
+    control: PowerControl,
 }
 
 /// UART handles and ring buffers, borrowed for one powered period.
-struct LidarPort {
+struct UartResources {
     /// UART0 peripheral handle, retained for reconstruction.
     uart: Peri<'static, UART0>,
     /// UART0 TX pad (GPIO 28), retained for reconstruction and release.
@@ -184,7 +184,7 @@ struct LidarPort {
 }
 
 /// Power line and timing retained across powered periods.
-struct LidarControl {
+struct PowerControl {
     /// `LIDAR_PWR` enable; `None` only while a driver owns the powered branch.
     power: Option<Output<'static>>,
     /// Instant of the most recent power-down, for the minimum off interval.
@@ -212,7 +212,7 @@ impl LidarSession {
         let mut uart_config = uart::Config::default();
         uart_config.baudrate = UART_BAUD;
         Self {
-            port: LidarPort {
+            port: UartResources {
                 uart,
                 tx,
                 rx,
@@ -220,7 +220,7 @@ impl LidarSession {
                 rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
                 uart_config,
             },
-            control: LidarControl {
+            control: PowerControl {
                 power: Some(Output::new(power_enable, Level::Low)),
                 last_power_down: None,
             },
@@ -228,7 +228,7 @@ impl LidarSession {
     }
 }
 
-impl LidarPort {
+impl UartResources {
     /// Power the branch and build a driver for the powered period.
     ///
     /// Waits out the minimum off interval, asserts `LIDAR_PWR`, waits for the
@@ -242,7 +242,7 @@ impl LidarPort {
     #[must_use = "the driver owns the powered branch until it is passed to `quiesce`"]
     async fn power_up<'i, 'p>(
         &'p mut self,
-        control: &mut LidarControl,
+        control: &mut PowerControl,
         ingest: &'i mut [u8],
     ) -> Option<LidarDriver<'i, 'p>> {
         if let Some(last) = control.last_power_down {
@@ -277,13 +277,21 @@ impl LidarPort {
     }
 }
 
-impl LidarControl {
-    /// Deinitialize the peripheral and deassert the branch after the UART has
-    /// been dropped.
+impl PowerControl {
+    /// Release the pads, deinitialize the peripheral and deassert the branch
+    /// after the UART has been dropped.
     ///
-    /// Clears `UARTCR.EN`/`TXE`/`RXE`, deasserts the enable and records the
+    /// Releases both UART pads to high-Z via [`UartResources::release_pads`],
+    /// clears `UARTCR.EN`/`TXE`/`RXE`, deasserts the enable and records the
     /// power-down instant.
-    fn complete_power_down(&mut self, mut power: Output<'static>) {
+    ///
+    /// The split between [`UartResources`] and `PowerControl` is forced by
+    /// `BufferedUart` borrowing the UART handles, so the teardown order is fixed:
+    /// `quiesce` → release pads → deassert power. Folding the pad release in here
+    /// keeps that order at one call site.
+    fn complete_power_down(&mut self, uart: &mut UartResources, mut power: Output<'static>) {
+        uart.release_pads();
+
         pac::UART0.uartcr().modify(|w| {
             w.set_uarten(false);
             w.set_txe(false);
@@ -501,14 +509,14 @@ fn set_status(status: LidarStatus) {
 /// and power-cycle to recover from streaming failures.
 ///
 /// Power assertion and UART construction happen outside the attempt timeout; each
-/// failed attempt goes through [`quiesce`] and [`LidarControl::complete_power_down`],
-/// and the next [`LidarPort::power_up`] enforces the minimum off interval. A device that
+/// failed attempt goes through [`quiesce`] and [`PowerControl::complete_power_down`],
+/// and the next [`UartResources::power_up`] enforces the minimum off interval. A device that
 /// cannot be brought up leaves the status `Failed`, the branch off and stale
 /// state cleared.
 #[allow(clippy::large_futures)]
 async fn serve_enabled(
-    port: &mut LidarPort,
-    control: &mut LidarControl,
+    port: &mut UartResources,
+    control: &mut PowerControl,
     ingest: &mut [u8],
     scratch: &mut Scan,
     sequence: &mut u64,
@@ -532,8 +540,7 @@ async fn serve_enabled(
                 }
                 // Power the branch down so the retry starts from a known off-state.
                 let power = quiesce(candidate).await;
-                port.release_pads();
-                control.complete_power_down(power);
+                control.complete_power_down(port, power);
                 if attempt >= BRINGUP_ATTEMPTS {
                     break None;
                 }
@@ -560,8 +567,7 @@ async fn serve_enabled(
             let end = stream_scans(&mut driver, scratch, sequence, last_obstacle).await;
             (end, quiesce(driver).await)
         };
-        port.release_pads();
-        control.complete_power_down(power);
+        control.complete_power_down(port, power);
         match end {
             StreamEnd::Disabled => {
                 clear_stale_state(last_obstacle).await;
@@ -598,16 +604,18 @@ async fn attempt_bring_up(driver: &mut LidarDriver<'_, '_>, scratch: &mut Scan) 
     }
 }
 
-/// Stream revolutions until a disable powers the sensor down or the device dies.
+/// Stream revolutions until a disable or a failed read ends the powered period.
 ///
 /// Commands are polled between revolutions. A duplicate enable is inert — the
-/// sensor is already up. A disable stops the device, powers the branch down,
-/// clears its stale cloud and obstacle flag, and returns [`StreamEnd::Disabled`].
+/// sensor is already up. On a disable it returns [`StreamEnd::Disabled`]; the
+/// caller, [`serve_enabled`], then quiesces the driver, completes the power-down
+/// (which releases the pads), clears the stale cloud and obstacle flag, and
+/// publishes [`LidarStatus::Off`]. This function does none of that itself.
 ///
 /// Each revolution is read behind [`STREAM_READ_TIMEOUT`], so the read cannot
 /// block indefinitely on a silent link: a driver read error and a wall-clock
-/// expiry both power the branch down and return [`StreamEnd::Restart`], leaving
-/// the caller to bring the device back up.
+/// expiry both return [`StreamEnd::Restart`], leaving the caller to power-cycle
+/// the branch and bring the device back up.
 async fn stream_scans(
     driver: &mut LidarDriver<'_, '_>,
     scratch: &mut Scan,

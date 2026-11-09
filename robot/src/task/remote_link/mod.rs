@@ -84,7 +84,7 @@ mod events;
 mod failsafe;
 mod streams;
 
-#[allow(unused_imports)] // Diagnostic getter for the bench and later tickets.
+#[allow(unused_imports)] // Diagnostic getter for the bench.
 pub use events::event_drops;
 pub use events::forward_event;
 
@@ -167,7 +167,7 @@ static TX_BUF: StaticCell<[u8; TX_BUF_LEN]> = StaticCell::new();
 static RX_BUF: StaticCell<[u8; RX_BUF_LEN]> = StaticCell::new();
 
 /// UART handles and ring buffers, borrowed for one powered period.
-struct LinkPort {
+struct UartResources {
     /// UART1 peripheral handle, retained for reconstruction.
     uart: Peri<'static, UART1>,
     /// UART1 TX pad (GPIO 36), retained for reconstruction and release.
@@ -183,7 +183,7 @@ struct LinkPort {
 }
 
 /// Power, reset and presence lines retained across powered periods.
-struct LinkControl {
+struct PowerControl {
     /// `EXP_PWR` branch enable (active high, GPIO 32).
     power: Output<'static>,
     /// `EXP_EN` Bridge enable/reset line (active high, GPIO 34).
@@ -200,14 +200,14 @@ struct LinkControl {
 ///
 /// The session keeps the raw [`Peri`] handles, the `EXP_PWR`/`EXP_EN`/`EXP_BOOT`
 /// outputs, the `EXP_IRQ` input handle and the `'static` TX/RX buffers. It
-/// constructs no UART at boot; [`LinkPort::power_up`] builds one for the powered
+/// constructs no UART at boot; [`UartResources::power_up`] builds one for the powered
 /// period and the task drains and drops it again, so the pads and the UART
 /// peripheral exist only while the branch is powered (ADR-0023).
 pub struct RemoteLinkSession {
     /// UART handles and ring buffers, borrowed for one powered period.
-    port: LinkPort,
+    port: UartResources,
     /// Power and presence lines, usable while the UART is borrowed.
-    control: LinkControl,
+    control: PowerControl,
     /// Hardware TRNG used to mint a Boot Id per powered period.
     trng: Trng<'static, Async>,
 }
@@ -243,7 +243,7 @@ impl RemoteLinkSession {
         uart_config.baudrate = link_core::timing::BAUD;
 
         Self {
-            port: LinkPort {
+            port: UartResources {
                 uart,
                 tx,
                 rx,
@@ -251,7 +251,7 @@ impl RemoteLinkSession {
                 rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
                 uart_config,
             },
-            control: LinkControl {
+            control: PowerControl {
                 power: Output::new(power_enable, Level::Low),
                 en: Output::new(en, Level::Low),
                 boot: Output::new(boot, Level::Low),
@@ -263,7 +263,7 @@ impl RemoteLinkSession {
     }
 }
 
-impl LinkPort {
+impl UartResources {
     /// Power the branch and build the UART for the powered period.
     ///
     /// Runs ADR-0023's order: wait out the minimum off interval, configure RX
@@ -272,7 +272,7 @@ impl LinkPort {
     /// `BufferedUart` from the retained handles and reborrowed static rings.
     /// There is no await point between construction and returning, so
     /// cancellation cannot leave a muxed UART owned by nobody.
-    async fn power_up(&mut self, control: &mut LinkControl) -> BufferedUart<'_> {
+    async fn power_up(&mut self, control: &mut PowerControl) -> BufferedUart<'_> {
         if let Some(last) = control.last_power_down {
             let elapsed = Instant::now().saturating_duration_since(last);
             if let Some(remaining) = POWER_CYCLE_OFF.checked_sub(elapsed) {
@@ -319,7 +319,7 @@ impl LinkPort {
     }
 }
 
-impl LinkControl {
+impl PowerControl {
     /// Read the `EXP_IRQ` presence level with the powered-period pull-down.
     fn presence_high(&mut self) -> bool {
         Input::new(self.irq.reborrow(), Pull::Down).is_high()
@@ -333,13 +333,21 @@ impl LinkControl {
         self.en.set_high();
     }
 
-    /// Deinitialize the peripheral and deassert the branch after the UART has
-    /// been dropped.
+    /// Release the pads, deinitialize the peripheral and deassert the branch
+    /// after the UART has been dropped.
     ///
-    /// Clears `UARTCR.EN`/`TXE`/`RXE`, drives `EXP_EN` and `EXP_BOOT` low,
+    /// Releases both UART pads to high-Z via [`UartResources::release_pads`],
+    /// clears `UARTCR.EN`/`TXE`/`RXE`, drives `EXP_EN` and `EXP_BOOT` low,
     /// releases `EXP_IRQ`, deasserts `EXP_PWR`, and records the power-down
     /// instant.
-    fn complete_power_down(&mut self) {
+    ///
+    /// The split between [`UartResources`] and `PowerControl` is forced by
+    /// `BufferedUart` borrowing the UART handles, so the teardown order is fixed:
+    /// `drain_uart` → release pads → deassert power. Folding the pad release in
+    /// here keeps that order at one call site.
+    fn complete_power_down(&mut self, uart: &mut UartResources) {
+        uart.release_pads();
+
         pac::UART1.uartcr().modify(|w| {
             w.set_uarten(false);
             w.set_txe(false);
@@ -513,8 +521,7 @@ pub async fn remote_link_task(mut session: RemoteLinkSession) {
 
         let uart = serve_enabled(&mut session.control, &mut core, uart).await;
         drain_uart(uart).await;
-        session.port.release_pads();
-        session.control.complete_power_down();
+        session.control.complete_power_down(&mut session.port);
         set_status(LinkStatus::Off);
         state::link::clear().await;
     }
@@ -565,7 +572,7 @@ impl PresenceWatch {
     /// ring survive, and the link returns to waiting. A still-low line after the
     /// grace gets one [`RESET_PULSE`]; still low after another grace means absent,
     /// with no further retry.
-    async fn update(&mut self, control: &mut LinkControl, core: &mut LinkCore, scratch: &mut TxScratch, now: Instant) {
+    async fn update(&mut self, control: &mut PowerControl, core: &mut LinkCore, scratch: &mut TxScratch, now: Instant) {
         match self.phase {
             PresencePhase::Waiting => {
                 if now < self.deadline {
@@ -653,7 +660,7 @@ impl TxScratch {
 /// [`LinkCore`] is dropped then.
 #[allow(clippy::large_futures)]
 async fn serve_enabled<'a>(
-    control: &mut LinkControl,
+    control: &mut PowerControl,
     core: &mut LinkCore,
     mut uart: BufferedUart<'a>,
 ) -> BufferedUart<'a> {
