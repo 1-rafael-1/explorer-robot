@@ -5,7 +5,7 @@
 // The Pairing Token is kept in `sessionStorage` for the tab only, sent as the
 // first frame on a gated peer, and never rendered or placed in the URL.
 
-import { CLOSE, PROTOCOL, normaliseCode } from './protocol.js';
+import { CLOSE, PROTOCOL, isCompleteCode, normaliseCode } from './protocol.js';
 
 /** The tab's Pairing Token key. */
 export const TOKEN_KEY = 'explorer-remote.pairing-token';
@@ -123,13 +123,16 @@ export function createTransport({
     }
   }
 
-  function sendClientHello() {
+  function sendGreeting() {
     if (!sendRaw({ type: 'hello', protocol: PROTOCOL })) return;
     notify('open');
     startHeartbeat();
-    if (manualEndpoint) {
-      sendRaw({ type: 'connect', host: manualEndpoint.host, port: manualEndpoint.port });
-    }
+  }
+
+  /** Asks the Relay to reach a manually entered robot endpoint. */
+  function sendManualConnect() {
+    if (!manualEndpoint) return;
+    sendRaw({ type: 'connect', host: manualEndpoint.host, port: manualEndpoint.port });
   }
 
   function handleHello(message) {
@@ -147,16 +150,19 @@ export function createTransport({
     if (message.auth_required === true) {
       const stored = storage.read();
       if (pendingPair) {
+        // ADR-0038: on a gated peer `pair` is the first frame, before the greeting.
         const code = pendingPair;
         pendingPair = null;
         storage.write(code);
         sendRaw({ type: 'pair', code });
-        sendClientHello();
+        sendGreeting();
+        sendManualConnect();
         return;
       }
       if (stored) {
         sendRaw({ type: 'auth', code: stored });
-        sendClientHello();
+        sendGreeting();
+        sendManualConnect();
         return;
       }
       // Probe-close: keep the code out of the page until the operator submits it.
@@ -164,7 +170,16 @@ export function createTransport({
       closeSocket(1000, 'pairing probe');
       return;
     }
-    sendClientHello();
+    // Loopback (ADR-0037): greet first. The Relay accepts a later `pair` after
+    // the greeting, so an operator-submitted code follows the client hello.
+    sendGreeting();
+    if (pendingPair) {
+      const code = pendingPair;
+      pendingPair = null;
+      storage.write(code);
+      sendRaw({ type: 'pair', code });
+    }
+    sendManualConnect();
   }
 
   function handleMessage(raw) {
@@ -291,10 +306,19 @@ export function createTransport({
     command,
     pair(code) {
       const normalised = normaliseCode(code);
-      if (normalised.length === 0) return;
-      pendingPair = normalised;
+      if (!isCompleteCode(normalised)) return;
       storage.write(normalised);
       backoff = reconnectBaseMs;
+      // An already-greeted peer (loopback) accepts `pair` after the greeting, so
+      // send it without dropping the healthy socket; then re-ask for the endpoint.
+      if (socket && helloReceived && sendRaw({ type: 'pair', code: normalised })) {
+        pendingPair = null;
+        sendManualConnect();
+        return;
+      }
+      // A probe-closed gated peer reopens: `pair` is the first frame on the new
+      // socket, then the greeting, within the hello deadline.
+      pendingPair = normalised;
       closeSocket(1000, 're-pair');
       connect();
     },
@@ -303,6 +327,7 @@ export function createTransport({
       if (socket && helloReceived) {
         sendRaw({ type: 'connect', host, port });
       } else {
+        closeSocket(1000, 'manual endpoint');
         connect();
       }
     },

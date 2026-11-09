@@ -9,6 +9,7 @@ import {
   codeHint,
   formatCode,
   isCompleteCode,
+  normaliseCode,
 } from '../protocol.js';
 import { byId, setHidden, setText } from './dom.js';
 import { displayState } from './shell.js';
@@ -30,13 +31,15 @@ export function bindPairing({ pair = () => {}, manual = () => {} } = {}) {
   if (form) {
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      const code = input?.value ?? '';
+      const code = normaliseCode(input?.value ?? '');
       if (!isCompleteCode(code)) {
         setText(hint, codeHint(code) ?? 'Enter the twelve-character code from the panel.');
         return;
       }
       pair(code);
+      // The code is never displayed back: clear the field and any stale hint.
       if (input) input.value = '';
+      setText(hint, '');
     });
   }
 
@@ -69,10 +72,8 @@ export function renderPairing(state) {
 
   const input = byId('pairing-code');
   if (input) {
-    if (!pairing) input.value = '';
-    else if (document.activeElement !== input && input.value.length > 0 && shown === 'unauthorized') {
-      input.value = '';
-    }
+    // A rejected or absent pairing must never leave the code on screen.
+    if (!pairing || shown === 'unauthorized') input.value = '';
   }
   const port = byId('manual-port');
   if (port && port.value.length === 0) port.value = String(DEFAULT_LINK_PORT);
