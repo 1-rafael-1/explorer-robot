@@ -14,8 +14,38 @@ export const FOOTPRINT = Object.freeze({ halfLengthCm: 9, halfWidthCm: 7 });
 /** The minimum on-screen size of the robot marker, in CSS pixels. */
 export const MIN_ICON_PX = 22;
 
+/** The scan age after which a scan is drawn dimmed; display only, never a gate (ADR-0043). */
+export const STALE_MS = 350;
+
 /** The identity pose, used until odometry lands. */
 export const IDENTITY_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
+
+/**
+ * The robot icon's half extents in CSS pixels at `scale`.
+ *
+ * The icon is drawn at the true world footprint, grown uniformly only until its
+ * longer half reaches `MIN_ICON_PX / 2`. The tap guard uses the same extents, so
+ * what the operator sees is exactly what they cannot tap through (ADR-0043).
+ */
+export function iconFootprintPx(scale) {
+  const safe = Math.max(scale, 1e-6);
+  const trueHalfLength = FOOTPRINT.halfLengthCm * safe;
+  const trueHalfWidth = FOOTPRINT.halfWidthCm * safe;
+  const grow = Math.max(1, MIN_ICON_PX / 2 / Math.max(trueHalfLength, trueHalfWidth, 1e-6));
+  return { halfLengthPx: trueHalfLength * grow, halfWidthPx: trueHalfWidth * grow };
+}
+
+/** Returns a scan's age in milliseconds, or `null` when `ts` is unknown. */
+export function scanAgeMs(ts, now) {
+  if (ts == null || !Number.isFinite(ts)) return null;
+  return Math.max(0, now - ts);
+}
+
+/** Returns whether a scan is stale; the age is display truth and never a Go gate. */
+export function isStaleScan(ts, now, staleMs = STALE_MS) {
+  const age = scanAgeMs(ts, now);
+  return age == null || age > staleMs;
+}
 
 /** Returns a point's distance from the pose, in centimetres. */
 export function distanceCm(pose, point) {
@@ -63,10 +93,9 @@ export function pointInFootprint(pose, point, scale = 1) {
   const sin = Math.sin(pose.yaw * RAD);
   const forward = dx * cos + dy * sin;
   const left = -dx * sin + dy * cos;
-  const minimumHalf = MIN_ICON_PX / 2 / Math.max(scale, 1e-6);
-  const halfLength = Math.max(FOOTPRINT.halfLengthCm, minimumHalf);
-  const halfWidth = Math.max(FOOTPRINT.halfWidthCm, minimumHalf);
-  return Math.abs(forward) <= halfLength && Math.abs(left) <= halfWidth;
+  const safe = Math.max(scale, 1e-6);
+  const { halfLengthPx, halfWidthPx } = iconFootprintPx(safe);
+  return Math.abs(forward) <= halfLengthPx / safe && Math.abs(left) <= halfWidthPx / safe;
 }
 
 /** Builds a camera view over a canvas of `width` by `height` CSS pixels. */
@@ -107,6 +136,25 @@ export function fitScale(width, height, rangeCm = 460) {
 export function slotAngleDeg(pose, firstDeg, stepDeg, clockwise, slot) {
   const direction = clockwise ? -1 : 1;
   return pose.yaw + direction * (firstDeg + slot * stepDeg);
+}
+
+/**
+ * Returns the newest pose sample at or before `ts`, or `null`.
+ *
+ * The World Frame rule is that a scan is paired with the pose at its own
+ * timestamp, never a newer pose (ADR-0038). v1 has no pose history and the
+ * reserved `pose` stream is absent, so this returns `null` and the renderer
+ * honestly falls back to the identity pose. The seam exists so a future pose
+ * stream can supply the sample without a rewrite.
+ */
+export function poseAt(poses, ts) {
+  if (!Array.isArray(poses) || ts == null) return null;
+  let best = null;
+  for (const sample of poses) {
+    if (sample?.ts == null || sample.ts > ts) continue;
+    if (!best || sample.ts > best.ts) best = sample;
+  }
+  return best;
 }
 
 /**
