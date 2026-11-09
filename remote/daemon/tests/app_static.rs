@@ -137,10 +137,16 @@ async fn the_embedded_app_folder_is_served() {
         .await,
         "server",
     );
+    let index = must(http_get(server.addr(), "/").await, "GET /");
+    assert_eq!(index.status, 200);
+    assert!(index.body.contains("Explorer Remote"));
+    assert_eq!(index.header("content-type"), Some("text/html; charset=utf-8"));
+    assert_static_headers(&index);
+    assert_eq!(index.header("content-security-policy"), Some(CSP));
+
     let response = must(http_get(server.addr(), "/README.md").await, "GET README");
     assert_eq!(response.status, 200);
-    assert!(response.body.contains("remote web app"));
+    assert!(response.body.contains("Remote App"));
     assert_eq!(response.header("content-type"), Some("text/plain; charset=utf-8"));
     assert_static_headers(&response);
-    assert_eq!(response.header("content-security-policy"), Some(CSP));
 }

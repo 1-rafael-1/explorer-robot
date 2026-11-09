@@ -173,9 +173,14 @@ instead, so an edit does not need a rebuild:
 cd remote && cargo run -p remote-daemon -- --no-open --assets app
 ```
 
-`app/` is currently a placeholder containing only its README, so `GET /`
-answers 404 until the SPA lands. Discovery, auth, the Relay and `/ws` are
-complete and tested. See the [app README](../../remote/app/README.md).
+The Remote App is the static SPA in `remote/app/`: vanilla ES modules and one
+`<canvas>`, no bundler and no build step. It connects to `/ws`, renders the App
+Snapshot and live streams in the World Frame, drives by point-and-go, and shows
+Bridge and link status. On loopback it needs no token; on a LAN it pairs with
+the twelve-character Pairing Token from the robot panel's Link screen and keeps
+the code for the tab only. The headless Chrome suite (the CI `web` job) serves
+the folder same-origin and runs the pure, fake-socket and real-chain pages. See
+the [app README](../../remote/app/README.md).
 
 ## What the daemon stores
 
@@ -227,7 +232,7 @@ the harness, power and wiring.
 |---|---|
 | compile error naming `thumbv8m.main-none-eabihf`, or `std`/`tokio` missing | the command ran outside `remote/`; `cd remote` first |
 | `libudev` or `pkg-config` not found while building `robot-stub` | install `libudev-dev` and `pkg-config` (Linux) |
-| `GET /` answers 404 | expected while `app/` is a placeholder; the `/ws` Relay works |
+| `GET /` answers 404 | the embedded app is missing, or `--assets` points at the wrong folder; check `remote/app/index.html` |
 | `pairing_required` or `unauthorized` | the device has no stored token; pair from the panel (bench-required) |
 | port 8765 in use | the daemon falls back to an ephemeral port; use the printed URL or `--port` |
 | no robots discovered | broadcast is blocked, or the Bridge is in AP-only Setup Mode; use a manual `host:port` (bench-required) |

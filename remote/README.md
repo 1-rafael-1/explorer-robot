@@ -14,7 +14,7 @@ data flow are in [docs/architecture.md](../docs/architecture.md).
 | `daemon/` | the `remote-daemon` binary: raw TCP to the Bridge, `/ws` JSON and the `/` static app (ADR-0039) | [daemon](daemon/README.md) |
 | `robot-stub/` | the robot's bench persona: the real `LinkCore` behind a serial port | [robot-stub](robot-stub/README.md) |
 | `bridge-stub/` | the daemon's bench peer: preamble server, Beacon and scripted robot traffic | [bridge-stub](bridge-stub/README.md) |
-| `app/` | the static SPA served at `/`; no build step, currently a placeholder | [app](app/README.md) |
+| `app/` | the Remote App: static ES modules and `<canvas>` served at `/`; no build step | [app](app/README.md) |
 
 ## The current-directory rule
 

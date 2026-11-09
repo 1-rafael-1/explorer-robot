@@ -127,8 +127,8 @@ cargo build --workspace
 
 ## Known limits
 
-- `remote/app/` currently holds only its README, so `/` answers 404 until the SPA lands; the
-  daemon's WebSocket, discovery, auth and relay paths are complete and tested.
+- The Remote App in `remote/app/` is served at `/` from the embedded copy (or `--assets`);
+  the browser suite runs in CI's `web` job.
 - v1 talks to one robot; several discovered Beacons pick one deterministically and name it in
   the app's `detail`.
 - Timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are provisional until a real LAN
