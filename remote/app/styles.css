@@ -494,6 +494,17 @@ input {
   font-size: 0.95rem;
 }
 
+.target-status {
+  margin: 0 0 10px;
+  min-height: 1.1em;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.target-status:empty {
+  display: none;
+}
+
 .target-actions {
   display: flex;
   gap: 8px;

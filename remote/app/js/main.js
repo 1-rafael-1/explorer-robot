@@ -22,11 +22,9 @@ const store = createStore();
 
 const radar = createRadar(byId('radar'), {
   onPick: (world, info) => {
-    if (info?.inside_robot) {
-      announce('Tap a point outside the robot footprint.', 'warn');
-      return;
-    }
-    planner.preview(world);
+    // The planner guards the drawn footprint too, so the same rule holds for
+    // any future caller, not only a radar tap.
+    planner.pick(world, { inside_robot: info?.inside_robot, scale: radar.scale });
   },
 });
 

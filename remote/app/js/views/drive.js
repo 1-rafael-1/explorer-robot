@@ -4,7 +4,7 @@
 // The planner owns the legs and their timing; this module only renders its state
 // and forwards the operator's intents.
 
-import { controlEnabled } from '../store.js';
+import { activityBusy, controlEnabled } from '../store.js';
 import { byId, setClass, setData, setHidden, setText } from './dom.js';
 
 /** Wires the drive controls. */
@@ -51,6 +51,7 @@ export function renderDrive(state) {
     setText(stop, stage === 'rotate' || stage === 'drive' ? 'Stop' : 'Stop');
   }
 
+  const waitingStage = stage === 'rotate' || stage === 'drive';
   const card = byId('target-card');
   setHidden(card, !plan);
   if (plan) {
@@ -59,8 +60,19 @@ export function renderDrive(state) {
     setText(byId('target-turn'), `${Number(plan.angle_deg).toFixed(1)}°`);
     setData(card, 'stage', stage);
     const go = byId('target-go');
-    if (go) go.disabled = !enabled;
+    if (go) {
+      go.disabled = !enabled || activityBusy(state) || waitingStage;
+      setText(go, waitingStage ? 'Waiting…' : 'Go');
+    }
     setHidden(byId('target-cancel'), stage !== 'idle');
+    setText(
+      byId('target-status'),
+      stage === 'rotate'
+        ? 'Waiting for the robot to rotate…'
+        : stage === 'drive'
+          ? 'Waiting for the robot to drive…'
+          : '',
+    );
   }
 
   setHidden(byId('drive-report'), !report);
