@@ -44,14 +44,17 @@ export function renderDrive(state) {
   const plan = state.drive?.plan;
   const report = state.drive?.report;
   const stage = state.drive?.stage ?? 'idle';
+  const stopping = state.drive?.stopping === true;
 
+  // Stop is always visible and stays offered through a live foreign claim; it
+  // is only disabled when the truth is unknown, because the app cannot send.
   const stop = byId('stop-button');
   if (stop) {
-    stop.disabled = !enabled && state.connection.state !== 'connected';
-    setText(stop, stage === 'rotate' || stage === 'drive' ? 'Stop' : 'Stop');
+    stop.disabled = !enabled;
+    setText(stop, 'Stop');
   }
 
-  const waitingStage = stage === 'rotate' || stage === 'drive';
+  const waitingStage = stopping || stage === 'rotate' || stage === 'drive';
   const card = byId('target-card');
   setHidden(card, !plan);
   if (plan) {
@@ -64,14 +67,16 @@ export function renderDrive(state) {
       go.disabled = !enabled || activityBusy(state) || waitingStage;
       setText(go, waitingStage ? 'Waiting…' : 'Go');
     }
-    setHidden(byId('target-cancel'), stage !== 'idle');
+    setHidden(byId('target-cancel'), stage !== 'idle' || stopping);
     setText(
       byId('target-status'),
-      stage === 'rotate'
-        ? 'Waiting for the robot to rotate…'
-        : stage === 'drive'
-          ? 'Waiting for the robot to drive…'
-          : '',
+      stopping
+        ? 'Stopping… the app waits for the robot’s ACK.'
+        : stage === 'rotate'
+          ? 'Waiting for the robot to rotate… Stop ends the motion.'
+          : stage === 'drive'
+            ? 'Waiting for the robot to drive… Stop ends the motion.'
+            : '',
     );
   }
 
@@ -81,6 +86,6 @@ export function renderDrive(state) {
     setText(byId('drive-report-text'), report.text ?? '');
     setData(byId('drive-report'), 'kind', report.kind ?? 'info');
   }
-  setData(byId('drive-bar'), 'stage', stage);
-  setClass(byId('drive-bar'), 'is-waiting', stage === 'rotate' || stage === 'drive');
+  setData(byId('drive-bar'), 'stage', stopping ? 'stop' : stage);
+  setClass(byId('drive-bar'), 'is-waiting', waitingStage);
 }

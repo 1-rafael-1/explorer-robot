@@ -1,18 +1,29 @@
-// The point-and-go planner: it owns the Target Point and the two-leg state
-// machine, with the command sender and the clock injected (ADR-0043).
+// The point-and-go planner: the Target Point, the two-leg state machine, the
+// completion wait and the context-sensitive Stop, with the command sender and
+// the clock injected (ADR-0043).
 //
-// Ticket 05 owns the preview and the rotate leg. The drive leg, busy handling,
-// unknown outcomes and the contextual Stop follow in ticket 06; the `afterRotate`
-// seam and the in-flight wait are written so those additions do not rewrite this.
+// Go sends `rotate_by` only when the bearing rounds to a non-zero centidegree,
+// then `drive_distance`. That is two commands and two claims: another operator
+// can take the robot between the legs, and the drive then comes back `busy` and
+// is reported without a retry. An ACK is acceptance, never the outcome; the
+// completion Event is. No Volatile Command is auto-retried, so an
+// `indeterminate` or `timeout` ACK is unknown and the operator re-issues.
 //
 // There is no distance cap, scan clamp, short-leg refusal, beyond-range warning,
 // age gate or fixed completion timeout: the robot owns motion safety, and the
 // wait ends on the completion Event, link loss, a Boot Id change, Stop or the
-// Activity leaving running.
+// Activity leaving running. A null-attribution completion is matched by leg,
+// target and the one in-flight plan.
 
 import { planLeg, pointInFootprint } from './geometry.js';
-import { ROTATE_SPEED, MANUAL_DRIVE_ID, centidegrees } from './protocol.js';
-import { activityBusy, controlEnabled, emptyDrive, latestPose } from './store.js';
+import { DRIVE_SPEED, BOOTING_ID, MANUAL_DRIVE_ID, ROTATE_SPEED, centidegrees } from './protocol.js';
+import {
+  activityBusy,
+  controlEnabled,
+  emptyDrive,
+  latestPose,
+  liveActivityId,
+} from './store.js';
 
 const RAD = Math.PI / 180;
 
@@ -28,16 +39,23 @@ function eventKey(event) {
 
 /** Creates the planner over a store, a command sender and a clock. */
 export function createPlanner({ store, send = () => 0, now = () => Date.now(), announce = () => {} } = {}) {
-  // The one in-flight rotate wait, or `null`. There is never more than one.
+  // The one in-flight plan wait, or `null`. It spans the rotate and the drive.
   let waiting = null;
+  // The one in-flight Stop wait, or `null`. Stop is idempotent but not stacked.
+  let stopWaiting = null;
 
   function setDrive(drive) {
     store.dispatch({ type: '@drive', drive });
   }
 
+  /** Whether a plan or a stop is in flight, so a new intent must wait. */
+  function busy() {
+    return waiting != null || stopWaiting != null;
+  }
+
   /** Commits a Target Point and draws its preview from the current Pose. */
   function preview(target) {
-    if (waiting) {
+    if (busy()) {
       announce('Wait for the robot to finish before choosing another point.', 'warn');
       return false;
     }
@@ -62,7 +80,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
    * allowed (ADR-0043).
    */
   function pick(point, { inside_robot = false, scale = 1 } = {}) {
-    if (waiting) {
+    if (busy()) {
       announce('Wait for the robot to finish before choosing another point.', 'warn');
       return false;
     }
@@ -94,7 +112,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
 
   /** Clears the Target Point and its preview. */
   function cancel() {
-    if (waiting) {
+    if (busy()) {
       announce('Wait for the robot to finish before cancelling the target.', 'warn');
       return;
     }
@@ -134,84 +152,149 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     };
   }
 
+  /** Builds the report for a drive completion Event: target, actual and reason. */
+  function driveCompletionReport(w, event) {
+    const value = event.v ?? {};
+    const status = value.status ?? 'ok';
+    const target = Number.isFinite(value.target_cm) ? value.target_cm : w.target_cm;
+    const actual = Number.isFinite(value.actual_cm) ? value.actual_cm : null;
+    const reason = value.detail || (status === 'ok' ? 'done' : status);
+    const title =
+      status === 'ok' ? 'Drive complete' : status === 'cancelled' ? 'Drive stopped' : 'Drive failed';
+    const kind = status === 'ok' ? 'success' : status === 'cancelled' ? 'warn' : 'bad';
+    const actualText = actual == null ? '—' : `${actual} cm`;
+    return {
+      kind,
+      title,
+      text: `Target ${target} cm, actual ${actualText} (${reason}).`,
+      status,
+      target_cm: target,
+      actual_cm: actual,
+      reason,
+    };
+  }
+
   /** Builds the report for a rejected, indeterminate or timed-out ACK. */
-  function resultReport(result) {
+  function resultReport(w, result) {
+    const leg = w.leg === 'drive' ? 'drive' : 'rotation';
+    const Leg = w.leg === 'drive' ? 'Drive' : 'Rotation';
     const unknown = result.outcome === 'indeterminate' || result.outcome === 'timeout';
     const reason = result.detail || result.status || result.outcome || 'rejected';
     if (unknown) {
       return {
         kind: 'unknown',
         title: 'Outcome unknown',
-        text: `The rotation ${result.outcome === 'timeout' ? 'timed out' : 'outcome is unknown'}; re-issue when ready.`,
+        text: `The ${leg} ${result.outcome === 'timeout' ? 'timed out' : 'outcome is unknown'}; re-issue when ready.`,
         status: result.status ?? null,
+        reason,
+      };
+    }
+    // A busy second claim is exactly what the two-claim design allows: report
+    // it and never retry.
+    if (w.leg === 'drive' && result.status === 'busy') {
+      return {
+        kind: 'busy',
+        title: 'Rotation done, drive not sent',
+        text:
+          result.detail ||
+          'The robot was busy when the drive was offered, so the drive was not accepted. No retry was sent.',
+        status: 'busy',
         reason,
       };
     }
     return {
       kind: 'bad',
-      title: 'Rotation rejected',
-      text: result.detail || `The robot rejected the rotation (${result.status ?? 'rejected'}).`,
+      title: `${Leg} rejected`,
+      text: result.detail || `The robot rejected the ${leg} (${result.status ?? 'rejected'}).`,
       status: result.status ?? null,
       reason,
     };
   }
 
-  /**
-   * Ends the in-flight wait, renders the outcome and resolves `go()`. A
-   * successful rotate passes through `afterRotate`, the seam ticket 06 fills
-   * with the drive leg.
-   */
-  function endWait(w, report, continueAfterRotate = false) {
+  /** Builds the "Stopped" report: shown only on an acked/ok Stop ACK. */
+  function stoppedReport() {
+    return {
+      kind: 'success',
+      title: 'Stopped',
+      text: 'The robot acknowledged the stop.',
+      status: 'ok',
+      reason: 'stopped',
+    };
+  }
+
+  /** Builds the honest fallback: the app cannot claim a stop without the ACK. */
+  function notConfirmedReport(result) {
+    const reason =
+      typeof result === 'string'
+        ? result
+        : result == null
+          ? 'not acknowledged'
+          : result.detail || result.status || result.outcome || 'not acknowledged';
+    return {
+      kind: 'warn',
+      title: 'Stop not confirmed',
+      text: 'Not confirmed — the robot stops on link loss.',
+      status: typeof result === 'string' ? null : (result?.status ?? null),
+      reason,
+    };
+  }
+
+  /** Ends the in-flight plan wait, renders the outcome and resolves `go()`. */
+  function endWait(w, report) {
     if (!w || waiting !== w) return;
     waiting = null;
-    w.unsubscribe();
-    const plan = store.state.drive?.plan ?? w.plan;
+    w.unsubscribe?.();
+    // A Boot Id reset clears the store's plan; keep that truth instead of
+    // resurrecting a target from a robot epoch that no longer exists.
+    const plan = store.state.drive?.plan ?? null;
     setDrive({ plan, stage: 'idle', report, sequence: w.seq });
-    const outcome = continueAfterRotate ? afterRotate(w, report) : report;
-    Promise.resolve(outcome).then((value) => w.resolve(value));
+    w.resolve(report);
   }
 
   function endForReason(w, reason, detail) {
-    const target = `Target ${angleText(w.angle)} was not confirmed.`;
+    const drive = w.leg === 'drive';
+    const subject = drive ? `Target ${w.target_cm} cm` : `Target ${angleText(w.angle)}`;
     if (reason === 'link') {
       endWait(w, {
         kind: 'warn',
         title: 'Link lost',
-        text: `${target} The rotation outcome is unknown; the robot stops on link loss.`,
+        text: `${subject} was not confirmed. The ${drive ? 'drive' : 'rotation'} outcome is unknown; the robot stops on link loss.`,
         reason: 'link lost',
       });
     } else if (reason === 'boot') {
       endWait(w, {
         kind: 'unknown',
         title: 'Outcome unknown',
-        text: `${target} The robot restarted (new Boot Id). Check it before re-issuing.`,
+        text: `${subject} was not confirmed. The robot restarted (new Boot Id). Check it before re-issuing.`,
         reason: 'Boot Id changed',
-      });
-    } else if (reason === 'stop') {
-      endWait(w, {
-        kind: 'warn',
-        title: 'Stop not confirmed',
-        text: `${target} The robot stops on link loss.`,
-        reason: 'stop requested',
       });
     } else {
       endWait(w, {
         kind: 'warn',
-        title: 'Rotation ended',
-        text: `${target} ${detail ?? 'The Activity left running before the rotation completed.'}`,
+        title: drive ? 'Drive ended' : 'Rotation ended',
+        text: `${subject} ${detail ?? `The Activity left running before the ${drive ? 'drive' : 'rotation'} completed.`}`,
         reason: 'activity ended',
       });
     }
   }
 
-  /** Finds the completion Event for this rotate, tolerating a null attribution. */
+  /**
+   * Finds the completion Event for this leg. A null attribution is matched by
+   * leg, target and the one in-flight plan; a completion from the other leg is
+   * never accepted.
+   */
   function completionFor(w, state) {
+    const name = w.leg === 'drive' ? 'drive_distance_completed' : 'rotate_completed';
     return (
       state.events.find((event) => {
         if (w.startKeys.has(eventKey(event))) return false;
-        if (event.name !== 'rotate_completed') return false;
+        if (event.name !== name) return false;
         const seq = event.v?.command_seq;
         if (seq != null) return seq === w.seq;
+        if (w.leg === 'drive') {
+          const target = event.v?.target_cm;
+          return target != null && Math.abs(target - w.target_cm) <= 1;
+        }
         const target = event.v?.target_deg;
         return target == null || Math.abs(target - w.angle) < 0.01;
       }) ?? null
@@ -231,21 +314,17 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
       endForReason(w, 'link');
       return;
     }
-    if (w.stopRequested) {
-      endForReason(w, 'stop');
-      return;
-    }
 
     const activity = state.streams.activity?.v;
     if (activity && activity.id === MANUAL_DRIVE_ID && activity.stage === 'running') {
       w.sawRunning = true;
     }
 
-    const result = state.commands[w.seq];
+    const result = w.seq == null ? null : state.commands[w.seq];
     if (result) {
       const accepted = result.outcome === 'acked' && (result.status == null || result.status === 'ok');
       if (!accepted) {
-        endWait(w, resultReport(result));
+        endWait(w, resultReport(w, result));
         return;
       }
       w.acked = true;
@@ -253,8 +332,14 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
 
     const completion = completionFor(w, state);
     if (completion && w.acked) {
-      const report = completionReport(w, completion);
-      endWait(w, report, report.status === 'ok');
+      const report =
+        w.leg === 'drive' ? driveCompletionReport(w, completion) : completionReport(w, completion);
+      if (w.leg === 'rotate') {
+        if (afterRotate(w, report)) return;
+        endWait(w, report);
+        return;
+      }
+      endWait(w, report);
       return;
     }
 
@@ -263,17 +348,77 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     }
   }
 
-  /** The seam ticket 06 fills: the drive leg follows an ok (or skipped) rotate. */
+  /**
+   * Continues a successful rotation into the drive leg. A failed or cancelled
+   * rotation never sends a drive; the rotation's own report ends the wait.
+   */
   function afterRotate(w, report) {
-    // Ticket 05 stops after the rotate. Ticket 06 sends `drive_distance` here
-    // only for an `ok` completion and reports a busy second claim without retry.
-    return report;
+    if (report.status !== 'ok') return false;
+    startDrive(w);
+    return true;
+  }
+
+  /** Sends `drive_distance` as the second claim and waits for its completion. */
+  function startDrive(w) {
+    if (!waiting || waiting !== w) return;
+    const state = store.state;
+    if (!controlEnabled(state)) {
+      endWait(w, {
+        kind: 'warn',
+        title: 'Rotation done, drive not sent',
+        text: 'The link was lost before the drive could be sent. The robot stops on link loss.',
+        reason: 'link lost',
+      });
+      return;
+    }
+
+    // The drive is a fresh claim: its own ACK, its own completion.
+    w.leg = 'drive';
+    w.acked = false;
+    w.sawRunning = false;
+    w.seq = null;
+    w.ready = false;
+    w.target_cm = Math.round(w.plan.distance_cm);
+    w.startKeys = new Set(state.events.map(eventKey));
+
+    setDrive({ plan: w.plan, stage: 'drive', report: null, sequence: null });
+    // Subscribe already exists; arm the leg before the sender can answer.
+    const seq = send('drive_distance', { distance_cm: w.target_cm, speed: DRIVE_SPEED });
+    w.seq = seq;
+    w.ready = true;
+    setDrive({ plan: w.plan, stage: 'drive', report: null, sequence: seq });
+    evaluate(w);
+  }
+
+  function makeWait(state, plan, angle) {
+    const w = {
+      plan,
+      leg: 'rotate',
+      angle,
+      target_cm: Math.round(plan.distance_cm),
+      bootId: state.bootId,
+      seq: null,
+      ready: false,
+      acked: false,
+      sawRunning: false,
+      startKeys: new Set(state.events.map(eventKey)),
+      resolve: null,
+      unsubscribe: null,
+    };
+    w.promise = new Promise((resolve) => {
+      w.resolve = resolve;
+    });
+    return w;
   }
 
   function go() {
     if (waiting) {
-      announce('A rotation is already in progress.', 'warn');
+      announce('A drive is already in progress.', 'warn');
       return waiting.promise;
+    }
+    if (stopWaiting) {
+      announce('Wait for the stop to be confirmed.', 'warn');
+      return Promise.resolve(null);
     }
     const state = store.state;
     const committed = state.drive?.plan?.target;
@@ -298,40 +443,20 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
       pose: { x: pose.x, y: pose.y, yaw: pose.yaw },
     };
 
+    // A bearing that rounds to a zero centidegree skips the rotate and sends
+    // the drive directly (ADR-0043).
     if (!leg.needs_rotate) {
-      const report = {
-        kind: 'info',
-        title: 'No rotation needed',
-        text: 'The bearing rounds to a zero centidegree, so no rotate is sent.',
-        status: 'ok',
-        target_deg: 0,
-        actual_deg: 0,
-        reason: 'already aligned',
-      };
-      setDrive({ plan, stage: 'idle', report, sequence: null });
-      announce('No rotation needed.', 'info');
-      return Promise.resolve(afterRotate({ plan, angle: 0, seq: null }, report));
+      const w = makeWait(state, plan, 0);
+      waiting = w;
+      w.unsubscribe = store.subscribe(() => evaluate(w));
+      w.ready = true;
+      startDrive(w);
+      return w.promise;
     }
 
     // The sent value is the rounded centidegree, the Relay's own precision.
     const sentAngle = centidegrees(leg.angle_deg) / 100;
-    const w = {
-      plan,
-      angle: sentAngle,
-      bootId: state.bootId,
-      seq: null,
-      ready: false,
-      acked: false,
-      sawRunning: false,
-      stopRequested: false,
-      startKeys: new Set(state.events.map(eventKey)),
-      resolve: null,
-      unsubscribe: null,
-    };
-    w.promise = new Promise((resolve) => {
-      w.resolve = resolve;
-    });
-
+    const w = makeWait(state, plan, sentAngle);
     setDrive({ plan, stage: 'rotate', report: null, sequence: null });
     waiting = w;
     w.unsubscribe = store.subscribe(() => evaluate(w));
@@ -346,17 +471,92 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     return w.promise;
   }
 
-  /**
-   * Ticket 05 only ends the wait: the contextual `stop_motion`/`stop_procedure`
-   * command and its ACK copy follow in ticket 06.
-   */
-  function stop() {
-    if (!waiting) {
-      announce('Stop is not available yet.', 'warn');
+  /** The contextual stop command: motion for a Manual Drive, procedure for a claim. */
+  function stopCommandFor(state, motion) {
+    if (motion) return { name: 'stop_motion', args: { brake: 1 } };
+    const id = liveActivityId(state);
+    // Booting is Activity-only, not a startable Procedure; Stop is idempotent.
+    if (id != null && id !== BOOTING_ID && id !== MANUAL_DRIVE_ID) {
+      return { name: 'stop_procedure', args: { id } };
+    }
+    return { name: 'stop_motion', args: { brake: 1 } };
+  }
+
+  /** Resolves the Stop wait with the ACK's verdict, never before it. */
+  function finishStop(entry, report) {
+    if (!stopWaiting || stopWaiting !== entry) return;
+    stopWaiting = null;
+    entry.unsubscribe?.();
+    // Respect a Boot Id reset that cleared the plan while the stop was in flight.
+    const plan = store.state.drive?.plan ?? null;
+    setDrive({ plan, stage: 'idle', report, sequence: entry.seq });
+    entry.resolve(report);
+    // A Stop during a plan ends that plan's wait too.
+    entry.motion?.resolve(report);
+  }
+
+  function evaluateStop(entry) {
+    if (!stopWaiting || stopWaiting !== entry || !entry.ready) return;
+    const state = store.state;
+    if (state.bootId !== entry.bootId || state.link !== 'open' || state.connection.state !== 'connected') {
+      finishStop(entry, notConfirmedReport('link lost'));
       return;
     }
-    waiting.stopRequested = true;
-    evaluate(waiting);
+    const result = entry.seq == null ? null : state.commands[entry.seq];
+    if (!result) return;
+    const stopped = result.outcome === 'acked' && (result.status == null || result.status === 'ok');
+    finishStop(entry, stopped ? stoppedReport() : notConfirmedReport(result));
+  }
+
+  /**
+   * Stops what is actually running (ADR-0043). Stop ends a motion wait, then
+   * sends the contextual command and waits for its `command_result`; "Stopped"
+   * appears only on an acked/ok ACK.
+   */
+  function stop() {
+    const state = store.state;
+    if (!controlEnabled(state)) {
+      announce('Stop is unavailable while the link or robot state is unknown.', 'warn');
+      return null;
+    }
+    if (stopWaiting) {
+      announce('A stop is already in progress.', 'info');
+      return stopWaiting.promise;
+    }
+
+    const motion = waiting;
+    const context = stopCommandFor(state, motion);
+    const plan = state.drive?.plan ?? motion?.plan ?? null;
+    // Keep the leg's stage so the store still sees the app's own claim while
+    // the stop is in flight; `stopping` is the view's extra signal.
+    const stage = motion ? motion.leg : 'idle';
+
+    if (motion) {
+      waiting = null;
+      motion.unsubscribe?.();
+    }
+
+    const entry = {
+      motion,
+      bootId: state.bootId,
+      seq: null,
+      ready: false,
+      resolve: null,
+      unsubscribe: null,
+    };
+    entry.promise = new Promise((resolve) => {
+      entry.resolve = resolve;
+    });
+    stopWaiting = entry;
+
+    setDrive({ plan, stage, report: null, sequence: null, stopping: true });
+    entry.unsubscribe = store.subscribe(() => evaluateStop(entry));
+    const seq = send(context.name, context.args);
+    entry.seq = seq;
+    entry.ready = true;
+    setDrive({ plan, stage, report: null, sequence: seq, stopping: true });
+    evaluateStop(entry);
+    return entry.promise;
   }
 
   return {
