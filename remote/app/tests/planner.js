@@ -632,4 +632,27 @@ test('a null command_seq completion is matched by leg and target, never the othe
   assertEqual(report.reason, 'Obstacle');
 });
 
+test('an Event overflow after the command ends the wait as Outcome unknown', async () => {
+  const h = make();
+  h.planner.preview({ x: 0, y: 100 });
+  const running = h.planner.go();
+
+  // The Events that would prove the outcome were dropped after the leg started.
+  h.clock.advance(1500);
+  h.store.dispatch({
+    type: 'event',
+    boot_id: null,
+    seq: null,
+    ts: 2000,
+    name: 'event_overflow',
+    v: { dropped: 3 },
+  });
+
+  const report = await running;
+  assertEqual(report.kind, 'unknown');
+  assertEqual(report.title, 'Outcome unknown');
+  assertEqual(report.reason, 'events dropped');
+  assertEqual(h.sent.map((message) => message.name), ['rotate_by'], 'no retry is sent');
+});
+
 autorun();

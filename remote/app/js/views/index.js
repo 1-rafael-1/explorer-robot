@@ -75,7 +75,8 @@ export function mountApp({ store, transport, planner, radar = createRadar(byId('
     const events = byId('events-panel');
     const bridge = byId('bridge-panel');
     if (compact) {
-      setHidden(activity, ui.tab !== 'activity');
+      // The live Activity is always visible; the tabs switch the secondary panel.
+      setHidden(activity, false);
       setHidden(events, ui.tab !== 'events');
       setHidden(bridge, ui.tab !== 'robot');
     } else {

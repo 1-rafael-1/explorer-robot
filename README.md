@@ -70,8 +70,9 @@ task watchdog. The Remote daemon implements discovery, the preamble, the Relay
 and the `/ws` boundary. The Remote App is a static SPA in `remote/app/` that the
 Relay serves at `/`: connection and pairing, the World Frame radar,
 point-and-go, Activity/Events, Bridge status and the phone-landscape layout. Its
-headless browser suite covers the pure modules, the fake socket and the real
-Relay + Bridge Stub chain (`run_web_tests.sh` and `run_real_chain.sh`); see the
+headless browser suite covers the static pages, the fake socket and the real
+Relay + Bridge Stub chain, including reload reconstruction and the Result Report
+(`run_web_tests.sh` and `run_real_chain.sh`); see the
 [Remote page](docs/components/remote.md) and the
 [app README](remote/app/README.md).
 

@@ -50,6 +50,19 @@ export function keepsShell(state) {
   );
 }
 
+/** Returns the kept-shell banner: a lost socket and a lost robot link differ. */
+export function linkBannerText(state) {
+  const honesty = 'showing the last known state.';
+  if (state.link !== 'open') return `Relay connection lost — ${honesty}`;
+  if (state.connection.state === 'reconnecting') return `Robot link lost — ${honesty}`;
+  return `Connection lost — ${honesty}`;
+}
+
+/** Formats the Relay's retry delay in seconds, keeping a half second when needed. */
+function retrySeconds(ms) {
+  return Number((Number(ms) / 1000).toFixed(1));
+}
+
 /** Renders the shell and the connection screen for `state`. */
 export function renderShell(state, ui = { tab: 'activity' }) {
   const shown = displayState(state);
@@ -60,11 +73,18 @@ export function renderShell(state, ui = { tab: 'activity' }) {
   setHidden(byId('connection-screen'), keepShell);
   setHidden(byId('shell'), !keepShell);
   setHidden(byId('link-banner'), !keepShell || connected);
+  setText(byId('link-banner'), linkBannerText(state));
   setClass(byId('shell'), 'is-stale', keepShell && !connected);
   setClass(byId('connection-screen'), 'is-pairing', shown === 'pairing_required' || shown === 'unauthorized');
 
+  const detail = state.linkDetail || state.connection.detail || copy.detail;
+  const retryCopy =
+    shown === 'busy' && state.connection.retry_in_ms != null
+      ? `The Relay will retry in ${retrySeconds(state.connection.retry_in_ms)} s.`
+      : '';
   setText(byId('connection-state'), copy.title);
-  setText(byId('connection-detail'), state.linkDetail || state.connection.detail || copy.detail);
+  setText(byId('connection-detail'), [detail, retryCopy].filter(Boolean).join(' '));
+  setText(byId('connection-robot'), state.connection.robot || 'Robot');
   setData(byId('connection-screen'), 'state', shown);
 
   setText(byId('connection-chip'), copy.chip);

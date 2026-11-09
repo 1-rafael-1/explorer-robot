@@ -15,26 +15,22 @@
 // Activity leaving running. A null-attribution completion is matched by leg,
 // target and the one in-flight plan.
 
-import { planLeg, pointInFootprint } from './geometry.js';
+import { RAD, planLeg, pointInFootprint } from './geometry.js';
 import { DRIVE_SPEED, BOOTING_ID, MANUAL_DRIVE_ID, ROTATE_SPEED, centidegrees } from './protocol.js';
 import {
   activityBusy,
   controlEnabled,
+  driveState,
   emptyDrive,
+  eventKey,
   latestPose,
   liveActivityId,
+  outcomeUnknown,
 } from './store.js';
-
-const RAD = Math.PI / 180;
 
 /** Formats an angle with one decimal, or an em dash when it is unknown. */
 function angleText(value) {
   return Number.isFinite(value) ? `${Number(value).toFixed(1)}°` : '—';
-}
-
-/** Returns the key the store uses to dedupe an Event. */
-function eventKey(event) {
-  return event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
 }
 
 /** Creates the planner over a store, a command sender and a clock. */
@@ -65,12 +61,16 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     }
     const pose = latestPose(store.state);
     const leg = planLeg(pose, target);
-    setDrive({
-      plan: { ...leg, target: { x: target.x, y: target.y }, pose: { x: pose.x, y: pose.y, yaw: pose.yaw } },
-      stage: 'idle',
-      report: null,
-      sequence: null,
-    });
+    setDrive(
+      driveState(
+        {
+          ...leg,
+          target: { x: target.x, y: target.y },
+          pose: { x: pose.x, y: pose.y, yaw: pose.yaw },
+        },
+        'idle',
+      ),
+    );
     return true;
   }
 
@@ -126,6 +126,19 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     setDrive({ ...drive, report: null });
   }
 
+  /** The status→tone cascade shared by both completion reports. */
+  function completionTone(status) {
+    return status === 'ok' ? 'success' : status === 'cancelled' ? 'warn' : 'bad';
+  }
+
+  /** The status→title cascade for a rotate or drive completion. */
+  function completionTitle(leg, status) {
+    const subject = leg === 'drive' ? 'Drive' : 'Rotation';
+    if (status === 'ok') return `${subject} complete`;
+    if (status === 'cancelled') return leg === 'drive' ? 'Drive stopped' : 'Rotation cancelled';
+    return `${subject} failed`;
+  }
+
   /** Builds the report for a rotate completion Event. */
   function completionReport(w, event) {
     const value = event.v ?? {};
@@ -134,16 +147,9 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     const error = Number.isFinite(value.error_deg) ? value.error_deg : 0;
     const actual = target + error;
     const reason = value.detail || (status === 'ok' ? 'done' : status);
-    const title =
-      status === 'ok'
-        ? 'Rotation complete'
-        : status === 'cancelled'
-          ? 'Rotation cancelled'
-          : 'Rotation failed';
-    const kind = status === 'ok' ? 'success' : status === 'cancelled' ? 'warn' : 'bad';
     return {
-      kind,
-      title,
+      kind: completionTone(status),
+      title: completionTitle('rotate', status),
       text: `Target ${angleText(target)}, actual ${angleText(actual)} (${reason}).`,
       status,
       target_deg: target,
@@ -159,13 +165,10 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     const target = Number.isFinite(value.target_cm) ? value.target_cm : w.target_cm;
     const actual = Number.isFinite(value.actual_cm) ? value.actual_cm : null;
     const reason = value.detail || (status === 'ok' ? 'done' : status);
-    const title =
-      status === 'ok' ? 'Drive complete' : status === 'cancelled' ? 'Drive stopped' : 'Drive failed';
-    const kind = status === 'ok' ? 'success' : status === 'cancelled' ? 'warn' : 'bad';
     const actualText = actual == null ? '—' : `${actual} cm`;
     return {
-      kind,
-      title,
+      kind: completionTone(status),
+      title: completionTitle('drive', status),
       text: `Target ${target} cm, actual ${actualText} (${reason}).`,
       status,
       target_cm: target,
@@ -239,6 +242,18 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     };
   }
 
+  /** Builds the honest fallback when an Event gap or overflow taints the leg. */
+  function droppedReport(w) {
+    const drive = w.leg === 'drive';
+    const subject = drive ? `Target ${w.target_cm} cm` : `Target ${angleText(w.angle)}`;
+    return {
+      kind: 'unknown',
+      title: 'Outcome unknown',
+      text: `${subject} was not confirmed. Events were dropped; re-issue when ready.`,
+      reason: 'events dropped',
+    };
+  }
+
   /** Ends the in-flight plan wait, renders the outcome and resolves `go()`. */
   function endWait(w, report) {
     if (!w || waiting !== w) return;
@@ -247,7 +262,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     // A Boot Id reset clears the store's plan; keep that truth instead of
     // resurrecting a target from a robot epoch that no longer exists.
     const plan = store.state.drive?.plan ?? null;
-    setDrive({ plan, stage: 'idle', report, sequence: w.seq });
+    setDrive(driveState(plan, 'idle', report, w.seq));
     w.resolve(report);
   }
 
@@ -343,6 +358,14 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
       return;
     }
 
+    // A gap or overflow after this leg started, with no matching completion,
+    // means the Events that would prove the outcome were dropped. Never success,
+    // and never a retry.
+    if (outcomeUnknown(state, w.startedAt) && !completion) {
+      endWait(w, droppedReport(w));
+      return;
+    }
+
     if (w.sawRunning && (!activity || activity.id !== MANUAL_DRIVE_ID || activity.stage !== 'running')) {
       endForReason(w, 'activity');
     }
@@ -379,14 +402,15 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     w.seq = null;
     w.ready = false;
     w.target_cm = Math.round(w.plan.distance_cm);
+    w.startedAt = now();
     w.startKeys = new Set(state.events.map(eventKey));
 
-    setDrive({ plan: w.plan, stage: 'drive', report: null, sequence: null });
+    setDrive(driveState(w.plan, 'drive'));
     // Subscribe already exists; arm the leg before the sender can answer.
     const seq = send('drive_distance', { distance_cm: w.target_cm, speed: DRIVE_SPEED });
     w.seq = seq;
     w.ready = true;
-    setDrive({ plan: w.plan, stage: 'drive', report: null, sequence: seq });
+    setDrive(driveState(w.plan, 'drive', null, seq));
     evaluate(w);
   }
 
@@ -401,6 +425,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
       ready: false,
       acked: false,
       sawRunning: false,
+      startedAt: now(),
       startKeys: new Set(state.events.map(eventKey)),
       resolve: null,
       unsubscribe: null,
@@ -457,7 +482,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     // The sent value is the rounded centidegree, the Relay's own precision.
     const sentAngle = centidegrees(leg.angle_deg) / 100;
     const w = makeWait(state, plan, sentAngle);
-    setDrive({ plan, stage: 'rotate', report: null, sequence: null });
+    setDrive(driveState(plan, 'rotate'));
     waiting = w;
     w.unsubscribe = store.subscribe(() => evaluate(w));
 
@@ -466,7 +491,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     const seq = send('rotate_by', { angle_deg: sentAngle, speed: ROTATE_SPEED });
     w.seq = seq;
     w.ready = true;
-    setDrive({ plan, stage: 'rotate', report: null, sequence: seq });
+    setDrive(driveState(plan, 'rotate', null, seq));
     evaluate(w);
     return w.promise;
   }
@@ -489,7 +514,7 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     entry.unsubscribe?.();
     // Respect a Boot Id reset that cleared the plan while the stop was in flight.
     const plan = store.state.drive?.plan ?? null;
-    setDrive({ plan, stage: 'idle', report, sequence: entry.seq });
+    setDrive(driveState(plan, 'idle', report, entry.seq));
     entry.resolve(report);
     // A Stop during a plan ends that plan's wait too.
     entry.motion?.resolve(report);
@@ -549,12 +574,12 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
     });
     stopWaiting = entry;
 
-    setDrive({ plan, stage, report: null, sequence: null, stopping: true });
+    setDrive({ ...driveState(plan, stage), stopping: true });
     entry.unsubscribe = store.subscribe(() => evaluateStop(entry));
     const seq = send(context.name, context.args);
     entry.seq = seq;
     entry.ready = true;
-    setDrive({ plan, stage, report: null, sequence: seq, stopping: true });
+    setDrive({ ...driveState(plan, stage, null, seq), stopping: true });
     evaluateStop(entry);
     return entry.promise;
   }

@@ -94,12 +94,23 @@ class DevToolsPipe:
             return item.get("result", {})
 
     def evaluate(self, session_id: str, expression: str) -> object:
-        result = self.call(
+        response = self.call(
             "Runtime.evaluate",
             {"expression": expression, "returnByValue": True},
             session_id,
         )
-        return result.get("result", {}).get("value")
+        # A page exception must fail the run immediately, not look like an
+        # attribute that never settles. `Runtime.evaluate` reports it beside
+        # the result, so surface the description with the expression.
+        exception = response.get("exceptionDetails")
+        if exception is not None:
+            description = (
+                (exception.get("exception") or {}).get("description")
+                or exception.get("text")
+                or "unknown page exception"
+            )
+            raise RuntimeError(f"page exception evaluating {expression!r}: {description}")
+        return response.get("result", {}).get("value")
 
 
 def start_chrome(chrome: str, user_data_dir: str) -> tuple[subprocess.Popen, int, int]:

@@ -218,9 +218,19 @@ test('a second connection reconstructs the snapshot, Streams and replayed Events
     );
     assert(state.eventCursor != null && state.eventCursor > 0, 'the snapshot carries the Event cursor');
     assert(state.events.length >= 2, 'the replayed Events survive the reload');
-    // The stub's activity is Idle, so the real snapshot carries no terminal
-    // Activity. This asserts the real value rather than inventing a report.
-    assertEqual(state.lastTerminal, null, 'the stub reports no terminal Activity');
+    // The stub's activity Stream is Idle, so the real snapshot's
+    // `last_terminal` is null. The scripted `procedure_completed` Event
+    // (COAST_AND_AVOID `0x0005`, stage `complete`, detail `done`) is replayed
+    // with the snapshot, and the store reconstructs the Result Report from it.
+    await waitFor(
+      () => reload.store.state.events.some((event) => event.name === 'procedure_completed'),
+      'the replayed procedure_completed Event',
+    );
+    const terminal = reload.store.state.lastTerminal;
+    assert(terminal != null, 'the replayed procedure_completed reconstructs the Result Report');
+    assertEqual(terminal.v?.id, 0x0005, 'the Result Report names COAST_AND_AVOID');
+    assertEqual(terminal.v?.stage, 'complete', 'the Result Report holds the terminal stage');
+    assertEqual(terminal.v?.detail, 'done', 'the Result Report keeps the stub detail');
   } finally {
     reload.transport.stop();
   }

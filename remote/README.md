@@ -39,15 +39,17 @@ The headless browser suite lives under `app/tests/` and runs from the repository
 root with no Node or npm:
 
 ```sh
-.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_web_tests.sh     # app boot smoke + every static test page
 .github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
 ```
 
 The real-chain script builds `remote-daemon` and `bridge-stub`, starts a
-`bridge-stub` with scripted Streams/Events, writes a temporary config with the
-stub's `bench-token`, and runs the daemon with `--assets app --port 0`. See the
-[app README](app/README.md) for the module map, the test pages and the manual
-matrix.
+`bridge-stub` with scripted Streams and `obstacle`/`floor_drop`/
+`procedure_completed` Events, writes a temporary config with the stub's
+`bench-token`, and runs the daemon with `--assets app --port 0`. The real page
+checks reload reconstruction, including the Result Report rebuilt from the
+replayed `procedure_completed`. See the [app README](app/README.md) for the
+module map, the test pages and the manual matrix.
 
 ## Common commands
 

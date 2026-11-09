@@ -42,7 +42,7 @@ rest from the App Snapshot.
 ## Test it
 
 The gate is headless Chrome, with no Node, npm or bundler (see the spec's
-Testing Decisions). There are three kinds of page under `tests/`:
+Testing Decisions). Each page under `tests/` drives one seam:
 
 | page | seam | what it covers |
 |---|---|---|
@@ -54,7 +54,7 @@ Testing Decisions). There are three kinds of page under `tests/`:
 | `pairing.html` | injected socket + DOM | auth/pair, 4401, protocol mismatch and the pairing screens |
 | `bridge.html` | none | the Bridge Status message, chip and Robot/Link panel |
 | `accessible.html` | real markup | focus order, targets, contrast tokens and the compact/phone layout |
-| `real.html` | the real `/ws` | the live Relay + Bridge Stub: discovery, Session, App Snapshot, Streams, Events, point-and-go ACKs, Stop and reload reconstruction |
+| `real.html` | the real `/ws` | the live Relay + Bridge Stub: discovery, Session, App Snapshot, Streams, Events, point-and-go ACKs, Stop, and the reload that reconstructs the Result Report from the replayed `procedure_completed` |
 
 The static suite (and the app boot smoke) is the CI `web` job:
 
@@ -74,8 +74,9 @@ The real chain is its own script:
 ```
 
 It builds `remote-daemon` and `bridge-stub` from `remote/`, starts the stub with
-fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop` Events,
-writes a temporary daemon config with the stub's `bench-token`, starts
+fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop`/
+`procedure_completed` Events, writes a temporary daemon config with the stub's
+`bench-token`, starts
 `remote-daemon --no-open --assets app --port 0`, waits for `GET /` and the CSP
 header, then drives the real page. `run_real_chain.sh` also loads `/` itself and
 asserts `data-boot="ok"`, which is the embedded/`--assets` boot check; the
@@ -151,8 +152,10 @@ Still manual:
   bench-confirmable.
 - The Relay's timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are
   provisional until a real LAN and phone exercise them.
-- The real chain performs the two drive legs as separate `go()` calls (a
-  rotate-only leg and a zero-bearing drive leg) because the Bridge Stub does not
-  script a completion Event; the planner's rotate-then-drive completion path is
-  covered by `tests/planner.html`.
+- The real chain performs one rotate leg and one zero-bearing drive leg as
+  separate `go()` calls; the Bridge Stub scripts `procedure_completed` but no
+  drive/rotate completion, so the waits end on Stop while the planner's
+  rotate-then-drive completion path is covered by `tests/planner.html`. The
+  scripted `procedure_completed` is replayed after a reload, and the test
+  asserts the Result Report reconstructed from it.
 - The test pages ship inside the embedded folder, unlinked from the app.

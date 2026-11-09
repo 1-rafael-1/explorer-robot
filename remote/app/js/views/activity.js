@@ -1,7 +1,8 @@
 // The one Activity truth: a live card, a Result Report, a Stopped card or Idle.
 // Labels come from the Catalogue except Idle, Booting and Manual Drive (ADR-0038).
 
-import { activityLabel, activityView } from '../store.js';
+import { labelForActivity } from '../protocol.js';
+import { activityView } from '../store.js';
 import { byId, formatAge, setClass, setData, setHidden, setText } from './dom.js';
 import { STREAM_STALE_MS } from './streams.js';
 
@@ -14,7 +15,7 @@ export function bindActivity({ dismiss = () => {} } = {}) {
 /** Renders the Activity card for `state`. */
 export function renderActivity(state) {
   const view = activityView(state);
-  const label = view.kind === 'idle' ? 'Idle' : activityLabel(state, view.data.id);
+  const label = view.kind === 'idle' ? 'Idle' : labelForActivity(view.data.id, state.catalogue);
   const panel = byId('activity-panel');
 
   setData(panel, 'kind', view.kind);

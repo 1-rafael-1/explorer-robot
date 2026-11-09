@@ -6,7 +6,10 @@
 // from the heading (slot 0 ahead); `first_deg`, `step_deg` and `clockwise` are
 // honoured even though v1 always sends 0/1/true.
 
-const RAD = Math.PI / 180;
+import { centidegrees, needsRotate } from './protocol.js';
+
+/** The one degree/radian conversion the geometry and the renderer share. */
+export const RAD = Math.PI / 180;
 
 /** The robot's provisional world footprint, in centimetres (ADR-0043). */
 export const FOOTPRINT = Object.freeze({ halfLengthCm: 9, halfWidthCm: 7 });
@@ -73,15 +76,14 @@ export function planLeg(pose, target) {
   const distance = distanceCm(pose, target);
   const bearing = bearingDeg(pose, target);
   const angle = relativeBearingDeg(pose, target);
-  const centi = Math.round(angle * 100);
   return {
     target: { x: target.x, y: target.y },
     pose: { x: pose.x, y: pose.y, yaw: pose.yaw },
     distance_cm: distance,
     bearing_deg: bearing,
     angle_deg: angle,
-    rotate_centideg: centi,
-    needs_rotate: centi !== 0,
+    rotate_centideg: centidegrees(angle),
+    needs_rotate: needsRotate(angle),
   };
 }
 

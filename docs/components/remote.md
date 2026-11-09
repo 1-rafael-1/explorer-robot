@@ -10,10 +10,13 @@ the commands below.
 **Verified:** 2026-11-09 — from `remote/`: `cargo +nightly fmt --all -- --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 (every suite `ok`, 0 failed) and `cargo build --workspace` (exit 0); from the
-repository root: `.github/scripts/run_web_tests.sh` (the pure, fake-socket and
-accessibility pages), `.github/scripts/run_real_chain.sh` (the real Relay +
-Bridge Stub page and the `/` boot check) and
-`python3 .github/scripts/check_links.py`. A headless Chrome boot smoke at the
+repository root: `.github/scripts/run_web_tests.sh` (the app boot smoke and the
+static pages: pure, state, radar, planner, fake socket, pairing, bridge and
+accessibility), `.github/scripts/run_real_chain.sh` (the real Relay + Bridge
+Stub page, including the scripted `procedure_completed` Event and the Result
+Report reconstructed from it, plus the `/` boot check) and
+`python3 .github/scripts/check_links.py` (29 Markdown files, 376 links, all
+resolve). A headless Chrome boot smoke at the
 844×390 phone-landscape viewport reported `data-boot="ok"`, and a headless
 Firefox 844×390 render smoke produced a screenshot; neither is a manual matrix
 or touch pass. The manual Firefox, LAN and real-phone steps are listed under
@@ -220,18 +223,20 @@ wire. The full module map and test commands are in the
 Stub, not the fake socket. From the repository root:
 
 ```sh
-.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_web_tests.sh     # app boot smoke + every static test page
 .github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
 ```
 
 `run_real_chain.sh` builds `remote-daemon` and `bridge-stub`, starts the stub with
-fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop` Events,
-writes a temporary config with the stub's `bench-token`, starts the daemon at
-`--assets app --port 0`, waits for `GET /` and the CSP header, then renders
-`tests/real.html`. The page asserts discovery/Session/`connection.connected`, the
-App Snapshot, at least one Stream, the scripted Events, the `rotate_by` and
-`drive_distance` ACKs, `stop_motion` and the Stopped report, a second connection's
-snapshot/replayed Events/event cursor, and `GET /` with the strict CSP. The runner
+fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop`/
+`procedure_completed` Events, writes a temporary config with the stub's
+`bench-token`, starts the daemon at `--assets app --port 0`, waits for `GET /` and
+the CSP header, then renders `tests/real.html`. The page asserts
+discovery/Session/`connection.connected`, the App Snapshot, at least one Stream,
+the scripted Events, the `rotate_by` and `drive_distance` ACKs, `stop_motion` and
+the Stopped report, a second connection's snapshot/replayed Events/event cursor
+and the Result Report reconstructed from the replayed `procedure_completed`
+(`COAST_AND_AVOID`, stage `complete`), and `GET /` with the strict CSP. The runner
 also asserts `data-boot="ok"` at `/`; the ADR-0039 `frame-ancestors 'none'` CSP
 blocks the same check in a same-origin iframe. Because the page finishes over a
 real WebSocket, the runner polls the page's `data-*` attribute with a
@@ -255,19 +260,21 @@ cd remote && cargo run -p remote-daemon -- --no-open --assets app
 ```
 
 The Remote App and its behaviour are described above. The headless Chrome suite
-(the CI `web` job) serves the folder same-origin and runs the pure and
-fake-socket pages; `run_real_chain.sh` adds the real Relay + Bridge Stub page.
-See the [app README](../../remote/app/README.md) for the module map and the
-three test pages.
+(the CI `web` job) serves the folder same-origin and runs the app boot smoke and
+every static page (pure, state, radar, planner, fake socket, pairing, bridge and
+accessibility); `run_real_chain.sh` adds the real Relay + Bridge Stub page and
+the `/` boot check. See the [app README](../../remote/app/README.md) for the
+module map and the test pages.
 
 ## Acceptance and known limits
 
 The spec's acceptance is demonstrated by the suite above: connection and
 pairing (fake socket), live state, Events and Activity (state/fake pages), the
 World Frame radar (radar page), point-and-go and Stop (planner page and the real
-chain ACKs), Bridge status (bridge page), the accessible layout (accessible
-page), and the real chain from discovery through `/ws`. Still manual or
-provisional:
+chain ACKs), the reload that reconstructs the snapshot and the Result Report
+from the replayed `procedure_completed` (real chain), Bridge status (bridge
+page), the accessible layout (accessible page), and the real chain from
+discovery through `/ws`. Still manual or provisional:
 
 - The real-phone pinch and pan pass remains the one open acceptance item; the
   844×390 and 422 px checks are layout checks, not touch tests.

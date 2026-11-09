@@ -24,16 +24,24 @@ if [[ -z "$chrome_bin" ]]; then
   exit 1
 fi
 
-port_file="$(mktemp)"
-server_log="$(mktemp)"
-python3 "$root/.github/scripts/serve_app.py" "$app" >"$port_file" 2>"$server_log" &
-server_pid=$!
+# One temporary work directory holds the port file and the server log, and the
+# trap is installed before the server starts so a later failure cannot leak it.
+work="$(mktemp -d)"
+port_file="$work/port"
+server_log="$work/server.log"
+server_pid=""
+
 cleanup() {
-  kill "$server_pid" 2>/dev/null || true
-  wait "$server_pid" 2>/dev/null || true
-  rm -f "$port_file" "$server_log"
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  rm -rf "$work"
 }
 trap cleanup EXIT
+
+python3 "$root/.github/scripts/serve_app.py" "$app" >"$port_file" 2>"$server_log" &
+server_pid=$!
 
 for _ in $(seq 1 100); do
   [[ -s "$port_file" ]] && break

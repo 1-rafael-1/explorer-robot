@@ -7,6 +7,11 @@
 
 import { BOOTING_ID, EVENT_LIMIT, IDLE_ID, labelForActivity } from './protocol.js';
 
+/** Returns the key used to dedupe an Event: `(boot_id, seq)` or a notice's timestamp. */
+export function eventKey(event) {
+  return event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
+}
+
 /** Returns a fresh initial state. */
 export function initialState() {
   return {
@@ -28,6 +33,7 @@ export function initialState() {
     eventCursor: null,
     seenEventSeq: 0,
     lastTerminal: null,
+    resultDismissed: false,
     catalogue: [],
     bridge: null,
     commands: {},
@@ -35,18 +41,18 @@ export function initialState() {
     eventGap: false,
     eventGapAt: null,
     overflowAt: null,
-    drive: { plan: null, stage: 'idle', report: null, sequence: null },
+    drive: driveState(),
   };
+}
+
+/** Builds one drive state from its parts. */
+export function driveState(plan = null, stage = 'idle', report = null, sequence = null) {
+  return { plan, stage, report, sequence };
 }
 
 /** An empty drive state. */
 export function emptyDrive() {
-  return { plan: null, stage: 'idle', report: null, sequence: null };
-}
-
-/** Returns the label for an Activity id using the current Catalogue. */
-export function activityLabel(state, id) {
-  return labelForActivity(id, state.catalogue);
+  return driveState();
 }
 
 /** Returns the latest pose: identity until a reserved `pose` stream lands. */
@@ -104,10 +110,12 @@ export function activityView(state) {
       ts: state.activityStopped.ts ?? null,
     };
   }
-  if (state.lastTerminal) {
+  // A dismissed Result Report stays dismissed, including the terminal-stream
+  // fallback, until a new Activity or terminal Event arrives.
+  if (!state.resultDismissed && state.lastTerminal) {
     return { kind: 'result', data: state.lastTerminal.v, ts: state.lastTerminal.ts ?? null };
   }
-  if (live && live.id !== IDLE_ID) {
+  if (!state.resultDismissed && live && live.id !== IDLE_ID) {
     return { kind: 'result', data: live, ts: entry?.ts ?? null };
   }
   return {
@@ -207,9 +215,9 @@ export function markEventsSeen(state) {
   return { ...state, seenEventSeq: top };
 }
 
-/** Clears the Result Report and the Stopped card. */
+/** Clears the Result Report and the Stopped card, and keeps them dismissed. */
 export function dismissReport(state) {
-  return { ...state, lastTerminal: null, activityStopped: null };
+  return { ...state, lastTerminal: null, activityStopped: null, resultDismissed: true };
 }
 
 /** Returns the active drive stage, or `idle`. */
@@ -230,16 +238,11 @@ function resetForBoot(state, bootId, bridge) {
     connection: { ...state.connection, boot_id: bootId },
     bridge: bridge ?? state.bridge,
     drive: wasActive
-      ? {
-          plan: null,
-          stage: 'idle',
-          sequence: null,
-          report: {
-            kind: 'unknown',
-            title: 'Outcome unknown',
-            text: 'The robot restarted (new Boot Id). Check it before re-issuing.',
-          },
-        }
+      ? driveState(null, 'idle', {
+          kind: 'unknown',
+          title: 'Outcome unknown',
+          text: 'The robot restarted (new Boot Id). Check it before re-issuing.',
+        })
       : emptyDrive(),
   };
 }
@@ -247,9 +250,7 @@ function resetForBoot(state, bootId, bridge) {
 /** Merges Events by `(boot_id, seq)`, keeping a bounded, ordered replay. */
 function mergeEvents(state, incoming) {
   if (!Array.isArray(incoming) || incoming.length === 0) return state;
-  const keyOf = (event) =>
-    event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
-  const seen = new Set(state.events.map(keyOf));
+  const seen = new Set(state.events.map(eventKey));
   const ordered = [...incoming].sort(
     (a, b) => (a.ts ?? 0) - (b.ts ?? 0) || (a.seq ?? 0) - (b.seq ?? 0),
   );
@@ -269,7 +270,7 @@ function mergeEvents(state, incoming) {
   );
 
   for (const event of ordered) {
-    const key = keyOf(event);
+    const key = eventKey(event);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(event);
@@ -351,6 +352,37 @@ function applyConnection(state, message) {
   };
 }
 
+/** Builds the Result Report entry shape from a `procedure_completed` Event. */
+function terminalFromEvent(event) {
+  return {
+    name: 'activity',
+    seq: 0,
+    ts: event.ts,
+    v: {
+      id: event.v?.id ?? 0,
+      stage: event.v?.stage ?? 'complete',
+      percent: null,
+      detail: event.v?.detail ?? '',
+    },
+  };
+}
+
+/** Returns the newest replayed `procedure_completed` Event, or `null`. */
+function newestTerminalEvent(events) {
+  let newest = null;
+  for (const event of events ?? []) {
+    if (event?.name !== 'procedure_completed') continue;
+    if (
+      !newest ||
+      (event.ts ?? 0) > (newest.ts ?? 0) ||
+      ((event.ts ?? 0) === (newest.ts ?? 0) && (event.seq ?? 0) > (newest.seq ?? 0))
+    ) {
+      newest = event;
+    }
+  }
+  return newest;
+}
+
 function applySnapshot(state, message) {
   let next = state;
   if (message.boot_id != null && state.bootId != null && message.boot_id !== state.bootId) {
@@ -361,16 +393,22 @@ function applySnapshot(state, message) {
   for (const entry of message.streams ?? []) {
     if (entry?.name) streams[entry.name] = entry;
   }
+  const events = message.events ?? [];
+  // The Relay's last terminal is authoritative; when it is absent, a replayed
+  // completion Event still reconstructs the Result Report after a reload.
+  const replayedTerminal = newestTerminalEvent(events);
+  const lastTerminal =
+    message.last_terminal ?? (replayedTerminal ? terminalFromEvent(replayedTerminal) : null);
   const merged = mergeEvents(
     {
       ...next,
       bootId,
       streams,
-      lastTerminal: message.last_terminal ?? null,
+      lastTerminal,
       catalogue: message.catalogue?.procedures ?? [],
       bridge: message.bridge ?? next.bridge,
     },
-    message.events ?? [],
+    events,
   );
   return {
     ...merged,
@@ -388,6 +426,12 @@ function applySnapshot(state, message) {
   };
 }
 
+/** Returns whether an Event is a terminal completion for the Activity `id`. */
+function isTerminalCompletion(event, id) {
+  if (event.name === 'procedure_completed') return event.v?.id === id;
+  return event.name === 'drive_distance_completed' || event.name === 'rotate_completed';
+}
+
 function applyStream(state, message) {
   if (!message?.name) return state;
   const previous = state.streams[message.name];
@@ -400,9 +444,11 @@ function applyStream(state, message) {
     const after = message.v;
     if (after && after.id !== IDLE_ID && after.stage === 'running') {
       const started = !before || before.id !== after.id || before.stage !== 'running';
-      if (started) next = { ...next, activityStopped: null, lastTerminal: null };
+      if (started) {
+        next = { ...next, activityStopped: null, lastTerminal: null, resultDismissed: false };
+      }
     } else if (after && after.id !== IDLE_ID && (after.stage === 'complete' || after.stage === 'failed')) {
-      next = { ...next, lastTerminal: entry, activityStopped: null };
+      next = { ...next, lastTerminal: entry, activityStopped: null, resultDismissed: false };
     } else if (
       after &&
       after.id === IDLE_ID &&
@@ -412,15 +458,13 @@ function applyStream(state, message) {
     ) {
       const completed = state.events.some(
         (event) =>
-          event.name === 'procedure_completed' &&
-          event.v?.id === before.id &&
-          (event.ts ?? 0) >= (previous.ts ?? 0) - 5000,
+          isTerminalCompletion(event, before.id) && (event.ts ?? 0) >= (previous.ts ?? 0) - 5000,
       );
       next = {
         ...next,
         activityStopped: completed
           ? null
-          : { id: before.id, label: activityLabel(state, before.id), ts: message.ts },
+          : { id: before.id, label: labelForActivity(before.id, state.catalogue), ts: message.ts },
       };
     }
   }
@@ -431,12 +475,8 @@ function applyEvent(state, message) {
   if (message?.boot_id != null && state.bootId != null && message.boot_id !== state.bootId) {
     return state;
   }
-  const key =
-    message.boot_id == null ? `notice:${message.ts}` : `${message.boot_id}:${message.seq}`;
-  const exists = state.events.some(
-    (event) =>
-      (event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`) === key,
-  );
+  const key = eventKey(message);
+  const exists = state.events.some((event) => eventKey(event) === key);
   if (exists) return state;
 
   const topSeq = Math.max(
@@ -461,22 +501,13 @@ function applyEvent(state, message) {
   if (message.name === 'procedure_completed') {
     next = {
       ...next,
-      lastTerminal: {
-        name: 'activity',
-        seq: 0,
-        ts: message.ts,
-        v: {
-          id: message.v?.id ?? 0,
-          stage: message.v?.stage ?? 'complete',
-          percent: null,
-          detail: message.v?.detail ?? '',
-        },
-      },
+      lastTerminal: terminalFromEvent(message),
       activityStopped: null,
+      resultDismissed: false,
     };
   }
   if (message.name === 'drive_distance_completed' || message.name === 'rotate_completed') {
-    next = { ...next, activityStopped: null };
+    next = { ...next, activityStopped: null, resultDismissed: false };
   }
   return next;
 }

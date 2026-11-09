@@ -168,6 +168,7 @@ test('the ids and live regions the modules bind are present', async () => {
     'app',
     'connection-screen',
     'connection-chip',
+    'connection-robot',
     'shell',
     'link-banner',
     'battery-level',
@@ -315,21 +316,23 @@ test('Escape closes Robot and never triggers Stop', async () => {
   assertEqual(calls.stop, 0, 'Escape never sent Stop');
 });
 
-test('the compact tabs show one panel at a time', async () => {
+test('the compact tabs keep Activity visible and switch the secondary panel', async () => {
   await mountRealMarkup();
   const activity = document.getElementById('activity-panel');
   const events = document.getElementById('events-panel');
   const bridge = document.getElementById('bridge-panel');
   document.getElementById('tab-events').click();
-  assert(events.hidden === false, 'Events is the sheet');
-  assert(activity.hidden, 'Activity is hidden');
+  assert(events.hidden === false, 'Events is the secondary panel');
+  assert(activity.hidden === false, 'Activity stays visible');
   assert(bridge.hidden, 'Robot / Link is hidden');
   document.getElementById('tab-robot').click();
-  assert(bridge.hidden === false, 'Robot / Link is the sheet');
+  assert(bridge.hidden === false, 'Robot / Link is the secondary panel');
   assert(events.hidden, 'Events is hidden');
+  assert(activity.hidden === false, 'Activity stays visible');
   document.getElementById('tab-activity').click();
-  assert(activity.hidden === false, 'Activity is the sheet again');
+  assert(activity.hidden === false, 'Activity stays visible');
   assert(bridge.hidden, 'Robot / Link is hidden again');
+  assert(events.hidden, 'Events is hidden again');
 });
 
 test('every control keeps at least a 34x34 CSS px target', async () => {

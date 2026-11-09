@@ -1,6 +1,5 @@
 import {
   activityBusy,
-  activityLabel,
   activityView,
   apply,
   controlEnabled,
@@ -15,6 +14,7 @@ import {
   powerView,
   unreadEvents,
 } from '../js/store.js';
+import { labelForActivity } from '../js/protocol.js';
 import { assert, assertEqual, autorun, test } from './harness.js';
 
 const CATALOGUE = {
@@ -283,7 +283,99 @@ test('the last terminal Activity is a Result Report after a reload', () => {
   assertEqual(view.kind, 'result');
   assertEqual(view.data.stage, 'failed');
   assertEqual(view.data.detail, 'Link lost');
-  assertEqual(activityLabel(state, 5), 'Coast and Avoid');
+  assertEqual(labelForActivity(5, state.catalogue), 'Coast and Avoid');
+});
+
+test('a snapshot reconstructs the last terminal from a replayed completion Event', () => {
+  const state = apply(
+    initialState(),
+    snapshot({
+      streams: [],
+      last_terminal: null,
+      catalogue: CATALOGUE,
+      events: [
+        event(1, 10, 'obstacle', { detected: true, source: 'lidar' }),
+        event(2, 20, 'procedure_completed', { id: 5, stage: 'complete', detail: 'done' }),
+        event(3, 30, 'procedure_completed', { id: 6, stage: 'failed', detail: 'stalled' }),
+      ],
+      event_cursor: 3,
+    }),
+  );
+
+  const view = activityView(state);
+  assertEqual(view.kind, 'result', 'the replayed completion is a Result Report');
+  assertEqual(view.data.id, 6, 'the newest replayed completion wins');
+  assertEqual(view.data.stage, 'failed');
+  assertEqual(view.data.detail, 'stalled');
+  assertEqual(state.lastTerminal.seq, 0, 'the reconstructed entry uses the Event shape');
+
+  const authoritative = apply(
+    initialState(),
+    snapshot({
+      last_terminal: {
+        name: 'activity',
+        seq: 4,
+        ts: 40,
+        v: { id: 5, stage: 'complete', percent: 100, detail: 'from the Relay' },
+      },
+      events: [event(3, 30, 'procedure_completed', { id: 6, stage: 'failed', detail: 'stale' })],
+      event_cursor: 4,
+    }),
+  );
+  assertEqual(activityView(authoritative).data.id, 5, 'the Relay last_terminal stays authoritative');
+  assertEqual(activityView(authoritative).data.detail, 'from the Relay');
+});
+
+test('a dismissed Result Report stays dismissed until a new Activity or terminal Event', () => {
+  let state = apply(initialState(), snapshot({ catalogue: CATALOGUE }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 1,
+    ts: 10,
+    v: { id: 5, stage: 'running', percent: 10, detail: '' },
+  });
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 2,
+    ts: 20,
+    v: { id: 5, stage: 'complete', percent: 100, detail: 'done' },
+  });
+  assertEqual(activityView(state).kind, 'result');
+
+  state = apply(state, { type: '@dismiss' });
+  assertEqual(activityView(state).kind, 'idle', 'Dismiss clears the Result Report');
+
+  state = apply(state, {
+    type: 'stream',
+    name: 'power',
+    seq: 1,
+    ts: 30,
+    v: { level: 50, voltage_mv: 12000 },
+  });
+  assertEqual(activityView(state).kind, 'idle', 'an unrelated Stream does not resurrect it');
+
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 3,
+    ts: 40,
+    v: { id: 6, stage: 'running', percent: 5, detail: '' },
+  });
+  assertEqual(activityView(state).kind, 'live', 'a new running Activity replaces it');
+
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 4,
+    ts: 50,
+    v: { id: 6, stage: 'failed', percent: 100, detail: 'stalled' },
+  });
+  state = apply(state, { type: '@dismiss' });
+  state = apply(state, event(1, 60, 'procedure_completed', { id: 6, stage: 'complete', detail: 'ok' }));
+  assertEqual(activityView(state).kind, 'result', 'a new terminal Event ends the dismissal');
+  assertEqual(activityView(state).data.stage, 'complete');
 });
 
 test('a terminal Activity stream or completion Event renders the Result Report', () => {
@@ -351,7 +443,30 @@ test('running to idle without a terminal stage or Event renders Stopped', () => 
   assert(state.activityStopped, 'leaving running without a terminal stage is Stopped');
   assertEqual(activityView(state).kind, 'stopped', 'the new Stopped card wins over the older Result Report');
   assertEqual(activityView(state).data.stage, 'stopped');
-  assertEqual(activityLabel(state, 5), 'Coast and Avoid');
+  assertEqual(labelForActivity(5, state.catalogue), 'Coast and Avoid');
+});
+
+test('a drive or rotate completion Event prevents a false Stopped card', () => {
+  let state = apply(
+    initialState(),
+    snapshot({
+      catalogue: CATALOGUE,
+      streams: [
+        { name: 'activity', seq: 1, ts: 10, v: { id: 0x000d, stage: 'running', percent: null, detail: '' } },
+      ],
+    }),
+  );
+  state = apply(state, event(1, 15, 'drive_distance_completed', { target_cm: 100, actual_cm: 100 }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 2,
+    ts: 20,
+    v: { id: 0, stage: 'running', percent: null, detail: '' },
+  });
+
+  assertEqual(state.activityStopped, null, 'the drive completion is terminal');
+  assertEqual(activityView(state).kind, 'idle', 'a successful Manual Drive never shows Stopped');
 });
 
 test('Event gaps and overflow notices make a live outcome unknown', () => {
@@ -380,12 +495,12 @@ test('Event gaps and overflow notices make a live outcome unknown', () => {
 
 test('Activity labels come from the Catalogue except Idle, Booting and Manual Drive', () => {
   const state = apply(initialState(), snapshot({ catalogue: CATALOGUE }));
-  assertEqual(activityLabel(state, 0), 'Idle');
-  assertEqual(activityLabel(state, 1), 'Booting');
-  assertEqual(activityLabel(state, 0x000d), 'Manual Drive');
-  assertEqual(activityLabel(state, 5), 'Coast and Avoid');
-  assertEqual(activityLabel(state, 6), 'Dock');
-  assertEqual(activityLabel(state, 99), 'Activity 0x0063');
+  assertEqual(labelForActivity(0, state.catalogue), 'Idle');
+  assertEqual(labelForActivity(1, state.catalogue), 'Booting');
+  assertEqual(labelForActivity(0x000d, state.catalogue), 'Manual Drive');
+  assertEqual(labelForActivity(5, state.catalogue), 'Coast and Avoid');
+  assertEqual(labelForActivity(6, state.catalogue), 'Dock');
+  assertEqual(labelForActivity(99, state.catalogue), 'Activity 0x0063');
   assert(Array.isArray(state.catalogue), 'the app keeps the Catalogue array, not a Procedure table');
 });
 

@@ -79,6 +79,7 @@ echo "starting bridge-stub"
   --stream activity:100 \
   --event obstacle \
   --event floor_drop \
+  --event procedure_completed \
   >"$stub_log" 2>&1 &
 stub_pid=$!
 

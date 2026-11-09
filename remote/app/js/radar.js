@@ -9,6 +9,8 @@
 // point today, but the seam is written honestly for odometry.
 
 import {
+  IDENTITY_POSE,
+  RAD,
   STALE_MS,
   cameraView,
   fitScale,
@@ -26,8 +28,6 @@ import { latestPose } from './store.js';
 import { byId, setData, setText } from './views/dom.js';
 
 export { STALE_MS };
-
-const RAD = Math.PI / 180;
 
 const COLOR = Object.freeze({
   bg: '#0b0f14',
@@ -59,16 +59,16 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
         return 1;
       },
       get pose() {
-        return { x: 0, y: 0, yaw: 0 };
+        return IDENTITY_POSE;
       },
-      planTo: (target) => planLeg({ x: 0, y: 0, yaw: 0 }, target),
+      planTo: (target) => planLeg(IDENTITY_POSE, target),
     };
   }
 
   const context = canvas.getContext('2d');
   const camera = { zoom: 1, centerX: 0, centerY: 0, follow: true };
   let view = null;
-  let pose = { x: 0, y: 0, yaw: 0 };
+  let pose = IDENTITY_POSE;
   let dirty = true;
   let drag = null;
   let pinch = null;
@@ -234,7 +234,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     }
     const latest = latestPose(state ?? { streams: {} });
     if (!latest.identity && lidar?.ts != null && latest.ts <= lidar.ts) return latest;
-    return { x: 0, y: 0, yaw: 0 };
+    return IDENTITY_POSE;
   }
 
   function render(state, now = Date.now()) {

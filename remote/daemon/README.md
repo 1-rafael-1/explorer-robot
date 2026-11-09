@@ -115,7 +115,7 @@ cargo test -p remote-daemon --test link_stub    # daemon link ↔ Bridge Stub
 The app's browser suite is separate and runs from the repository root:
 
 ```sh
-.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_web_tests.sh     # app boot smoke + every static test page
 .github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
 ```
 

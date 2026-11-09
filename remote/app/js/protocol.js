@@ -8,9 +8,6 @@
 /** The one App Boundary protocol version (`hello.protocol`). */
 export const PROTOCOL = 1;
 
-/** The stable service name the Relay advertises (`hello.server.name`). */
-export const SERVICE_NAME = 'explorer-remote';
-
 /** The close codes the Relay uses (ADR-0039). */
 export const CLOSE = Object.freeze({
   UNAUTHORIZED: 4401,
@@ -95,21 +92,6 @@ export const CONNECTION_COPY = Object.freeze({
   },
 });
 
-/** The ordered list of states the connection screen knows. */
-export const CONNECTION_STATES = Object.freeze([
-  'searching',
-  'connecting',
-  'connected',
-  'reconnecting',
-  'no_robots',
-  'pairing_required',
-  'unauthorized',
-  'busy',
-  'setup_mode',
-  'protocol_mismatch',
-  'stopped',
-]);
-
 /** Returns the copy for a connection state, falling back to `searching`. */
 export function connectionCopy(state) {
   return CONNECTION_COPY[state] ?? CONNECTION_COPY.searching;
@@ -176,11 +158,6 @@ export function normalise360(degrees) {
   let value = degrees % 360;
   if (value < 0) value += 360;
   return value;
-}
-
-/** Rounds to one decimal place. */
-export function round1(value) {
-  return Math.round(value * 10) / 10;
 }
 
 /** Rounds an angle to whole centidegrees, the Relay's rotate precision. */

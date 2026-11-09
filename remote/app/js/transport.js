@@ -331,9 +331,6 @@ export function createTransport({
         connect();
       }
     },
-    disconnect() {
-      sendRaw({ type: 'disconnect' });
-    },
     reconnectNow() {
       backoff = reconnectBaseMs;
       closeSocket(1000, 'retry');
