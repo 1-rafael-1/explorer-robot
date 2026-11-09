@@ -32,6 +32,6 @@ absolute odometry reference, with dead reckoning between corrections.
 
 ## Notes
 
-- Research: `.scratch/optical-flow-sensor-working-range.md`.
+- Research: the optical-flow sensor working-range measurements from the 2026 evaluation.
 - The reserve is worth revisiting only if bench data shows longitudinal track slip
   dominating the error budget; it does not address yaw.

@@ -57,7 +57,7 @@ impl CoveredTask {
         1u16 << (self as u16)
     }
 
-    /// Returns a short, stable label for the firmware's log lines and the ticket's scope table.
+    /// Returns a short, stable label for the firmware's log lines and the watchdog coverage table.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {

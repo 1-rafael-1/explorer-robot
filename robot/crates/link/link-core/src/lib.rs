@@ -7,7 +7,7 @@
 //! This crate is `no_std` and allocates nothing. The `std` feature exists only for host tests and
 //! for the simulated link in `link-protocol`.
 //!
-//! This ticket lands the stream half, the two-phase command seam, the Session handshake, lease and
+//! The crate covers the stream half, the two-phase command seam, the Session handshake, lease and
 //! Peer/Deadman, the reliable event ring, and the throttle/rate emission schedule. Commands are
 //! accepted one at a time: [`LinkCore::poll`] yields a structurally valid, known, same-major,
 //! in-order command and the firmware answers it with [`LinkCore::ack_command`] before polling

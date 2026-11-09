@@ -5,7 +5,8 @@ The robot's bench persona (ADR-0040's host-workspace amendment). It puts the **r
 answers `HELLO`/`PING`, deduplicates commands, ACKs with the robot's rules and retries
 unacknowledged events. The personas only configure rates and load around that core; the wire
 semantics stay the crate's. The library never depends on a port library — that is the binary's
-job.
+job. It is a member of the `remote/` host workspace; the [bench page](../../docs/components/bench.md)
+has the harness and the [remote page](../../docs/components/remote.md) the workspace.
 
 ## Library map
 

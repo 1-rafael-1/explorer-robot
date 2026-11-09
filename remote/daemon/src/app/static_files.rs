@@ -4,7 +4,7 @@
 //! `no-store` and carries the same strict headers. Resolution is deliberately small: an existing
 //! file wins, an extensionless path falls back to `index.html`, a missing asset with an extension
 //! is 404, and `/ws` is never a fallback. The folder is embedded at compile time with a disk
-//! override for `<path>` development (`--assets` in ticket 13).
+//! override for `<path>` development (`--assets`).
 
 use std::path::{Path, PathBuf};
 

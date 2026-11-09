@@ -1,9 +1,10 @@
 # Hardware
 
 This is the mechanical and electrical source for explorer-robot: the FreeCAD
-chassis and running gear, the KiCad board, and the assembly photos. See the
-[repository README](../README.md) for the software project and the parts at a
-glance.
+chassis and running gear, the KiCad board, and the assembly photos. It is the
+hardware part of the repository, alongside the robot, Bridge and Remote
+workspaces; the repo map is in [architecture.md](../docs/architecture.md) and
+the [repository README](../README.md) is the front door.
 
 ## BOM / Parts required
 

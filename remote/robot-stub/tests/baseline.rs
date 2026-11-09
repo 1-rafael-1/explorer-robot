@@ -1,4 +1,4 @@
-//! Host tests for the baseline persona (ticket 02): streams at the negotiated or baseline rates,
+//! Host tests for the baseline persona: streams at the negotiated or baseline rates,
 //! `HELLO`/`PING` answered, command ACK rules and event retries.
 //!
 //! Every observation is a frame at the serial seam; the expected values are the ADRs' (ADR-0031's

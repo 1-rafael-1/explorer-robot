@@ -24,7 +24,7 @@ fn recompute_crc(frame: &mut [u8]) {
     frame[10..12].copy_from_slice(&crc.to_le_bytes());
 }
 
-/// The golden vector from the ticket: major 1, stream, id 1, seq 1, payload `0x42`.
+/// The golden vector for the smallest stream frame: major 1, stream, id 1, seq 1, payload `0x42`.
 const GOLDEN: [u8; 13] = [
     0xA5, 0x5A, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x39, 0xAA, 0x42,
 ];

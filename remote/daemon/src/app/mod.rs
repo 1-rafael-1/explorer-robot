@@ -1,12 +1,12 @@
 //! The app adapter: one `axum` WebSocket at `/ws`, the static SPA and the auth and `Origin`
 //! gates (ADR-0039's `app` module).
 //!
-//! The adapter is a library so ticket 13 can own the process. It shares the relay through the same
-//! `Arc<Mutex<Relay>>` the link adapter uses: [`App::new`] registers a connection on
+//! The adapter is a library so the daemon's process host can own the process. It shares the relay
+//! through the same `Arc<Mutex<Relay>>` the link adapter uses: [`App::new`] registers a connection on
 //! authentication, its WebSocket task drains [`Relay::poll`] and ticks the relay's timers, and a
-//! [`TokenGate`] holds the pairing token the LAN gate compares in constant time. Ticket 13 supplies
-//! the gate over its config store, wires the [`AppHooks`] to open and release the Bridge Session,
-//! and binds the listener [`App::serve`] consumes.
+//! [`TokenGate`] holds the pairing token the LAN gate compares in constant time. The process host
+//! supplies the gate over its config store, wires the [`AppHooks`] to open and release the Bridge
+//! Session, and binds the listener [`App::serve`] consumes.
 //!
 //! The server's first frame is always `hello`; `auth_required` is true exactly for a peer address
 //! the [`PeerPolicy`] gates. A loopback peer needs no token, and a non-loopback peer must send
@@ -57,8 +57,8 @@ const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The pairing token store the LAN gate consults.
 ///
-/// Ticket 13 implements this over the per-user config store; tests use a fake. The trait exposes
-/// the stored token rather than a `verify(&str)` answer so the adapter performs the one
+/// The process host implements this over the per-user config store; tests use a fake. The trait
+/// exposes the stored token rather than a `verify(&str)` answer so the adapter performs the one
 /// constant-time comparison, keeping the timing property in a single place.
 pub trait TokenGate: Send + Sync {
     /// Returns the stored pairing token, or `None` when none has been stored.
@@ -69,7 +69,7 @@ pub trait TokenGate: Send + Sync {
     fn pair(&self, code: &str);
 }
 
-/// The process hooks ticket 13 wires to the Bridge Session.
+/// The process hooks the host wires to the Bridge Session.
 ///
 /// The adapter never awaits the link: these are short, synchronous callbacks. A `disconnect`
 /// message releases the shared Session for every tab but keeps the stored token (ADR-0039), and a
@@ -121,7 +121,7 @@ struct AppState {
     relay: Arc<Mutex<Relay>>,
     /// The pairing-token store.
     gate: Arc<dyn TokenGate>,
-    /// The Session hooks ticket 13 supplies.
+    /// The Session hooks the host supplies.
     hooks: Arc<dyn AppHooks>,
     /// The per-peer-address auth rule.
     policy: Arc<dyn PeerPolicy>,
@@ -222,7 +222,7 @@ impl App {
         }
     }
 
-    /// Installs the Session hooks ticket 13 supplies.
+    /// Installs the Session hooks the host supplies.
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn AppHooks>) -> Self {
         self.state.hooks = hooks;

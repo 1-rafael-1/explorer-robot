@@ -136,5 +136,5 @@ cost is less PWM rejection than the ~10 nF target. Bring-up should watch the
 MCU-side waveform at full RPM with the 20 kHz drive active; if it glitches,
 rework `C32`/`C34` to 10 nF (0603) or add the second pole. The firmware
 minimum-pulse-width reject is not yet implemented, so until it is, the RC and
-the harness are the only glitch defences. The full bench procedure is in
-`.scratch/hardware-integration/spec.md` (§5.2 covers the encoder noise check).
+the harness are the only glitch defences. The full bench procedure was recorded
+during the hardware-integration review (§5.2 covers the encoder noise check).

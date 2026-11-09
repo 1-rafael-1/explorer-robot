@@ -5,6 +5,8 @@ Each test is a self-contained embassy binary under `examples/` that wires one or
 two sensors directly to the RP2350, independently of the main robot firmware.
 This is where small "does the hardware work" checks live; the in-firmware
 `task/testmode/` tasks remain the place for procedures that run inside the robot.
+It is a member of the robot workspace; the [robot page](../../../docs/components/robot.md)
+has the firmware view and [architecture.md](../../../docs/architecture.md) the repo map.
 
 ## Examples
 

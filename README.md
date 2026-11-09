@@ -1,34 +1,57 @@
 # explorer-robot
 
-A tracked robot platform with LiDAR-based autonomous navigation and sensor-driven
+A tracked robot with LiDAR-based autonomous navigation and sensor-driven
 obstacle avoidance, built in Rust on [Embassy](https://embassy.dev/) for the
-RP2350 microcontroller. It builds on hardware experience from
+RP2350B. It builds on hardware experience from
 [simple-robot](https://github.com/1-rafael-1/simple-robot) and adds a 360° COIN-D6
-LiDAR, two VL53L0X rangefinders, an ICM-20948 IMU over SPI, an ST7789 TFT with a
-resistive touch panel, and a Grove Vision AI V2 camera — as much as fits on custom
-PCB hardware.
+LiDAR, two VL53L0X rangefinders, an ICM-20948 IMU, an ST7789 TFT with a resistive
+touch panel, and a Grove Vision AI V2 camera — as much as fits on the custom PCB.
 
 ![Fully assembled explorer-robot](hardware/assembly/fully_assembled.jpg)
 
-## Parts at a glance
+## Repository map
 
-The three Cargo workspaces are split by build target so the robot's `thumbv8m`
-build never sees the RISC-V or host dependencies (ADR-0040). The paths below are
-the current tree.
+The repository is one tree with three Cargo workspaces, split by build target so
+the robot's `thumbv8m` build never sees the RISC-V or host dependency graphs
+([ADR-0040](docs/adr/0040-repo-and-build-layout.md)), plus the hardware sources
+and the written material.
 
-| Role | Directory | Workspace or target | README |
+| Part | Directory | What it is | README |
 |---|---|---|---|
-| Robot firmware | `robot/`, `robot/Cargo.toml` | Robot workspace — `thumbv8m.main-none-eabihf` | [robot](robot/README.md) |
-| Link contract — the wire and the robot-side core | `robot/crates/link/link-protocol/`, `robot/crates/link/link-core/` | Robot workspace; host tests on `x86_64-unknown-linux-gnu` | [link-protocol](robot/crates/link/link-protocol/README.md), [link-core](robot/crates/link/link-core/README.md) |
-| Bridge — network ⇄ UART1 | `bridge/` | Its own workspace — `riscv32imc-unknown-none-elf` | [Bridge README](bridge/README.md) |
-| Remote — daemon and static app | `remote/` | Host workspace — `x86_64-unknown-linux-gnu` | [remote](remote/README.md) |
-| Bench tools — robot and Bridge personas, link probes | `remote/robot-stub/`, `remote/bridge-stub/`, `bridge/tools/` | Host and Bridge workspaces | [robot-stub](remote/robot-stub/README.md), [bridge-stub](remote/bridge-stub/README.md) |
-| Hardware — CAD, EDA and assembly | `hardware/assembly/`, `hardware/cad/`, `hardware/eda/` | No Cargo target | [Hardware notes](hardware/README.md) |
-| Documentation | `docs/` | No Cargo target | [docs/README.md](docs/README.md) |
+| Robot firmware | `robot/`, root `Cargo.toml` | The `explorer-robot` Embassy firmware for the RP2350B (`thumbv8m.main-none-eabihf`) and its workspace crates: the Link Protocol, `LinkCore`, the drivers and the host-testable models | [robot](robot/README.md) |
+| Bridge | `bridge/` | Its own workspace: the ESP32-C3 RISC-V firmware (`riscv32imc-unknown-none-elf`, `build-std`) that translates between the home network and the robot's UART1, and the HAL-free `bridge-core` rules | [bridge](bridge/README.md) |
+| Remote | `remote/` | Its own host workspace (`x86_64-unknown-linux-gnu`): the `remote-daemon` relay, the shared `bridge-net` network edge, the two bench stubs and the static app | [remote](remote/README.md) |
+| Hardware | `hardware/` | FreeCAD chassis and running gear, KiCad schematic and PCB, BOM, print notes, assembly photos and safety notes — no Cargo target | [hardware](hardware/README.md) |
+| Documentation | `docs/`, `CONTEXT.md` | The docs index, [architecture and data flow](docs/architecture.md), the [component pages](docs/README.md#component-pages), the [ADRs](docs/adr/), and the [domain glossary](CONTEXT.md) — no Cargo target | [docs](docs/README.md) |
+
+The robot workspace holds `link-protocol` and `link-core` under
+`robot/crates/link/`, the async drivers under `robot/crates/drivers/`, and the
+pure models under `robot/crates/models/`; see the [robot package
+README](robot/README.md) for the bucket map.
+
+## Toolchain and dependencies
+
+- **One Rust pin for the whole repository.** [`rust-toolchain.toml`](rust-toolchain.toml)
+  selects channel **1.99.1** with the `rustfmt`, `clippy` and `rust-src`
+  components and the `thumbv8m.main-none-eabihf` and
+  `riscv32imc-unknown-none-elf` targets. There are no per-workspace toolchain
+  files, so `rustup` applies the same pin inside `robot/`, `bridge/` and
+  `remote/`.
+- **The robot follows Embassy master.** The root manifest's
+  `[patch.crates-io]` pins `embassy-rp` and its companion crates to one embassy
+  commit, updated as a set.
+- **The Bridge stays on the released `embassy-net` 0.9.1.** `esp-hal` 1.2.2,
+  `esp-radio` 1.0.0-beta.1 and `esp-rtos` 0.4.0 pin the released embassy crates,
+  whose `xarxa-driver` generation does not match embassy master's. The Bridge
+  moves once the Espressif crates ship the newer generation; the reasoning is in
+  [the Bridge dependency pin](docs/components/bridge.md#dependency-pin).
+- **Nothing is packaged.** There are no published binaries, releases, OTA
+  updates or installers. Build from source: `probe-rs` and SWD for the robot,
+  `espflash` for the Bridge, `cargo` for the Remote.
 
 ## Quickstart
 
-| Role | Start here | First command or step |
+| Part | Start here | First command |
 |---|---|---|
 | Robot | [Robot page](docs/components/robot.md) | `cargo build --workspace --release --target thumbv8m.main-none-eabihf` from the repository root |
 | Bridge | [Bridge page](docs/components/bridge.md) | `cd bridge && cargo build` |
@@ -37,61 +60,28 @@ the current tree.
 
 ## Status
 
-Active development. Drive, perception, UI and calibration are implemented: the
-LiDAR driver and the Panel and Touch Panel geometry are real, while the
-rangefinders and the AI camera remain stubbed or planned.
+The robot firmware implements the drive subsystem, the COIN-D6 LiDAR perception
+path, the panel UI and touch input, calibration, and the Link Task that owns
+UART1 and the Link Port power. The Bridge implements the network edge: the
+Discovery Beacon, the HMAC preamble, the single-client gate, the credential
+record and Pairing Token, Setup Mode with its portal, Bridge Presence and the
+task watchdog. The Remote daemon implements discovery, the preamble, the Relay
+and the `/ws` boundary.
 
-Done: the chassis for the new motors and bearings, the async COIN-D6 LiDAR
-driver, the async ST7789 driver, and their firmware integration.
-
-Known gaps:
-
-- An async VL53L0X driver, and integration of the front/rear pair.
-- A new schematic adapted from simple-robot.
-- A full breadboard demonstrator to check the firmware.
-- An async Grove Vision AI V2 driver and its integration.
-- A new PCB; depending on how mad I feel, maybe an SMD design instead of dev
-  boards.
-
-## Hardware
-
-- **MCU:** Raspberry Pi RP2350B (dual-core Cortex-M33).
-- **Drive:** 2× JGB37-520 6 V DC motors with Hall encoders, 12× 6802-2RS
-  bearings, and a TB6612FNG dual H-bridge motor driver.
-- **LiDAR:** COIN-D6 360° spinning dTOF on UART0 (core1), powered on demand
-  through a TPS22917 high-side load switch; the driver is integrated and the
-  sensor is off at boot.
-- **AI Cam:** Grove Vision AI V2 on a PIO UART (core0), with a reserved switched
-  5 V branch; not yet integrated. UART1 stays free for the expansion connector.
-- **Expansion:** 7-pin 5 V-powered, 3.3 V-logic connector (not yet implemented),
-  switched by a TPS22917 on `EXP_PWR` (GPIO32), with UART1 on GPIO36/37.
-- **Rangefinders:** 2× VL53L0X ToF, front and rear-down, on separate I2C0/I2C1
-  buses (currently stubbed).
-- **IMU:** ICM-20948 9-axis on a dedicated SPI bus.
-- **Display and input:** ST7789 240×320 Panel driven landscape as a 320×240
-  framebuffer, with a resistive touch panel, sharing the SPI1 bus.
-- **Power:** 2S LiPo (8.4 V max).
-
-## Hardware files
-
-The FreeCAD chassis and running gear, the KiCad board and the assembly photos
-live under [`hardware/`](hardware/README.md), together with the BOM, print notes,
-assembly steps and safety notes.
+Still open: an async VL53L0X driver for the rangefinder pair (the firmware
+currently uses a stub), a Grove Vision AI V2 driver (the PIO UART and switched 5 V
+branch are reserved), and the static app, so `GET /` answers 404 until the SPA
+lands.
 
 ## Read next
 
 - [Documentation index](docs/README.md)
 - [Architecture — repo map and data flow](docs/architecture.md)
-- [Domain glossary](CONTEXT.md)
 - Component pages: [robot](docs/components/robot.md),
   [bridge](docs/components/bridge.md), [remote](docs/components/remote.md),
   [bench](docs/components/bench.md)
-- Owning decisions: [ADR-0040 — the three workspaces](docs/adr/0040-repo-and-build-layout.md),
-  [ADR-0030 — the Link Protocol envelope](docs/adr/0030-link-protocol-envelope.md),
-  [ADR-0032 — the robot's Link task](docs/adr/0032-remote-link-task.md),
-  [ADR-0037 — reachability and trust](docs/adr/0037-reachability-and-trust.md),
-  [ADR-0039 — the daemon relay](docs/adr/0039-remote-daemon-relay.md)
-- [MIT license](LICENSE) and [third-party notices](THIRD_PARTY_LICENSES.md)
+- [Domain glossary](CONTEXT.md) and the [architecture decision records](docs/adr/)
+- [Hardware notes](hardware/README.md)
 
 ## License
 

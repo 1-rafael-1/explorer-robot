@@ -62,7 +62,8 @@ const fn u16_at(bytes: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([bytes[at], bytes[at + 1]])
 }
 
-/// A normal `A` query is answered with the AP's address and every header field the spec fixes.
+/// A normal `A` query is answered with the AP's address and every header field the DNS message
+/// format fixes.
 #[test]
 fn an_a_query_gets_the_catch_all_address() {
     let datagram = example_query(0xABCD, TYPE_A, CLASS_IN);

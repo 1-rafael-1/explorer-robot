@@ -1,6 +1,6 @@
-//! The daemon's link against the Bridge Stub, end to end (ticket 11's TCP/preamble seam).
+//! The daemon's link against the Bridge Stub, end to end (the TCP/preamble seam).
 //!
-//! The stub is the real ticket-09 library, started in-process on loopback. The test asserts the
+//! The stub is the real `bridge-stub` library, started in-process on loopback. The test asserts the
 //! behaviours ADR-0039 fixes: the preamble completes, `HELLO_ACK` opens the Session, scripted
 //! streams and events reach the relay, an event is acknowledged only after it is stored (the
 //! second scripted event can only flow once the first is `ACKed`), and a command round-trips with a

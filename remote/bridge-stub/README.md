@@ -5,7 +5,9 @@ The daemon's bench peer (ADR-0040's host-workspace amendment). It serves the ser
 `ACCEPT` and the `DENY` variants — plus the Discovery Beacon and scripted robot traffic behind
 an accepted connection. Both sides compose `bridge-net`'s framing and `link-protocol`'s
 payload codecs, so the stub never invents wire semantics. It replaces the Bridge, not the
-robot; see [`../robot-stub/README.md`](../robot-stub/README.md) for the robot end.
+robot; see [`../robot-stub/README.md`](../robot-stub/README.md) for the robot end, the
+[bench page](../../docs/components/bench.md) for the harness, and the
+[remote page](../../docs/components/remote.md) for the workspace.
 
 ## Library
 

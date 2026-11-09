@@ -7,8 +7,8 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 07 (the persisted credential record and the Setup Mode lifecycle) and ticket 08 (Bridge
-//! Presence and the task watchdog).
+//! The persisted credential record, the Setup Mode lifecycle, Bridge Presence and the task
+//! watchdog.
 //!
 //! The Bridge is the trust boundary for the robot (ADR-0037): the `bridge-net` HMAC preamble
 //! completes before a single Link Protocol byte crosses, exactly one authenticated client holds the
@@ -23,7 +23,7 @@
 //! minutes, or about 30 s after a stable station association. In APSTA the station Beacon carries
 //! `setup_mode` and `tcp_port = 0`; in AP-only there is no station Beacon.
 //!
-//! Ticket 07 stores the station credentials and the 60-bit pairing token in one versioned,
+//! The Bridge stores the station credentials and the 60-bit pairing token in one versioned,
 //! CRC-checked record on the `bridge_data` partition, written with `sequential-storage` through
 //! `esp-storage`. A missing or unusable record fails closed into Setup Mode; a reflash of the app
 //! leaves the partition alone; the portal's submit path and the panel's `BRIDGE_CONTROL` actions
@@ -353,7 +353,7 @@ const PORTAL_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many portal commands the HTTP workers may queue for the supervisory loop.
 const PORTAL_COMMAND_QUEUE: usize = 4;
 
-/// Best-of-N: `scan_async` on this beta drops whole sweeps (ticket 09), so merge several.
+/// Best-of-N: `scan_async` on this beta drops whole sweeps, so merge several.
 const SCAN_SWEEPS: usize = 3;
 
 /// How often a fresh best-of-N scan refreshes the portal's list while no join is in flight. A
@@ -387,8 +387,7 @@ static AP_RESOURCES: StaticCell<StackResources<6>> = StaticCell::new();
 /// Whether the bounded setup window is open; the Beacon and the portal tasks read it.
 static SETUP_OPEN: AtomicBool = AtomicBool::new(false);
 
-/// Whether a usable credential pair exists; the Beacon's `provisioned` bit reads it. Ticket 07
-/// replaces this with the credential record.
+/// Whether a usable credential pair exists; the Beacon's `provisioned` bit reads it.
 static PROVISIONED: AtomicBool = AtomicBool::new(false);
 
 /// The portal's current status line, shared by the supervisory loop and the HTTP workers.
@@ -721,7 +720,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     info!(
-        "bridge firmware: ticket 07 credential record, setup portal, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
+        "bridge firmware: credential record, setup portal, bridge-net preamble, Beacon every {}ms; uart {} 8N1 TX=GPIO{} RX=GPIO{}",
         beacon::INTERVAL_MS,
         UART_BAUD,
         UART_TX_PIN,
@@ -983,8 +982,7 @@ async fn main(spawner: Spawner) -> ! {
     // -- Watchdog ----------------------------------------------------------------------------
     // The RTC watchdog covers the pump and network tasks that were spawned above. The portal
     // workers are deliberately not covered: they block on captive-portal traffic by design, and a
-    // reset during the bounded setup window would throw away the operator's session. See the
-    // ticket for the full scope decision.
+    // reset during the bounded setup window would throw away the operator's session.
     let rwdt = Rtc::new(peripherals.RTC_TIMER).rwdt;
     if !spawn_or_warn(&spawner, watchdog_task(rwdt), "watchdog") {
         warn!("watchdog: the supervisor did not start; the RTC watchdog is not running");
@@ -3092,7 +3090,7 @@ fn enqueue_bridge_ack(seq: Seq, reply: &BridgeControlReply<'_>) {
 async fn handle_panel_request(request: BridgeControlRequest) {
     match request.action {
         BridgeControlAction::ForgetNetwork => {
-            // ADR-0037 (amended for ticket 07): action 0 clears the network and rotates the token
+            // ADR-0037 (amended for the credential record): action 0 clears the network and rotates the token
             // rather than leaving the slot empty. The record is written before the RAM key changes
             // and before the acknowledgement; a failed write keeps the old code live and reports
             // `Internal`. The window is still raised, because the panel asked for the recovery

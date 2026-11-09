@@ -7,7 +7,9 @@ daemon all speak. There is no UART, clock, allocator or logging; every reliabili
 point takes `now` or a sequence number.
 
 It is a member of the robot workspace so the firmware gets it by path; the Bridge and the
-host workspace consume the same manifest.
+host workspace consume the same manifest. The repo map is in
+[architecture.md](../../../../docs/architecture.md); the operator context is in the
+[robot page](../../../../docs/components/robot.md).
 
 ## Versioning
 

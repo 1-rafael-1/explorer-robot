@@ -7,7 +7,7 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-//! Ticket 09 — the Bridge language spike.
+//! The Bridge language spike, kept as the regression soak.
 //!
 //! This binary answers one question: **does the Rust Wi-Fi stack wedge** under sustained
 //! bidirectional UART + TCP traffic and forced disconnect/reconnect, with the controller in
@@ -15,7 +15,7 @@
 //!
 //! It is not the Bridge firmware. It deliberately has no Link Protocol framing, no robot
 //! lifecycle, no boot loader hand-off and no provisioning. It is a load generator and an
-//! observer. It is kept as the regression soak under the name `stack-soak`, so the ticket-09
+//! observer. It is kept as the regression soak under the name `stack-soak`, so the spike's
 //! evidence stays reproducible against future stack changes.
 //!
 //! ## Bench wiring
@@ -88,7 +88,7 @@ const AP_SSID: &str = "explorer-spike";
 /// Setup AP password. WPA2, so it must be at least eight bytes.
 const AP_PASSWORD: &str = "spike12345";
 
-/// Setup AP channel. Ticket 11 says this must become a setting; here it is a spike constant.
+/// Setup AP channel. This must become a setting; here it is a spike constant.
 const AP_CHANNEL: u8 = 1;
 
 /// Setup AP address. There is no DHCP server in this binary; set the client to 192.168.4.2/24.
@@ -127,7 +127,7 @@ const fn parse_u32(value: &str, fallback: u32) -> u32 {
     result
 }
 
-/// Ticket 04's chosen target baud. Override with `SPIKE_UART_BAUD` for a control run.
+/// ADR-0033's chosen target baud. Override with `SPIKE_UART_BAUD` for a control run.
 const UART_BAUD: u32 = match option_env!("SPIKE_UART_BAUD") {
     Some(value) => parse_u32(value, 921_600),
     None => 921_600,
@@ -145,7 +145,7 @@ const UART_RX_THRESHOLD: u16 = match option_env!("SPIKE_RX_THRESHOLD") {
 const UART_TX_PIN: u8 = 6;
 const UART_RX_PIN: u8 = 7;
 
-/// The software ring between the UART reader and the frame verifier. Ticket 04 sizes the real
+/// The software ring between the UART reader and the frame verifier. ADR-0033 sizes the real
 /// Bridge ring at 8 KiB; using the same number here keeps the observation representative.
 const UART_QUEUE_CAPACITY: usize = 8 * 1024;
 
@@ -153,7 +153,7 @@ const UART_QUEUE_CAPACITY: usize = 8 * 1024;
 const UART_READ_CHUNK: usize = 512;
 
 /// Use UHCI RX DMA for the UART drain. This is the default because it is the only RX path that
-/// is lossless at 921600 under TCP load (ticket 09); the async FIFO reader cannot meet the
+/// is lossless at 921600 under TCP load; the async FIFO reader cannot meet the
 /// 1.39 ms line-rate FIFO deadline. Set `SPIKE_UART_RX_ASYNC` to select the async reader
 /// instead, e.g. to re-run the comparison against a future esp-hal/esp-radio version.
 const UART_RX_DMA: bool = option_env!("SPIKE_UART_RX_ASYNC").is_none();
@@ -169,7 +169,7 @@ const DMA_RX_CHUNK: usize = match option_env!("SPIKE_DMA_CHUNK") {
     None => 128,
 };
 
-/// Optional delay between loopback frames. Zero means full speed. Ticket 04's real worst case
+/// Optional delay between loopback frames. Zero means full speed. ADR-0033's real worst case
 /// is ~10.3 KB/s, so a 256-byte frame every 25 ms (10.24 KB/s) is the realistic control.
 const UART_FRAME_INTERVAL_MS: u32 = match option_env!("SPIKE_UART_FRAME_INTERVAL_MS") {
     Some(value) => parse_u32(value, 0),
@@ -241,7 +241,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    info!("ticket 09 spike: APSTA + UART loopback + TCP echo");
+    info!("stack-soak: APSTA + UART loopback + TCP echo");
 
     // -- Wi-Fi -------------------------------------------------------------------------------
 

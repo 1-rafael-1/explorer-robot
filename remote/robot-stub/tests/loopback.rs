@@ -1,4 +1,4 @@
-//! The serial loopback self-test (ticket 02): a full `HELLO` round trip through the transport
+//! The serial loopback self-test: a full `HELLO` round trip through the transport
 //! with no Bridge present.
 //!
 //! The peer plays the Remote's side of the seam directly, so the round trip proves the transport

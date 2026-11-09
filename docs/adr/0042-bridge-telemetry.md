@@ -143,9 +143,8 @@ direction under 1 KB/s. No ring size or baud changes (ADR-0033).
 **Open items**
 
 - Sample the control snapshot in `task::remote_link`, read `LinkCore::bridge_status()` and publish it
-  into a `state::link` module for the panel (remote-link ticket 11 under `.scratch/remote-link/issues/`).
-- Add the panel's `Link` screen, header connectivity/battery indicator and System Info link section
-  (remote-link ticket 12 under `.scratch/remote-link/issues/`).
+  into a `state::link` module for the panel.
+- Add the panel's `Link` screen, header connectivity/battery indicator and System Info link section.
 - Render the daemon-side status in the SPA once it stops being a placeholder; the app JSON contract
   (`Snapshot.bridge` / `ServerMessage::Bridge`) is in place and needs no further daemon change.
 - Bench-confirm the 1 Hz cadence and the counter meanings, and keep the Bridge's USB status line

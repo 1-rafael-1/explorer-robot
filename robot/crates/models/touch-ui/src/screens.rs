@@ -395,7 +395,7 @@ pub enum Screen {
     ValueEntry(ValueFlow),
     /// A running/status screen, whose content is supplied by [`StatusView`].
     ///
-    /// Later tickets use this for a procedure's progress and sensor state. A
+    /// The UI uses this for a procedure's progress and sensor state. A
     /// live procedure offers a touch Stop in the header; a finished Result
     /// Report offers Back instead.
     Status,

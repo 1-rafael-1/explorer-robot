@@ -4,7 +4,9 @@ A custom async driver for the ST7789 (and ST7789-compatible) TFT
 controller. It's written against `embedded-hal-async` so it isn't tied to a
 specific HAL: it owns the SPI bus and data/command pin, borrows a
 caller-allocated framebuffer, and exposes an `embedded_graphics::DrawTarget`
-plus an async `flush`.
+plus an async `flush`. It is one of the robot workspace's drivers, used by the
+firmware's panel UI; see the [robot page](../../../../docs/components/robot.md)
+and [architecture.md](../../../../docs/architecture.md).
 
 ## Examples
 

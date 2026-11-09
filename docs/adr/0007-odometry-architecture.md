@@ -45,5 +45,5 @@ matcher added behind it.
 - Encoder covariance becomes **state-dependent**, inflated by commanded turn rate and
   by unpowered states where the sign is unknown.
 - The scan matcher runs on core1 and the EKF on core0; tuning parameters are
-  centralised and documented in `.scratch/odometry/spec.md` so they can be adjusted
+  centralised and documented in the odometry design notes so they can be adjusted
   without re-deriving the design.

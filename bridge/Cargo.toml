@@ -24,7 +24,7 @@ multiple_crate_versions = "allow"
 [package]
 edition      = "2024"
 name         = "bridge-firmware"
-rust-version = "1.95"
+rust-version = "1.99"
 version      = "0.1.0"
 
 # `src/bin/stack-soak.rs` is auto-discovered as the `stack-soak` binary: the ticket-09
@@ -83,25 +83,10 @@ esp-radio = { version = "1.0.0-beta.1", features = [
   "unstable",
   "wifi",
 ] }
-smoltcp = { version = "0.14.0", default-features = false, features = [
-  "defmt",
-  "medium-ethernet",
-  "multicast",
-  "proto-dhcpv4",
-  "proto-dns",
-  "proto-ipv4",
-  "socket-dns",
-  "socket-icmp",
-  "socket-raw",
-  "socket-tcp",
-  "socket-udp",
-] }
-
 critical-section = "1.2.0"
 heapless         = { version = "0.9", features = ["defmt", "portable-atomic"] }
 portable-atomic  = "1"
 static_cell      = "2.1.1"
-
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]

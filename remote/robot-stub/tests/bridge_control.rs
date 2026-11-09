@@ -1,4 +1,4 @@
-//! Host tests for the `BRIDGE_CONTROL` persona (ticket 02, ADR-0036, ADR-0037).
+//! Host tests for the `BRIDGE_CONTROL` persona (ADR-0036, ADR-0037).
 //!
 //! The stub sends the actions and reports the Bridge's reply — or its timeout. The peer plays the
 //! Bridge's UART side: it consumes the request and acknowledges with the setup credentials or the

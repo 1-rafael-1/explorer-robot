@@ -1,4 +1,4 @@
-//! The serial seam: raw UART bytes in both directions (ticket 02).
+//! The serial seam: raw UART bytes in both directions.
 //!
 //! The stub's personas, the integration tests and the binary all speak through [`Transport`],
 //! the same bytes the Bridge's UART will see. The in-memory [`Duplex`] channel serves the tests;

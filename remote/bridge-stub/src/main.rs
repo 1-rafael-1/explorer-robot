@@ -1,4 +1,4 @@
-//! The standalone Bridge Stub binary (ticket 09): manual integration runs and the joint
+//! The standalone Bridge Stub binary: manual integration runs and the joint
 //! milestone's early rehearsals. Everything it serves is the library's scenario, parsed from the
 //! command line by [`bridge_stub::cli`].
 

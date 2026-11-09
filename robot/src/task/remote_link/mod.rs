@@ -63,6 +63,7 @@ use embassy_futures::select::{Either3, select3};
 use embassy_rp::{
     Peri,
     gpio::{Input, Level, Output, Pull},
+    mode::Async,
     pac,
     peripherals::{PIN_33, PIN_36, PIN_37, TRNG, UART1},
     trng::{Config as TrngConfig, Trng},
@@ -70,7 +71,6 @@ use embassy_rp::{
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
-use embedded_io_async::{Read as _, Write as _};
 use link_core::{Config as LinkConfig, LinkCore};
 use link_protocol::{BridgeControlAction, Caps, MAX_ROBOT_TO_PC_FRAME, Status};
 use static_cell::StaticCell;
@@ -84,7 +84,7 @@ mod events;
 mod failsafe;
 mod streams;
 
-#[allow(unused_imports)] // Diagnostic getter for the bench and later tickets.
+#[allow(unused_imports)] // Diagnostic getter for the bench.
 pub use events::event_drops;
 pub use events::forward_event;
 
@@ -166,20 +166,24 @@ static TX_BUF: StaticCell<[u8; TX_BUF_LEN]> = StaticCell::new();
 /// Static RX ring buffer, reborrowed for each powered period.
 static RX_BUF: StaticCell<[u8; RX_BUF_LEN]> = StaticCell::new();
 
-/// Owner of the Link Port's retained resources and power/UART sequencing.
-///
-/// The session keeps the raw [`Peri`] handles, the `EXP_PWR`/`EXP_EN`/`EXP_BOOT`
-/// outputs, the `EXP_IRQ` input handle and the `'static` TX/RX buffers. It
-/// constructs no UART at boot; [`Self::power_up`] builds one for the powered
-/// period and [`Self::power_down`] consumes it again, so the pads and the UART
-/// peripheral exist only while the branch is powered (ADR-0023).
-pub struct RemoteLinkSession {
+/// UART handles and ring buffers, borrowed for one powered period.
+struct UartResources {
     /// UART1 peripheral handle, retained for reconstruction.
     uart: Peri<'static, UART1>,
     /// UART1 TX pad (GPIO 36), retained for reconstruction and release.
     tx: Peri<'static, PIN_36>,
     /// UART1 RX pad (GPIO 37), retained for reconstruction and release.
     rx: Peri<'static, PIN_37>,
+    /// Static TX ring buffer, reborrowed on every construction.
+    tx_buf: &'static mut [u8; TX_BUF_LEN],
+    /// Static RX ring buffer, reborrowed on every construction.
+    rx_buf: &'static mut [u8; RX_BUF_LEN],
+    /// UART configuration used for every construction.
+    uart_config: uart::Config,
+}
+
+/// Power, reset and presence lines retained across powered periods.
+struct PowerControl {
     /// `EXP_PWR` branch enable (active high, GPIO 32).
     power: Output<'static>,
     /// `EXP_EN` Bridge enable/reset line (active high, GPIO 34).
@@ -188,16 +192,24 @@ pub struct RemoteLinkSession {
     boot: Output<'static>,
     /// `EXP_IRQ` Bridge-ready presence input (GPIO 33).
     irq: Peri<'static, PIN_33>,
-    /// Static TX ring buffer, reborrowed on every construction.
-    tx_buf: &'static mut [u8; TX_BUF_LEN],
-    /// Static RX ring buffer, reborrowed on every construction.
-    rx_buf: &'static mut [u8; RX_BUF_LEN],
-    /// UART configuration used for every construction.
-    uart_config: uart::Config,
     /// Instant of the most recent power-down, for the minimum off interval.
     last_power_down: Option<Instant>,
+}
+
+/// Owner of the Link Port's retained resources and power/UART sequencing.
+///
+/// The session keeps the raw [`Peri`] handles, the `EXP_PWR`/`EXP_EN`/`EXP_BOOT`
+/// outputs, the `EXP_IRQ` input handle and the `'static` TX/RX buffers. It
+/// constructs no UART at boot; [`UartResources::power_up`] builds one for the powered
+/// period and the task drains and drops it again, so the pads and the UART
+/// peripheral exist only while the branch is powered (ADR-0023).
+pub struct RemoteLinkSession {
+    /// UART handles and ring buffers, borrowed for one powered period.
+    port: UartResources,
+    /// Power and presence lines, usable while the UART is borrowed.
+    control: PowerControl,
     /// Hardware TRNG used to mint a Boot Id per powered period.
-    trng: Trng<'static, TRNG>,
+    trng: Trng<'static, Async>,
 }
 
 impl RemoteLinkSession {
@@ -231,21 +243,27 @@ impl RemoteLinkSession {
         uart_config.baudrate = link_core::timing::BAUD;
 
         Self {
-            uart,
-            tx,
-            rx,
-            power: Output::new(power_enable, Level::Low),
-            en: Output::new(en, Level::Low),
-            boot: Output::new(boot, Level::Low),
-            irq,
-            tx_buf: TX_BUF.init([0; TX_BUF_LEN]),
-            rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
-            uart_config,
-            last_power_down: None,
+            port: UartResources {
+                uart,
+                tx,
+                rx,
+                tx_buf: TX_BUF.init([0; TX_BUF_LEN]),
+                rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
+                uart_config,
+            },
+            control: PowerControl {
+                power: Output::new(power_enable, Level::Low),
+                en: Output::new(en, Level::Low),
+                boot: Output::new(boot, Level::Low),
+                irq,
+                last_power_down: None,
+            },
             trng: Trng::new(trng, crate::Irqs, TrngConfig::default()),
         }
     }
+}
 
+impl UartResources {
     /// Power the branch and build the UART for the powered period.
     ///
     /// Runs ADR-0023's order: wait out the minimum off interval, configure RX
@@ -254,8 +272,8 @@ impl RemoteLinkSession {
     /// `BufferedUart` from the retained handles and reborrowed static rings.
     /// There is no await point between construction and returning, so
     /// cancellation cannot leave a muxed UART owned by nobody.
-    pub async fn power_up(&mut self) -> BufferedUart {
-        if let Some(last) = self.last_power_down {
+    async fn power_up(&mut self, control: &mut PowerControl) -> BufferedUart<'_> {
+        if let Some(last) = control.last_power_down {
             let elapsed = Instant::now().saturating_duration_since(last);
             if let Some(remaining) = POWER_CYCLE_OFF.checked_sub(elapsed) {
                 Timer::after(remaining).await;
@@ -265,12 +283,12 @@ impl RemoteLinkSession {
         // Configure the pads before the branch is powered: an idle RX is pulled
         // high, and the Bridge's presence line is pulled low while it is absent.
         drop(Input::new(self.rx.reborrow(), Pull::Up));
-        drop(Input::new(self.irq.reborrow(), Pull::Down));
+        drop(Input::new(control.irq.reborrow(), Pull::Down));
 
         // Assert the branch, wait for the switch rise, then enable the Bridge.
-        self.power.set_high();
+        control.power.set_high();
         Timer::after(BRANCH_RISE).await;
-        self.en.set_high();
+        control.en.set_high();
 
         let uart = BufferedUart::new(
             self.uart.reborrow(),
@@ -293,54 +311,15 @@ impl RemoteLinkSession {
         uart
     }
 
-    /// Quiesce and deinitialize the branch, then deassert `EXP_PWR`.
-    ///
-    /// Runs the ADR-0023 sequence in order: bounded drain of the TX ring and
-    /// shifter, drop the UART, release both pads to high-Z inputs with no pull,
-    /// clear `UARTCR.EN`/`TXE`/`RXE`, drive `EXP_EN` and `EXP_BOOT` low, release
-    /// `EXP_IRQ`, deassert `EXP_PWR`, and record the power-down instant. Every
-    /// wait is bounded, so a dead or silent peer cannot hang teardown.
-    pub async fn power_down(&mut self, mut uart: BufferedUart) {
-        // Drain the software ring, bounded, then the hardware shifter.
-        if with_timeout(BUSY_TIMEOUT, uart.flush()).await.is_err() {
-            warn!("[link] TX ring did not flush within {:?}", BUSY_TIMEOUT);
-        }
-        let drained = with_timeout(BUSY_TIMEOUT, async {
-            while uart.busy() {
-                Timer::after(Duration::from_micros(100)).await;
-            }
-        })
-        .await;
-        if drained.is_err() {
-            warn!("[link] UART shifter did not drain within {:?}", BUSY_TIMEOUT);
-        }
-
-        // Drop the UART: this deinits its ring buffers and disables `UART1_IRQ`.
-        drop(uart);
-
-        // Release both pads to high-Z inputs with no pull, so neither line can
-        // source current into the unpowered branch.
+    /// Release both pads to high-Z inputs with no pull, so neither line can
+    /// source current into the unpowered branch.
+    fn release_pads(&mut self) {
         drop(Input::new(self.tx.reborrow(), Pull::None));
         drop(Input::new(self.rx.reborrow(), Pull::None));
-
-        // Deinitialize the peripheral: no enable, transmitter or receiver.
-        pac::UART1.uartcr().modify(|w| {
-            w.set_uarten(false);
-            w.set_txe(false);
-            w.set_rxe(false);
-        });
-
-        // Hold the Bridge in reset and boot mode while the branch is off.
-        self.en.set_low();
-        self.boot.set_low();
-        drop(Input::new(self.irq.reborrow(), Pull::None));
-
-        // Deassert the branch enable and record the instant for the minimum off
-        // interval.
-        self.power.set_low();
-        self.last_power_down = Some(Instant::now());
     }
+}
 
+impl PowerControl {
     /// Read the `EXP_IRQ` presence level with the powered-period pull-down.
     fn presence_high(&mut self) -> bool {
         Input::new(self.irq.reborrow(), Pull::Down).is_high()
@@ -354,23 +333,70 @@ impl RemoteLinkSession {
         self.en.set_high();
     }
 
-    /// Mint a Boot Id from the TRNG, falling back to an uptime/nonce mix.
+    /// Release the pads, deinitialize the peripheral and deassert the branch
+    /// after the UART has been dropped.
     ///
-    /// The value is forced unique within the process by [`unique_boot_id`], so a
-    /// failed or repeated sample cannot collide with an earlier powered period.
-    async fn mint_boot_id(&mut self) -> u32 {
-        let mut bytes = [0u8; 4];
-        let candidate = if with_timeout(TRNG_TIMEOUT, self.trng.fill_bytes(&mut bytes))
-            .await
-            .is_ok()
-        {
-            u32::from_ne_bytes(bytes)
-        } else {
-            warn!("[link] TRNG timed out; using the uptime fallback for the Boot Id");
-            fallback_boot_id()
-        };
-        unique_boot_id(candidate)
+    /// Releases both UART pads to high-Z via [`UartResources::release_pads`],
+    /// clears `UARTCR.EN`/`TXE`/`RXE`, drives `EXP_EN` and `EXP_BOOT` low,
+    /// releases `EXP_IRQ`, deasserts `EXP_PWR`, and records the power-down
+    /// instant.
+    ///
+    /// The split between [`UartResources`] and `PowerControl` is forced by
+    /// `BufferedUart` borrowing the UART handles, so the teardown order is fixed:
+    /// `drain_uart` → release pads → deassert power. Folding the pad release in
+    /// here keeps that order at one call site.
+    fn complete_power_down(&mut self, uart: &mut UartResources) {
+        uart.release_pads();
+
+        pac::UART1.uartcr().modify(|w| {
+            w.set_uarten(false);
+            w.set_txe(false);
+            w.set_rxe(false);
+        });
+
+        self.en.set_low();
+        self.boot.set_low();
+        drop(Input::new(self.irq.reborrow(), Pull::None));
+
+        self.power.set_low();
+        self.last_power_down = Some(Instant::now());
     }
+}
+
+/// Drain the UART's software ring and hardware shifter, then drop it.
+///
+/// Every wait is bounded, so a dead or silent peer cannot hang teardown.
+async fn drain_uart(mut uart: BufferedUart<'_>) {
+    if with_timeout(BUSY_TIMEOUT, uart.flush()).await.is_err() {
+        warn!("[link] TX ring did not flush within {:?}", BUSY_TIMEOUT);
+    }
+    let drained = with_timeout(BUSY_TIMEOUT, async {
+        while uart.busy() {
+            Timer::after(Duration::from_micros(100)).await;
+        }
+    })
+    .await;
+    if drained.is_err() {
+        warn!("[link] UART shifter did not drain within {:?}", BUSY_TIMEOUT);
+    }
+
+    // Drop the UART: this deinits its ring buffers and disables `UART1_IRQ`.
+    drop(uart);
+}
+
+/// Mint a Boot Id from the TRNG, falling back to an uptime/nonce mix.
+///
+/// The value is forced unique within the process by [`unique_boot_id`], so a
+/// failed or repeated sample cannot collide with an earlier powered period.
+async fn mint_boot_id(trng: &mut Trng<'static, Async>) -> u32 {
+    let mut bytes = [0u8; 4];
+    let candidate = if with_timeout(TRNG_TIMEOUT, trng.fill_bytes(&mut bytes)).await.is_ok() {
+        u32::from_ne_bytes(bytes)
+    } else {
+        warn!("[link] TRNG timed out; using the uptime fallback for the Boot Id");
+        fallback_boot_id()
+    };
+    unique_boot_id(candidate)
 }
 
 // ── Status cell (lock-free) ───────────────────────────────────────────────────
@@ -487,13 +513,17 @@ pub async fn remote_link_task(mut session: RemoteLinkSession) {
         }
         auto_enable = false;
 
-        let uart = session.power_up().await;
-        let boot_id = session.mint_boot_id().await;
+        let uart = session.port.power_up(&mut session.control).await;
+        let boot_id = mint_boot_id(&mut session.trng).await;
         let mut core = LinkCore::new(link_config(), boot_id, now_ms());
         set_status(LinkStatus::WaitingForBoard);
         info!("[link] port powered, boot id {=u32}", boot_id);
 
-        serve_enabled(&mut session, &mut core, uart).await;
+        let uart = serve_enabled(&mut session.control, &mut core, uart).await;
+        drain_uart(uart).await;
+        session.control.complete_power_down(&mut session.port);
+        set_status(LinkStatus::Off);
+        state::link::clear().await;
     }
 }
 
@@ -542,26 +572,20 @@ impl PresenceWatch {
     /// ring survive, and the link returns to waiting. A still-low line after the
     /// grace gets one [`RESET_PULSE`]; still low after another grace means absent,
     /// with no further retry.
-    async fn update(
-        &mut self,
-        session: &mut RemoteLinkSession,
-        core: &mut LinkCore,
-        scratch: &mut TxScratch,
-        now: Instant,
-    ) {
+    async fn update(&mut self, control: &mut PowerControl, core: &mut LinkCore, scratch: &mut TxScratch, now: Instant) {
         match self.phase {
             PresencePhase::Waiting => {
                 if now < self.deadline {
                     return;
                 }
-                if session.presence_high() {
+                if control.presence_high() {
                     self.phase = PresencePhase::Ready;
                     set_status(LinkStatus::Ready);
                     info!("[link] bridge present");
                 } else if self.pulses_left > 0 {
                     self.pulses_left -= 1;
                     info!("[link] bridge absent; issuing the reset pulse");
-                    session.pulse_enable().await;
+                    control.pulse_enable().await;
                     self.deadline = Instant::now() + PRESENCE_GRACE;
                 } else {
                     self.phase = PresencePhase::Absent;
@@ -569,7 +593,7 @@ impl PresenceWatch {
                 }
             }
             PresencePhase::Ready => {
-                if !session.presence_high() {
+                if !control.presence_high() {
                     info!("[link] bridge reset");
                     core.reset_parser();
                     scratch.reset();
@@ -580,7 +604,7 @@ impl PresenceWatch {
                 }
             }
             PresencePhase::Absent => {
-                if session.presence_high() {
+                if control.presence_high() {
                     self.phase = PresencePhase::Ready;
                     set_status(LinkStatus::Ready);
                     info!("[link] bridge present");
@@ -635,7 +659,11 @@ impl TxScratch {
 /// is present. A disable powers the branch down and returns; the caller's
 /// [`LinkCore`] is dropped then.
 #[allow(clippy::large_futures)]
-async fn serve_enabled(session: &mut RemoteLinkSession, core: &mut LinkCore, mut uart: BufferedUart) {
+async fn serve_enabled<'a>(
+    control: &mut PowerControl,
+    core: &mut LinkCore,
+    mut uart: BufferedUart<'a>,
+) -> BufferedUart<'a> {
     streams::reset();
     // Disable/Enable starts clean: the panel reads Off until the first tick
     // publishes this powered period's presence and peer.
@@ -657,10 +685,7 @@ async fn serve_enabled(session: &mut RemoteLinkSession, core: &mut LinkCore, mut
                     // Deliberate power-down fires the same failsafe as peer loss,
                     // before the branch goes down and the core is dropped.
                     failsafe::link_lost();
-                    session.power_down(uart).await;
-                    set_status(LinkStatus::Off);
-                    state::link::clear().await;
-                    return;
+                    return uart;
                 }
                 LinkCommand::BridgeControl(action) => {
                     handle_bridge_control(core, action, presence.is_ready()).await;
@@ -683,7 +708,7 @@ async fn serve_enabled(session: &mut RemoteLinkSession, core: &mut LinkCore, mut
                     failsafe::link_lost();
                 }
                 streams::sample_and_publish(core, now_ms).await;
-                presence.update(session, core, &mut scratch, now).await;
+                presence.update(control, core, &mut scratch, now).await;
                 publish_link_state(&presence, core, &mut published, now_ms).await;
             }
         }
@@ -737,7 +762,7 @@ const fn map_link_action(action: LinkAction) -> BridgeControlAction {
 /// When no frame is being written, asks [`LinkCore::next_frame`] for the next
 /// one; when the ring is full, defers the remainder to the next pass. A partial
 /// write is retained in `scratch` so a frame is never silently truncated.
-async fn flush_tx(core: &mut LinkCore, uart: &mut BufferedUart, scratch: &mut TxScratch, ready: bool) {
+async fn flush_tx(core: &mut LinkCore, uart: &mut BufferedUart<'_>, scratch: &mut TxScratch, ready: bool) {
     loop {
         if scratch.is_empty() {
             if !ready {

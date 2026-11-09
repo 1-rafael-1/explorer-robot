@@ -124,9 +124,9 @@ fn a_boot_id_change_clears_the_retained_state() {
     let messages = relay.poll(app, 110);
     let assembled = must(snapshot(&messages), "snapshot after the Boot Id change");
     assert_eq!(assembled.boot_id, Some(8));
-    assert!(assembled.streams.is_empty());
+    assert_eq!(assembled.streams, Vec::new());
     assert!(assembled.last_terminal.is_none());
-    assert!(assembled.events.is_empty());
+    assert_eq!(assembled.events, Vec::new());
     assert_eq!(assembled.event_cursor, None);
     assert!(
         assembled.catalogue.is_none(),
@@ -181,5 +181,5 @@ fn a_catalogue_retry_marks_a_fresh_snapshot() {
     let assembled = must(snapshot(&messages), "snapshot after the retry");
     assert!(assembled.catalogue.is_some());
     assert_eq!(assembled.streams.len(), 1, "the stream slots are untouched");
-    assert!(relay.poll(app, 22).is_empty());
+    assert_eq!(relay.poll(app, 22), Vec::new());
 }

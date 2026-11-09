@@ -164,7 +164,7 @@ The SPA lives at `remote/app/` beside the daemon. It has no `Cargo.toml`, no `pa
 bundler and no generated output. The daemon embeds it at compile time from
 `$CARGO_MANIFEST_DIR/../app` (the `include_dir`-style embed is an implementation choice, the path is
 the decision); `--assets <path>` serves from disk for development, as ADR-0039 requires. The
-prototype stays in `.scratch/`; ticket 14 places the destination, it does not populate it.
+prototype stays untracked; ticket 14 places the destination, it does not populate it.
 
 *One protocol version.*
 
@@ -219,6 +219,9 @@ its own cache key from its own lockfile. Details that matter:
 - The `bridge` job installs the toolchain pinned by `esp-bridge/rust-toolchain.toml` and must
   reproduce whatever `build-std` needs locally. The Bridge's toolchain is ticket 09's, not this
   ADR's to change.
+  **Superseded by the 2026-11-09 amendment:** `esp-bridge/` is now `bridge/`, its
+  `rust-toolchain.toml` is deleted, and every CI job installs the root pin instead. The toolchain
+  is no longer a separate tracker's to own.
 - Nightly `rustfmt` is required in all three jobs because `rustfmt.toml` uses
   `group_imports`/`imports_granularity`, which are unstable options. Config discovery upward means
   the root `rustfmt.toml` also styles the other two workspaces.
@@ -280,8 +283,8 @@ homes"). Recorded here as an amendment because the layout above is otherwise unc
 - The root workspace's `exclude` now says `bridge-firmware` (`Cargo.toml`); the exclude remains
   the contract that keeps the RISC-V workspace out of the robot's `thumbv8m` builds.
 - Historical records keep the old name deliberately: this ADR's body above, ADR-0033, and the
-  resolved tickets under `.scratch/expansion-remote/issues/` (notably ticket 09's Answer) all
-  predate the rename and are not rewritten.
+  resolved tickets of the expansion-and-remote effort (notably ticket 09's Answer) all predate the
+  rename and are not rewritten.
 
 ## Amendment — 2026-11-07: the host workspace's two bench-tool crates
 
@@ -339,3 +342,35 @@ stands; only the homes and three names change.
   live-Markdown link check. The ADRs stay historical and are excluded from that check.
 - Historical ADRs keep their old paths; this amendment is the path note, and the body above is not
   rewritten.
+
+## Amendment — 2026-11-09: one Rust pin, and embassy master in the robot
+
+The three workspaces still have three targets and three lockfiles; they no longer have three Rust
+versions. The robot and host workspaces were pinned to 1.96.0 while the Bridge followed `stable`
+(1.99.1 at the time of writing). Recorded here because the toolchain is part of the layout above.
+
+- The **root** `rust-toolchain.toml` is the only pin: channel `1.99.1`, components `rustfmt`,
+  `clippy` and `rust-src`, targets `thumbv8m.main-none-eabihf` and
+  `riscv32imc-unknown-none-elf`. `bridge/rust-toolchain.toml` is deleted, so the Bridge inherits the
+  root pin like `remote/` does. Every CI job installs 1.99.1 with both targets
+  (`thumbv8m.main-none-eabihf`, `riscv32imc-unknown-none-elf`) and the `rustfmt`, `clippy` and
+  `rust-src` components; it is not only the `bridge` job that does.
+- The **robot** workspace follows embassy's "use git when there is no release" policy. Root
+  `[patch.crates-io]` pins `embassy-rp`, `embassy-embedded-hal`, `embassy-sync`, `embassy-executor`,
+  `embassy-time` and `embassy-futures` to embassy commit
+  `9b0680bdd75c6a665aabb3e760ef08ea576abaae` (2026-11-09). All six move together; the revision is
+  pinned in root `[patch.crates-io]` and recorded in `Cargo.lock`, so builds stay reproducible.
+- The **Bridge** cannot follow that pin yet. `esp-hal` 1.2.2 and `esp-radio` 1.0.0-beta.1 implement
+  the crates.io `xarxa-driver` 0.1.0 API, while embassy master's `embassy-net` depends on a git
+  `xarxa-driver` at revision `8f6f33b` whose buffer-ownership and driver-trait API is different. A
+  graph with both would contain two packages named `xarxa-driver` 0.1.0 from different sources, and
+  the Wi-Fi `Interface` would implement the registry trait rather than the git trait the stack
+  accepts. The Bridge therefore keeps the released embassy crates and `embassy-net` 0.9.1
+  (smoltcp-backed) until Espressif ships a compatible `xarxa-driver` generation. The direct, unused
+  `smoltcp` dependency is removed; smoltcp remains a transitive dependency of released
+  `embassy-net` only.
+- Consequences: a single `rustup` pin and one stable toolchain cover the whole repository, so a
+  contributor no longer enters `bridge/` to get a different compiler. The robot can take embassy
+  fixes and API changes immediately; the Bridge waits on its HAL rather than carrying a second
+  xarxa driver or a packet-copying adapter. Revisit the Bridge pin when `esp-hal`/`esp-radio` update
+  `xarxa-driver`, and re-check the embassy commit then.

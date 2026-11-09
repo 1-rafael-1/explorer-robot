@@ -1,4 +1,4 @@
-//! The preamble's server side: the challenge, the proofs and the verdicts (ticket 09).
+//! The preamble's server side: the challenge, the proofs and the verdicts.
 
 mod support;
 

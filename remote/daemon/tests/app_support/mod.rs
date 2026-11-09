@@ -100,7 +100,7 @@ impl TokenGate for FakeGate {
     }
 }
 
-/// Records the Session hooks ticket 13 will wire.
+/// Records the Session hooks the host wires.
 #[derive(Debug, Default)]
 pub struct RecordingHooks {
     /// How many times the first-auth hook fired.

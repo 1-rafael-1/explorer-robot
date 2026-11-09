@@ -29,8 +29,7 @@ implementation is the reference sequence.
 `J10` (`EXP.DATA`: TX, RX, EN, BOOT, IRQ). The series ferrite bead on the 5 V feed
 and the ESD clamp array are **not fitted**; the connector capacitors are
 10 µF + 1 µF. Whether to accept, bodge or re-spin is an open decision, recorded
-with the verified pinout in
-`.scratch/expansion-remote/issues/10-harness-and-port-as-built.md`.
+with the verified pinout during the expansion-and-remote work.
 
 **Considered Options**
 

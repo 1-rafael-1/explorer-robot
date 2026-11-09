@@ -1,4 +1,4 @@
-//! The end-to-end host chain: daemon + Bridge Stub + headless WebSocket client (ticket 13).
+//! The end-to-end host chain: daemon + Bridge Stub + headless WebSocket client.
 //!
 //! Each test binds discovery on an ephemeral loopback port, points the stub's Beacon there, and
 //! drives the daemon's real [`Host`] wiring through a real `/ws` upgrade. The expected states and

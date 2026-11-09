@@ -3,11 +3,12 @@
 //! Replaces the synthetic `lidar_stub` task. A single long-lived embassy task on
 //! **core1** owns a [`LidarSession`], which retains the UART0/GPIO28/GPIO29
 //! [`Peri`] handles, the `LIDAR_PWR` enable and the static buffers. The UART
-//! exists only while the switched 5 V branch is powered: [`LidarSession::power_up`]
+//! exists only while the switched 5 V branch is powered: [`UartResources::power_up`]
 //! asserts the enable, waits for the switch rise and constructs the buffered
-//! UART; [`LidarSession::power_down`] quiesces it, drops it, releases TX and RX
-//! to high-Z, clears `UARTCR.EN`/`TXE`/`RXE`, and only then deasserts
-//! `LIDAR_PWR` (ADR-0023). The task is driven by a one-way command channel.
+//! UART; [`quiesce`] drains and drops it; then [`PowerControl::complete_power_down`]
+//! releases TX and RX to high-Z through [`UartResources::release_pads`], clears
+//! `UARTCR.EN`/`TXE`/`RXE`, and only then deasserts `LIDAR_PWR` (ADR-0023). The
+//! task is driven by a one-way command channel.
 //!
 //! # The model
 //!
@@ -39,7 +40,7 @@
 //! branch down and retries a bounded number of times before reporting
 //! [`LidarStatus::Failed`]. Every path that deasserts `LIDAR_PWR` — bring-up
 //! failure, retry, streaming restart, terminal failure and disable — goes through
-//! [`LidarSession::power_down`], so no path can switch the branch off with a live
+//! [`quiesce`], so no path can switch the branch off with a live
 //! UART.
 //!
 //! # Streaming
@@ -149,31 +150,43 @@ static RX_BUF: StaticCell<[u8; RX_BUF_LEN]> = StaticCell::new();
 
 /// The concrete driver for one powered period: buffered UART0 plus the GPIO30
 /// power gate.
-type LidarDriver<'a> = CoinD6<'a, BufferedUart, Output<'static>>;
+type LidarDriver<'a, 'p> = CoinD6<'a, BufferedUart<'p>, Output<'static>>;
 
 /// Owner of the `LiDAR` branch's retained resources and power/UART sequencing.
 ///
 /// The session keeps the raw [`Peri`] handles, one `Output` for `LIDAR_PWR`
 /// (held low while off) and the `'static` TX/RX buffers. It does not store the
-/// driver: [`Self::power_up`] returns one that borrows the caller's ingest chunk
-/// for the powered period, and [`Self::power_down`] consumes it again. That
+/// driver: [`UartResources::power_up`] returns one that borrows the caller's ingest
+/// chunk for the powered period, and [`quiesce`] consumes it again. That
 /// keeps the UART — and the pads muxed to it — alive only while the branch is
 /// powered.
 pub struct LidarSession {
+    /// UART handles and ring buffers, borrowed for one powered period.
+    port: UartResources,
+    /// Power line, usable while the driver borrows the port.
+    control: PowerControl,
+}
+
+/// UART handles and ring buffers, borrowed for one powered period.
+struct UartResources {
     /// UART0 peripheral handle, retained for reconstruction.
     uart: Peri<'static, UART0>,
     /// UART0 TX pad (GPIO 28), retained for reconstruction and release.
     tx: Peri<'static, PIN_28>,
     /// UART0 RX pad (GPIO 29), retained for reconstruction and release.
     rx: Peri<'static, PIN_29>,
-    /// `LIDAR_PWR` enable; `None` only while a driver owns the powered branch.
-    power: Option<Output<'static>>,
     /// Static TX ring buffer, reborrowed on every construction.
     tx_buf: &'static mut [u8; TX_BUF_LEN],
     /// Static RX ring buffer, reborrowed on every construction.
     rx_buf: &'static mut [u8; RX_BUF_LEN],
     /// UART configuration used for every construction.
     uart_config: uart::Config,
+}
+
+/// Power line and timing retained across powered periods.
+struct PowerControl {
+    /// `LIDAR_PWR` enable; `None` only while a driver owns the powered branch.
+    power: Option<Output<'static>>,
     /// Instant of the most recent power-down, for the minimum off interval.
     last_power_down: Option<Instant>,
 }
@@ -199,17 +212,23 @@ impl LidarSession {
         let mut uart_config = uart::Config::default();
         uart_config.baudrate = UART_BAUD;
         Self {
-            uart,
-            tx,
-            rx,
-            power: Some(Output::new(power_enable, Level::Low)),
-            tx_buf: TX_BUF.init([0; TX_BUF_LEN]),
-            rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
-            uart_config,
-            last_power_down: None,
+            port: UartResources {
+                uart,
+                tx,
+                rx,
+                tx_buf: TX_BUF.init([0; TX_BUF_LEN]),
+                rx_buf: RX_BUF.init([0; RX_BUF_LEN]),
+                uart_config,
+            },
+            control: PowerControl {
+                power: Some(Output::new(power_enable, Level::Low)),
+                last_power_down: None,
+            },
         }
     }
+}
 
+impl UartResources {
     /// Power the branch and build a driver for the powered period.
     ///
     /// Waits out the minimum off interval, asserts `LIDAR_PWR`, waits for the
@@ -220,16 +239,20 @@ impl LidarSession {
     ///
     /// Returns `None` only if a driver already owns the power enable, which the
     /// one-driver-at-a-time task contract makes unreachable.
-    #[must_use = "the driver owns the powered branch until it is passed to `power_down`"]
-    pub async fn power_up<'i>(&mut self, ingest: &'i mut [u8]) -> Option<LidarDriver<'i>> {
-        if let Some(last) = self.last_power_down {
+    #[must_use = "the driver owns the powered branch until it is passed to `quiesce`"]
+    async fn power_up<'i, 'p>(
+        &'p mut self,
+        control: &mut PowerControl,
+        ingest: &'i mut [u8],
+    ) -> Option<LidarDriver<'i, 'p>> {
+        if let Some(last) = control.last_power_down {
             let elapsed = Instant::now().saturating_duration_since(last);
             if let Some(remaining) = POWER_CYCLE_OFF.checked_sub(elapsed) {
                 Timer::after(remaining).await;
             }
         }
 
-        let mut power = self.power.take()?;
+        let mut power = control.power.take()?;
         // `embassy_rp::gpio::Output`'s inherent setter is infallible.
         power.set_high();
         Timer::after(BRANCH_RISE).await;
@@ -246,61 +269,74 @@ impl LidarSession {
         Some(CoinD6::new(uart, power, ingest, Config::default()))
     }
 
-    /// Quiesce and deinitialize the branch, then deassert `LIDAR_PWR`.
-    ///
-    /// Runs the ADR-0023 sequence in order: bounded best-effort stop, recover the
-    /// UART and enable, bounded wait for the hardware shifter, drop the UART,
-    /// release TX and RX to high-Z inputs with no pull, clear `UARTCR.EN`/`TXE`/
-    /// `RXE`, deassert the enable and record the power-down instant. Every wait
-    /// is bounded, so a dead or silent UART cannot hang teardown.
-    pub async fn power_down(&mut self, mut driver: LidarDriver<'_>) {
-        // 1. Best-effort stop, bounded so a dead or silent UART cannot hang
-        //    teardown.
-        match with_timeout(STOP_TIMEOUT, driver.stop()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!("[lidar] stop command failed (best-effort): {:?}", Debug2Format(&error)),
-            Err(_) => warn!("[lidar] stop timed out during power-down"),
-        }
-
-        // 2. Recover the UART and the power enable.
-        let (uart, mut power) = driver.release();
-        // 3. Wait, bounded, for the hardware shifter to drain. `flush()` only
-        //    drains the software ring, so this is what keeps the stop command
-        //    from being truncated.
-        let drained = with_timeout(BUSY_TIMEOUT, async {
-            while uart.busy() {
-                Timer::after(Duration::from_micros(100)).await;
-            }
-        })
-        .await;
-        if drained.is_err() {
-            warn!("[lidar] UART shifter did not drain within {:?}", BUSY_TIMEOUT);
-        }
-
-        // 4. Drop the UART: this deinits its ring buffers and disables
-        //    `UART0_IRQ`.
-        drop(uart);
-
-        // 5. Release both pads to high-Z inputs with no pull, so neither line can
-        //    source current into the unpowered branch.
+    /// Release both pads to high-Z inputs with no pull, so neither line can
+    /// source current into the unpowered branch.
+    fn release_pads(&mut self) {
         drop(Input::new(self.tx.reborrow(), Pull::None));
         drop(Input::new(self.rx.reborrow(), Pull::None));
+    }
+}
 
-        // 6. Deinitialize the peripheral: no enable, transmitter or receiver.
+impl PowerControl {
+    /// Release the pads, deinitialize the peripheral and deassert the branch
+    /// after the UART has been dropped.
+    ///
+    /// Releases both UART pads to high-Z via [`UartResources::release_pads`],
+    /// clears `UARTCR.EN`/`TXE`/`RXE`, deasserts the enable and records the
+    /// power-down instant.
+    ///
+    /// The split between [`UartResources`] and `PowerControl` is forced by
+    /// `BufferedUart` borrowing the UART handles, so the teardown order is fixed:
+    /// `quiesce` → release pads → deassert power. Folding the pad release in here
+    /// keeps that order at one call site.
+    fn complete_power_down(&mut self, uart: &mut UartResources, mut power: Output<'static>) {
+        uart.release_pads();
+
         pac::UART0.uartcr().modify(|w| {
             w.set_uarten(false);
             w.set_txe(false);
             w.set_rxe(false);
         });
 
-        // 7. Deassert the branch enable.
         power.set_low();
         self.power = Some(power);
-
-        // 8. Record the instant so the next power-up enforces the minimum off
-        //    interval.
         self.last_power_down = Some(Instant::now());
     }
+}
+
+/// Stop the device, recover the UART, drain it, and drop it.
+///
+/// Runs the ADR-0023 order up to the drop: bounded best-effort stop, recover the
+/// UART and enable, bounded wait for the hardware shifter, drop the UART. Every
+/// wait is bounded, so a dead or silent UART cannot hang teardown.
+async fn quiesce(mut driver: LidarDriver<'_, '_>) -> Output<'static> {
+    // 1. Best-effort stop, bounded so a dead or silent UART cannot hang
+    //    teardown.
+    match with_timeout(STOP_TIMEOUT, driver.stop()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!("[lidar] stop command failed (best-effort): {:?}", Debug2Format(&error)),
+        Err(_) => warn!("[lidar] stop timed out during power-down"),
+    }
+
+    // 2. Recover the UART and the power enable.
+    let (uart, power) = driver.release();
+    // 3. Wait, bounded, for the hardware shifter to drain. `flush()` only
+    //    drains the software ring, so this is what keeps the stop command
+    //    from being truncated.
+    let drained = with_timeout(BUSY_TIMEOUT, async {
+        while uart.busy() {
+            Timer::after(Duration::from_micros(100)).await;
+        }
+    })
+    .await;
+    if drained.is_err() {
+        warn!("[lidar] UART shifter did not drain within {:?}", BUSY_TIMEOUT);
+    }
+
+    // 4. Drop the UART: this deinits its ring buffers and disables `UART0_IRQ`.
+    drop(uart);
+
+    power
 }
 
 // ── Status cell (lock-free) ───────────────────────────────────────────────────
@@ -420,7 +456,8 @@ pub async fn lidar_task(mut session: LidarSession) {
 
         info!("[lidar] enable requested");
         match serve_enabled(
-            &mut session,
+            &mut session.port,
+            &mut session.control,
             &mut ingest[..],
             &mut scratch,
             &mut sequence,
@@ -472,13 +509,14 @@ fn set_status(status: LidarStatus) {
 /// and power-cycle to recover from streaming failures.
 ///
 /// Power assertion and UART construction happen outside the attempt timeout; each
-/// failed attempt goes through [`LidarSession::power_down`], and the next
-/// [`LidarSession::power_up`] enforces the minimum off interval. A device that
+/// failed attempt goes through [`quiesce`] and [`PowerControl::complete_power_down`],
+/// and the next [`UartResources::power_up`] enforces the minimum off interval. A device that
 /// cannot be brought up leaves the status `Failed`, the branch off and stale
 /// state cleared.
 #[allow(clippy::large_futures)]
 async fn serve_enabled(
-    session: &mut LidarSession,
+    port: &mut UartResources,
+    control: &mut PowerControl,
     ingest: &mut [u8],
     scratch: &mut Scan,
     sequence: &mut u64,
@@ -490,42 +528,52 @@ async fn serve_enabled(
         set_status(LidarStatus::Warming);
 
         let mut attempt: u8 = 1;
-        let driver = loop {
-            let Some(mut candidate) = session.power_up(&mut *ingest).await else {
-                break None;
+        let (end, power) = {
+            let driver = loop {
+                let Some(mut candidate) = port.power_up(control, &mut *ingest).await else {
+                    break None;
+                };
+                match with_timeout(WARMUP_TIMEOUT, attempt_bring_up(&mut candidate, scratch)).await {
+                    Ok(true) => break Some(candidate),
+                    Ok(false) => warn!("[lidar] bring-up attempt {} failed", attempt),
+                    Err(_) => warn!("[lidar] bring-up attempt {} timed out", attempt),
+                }
+                // Power the branch down so the retry starts from a known off-state.
+                let power = quiesce(candidate).await;
+                control.complete_power_down(port, power);
+                if attempt >= BRINGUP_ATTEMPTS {
+                    break None;
+                }
+                attempt += 1;
             };
-            match with_timeout(WARMUP_TIMEOUT, attempt_bring_up(&mut candidate, scratch)).await {
-                Ok(true) => break Some(candidate),
-                Ok(false) => warn!("[lidar] bring-up attempt {} failed", attempt),
-                Err(_) => warn!("[lidar] bring-up attempt {} timed out", attempt),
+
+            let Some(mut driver) = driver else {
+                set_status(LidarStatus::Failed);
+                clear_stale_state(last_obstacle).await;
+                return StreamEnd::Failed;
+            };
+
+            set_status(LidarStatus::Streaming);
+            if started {
+                info!("[lidar] device restarted");
+            } else {
+                started = true;
+                info!("[lidar] streaming");
             }
-            // Power the branch down so the retry starts from a known off-state.
-            session.power_down(candidate).await;
-            if attempt >= BRINGUP_ATTEMPTS {
-                break None;
+            // Seed the edge tracker with the current flag so the first scan only
+            // raises an event on a real change.
+            *last_obstacle = Some(perception::is_obstacle_detected());
+
+            let end = stream_scans(&mut driver, scratch, sequence, last_obstacle).await;
+            (end, quiesce(driver).await)
+        };
+        control.complete_power_down(port, power);
+        match end {
+            StreamEnd::Disabled => {
+                clear_stale_state(last_obstacle).await;
+                set_status(LidarStatus::Off);
+                return StreamEnd::Disabled;
             }
-            attempt += 1;
-        };
-
-        let Some(driver) = driver else {
-            set_status(LidarStatus::Failed);
-            clear_stale_state(last_obstacle).await;
-            return StreamEnd::Failed;
-        };
-
-        set_status(LidarStatus::Streaming);
-        if started {
-            info!("[lidar] device restarted");
-        } else {
-            started = true;
-            info!("[lidar] streaming");
-        }
-        // Seed the edge tracker with the current flag so the first scan only
-        // raises an event on a real change.
-        *last_obstacle = Some(perception::is_obstacle_detected());
-
-        match stream_scans(session, driver, scratch, sequence, last_obstacle).await {
-            StreamEnd::Disabled => return StreamEnd::Disabled,
             StreamEnd::Restart => info!("[lidar] restarting device"),
             StreamEnd::Failed => unreachable!("stream_scans reports restart, not failure"),
         }
@@ -534,7 +582,7 @@ async fn serve_enabled(
 
 /// One bring-up attempt: probe the device-info frame, send start (tolerated), and
 /// warm up.
-async fn attempt_bring_up(driver: &mut LidarDriver<'_>, scratch: &mut Scan) -> bool {
+async fn attempt_bring_up(driver: &mut LidarDriver<'_, '_>, scratch: &mut Scan) -> bool {
     if let Err(error) = driver.probe().await {
         warn!("[lidar] device-info probe failed: {:?}", Debug2Format(&error));
         return false;
@@ -556,19 +604,20 @@ async fn attempt_bring_up(driver: &mut LidarDriver<'_>, scratch: &mut Scan) -> b
     }
 }
 
-/// Stream revolutions until a disable powers the sensor down or the device dies.
+/// Stream revolutions until a disable or a failed read ends the powered period.
 ///
 /// Commands are polled between revolutions. A duplicate enable is inert — the
-/// sensor is already up. A disable stops the device, powers the branch down,
-/// clears its stale cloud and obstacle flag, and returns [`StreamEnd::Disabled`].
+/// sensor is already up. On a disable it returns [`StreamEnd::Disabled`]; the
+/// caller, [`serve_enabled`], then quiesces the driver, completes the power-down
+/// (which releases the pads), clears the stale cloud and obstacle flag, and
+/// publishes [`LidarStatus::Off`]. This function does none of that itself.
 ///
 /// Each revolution is read behind [`STREAM_READ_TIMEOUT`], so the read cannot
 /// block indefinitely on a silent link: a driver read error and a wall-clock
-/// expiry both power the branch down and return [`StreamEnd::Restart`], leaving
-/// the caller to bring the device back up.
+/// expiry both return [`StreamEnd::Restart`], leaving the caller to power-cycle
+/// the branch and bring the device back up.
 async fn stream_scans(
-    session: &mut LidarSession,
-    mut driver: LidarDriver<'_>,
+    driver: &mut LidarDriver<'_, '_>,
     scratch: &mut Scan,
     sequence: &mut u64,
     last_obstacle: &mut Option<bool>,
@@ -580,9 +629,6 @@ async fn stream_scans(
                     // Already enabled and streaming; a duplicate is inert.
                 }
                 LidarCommand::Disable => {
-                    session.power_down(driver).await;
-                    clear_stale_state(last_obstacle).await;
-                    set_status(LidarStatus::Off);
                     return StreamEnd::Disabled;
                 }
             }
@@ -601,7 +647,6 @@ async fn stream_scans(
                     "[lidar] scan read failed, restarting device: {:?}",
                     Debug2Format(&error)
                 );
-                session.power_down(driver).await;
                 return StreamEnd::Restart;
             }
             Err(_) => {
@@ -609,7 +654,6 @@ async fn stream_scans(
                 // it never fires on a silent link. Expiry means no revolution
                 // arrived within the wall-clock bound; restart like any error.
                 warn!("[lidar] scan read timed out (sensor silent), restarting device");
-                session.power_down(driver).await;
                 return StreamEnd::Restart;
             }
         }

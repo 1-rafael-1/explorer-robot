@@ -118,7 +118,7 @@ impl RateEntry {
 }
 
 /// Reads one entry from the start of `bytes`, returning it and its encoded length.
-fn decode_entry(bytes: &[u8]) -> Result<(RateEntry, usize), CodecError> {
+const fn decode_entry(bytes: &[u8]) -> Result<(RateEntry, usize), CodecError> {
     if bytes.len() < RateEntry::ENCODED_LEN {
         return Err(CodecError::Length);
     }

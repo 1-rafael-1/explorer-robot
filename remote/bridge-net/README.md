@@ -3,7 +3,9 @@
 The Bridge↔daemon network edge (ADR-0037, ADR-0039, ADR-0040): the Discovery Beacon, the
 pre-Link `EXPH` HMAC-SHA256 preamble and the fixed ports. It is `no_std` and allocation-free;
 sockets, tasks and timers stay in the Bridge firmware and the daemon, its only consumers. The
-robot never depends on it.
+robot never depends on it. It is a member of the `remote/` host workspace but is also compiled for
+`riscv32imc` by the Bridge; see the [remote page](../../docs/components/remote.md),
+[Bridge page](../../docs/components/bridge.md) and [architecture.md](../../docs/architecture.md).
 
 The crate version mirrors the preamble version (`1.0.0` = preamble `1.0`); a test enforces it.
 

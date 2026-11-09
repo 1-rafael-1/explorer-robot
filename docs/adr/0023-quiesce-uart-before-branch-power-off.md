@@ -161,3 +161,19 @@ the 3.3 V logic.
 - Implement the camera's PIO UART release/tri-state and its boot delay.
 - Implement the expansion task's UART1/`EN`/`BOOT` sequencing.
 - Measure the off-state back-feed on each branch when the board exists.
+
+**Amendment (2026-11-09).** The statement above that `BufferedUart::new` returns a
+`BufferedUart` with no lifetime parameter is historical. Embassy master's
+`BufferedUart<'d>` borrows the UART handles and ring buffers for `'d`, so the
+implementation splits the retained resources: `UartResources` holds the `Peri`
+handles, the static rings and `power_up`; `PowerControl` holds the branch enable,
+the minimum-off bookkeeping and `complete_power_down`. Power-up is
+`UartResources::power_up`. Teardown is `quiesce(driver)` — bounded stop, drain
+and drop — then `PowerControl::complete_power_down(power)`, which calls
+`UartResources::release_pads()`, clears `UARTCR.EN`/`TXE`/`RXE` and deasserts the
+branch. In the Link task the drain step is `drain_uart(uart)` instead of
+`quiesce`. The sequence and the one-owner invariant above are unchanged: every
+path that deasserts branch power still stops, drains and drops the UART,
+releases the pads, then deasserts power in that order. References above to `LidarSession::power_up` and
+`LidarSession::power_down` are superseded; the session keeps its name as the
+retained-resource owner.

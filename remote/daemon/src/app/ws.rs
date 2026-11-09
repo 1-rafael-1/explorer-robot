@@ -132,8 +132,8 @@ async fn session(mut socket: WebSocket, state: AppState, peer: SocketAddr) {
     else {
         return;
     };
-    // The relay guard must drop before the ticket so the last-disconnect hook sees the relay
-    // without this connection (drop order is the reverse of declaration order).
+    // The relay guard must drop before the admission ticket so the last-disconnect hook sees the
+    // relay without this connection (drop order is the reverse of declaration order).
     let _ticket = state.admit();
     let _connection = RelayConnection {
         relay: Arc::clone(&state.relay),

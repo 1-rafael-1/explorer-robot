@@ -1,4 +1,4 @@
-//! The scriptable `DENY` variants and the natural gates (ticket 09).
+//! The scriptable `DENY` variants and the natural gates.
 
 mod support;
 

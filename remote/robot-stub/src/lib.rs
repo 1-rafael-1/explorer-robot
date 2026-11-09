@@ -1,4 +1,4 @@
-//! The Robot Stub (ticket 02): the robot's real `LinkCore` behind a serial port.
+//! The Robot Stub: the robot's real `LinkCore` behind a serial port.
 //!
 //! The stub replaces the robot on the Bridge's bench. It owns no wire semantics of its own:
 //! [`link_core::LinkCore`] answers `HELLO` and `PING`, deduplicates commands, re-ACKs the last
@@ -56,7 +56,7 @@ const EXECUTION_LOG: usize = 32;
 /// matching ADR-0033's assumed maximum frame sizes.
 const WORST_DETAIL: &str = "0123456789abcdef0123456789abcdef";
 
-/// The stub's load profile, selected by the binary's `--persona` (ticket 02).
+/// The stub's load profile, selected by the binary's `--persona`.
 ///
 /// A persona never changes the wire semantics; it configures what the stub samples, how fast it
 /// samples and how much event traffic it publishes. The fault knobs compose with every persona.
@@ -87,7 +87,7 @@ pub fn worst_case_config() -> Config {
     }
 }
 
-/// The induced faults on the stub's serial side, on demand (ticket 02).
+/// The induced faults on the stub's serial side, on demand.
 ///
 /// The knobs act on the bytes the stub writes: `drop_every` drops every n-th outbound byte,
 /// `corrupt_every` flips every n-th outbound byte, and `delay_ms` holds outbound bytes for the
@@ -131,7 +131,7 @@ pub enum OwnedReply {
 }
 
 /// What the stub knows about one `BRIDGE_CONTROL` request: the Bridge's reply, or that none came
-/// before the configured timeout (ticket 02).
+/// before the configured timeout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BridgeControlReport {
     /// The Bridge acknowledged the request.

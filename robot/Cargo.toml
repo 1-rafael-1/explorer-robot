@@ -64,11 +64,3 @@ embedded-io-async = "0.7.0"
 sequential-storage = "7.1.0"
 embedded-storage-async = "0.4.1"
 assign-resources = "0.5.0"
-
-# [patch.crates-io]
-# embassy-rp = { git = "https://github.com/embassy-rs/embassy" }
-# embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy" }
-# embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
-# embassy-executor = { git = "https://github.com/embassy-rs/embassy" }
-# embassy-time = { git = "https://github.com/embassy-rs/embassy" }
-# embassy-futures = { git = "https://github.com/embassy-rs/embassy" }

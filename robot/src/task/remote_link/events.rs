@@ -115,9 +115,9 @@ static EVENT_DROPS: AtomicU32 = AtomicU32::new(0);
 /// Number of Events dropped for want of channel room, for diagnostics.
 ///
 /// A dropped Event is still a state change the state modules reflect; only the
-/// link's reliable copy is lost. The counter is read by the bench and the later
-/// Link State work.
-#[allow(dead_code)] // Read by the bench / Link State work in later tickets.
+/// link's reliable copy is lost. The counter is exposed through the link task as
+/// a diagnostic; nothing reads it in the firmware yet.
+#[allow(dead_code)] // Diagnostic, exposed through the link task.
 #[must_use]
 pub fn event_drops() -> u32 {
     EVENT_DROPS.load(Ordering::Relaxed)

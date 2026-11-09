@@ -1,4 +1,4 @@
-//! The preamble's transport helpers (ticket 09, ADR-0037, ADR-0039).
+//! The preamble's transport helpers (ADR-0037, ADR-0039).
 //!
 //! The message codec, framing and proofs are `bridge-net`'s, so both sides of the exchange share
 //! one implementation. This module re-exports them and adds the blocking `std::io` reads and

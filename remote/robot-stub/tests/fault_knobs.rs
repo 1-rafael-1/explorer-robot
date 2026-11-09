@@ -1,4 +1,4 @@
-//! Host tests for the fault knobs (ticket 02): induced drop, delay and corruption of bytes on the
+//! Host tests for the fault knobs: induced drop, delay and corruption of bytes on the
 //! serial side, observable at the byte seam and switchable on demand.
 //!
 //! The knobs act on the stub's outbound bytes, which is what the Bridge's parser receives; the

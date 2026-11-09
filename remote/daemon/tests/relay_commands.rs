@@ -103,7 +103,7 @@ fn a_command_result_reaches_only_the_originating_tab() {
     assert_eq!(addressed.command_seq, 9);
     assert_eq!(addressed.outcome, Outcome::Rejected);
     assert_eq!(addressed.status, Status::Busy);
-    assert!(results(&relay.poll(app_b, 31)).is_empty());
+    assert_eq!(results(&relay.poll(app_b, 31)), Vec::new());
 }
 
 /// `VERSION_MISMATCH` is `rejected` with a detail, because the app has no separate status.

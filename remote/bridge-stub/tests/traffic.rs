@@ -1,4 +1,4 @@
-//! The scripted robot traffic behind `ACCEPT` (ticket 09).
+//! The scripted robot traffic behind `ACCEPT`.
 
 mod support;
 

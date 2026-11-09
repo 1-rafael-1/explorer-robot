@@ -8,7 +8,10 @@
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
 
 use defmt::{debug, error, info};
-use embassy_rp::flash::{Async, ERASE_SIZE, Flash};
+use embassy_rp::{
+    flash::{ERASE_SIZE, Flash},
+    mode::Async,
+};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
 use sequential_storage::{
@@ -248,7 +251,7 @@ impl Value<'_> for ImuCalibrationFlags {
 /// of the 2048 KB flash. We reference it by absolute flash address offset.
 #[allow(clippy::too_many_lines)]
 #[embassy_executor::task]
-pub async fn flash_storage(flash: Flash<'static, embassy_rp::peripherals::FLASH, Async, { 2048 * 1024 }>) {
+pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
     info!("Flash storage task started");
 
     // FLASH_STORAGE region starts at 0x10000000 + (2048K - 8K).
