@@ -6,6 +6,10 @@ dedupe and TX priority. It composes the mechanisms from `link-protocol` rather t
 reimplementing them. It is `#![no_std]` and allocation-free; the firmware owns the UART, port
 power, sampling and the mapping onto the wire vocabulary.
 
+It is a member of the robot workspace and is consumed by the firmware's Link Task and by the
+Robot Stub. The repo map is in [architecture.md](../../../../docs/architecture.md); the operator
+context is in the [robot page](../../../../docs/components/robot.md).
+
 ## API map
 
 - **`LinkCore::new(config, boot_id, now_ms)`** — one core for this powered link period.

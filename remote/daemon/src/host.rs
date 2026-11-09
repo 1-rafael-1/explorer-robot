@@ -1,5 +1,5 @@
-//! The process wiring ticket 13 owns: config → discovery → app server, and the `AppHooks` that
-//! open and release the Bridge Session (ADR-0039).
+//! The process wiring the daemon binary and the end-to-end test share: config → discovery → app
+//! server, and the `AppHooks` that open and release the Bridge Session (ADR-0039).
 //!
 //! [`Host::start`] is the library entry point the binary and the end-to-end test share. It binds
 //! the app listener, starts the Beacon listener, installs the [`AppHooks`] that ask the link to
@@ -93,7 +93,7 @@ impl From<LinkError> for HostError {
     }
 }
 
-/// The wired pieces ticket 13 supplies to [`Host::start`].
+/// The wired pieces the binary supplies to [`Host::start`].
 pub struct Host {
     /// The pre-bound Beacon listener; binding it first lets a test point the Bridge Stub at it.
     pub discovery: Discovery,

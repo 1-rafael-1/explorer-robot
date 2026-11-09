@@ -3,13 +3,15 @@
 The C3 (ESP32-C3) side of the Bridge: a `no_std` Embassy firmware that sits between the robot's
 UART and the home network. This workspace targets `riscv32imc-unknown-none-elf` and keeps its own
 `.cargo/config.toml`, so it stays out of the robot's and daemon's host workspaces (ADR-0040).
+The full operator page is [docs/components/bridge.md](../docs/components/bridge.md); the repo map
+and data flow are in [docs/architecture.md](../docs/architecture.md).
 
 It currently holds two binaries:
 
 | binary | purpose |
 |---|---|
-| `bridge` | the ticket-07/08 firmware: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, the persisted credential record and pairing token, the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal, the panel's `BRIDGE_CONTROL` actions, Bridge Presence and the task watchdog |
-| `stack-soak` | the ticket-09 language spike, kept as the regression soak: APSTA, a UART loopback and a TCP echo |
+| `bridge` | the current firmware: UHCI RX DMA into the pump, the `bridge-net` preamble and single-client gate, the Discovery Beacon, the persisted credential record and pairing token, the bounded setup AP with its hand-rolled DHCP, DNS catch-all and HTTP portal, the panel's `BRIDGE_CONTROL` actions, Bridge Presence and the task watchdog |
+| `stack-soak` | the original language spike, kept as the regression soak: APSTA, a UART loopback and a TCP echo |
 
 `bridge-core` is the host-testable pump crate the `bridge` binary wires to the HAL (see
 [`bridge-core/README.md`](bridge-core/README.md)).
@@ -51,7 +53,7 @@ the way back, and sets the Discovery Beacon's link-ready flag for five seconds (
 ignores it, because a robot-side `HELLO` without `IS_ACK` is not a legal robot frame).
 
 Both directions run **921600 8N1**, the baud ADR-0033 fixes for the robot, the Bridge and the
-daemon. The ticket-05/06/07 transcripts later in this file predate the ticket-08 harness remap and
+daemon. The transcripts later in this file predate the presence/watchdog harness remap and
 show the old GPIO6/7 pins; use this table for the current image.
 
 ## The credential record and the pairing token
@@ -128,9 +130,9 @@ console from `by-id`; on the current bench it is `/dev/ttyACM1`. If `espflash` r
 before testing, or the 10-minute window will already be running.
 
 The end-to-end sequences, with the exact boot lines and probe output to expect, are
-[Bench acceptance run](#bench-acceptance-run-ticket-05) (the network edge),
-[Bench acceptance run (ticket 06)](#bench-acceptance-run-ticket-06) (Setup Mode) and
-[Bench acceptance run (ticket 07)](#bench-acceptance-run-ticket-07) (the record and token).
+[Bench acceptance run: the network edge](#bench-acceptance-run-the-network-edge),
+[Bench acceptance run: Setup Mode](#bench-acceptance-run-setup-mode) and
+[Bench acceptance run: the credential record](#bench-acceptance-run-the-credential-record).
 `Ctrl-C` ends the monitor and frees `/dev/ttyACM0`.
 
 The monitor resets the board, so the boot banner and the association lines appear after it
@@ -139,11 +141,11 @@ attaches. It holds the serial port, so stop it before the next flash.
 The console prints the boot banner, the association/scan lines, the station address once DHCP
 completes, and a status line every ten seconds.
 
-## Bench acceptance run (ticket 05)
+## Bench acceptance run: the network edge
 
-> **Historical.** Ticket 07 removed the `BRIDGE_STA_SSID`/`BRIDGE_STA_PASSWORD`/
-> `BRIDGE_BENCH_TOKEN` build inputs. The commands below are the ticket-05 record; use the
-> [ticket-07 flow](#bench-acceptance-run-ticket-07) for the current image.
+> **Historical.** The credential-record firmware removed the `BRIDGE_STA_SSID`/`BRIDGE_STA_PASSWORD`/
+> `BRIDGE_BENCH_TOKEN` build inputs. The commands below are the earlier network-edge record; use the
+> [credential-record flow](#bench-acceptance-run-the-credential-record) for the current image.
 
 This is the flow that passed on 2026-11-07: C3 at `192.168.0.138`, token `bench05`, the
 GPIO6↔GPIO7 jumper installed, and a WPA2 station. Replace the address with the one the Bridge
@@ -168,7 +170,7 @@ espflash flash --monitor --chip esp32c3 --port /dev/ttyACM0 --log-format defmt \
 Expect (the bench's values shown):
 
 ```text
-[INFO ] bridge firmware: ticket 05 network edge, station-only, bridge-net preamble, Beacon every 3000ms; uart 921600 8N1 TX=GPIO6 RX=GPIO7
+[INFO ] bridge firmware: network edge, station-only, bridge-net preamble, Beacon every 3000ms; uart 921600 8N1 TX=GPIO6 RX=GPIO7
 [INFO ] bridge identity: device_id=907069c1d064 name=Explorer-D064 token=configured
 [INFO ] sta: station mode configured for ssid=…
 [INFO ] tcp: listening on port 9000 (station interface only, three preamble workers)
@@ -220,8 +222,8 @@ The `HELLO` is ignored by the router on the way back, so `frames=0` and `hello_a
 expected. The proof is the next status line —
 `uart_rx=52B uart_tx=52B … good=1 … link_ready=true` — and the Beacon watcher showing
 `flags=0x03 (provisioned,link-ready)` for one or two datagrams, then back to `0x01` after the 5 s
-window. (Ticket 06 sets the `provisioned` bit whenever a usable credential pair exists; a build
-with no station credentials shows `0x00` and `0x02` instead.)
+window. (The current firmware sets the `provisioned` bit whenever a usable credential pair
+exists; a build with no station credentials shows `0x00` and `0x02` instead.)
 
 Expected for step 3:
 
@@ -255,7 +257,7 @@ matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags
 
 - `dma_stalls` may tick once in step 2 because the UART is quiet between tests. Read it with
   `uart_drop`, `crc`, `bad` and the rising `good`/`uart_rx`: the smooth run was
-  `uart_rx=52B uart_tx=52B good=1 uart_drop=0 crc=0`. A tick after a quiet line is the ticket-04
+  `uart_rx=52B uart_tx=52B good=1 uart_drop=0 crc=0`. A tick after a quiet line is the ADR-0033
   "done-and-silent for 1 s" accounting, not lost data.
 - The matrix's last check leaves a 60 s refusal window. Reset the board (or wait) before another
   connection test; a post-window attempt answers `DENY(unauthorized, retry_ms=60000)`.
@@ -263,11 +265,12 @@ matrix, and `deny_busy` / `deny_refused` are non-zero. The `valid` line's `flags
   `preamble failed: denied: unauthorized` in a probe means the probe's token differs from the one
   compiled into the image.
 
-## Bench acceptance run (ticket 06)
+## Bench acceptance run: Setup Mode
 
-> **Historical.** Ticket 07 removed the build-time credentials this run used to boot provisioned.
-> The portal flow is unchanged; use the [ticket-07 flow](#bench-acceptance-run-ticket-07) for the
-> current flash command and the record's boot lines.
+> **Historical.** The credential-record firmware removed the build-time credentials this run used
+> to boot provisioned. The portal flow is unchanged; use the
+> [credential-record flow](#bench-acceptance-run-the-credential-record) for the current flash
+> command and the record's boot lines.
 
 This is the flow that passed on 2026-11-07. It deliberately builds **without** station
 credentials, so the Bridge boots unprovisioned and raises Setup Mode. The flashed image had no
@@ -291,7 +294,7 @@ expired when you start.
 Expect:
 
 ```text
-[INFO ] bridge firmware: ticket 06 setup portal, bridge-net preamble, Beacon every 3000ms; …
+[INFO ] bridge firmware: setup portal, bridge-net preamble, Beacon every 3000ms; …
 [INFO ] bridge identity: device_id=… name=Explorer-… token=MISSING
 [INFO ] setup: window opened (unprovisioned)
 [INFO ] wifi: setup AP mode (APSTA)
@@ -360,11 +363,11 @@ beacon from=192.168.x.y device=… name='Explorer-…' major=1 tcp_port=9000 fla
 - **WPA2 vs the client limit.** WPA2-PSK is confirmed by the laptop join. `max_connections = 2`
   is configured and accepted by the driver, but a third client was not available to exercise the
   rejection. Close that with a phone when convenient.
-- **Cost.** Against the ticket-05 image: **+27,064 B flash (~26.4 KiB)** and **+32,088 B static
+- **Cost.** Against the network-edge image: **+27,064 B flash (~26.4 KiB)** and **+32,088 B static
   RAM (~31.3 KiB)**; the app partition reported 13.75% of 4 MB. The RAM is mostly the two HTTP
   workers' static request/response/TCP buffers.
 
-## Bench acceptance run (ticket 07)
+## Bench acceptance run: the credential record
 
 This is the record and token lifecycle. It needs no station credentials; the portal's successful
 provisioning step is the owner's, because the home SSID and passphrase are never written down.
@@ -470,7 +473,7 @@ on hardware yet. The wire contract is covered by `remote/robot-stub/tests/bridge
 `link-core`'s tests, and the Bridge's action→reply mapping by `bridge-core`'s routing tests; the
 remaining risk is the firmware glue (the ACK frame flags/seq and the UART enqueue).
 
-## Browser provisioning round-trip (ticket 14)
+## Browser provisioning round-trip
 
 This is the browser-driven version of the portal round trip: forget the station over UART1, join the
 Bridge's setup AP, provision the target network from the page, and rejoin the bench AP. A human
@@ -590,7 +593,7 @@ line carries `ring_used`, `ring_entries` and the drop counters, and `auth_ok` / 
 the daemon connects. Never commit the passphrase, the pairing code or a filled-in
 `config.toml`.
 
-## Bridge Presence and the watchdog (ticket 08)
+## Bridge Presence and the watchdog
 
 ### Bridge Presence
 
@@ -655,7 +658,7 @@ feeding, so the RWDT resets the board. In the 10 s status line, `wdt_feeds` stop
 After the reset expect the normal boot banner with the **same** `pairing_code`, the station rejoin
 and the daemon reconnect with no operator action; the robot keeps streaming at baseline and its
 Boot Id is unchanged (ADR-0035). The daemon/Robot Stub half of that acceptance needs the USB-TTL
-adapter and a provisioned station, as in the ticket-07 notes.
+adapter and a provisioned station, as in the credential-record notes.
 
 ### UART RX recovery
 
@@ -690,7 +693,7 @@ cargo run -p robot-stub -- --port /dev/ttyUSB0 --persona bridge-control --action
 The stub prints its peer state every five seconds. The Bridge's status line is the other half of
 the observation.
 
-## The network edge (ticket 05)
+## The network edge
 
 The listener runs the `bridge-net` preamble before a single Link Protocol byte crosses (ADR-0037):
 `CLIENT_HELLO` → the Bridge proves the token → `CLIENT_AUTH` → `ACCEPT`, all inside 5 s. A wrong
@@ -702,9 +705,9 @@ The Bridge also broadcasts the Discovery Beacon every 3 s on the station interfa
 
 | flag | source |
 |---|---|
-| `provisioned` | a credential record with a usable station credential pair (ticket 07); a token-only record is not provisioned |
+| `provisioned` | a credential record with a usable station credential pair; a token-only record is not provisioned |
 | `link-ready` | a valid Link Protocol frame from the robot in the last 5 s (`beacon::LINK_READY_WINDOW_MS`) |
-| `setup_mode` | the bounded window is open (ticket 06) |
+| `setup_mode` | the bounded window is open |
 | `tcp_port` | the Link listener's port (9000); zero while Setup Mode advertises the portal only |
 
 The identity served in the challenge is the same one the Beacon advertises: the efuse station
@@ -786,7 +789,7 @@ on an idle timeout, a closed peer or a missing `HELLO_ACK`. The probe deliberate
 acknowledge events; the real daemon does, so the stub retransmits events during a probe-only
 soak. That is expected and is not Bridge loss.
 
-The ticket-04 acceptance observation is a worst-case stub run with the probe counting frames and
+The ADR-0033 acceptance observation is a worst-case stub run with the probe counting frames and
 the Bridge status line showing `uart_drop=0 dma_stalls=0 crc=0` throughout.
 
 ## Status line
@@ -842,11 +845,11 @@ status: t=…s rssi=…dBm uart_rx=…B uart_tx=…B uart_kbps=…
 | `scan_sweeps` / `scan_aps` | best-of-N sweeps completed / AP observations merged into the scan cache |
 | `wdt_feeds` / `wdt_withheld` | RTC watchdog feeds / checks that found a stale covered task and withheld the feed (the second should stay zero in a healthy run) |
 
-`uart_drop=0` on a sustained run is the ticket-04 "zero loss" observation.
+`uart_drop=0` on a sustained run is the ADR-0033 "zero loss" observation.
 
 ## The `stack-soak` regression soak
 
-`stack-soak` is the original ticket-09 spike. It brings up **APSTA**, transmits a known frame
+`stack-soak` is the original language spike. It brings up **APSTA**, transmits a known frame
 pattern on UART1 (jumper GPIO6 to GPIO7), echoes TCP bytes on port 9000 on both interfaces, and
 forces station disconnects after ten minutes.
 
@@ -878,14 +881,14 @@ cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tes
 espflash partition-table partitions.csv
 ```
 
-`bridge-core` has 156 host tests: the pre-existing pump/window/DHCP/DNS/portal suites plus 7
-`pairing` tests (length, alphabet, bit mapping, grouping) and 12 `record` tests (round trips and
-every fail-closed case: magic, version, CRC, length, flags, token, credentials). `bridge-net`
-keeps its 18.
+`bridge-core` has 176 host tests: the pump/window/DHCP/DNS/portal suites, 7 `pairing` tests
+(length, alphabet, bit mapping, grouping), 12 `record` tests (round trips and every fail-closed
+case: magic, version, CRC, length, flags, token, credentials) and 11 `heartbeat` tests (the
+watchdog's coverage and liveness rule). `bridge-net` keeps its 18.
 
 `espflash partition-table` parses the CSV and prints the four partitions; the `factory` app has
 3 MiB, and the current image uses about 18.7% of it. The record adds roughly 21 KiB of flash over
-ticket 06.
+the Setup Mode image.
 
 `cargo build --release` must link both `bridge` and `stack-soak` for
 `riscv32imc-unknown-none-elf`:
@@ -920,7 +923,7 @@ ruff check tools/bridge_preamble.py tools/link-probe.py tools/auth-probe.py tool
 - **A reflash re-provisioned the Bridge.** That is only possible after a partition erase or a table
   change. A normal `espflash flash` writes the bootloader, table and app only; check that
   `bridge_data` still points at `0x310000`.
-- **`dma_stalls` rises.** On a quiet bench line the ticket-04 "done-and-silent for 1 s" rule
+- **`dma_stalls` rises.** On a quiet bench line the ADR-0033 "done-and-silent for 1 s" rule
 ticks once; if `uart_drop=0`, `crc=0` and `good` rises, nothing was lost. Under real robot load,
 suspect the Wi-Fi stack holding the DMA task longer than the descriptor ring can absorb. Check the
 heap size and the task priorities before suspecting the UART wiring.

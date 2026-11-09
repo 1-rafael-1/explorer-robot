@@ -620,7 +620,7 @@ impl Ui {
     fn activate(&mut self, hit: Hit) -> bool {
         match hit {
             // Back and Stop return to the parent, as do a value screen's Cancel
-            // and Save; saving is wired in later tickets.
+            // and Save; the firmware picks a submitted value up from `last_activation`.
             Hit::Back | Hit::Stop | Hit::Cancel | Hit::Save => self.go_back(),
             Hit::MenuItem(item) => self.open_item(item),
             Hit::NudgeMinus => self.nudge(-1),

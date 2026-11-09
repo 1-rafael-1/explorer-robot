@@ -148,7 +148,7 @@ fn every_variant_owns_its_indexed_slot() {
     }
 }
 
-/// The labels are stable for the firmware's log line and the ticket's scope table.
+/// The labels are stable for the firmware's log line and the watchdog coverage table.
 #[test]
 fn the_task_labels_are_stable() {
     assert_eq!(CoveredTask::UartRx.label(), "uart-rx");

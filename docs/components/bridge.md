@@ -194,9 +194,9 @@ The build half runs anywhere; flashing and monitoring require the board and are
   every ten seconds.
 - The exact boot lines and probe output for the network edge, Setup Mode and the
   record/token are in the README's
-  [ticket 05](../../bridge/README.md#bench-acceptance-run-ticket-05),
-  [ticket 06](../../bridge/README.md#bench-acceptance-run-ticket-06) and
-  [ticket 07](../../bridge/README.md#bench-acceptance-run-ticket-07)
+  [network-edge run](../../bridge/README.md#bench-acceptance-run-the-network-edge),
+  [Setup Mode run](../../bridge/README.md#bench-acceptance-run-setup-mode) and
+  [credential-record run](../../bridge/README.md#bench-acceptance-run-the-credential-record)
   acceptance runs. The probes live in
   [`bridge/tools/`](../../bridge/tools/): `link-probe.py`,
   `auth-probe.py`, `beacon-watch.py`, `soak.py` and the shared preamble module.

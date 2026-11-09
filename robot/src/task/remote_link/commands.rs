@@ -105,14 +105,14 @@ enum OwnedCommand {
     },
     /// `STOP_PROCEDURE`: the carried id is deliberately not retained.
     StopProcedure,
-    /// `DRIVE_DISTANCE`: owned by ticket 11.
+    /// `DRIVE_DISTANCE`: handed to the drive job.
     DriveDistance {
         /// Signed distance in centimetres.
         distance_cm: i16,
         /// Drive speed percentage.
         speed: u8,
     },
-    /// `ROTATE_BY`: owned by ticket 11.
+    /// `ROTATE_BY`: handed to the drive job.
     RotateBy {
         /// Signed angle in centidegrees.
         angle_cdeg: i16,

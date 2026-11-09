@@ -5,6 +5,9 @@ The host workspace for the remote-control effort: the `remote-daemon` relay, the
 `link-protocol` and `link-core` crates by path; the Bridge firmware
 (`../bridge/`) consumes the same `link-protocol` and `bridge-net`.
 
+The operator page is [docs/components/remote.md](../docs/components/remote.md); the repo map and
+data flow are in [docs/architecture.md](../docs/architecture.md).
+
 | crate / folder | what it is | README |
 |---|---|---|
 | `bridge-net/` | `no_std` Beacon, `EXPH` preamble and fixed ports, shared by the Bridge and the daemon (ADR-0037, ADR-0040) | [bridge-net](bridge-net/README.md) |

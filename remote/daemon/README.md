@@ -5,7 +5,9 @@ HMAC preamble, owns the robot Session, and serves the static app at `/` and one 
 at `/ws` (ADR-0038). It is a pure relay in the app-facing sense: it decodes the wire, flips the
 sign of angles, retains latest-wins state and never exposes the wire or its own process to the
 app. Its shared dependencies are `link-protocol` (wire) and `bridge-net` (preamble, Beacon,
-ports); ADR-0040 records the layout.
+ports); ADR-0040 records the layout. It is a member of the `remote/` host workspace; the operator
+page is [docs/components/remote.md](../../docs/components/remote.md) and the repo map is
+[docs/architecture.md](../../docs/architecture.md).
 
 ## Running
 

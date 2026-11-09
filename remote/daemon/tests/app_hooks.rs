@@ -1,5 +1,5 @@
-//! The Session hooks ticket 13 wires: first authentication, last disconnect, an app `disconnect`
-//! and a manual endpoint (ADR-0039).
+//! The Session hooks the process host wires: first authentication, last disconnect, an app
+//! `disconnect` and a manual endpoint (ADR-0039).
 
 mod app_support;
 

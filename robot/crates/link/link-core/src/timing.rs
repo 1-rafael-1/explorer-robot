@@ -1,6 +1,6 @@
 //! The link's timing contract as named constants (ADR-0030, ADR-0033, ADR-0041).
 //!
-//! The values are the spec's: a 5 s lease, a 2 s Deadman, 1 s `PING`, `HELLO` every 1 s up to five
+//! The values are the ADRs': a 5 s lease, a 2 s Deadman, 1 s `PING`, `HELLO` every 1 s up to five
 //! attempts, command retries at 300 ms doubling to a 1 s cap with three attempts, event retries at
 //! 500 ms doubling to a 2 s cap with five attempts, an 8-entry event ring, `THROTTLE` repetition
 //! every 500 ms, a 2 s `BRIDGE_CONTROL` timeout and a 50 ms frame timeout.
@@ -8,7 +8,7 @@
 //! [`Config`] carries only the values `LinkCore` reads, so a host test can compress time; the
 //! firmware passes a `Config` into [`crate::LinkCore::new`] rather than editing these constants.
 //! [`PING_INTERVAL_MS`], [`HELLO_INTERVAL_MS`], [`HELLO_ATTEMPTS`], the `COMMAND_*` retry figures
-//! and [`THROTTLE_REPEAT_MS`] are the daemon-side contract the spec names; `LinkCore` does not
+//! and [`THROTTLE_REPEAT_MS`] are the daemon-side contract the ADRs name; `LinkCore` does not
 //! implement them and therefore does not carry them in [`Config`].
 
 use link_protocol::{Caps, ids::Stream};

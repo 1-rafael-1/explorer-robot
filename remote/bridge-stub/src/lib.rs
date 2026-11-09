@@ -1,4 +1,4 @@
-//! The Bridge Stub (ticket 09): the daemon's bench peer (ADR-0037, ADR-0039).
+//! The Bridge Stub: the daemon's bench peer (ADR-0037, ADR-0039).
 //!
 //! The stub replaces the Bridge for the daemon's development and tests. It serves the
 //! `bridge-net` preamble's server side — the challenge with the identity fields, the client-proof

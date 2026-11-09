@@ -1,4 +1,4 @@
-//! The Discovery Beacon: the daemon's discovery states, scripted (ticket 09).
+//! The Discovery Beacon: the daemon's discovery states, scripted.
 
 mod support;
 

@@ -1,4 +1,4 @@
-//! Host test for the worst-case persona (ticket 02): ADR-0033's ~10.3 KB/s sustained budget.
+//! Host test for the worst-case persona: ADR-0033's ~10.3 KB/s sustained budget.
 //!
 //! The budget's stream lines price every change-based stream at the 10 Hz sampling tick; its
 //! event line (1,856 B/s) was priced with the 250 ms retry placeholder, while the shipped retry

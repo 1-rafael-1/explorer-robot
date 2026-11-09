@@ -1,4 +1,4 @@
-//! The Robot Stub's bench binary (ticket 02): the library's personas behind a real serial port.
+//! The Robot Stub's bench binary: the library's personas behind a real serial port.
 //!
 //! The port opens at ADR-0033's 921600 8N1 — the baud all three projects share — and the stub
 //! steps on the wall clock. The persona, the Boot Id and the fault knobs come from the command

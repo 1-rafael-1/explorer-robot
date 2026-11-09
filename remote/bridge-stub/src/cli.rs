@@ -25,7 +25,7 @@ use crate::{
 
 /// The usage text, printed by `--help` and on a parse error.
 pub const USAGE: &str = "\
-bridge-stub: the daemon's bench peer (ticket 09)
+bridge-stub: the daemon's bench peer
 usage: bridge-stub [options]
 
 options:

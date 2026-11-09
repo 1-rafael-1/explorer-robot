@@ -1,15 +1,17 @@
 # bridge-core
 
-The Bridge's HAL-agnostic rules, proven on the host without the C3. The crate is `no_std`,
+The Bridge's HAL-agnostic rules, proven on the host without the C3. It is a member of the Bridge
+workspace (`bridge/`); the operator page is
+[docs/components/bridge.md](../../docs/components/bridge.md). The crate is `no_std`,
 allocation-free and I/O-free: it owns no UART, socket, radio or clock. The firmware parses frames
 with `link-protocol` and hands them here; `bridge-core` decides what crosses, what coalesces,
 what is dropped and when to ask the robot to slow down. It also owns the Setup Mode protocol and
 the credential record's codec, which need no HAL: the bounded window, the DHCP, DNS and portal
 codecs, the versioned record and the pairing-code alphabet.
 
-This is the crate behind the spec's claim that "the risky forwarding rules are provable without
-the hardware". Its test suite runs on `x86_64-unknown-linux-gnu` behind the `std` feature, and the
-same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
+The risky forwarding rules are proven on the host rather than on the hardware. Its test suite runs
+on `x86_64-unknown-linux-gnu` behind the `std` feature, and the same crate compiles for
+`riscv32imc-unknown-none-elf` with the feature off.
 
 ## The four rule surfaces
 
@@ -34,7 +36,7 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
 
 `pump` composes the four into `BridgePump`, the frame-level type the firmware wires to its HAL.
 
-## Setup Mode protocol (ticket 06)
+## Setup Mode protocol
 
 - **`setup`** — the bounded window (ADR-0036): 10 minutes, closed ~30 s after a station rises
   while the window is open, raised by an unprovisioned boot, once per boot after five continuous
@@ -49,7 +51,7 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
   (strongest RSSI per SSID), the status text, and the one-page HTML with inline CSS and the
   `fetch('/status')` poll. All writers take a caller buffer.
 
-## The credential record and the pairing token (ticket 07)
+## The credential record and the pairing token
 
 - **`record`** — the versioned, CRC-checked credential record (ADR-0036): magic `BRID`,
   version 1, flags, the station SSID and passphrase, the twelve-character pairing token and a
@@ -66,7 +68,7 @@ same crate compiles for `riscv32imc-unknown-none-elf` with the feature off.
 The firmware implements the `sequential-storage` `Value`/`Key` glue and the `esp-storage`
 partition adapter; neither appears here, so the codec stays host-testable.
 
-## The watchdog's liveness policy (ticket 08)
+## The watchdog's liveness policy
 
 - **`heartbeat`** — a fixed set of covered tasks, each owning one slot, plus the rule that a task
   is alive while its silence is at most the caller's maximum age. The firmware stamps beats from
@@ -144,7 +146,7 @@ The `bridge` binary keeps only HAL wiring:
 
 - **UART RX**: UHCI RX DMA at 921600 8N1 (`GPIO4` TX, `GPIO3` RX) feeds
   `link-protocol::RobotToPcParser`; each frame goes to `pump.on_robot_frame()`. The UART is
-  parsed regardless of a client, so `BRIDGE_CONTROL` and the Beacon's eventual link flag stay
+  parsed regardless of a client, so `BRIDGE_CONTROL` and the Beacon's link-ready flag stay
   truthful with no Remote attached.
 - **TCP RX**: one client at a time on the station stack. On accept the firmware calls
   `pump.connect()` and `pump.authenticate()`; on close it calls `pump.disconnect()` and drains
@@ -160,7 +162,6 @@ The `bridge` binary keeps only HAL wiring:
 - **Timers**: `pump.tick()` expires the authentication deadline and the refusal window.
 - **Status**: the ring occupancy and every drop counter are printed every ten seconds.
 
-Ticket 05 replaced the firmware's zero-proof placeholder with `bridge-net`'s HMAC preamble and
-wired the real single-client supersede path. Ticket 06 wires the setup window and the portal
-codecs to a second `embassy-net` stack. Ticket 07 wires the credential record and the robot-side
-`BRIDGE_CONTROL` replies; neither changes the rules in this crate.
+The firmware wires `bridge-net`'s HMAC preamble and the real single-client supersede path, the
+setup window and the portal codecs to a second `embassy-net` stack, the credential record and the
+robot-side `BRIDGE_CONTROL` replies; none of that changes the rules in this crate.

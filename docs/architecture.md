@@ -28,7 +28,7 @@ states a `version` ([ADR-0040](adr/0040-repo-and-build-layout.md)).
 | `robot/` | The robot firmware package: core0 tasks, the core1 LiDAR task, `src/`, `build.rs`, `memory.x` | `explorer-robot` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0032](adr/0032-remote-link-task.md) |
 | `robot/crates/link/` | The wire and the robot-side core: frame envelope, payload codecs, reliability mechanisms, `LinkCore` | `link-protocol`, `link-core` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0031](adr/0031-link-protocol-payloads.md), [ADR-0032](adr/0032-remote-link-task.md), [ADR-0041](adr/0041-reliability-mechanisms-in-protocol.md) |
 | `robot/crates/drivers/` | Hardware-facing async drivers: LiDAR, display, touch | `coin-d6`, `st7789-async`, `touch-async` | `thumbv8m.main-none-eabihf`; host tests where the driver allows | [ADR-0001](adr/0001-async-st7789-display-driver.md), [ADR-0002](adr/0002-coin-d6-async-driver.md), [ADR-0004](adr/0004-touch-controller-on-shared-display-bus.md) |
-| `robot/crates/models/` | Pure, HAL-agnostic, host-testable logic: claim slot, LiDAR cloud grid, panel model | `claim-slot`, `lidar-cloud`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md) |
+| `robot/crates/models/` | Pure, HAL-agnostic, host-testable logic: claim slot, LiDAR cloud grid, link state, panel model | `claim-slot`, `lidar-cloud`, `link-state`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md) |
 | `robot/crates/hardware-tests/` | Standalone, breadboard-scale HIL example binaries that run on the robot hardware | `hardware-tests` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md) |
 | `bridge/` | The Bridge workspace: network ⇄ UART1 firmware, credential record, Discovery Beacon, preamble gate | `bridge-firmware` (binaries `bridge`, `stack-soak`), `bridge-core` | `riscv32imc-unknown-none-elf` with `build-std` | [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
 | `bridge/bridge-core/` | The Bridge's HAL-agnostic pump and provisioning rules: coalescing, routing, flow, auth, Setup Mode, Credential Record | `bridge-core` | `riscv32imc-unknown-none-elf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0036](adr/0036-wifi-provisioning.md), [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
@@ -42,7 +42,7 @@ states a `version` ([ADR-0040](adr/0040-repo-and-build-layout.md)).
 | `docs/` | Docs index, this page, the component pages and the ADRs under `adr/` | None | No Cargo target | [ADR-0040](adr/0040-repo-and-build-layout.md) |
 | `.github/` | CI workflows and the Markdown link check | None | The three workspace jobs, plus the `docs` job | [ADR-0040](adr/0040-repo-and-build-layout.md) for the workspace jobs; the docs job is repo policy |
 
-`target/` and `.scratch/` are generated or local and are not part of the map.
+`target/` is generated and is not part of the map.
 
 ## Data flow
 
@@ -132,10 +132,10 @@ perception atomics, which is the three-way split in
 `robot/src/task/procedure/` owns the one **Active Claim** ([ADR-0034](adr/0034-one-active-claim.md)).
 A producer takes a `Claim` with `claim` or `start`, reports its phase and terminal outcome through
 it, and `stop` latches the stop for whichever claim holds the slot. The kinds are `Boot`,
-`Procedure(P)` and `Screen(RoomScan)`, and the claim's owner is the only writer of the `activity`
-state. A second claimant is `BUSY`; anyone may stop; there is no owner or takeover mode. Later
-firmware adds the transient `Panel`/`Remote` origin used only by the Deadman
-([ADR-0035](adr/0035-failsafe-deadman.md)).
+`Boot`, `Procedure(P)` and `Screen(RoomScan)`, and the claim's owner is the only writer of the
+`activity` state. A claim records its origin, `Panel` or `Remote`; the Deadman uses it to stop only
+Remote-originated work ([ADR-0035](adr/0035-failsafe-deadman.md)). A second claimant is `BUSY`;
+anyone may stop; there is no owner or takeover mode.
 
 ### Drive path
 
@@ -150,13 +150,13 @@ takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-
 ### Link side
 
 The Link Task is the firmware's side of the Link Protocol, specified in
-[ADR-0032](adr/0032-remote-link-task.md) for a task module under `robot/src/task/`; the module
-lands with the robot-link integration effort. It owns the
-Link Port's power and UART1, drives `LinkCore` from `link-core`, samples the state modules for
-Streams, forwards the curated Events and publishes the Bridge Status snapshot into the link state
-for the panel. The port resources are already assigned in `robot/src/resources.rs`
-(`ExpansionResources`); the task itself is the link implementation work. The glossary entry for the
-[Link Task](../CONTEXT.md#remote-link) is the canonical description.
+[ADR-0032](adr/0032-remote-link-task.md) and implemented by `robot/src/task/remote_link/`. It owns
+the Link Port's power, UART1 and the `EXP_IRQ` presence line; drives `LinkCore` from `link-core`;
+samples the state modules for Streams; forwards the curated Events; dispatches commands through the
+same seam the panel uses, with a long-lived drive job for the volatile drive commands; and runs the
+Remote-originated Deadman. It publishes the Bridge Status snapshot into the link state for the
+panel. The port resources are assigned in `robot/src/resources.rs` (`RemoteLinkResources`). The
+glossary entry for the [Link Task](../CONTEXT.md#remote-link) is the canonical description.
 
 ## Vocabulary
 

@@ -378,7 +378,7 @@ impl FakeRemote {
     /// Unknown stream and event ids are counted and ignored. Command frames carrying `IS_ACK` are
     /// copied into the ACK log. Event frames are deduplicated by `(boot_id, seq)`; a duplicate is
     /// counted and not recorded again, but it is still acknowledged so a lost ACK is repaired.
-    /// Every other non-stream class is ignored until a later ticket implements it.
+    /// Every other non-stream class is ignored for now.
     pub fn feed(&mut self, bytes: &[u8], now_ms: u32) -> usize {
         let before = self.received.len();
         let received = &mut self.received;

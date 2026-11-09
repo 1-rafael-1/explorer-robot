@@ -62,7 +62,7 @@ connect the C3's `3V3` pin to the robot: each side regulates its own 3.3 V.
 
 Both directions run **921600 8N1** (ADR-0033). For the `bridge` image, jumper
 **GPIO3 to GPIO4** on the C3 for a loopback; the `stack-soak` image keeps the
-C3's default pins, so jumper **GPIO6 to GPIO7** for that one. The ticket-05/06/07
+C3's default pins, so jumper **GPIO6 to GPIO7** for that one. The earlier
 transcripts in the Bridge README predate the remap and show the old GPIO6/7
 pins; use the table above for the current image.
 
@@ -309,8 +309,8 @@ WPA2-PSK `explorer-setup`, on `192.168.4.1/24`. The portal is the only service;
 the Link Protocol listener is never on the AP interface. The successful
 provisioning submit needs the owner's home SSID and passphrase and is not part
 of this page: follow the
-[ticket-06 run](../../bridge/README.md#bench-acceptance-run-ticket-06)
-or the current [ticket-07 record run](../../bridge/README.md#bench-acceptance-run-ticket-07).
+[Setup Mode run](../../bridge/README.md#bench-acceptance-run-setup-mode)
+or the current [credential-record run](../../bridge/README.md#bench-acceptance-run-the-credential-record).
 
 ## Bench acceptance runs and further detail
 
@@ -318,16 +318,16 @@ These are **bench-required** and are the source material for the sequences above
 
 - [Bench wiring](../../bridge/README.md#bench-wiring) — the current pin
   table, levels and loopback jumpers.
-- [Bench acceptance run (ticket 05)](../../bridge/README.md#bench-acceptance-run-ticket-05)
+- [Bench acceptance run: the network edge](../../bridge/README.md#bench-acceptance-run-the-network-edge)
   — the network edge and the gate matrix (historical build inputs; the measured
   output is still the reference).
-- [Bench acceptance run (ticket 06)](../../bridge/README.md#bench-acceptance-run-ticket-06)
+- [Bench acceptance run: Setup Mode](../../bridge/README.md#bench-acceptance-run-setup-mode)
   — Setup Mode and the portal.
-- [Bench acceptance run (ticket 07)](../../bridge/README.md#bench-acceptance-run-ticket-07)
+- [Bench acceptance run: the credential record](../../bridge/README.md#bench-acceptance-run-the-credential-record)
   — the credential record, the Pairing Token and the `BRIDGE_CONTROL` actions.
-- [Browser provisioning round-trip (ticket 14)](../../bridge/README.md#browser-provisioning-round-trip-ticket-14)
+- [Browser provisioning round-trip](../../bridge/README.md#browser-provisioning-round-trip)
   — the full portal and rejoin sequence.
-- [Bridge Presence and the watchdog (ticket 08)](../../bridge/README.md#bridge-presence-and-the-watchdog-ticket-08)
+- [Bridge Presence and the watchdog](../../bridge/README.md#bridge-presence-and-the-watchdog)
   — presence, the RWDT and the bench-only stall hook.
 - [The `link-probe.py` round trip and soak](../../bridge/README.md#the-link-probepy-round-trip-and-soak)
   — the probe's output and exit status.

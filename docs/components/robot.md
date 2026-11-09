@@ -119,6 +119,7 @@ cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p link-state --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
 Expected, once per test binary:

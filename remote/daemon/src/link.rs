@@ -11,8 +11,8 @@
 //!
 //! The relay is shared through `Arc<Mutex<Relay>>`. The link never awaits an app: every stream and
 //! event path is a bounded, synchronous relay update. [`Link::spawn`] returns a [`LinkHandle`] with
-//! a cancellation channel and a state subscription, so ticket 13 can open the Session when the
-//! first app authenticates and close it after the grace.
+//! a cancellation channel and a state subscription, so the process host can open the Session when
+//! the first app authenticates and close it after the grace.
 //!
 //! # The epoch
 //!
@@ -114,7 +114,7 @@ impl std::error::Error for LinkError {}
 
 /// The link's connection state, mirroring ADR-0038's app-facing connection states.
 ///
-/// Ticket 13 maps these onto the app's `connection{state}` messages. [`Self::VersionMismatch`] has
+/// The process host maps these onto the app's `connection{state}` messages. [`Self::VersionMismatch`] has
 /// no separate ADR-0038 state, so it is surfaced as `unauthorized` with a detail — the same pattern
 /// ADR-0039 uses for an ACK `VERSION_MISMATCH` becoming `rejected` plus a detail.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,7 +223,7 @@ pub fn random_epoch() -> Result<u32, LinkError> {
 /// The link adapter's configuration: where, with what token, and the ADR's timers.
 #[derive(Clone, Debug)]
 pub struct LinkConfig {
-    /// The Bridge's `host:port`. Discovery lands in ticket 13; this is the manual endpoint.
+    /// The Bridge's `host:port`; the host resolves it from discovery or a manual endpoint.
     pub endpoint: SocketAddr,
     /// The pairing token's bytes; 60 bits in production.
     pub token: Vec<u8>,
@@ -261,7 +261,7 @@ impl LinkConfig {
 
     /// Builds a config with the ADR's timers and the supplied epoch.
     ///
-    /// Tests and ticket 13 use this when the epoch is already fixed for the process.
+    /// Tests and the process host use this when the epoch is already fixed for the process.
     #[must_use]
     pub fn with_epoch(endpoint: SocketAddr, token: impl Into<Vec<u8>>, epoch: u32) -> Self {
         Self {
@@ -355,7 +355,7 @@ impl Link {
 
     /// Runs the adapter until a fatal state or cancellation.
     ///
-    /// Ticket 13 can also drive this future directly when it needs to own the task.
+    /// The process host can also drive this future directly when it needs to own the task.
     pub async fn run(self, mut stop: watch::Receiver<bool>, states: watch::Sender<LinkState>) -> LinkState {
         // The app adapter stamps its relay updates from the same process origin, so the relay's
         // liveness and command timers compare like values across the two adapters (ADR-0039).

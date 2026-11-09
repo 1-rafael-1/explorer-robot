@@ -4,6 +4,9 @@ An async driver for the COIN-D6 360° spinning dToF LiDAR. It's `#![no_std]` and
 HAL-agnostic: it owns an `embedded_io_async::Read + Write` UART and a
 synchronous power `OutputPin`, feeds bytes through a pure decoder, and exposes
 scans either one revolution at a time or aggregated over several revolutions.
+It is one of the robot workspace's drivers, used by the firmware's core1 LiDAR
+task; see the [robot page](../../../../docs/components/robot.md) for that side and
+[architecture.md](../../../../docs/architecture.md) for the repo map.
 
 ## Public API
 

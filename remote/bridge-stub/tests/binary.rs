@@ -1,4 +1,4 @@
-//! The binary: the same scenario, standalone (ticket 09).
+//! The binary: the same scenario, standalone.
 
 mod support;
 

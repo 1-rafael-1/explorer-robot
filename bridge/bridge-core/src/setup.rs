@@ -9,7 +9,7 @@
 //! the station has stayed down long enough, so closing the window does not immediately raise a
 //! new one; exposure stays bounded. A boot that is provisioned while the unprovisioned window is
 //! open therefore cannot later raise an outage window in that same boot — the panel's
-//! `BRIDGE_CONTROL` action 0 remains the on-demand recovery path (ticket 07).
+//! `BRIDGE_CONTROL` action 0 remains the on-demand recovery path (ADR-0037).
 //!
 //! The window owns no clock, no I/O and no radio: the caller passes a monotonic millisecond
 //! timestamp and reports whether the station link is up (associated and holding a DHCP address).
