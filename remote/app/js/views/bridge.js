@@ -4,11 +4,18 @@
 
 import { byId, formatAge, orUnknown, setData, setText } from './dom.js';
 
+/** Returns a stable key for the station state; anything else is `unknown`. */
+export function stationKey(station) {
+  if (station === 'associated' || station === 'connecting' || station === 'down') return station;
+  return 'unknown';
+}
+
 /** Returns a short station label. */
 export function stationLabel(station) {
-  if (station === 'associated') return 'Associated';
-  if (station === 'connecting') return 'Connecting';
-  if (station === 'down') return 'Down';
+  const key = stationKey(station);
+  if (key === 'associated') return 'Associated';
+  if (key === 'connecting') return 'Connecting';
+  if (key === 'down') return 'Down';
   return 'Unknown';
 }
 
@@ -24,9 +31,9 @@ export function rssiBucket(rssi) {
 /** Renders the header chip and the Robot/Link panel. */
 export function renderBridge(state, now = Date.now()) {
   const bridge = state.bridge;
-  const station = bridge?.station ?? null;
+  const station = stationKey(bridge?.station);
   const chip = byId('bridge-chip');
-  setData(chip, 'station', station ?? 'unknown');
+  setData(chip, 'station', station);
   setData(chip, 'rssi', bridge?.rssi_dbm == null ? 'unknown' : rssiBucket(bridge.rssi_dbm).toLowerCase());
   setText(byId('bridge-chip-station'), stationLabel(station));
   setText(byId('bridge-chip-rssi'), rssiBucket(bridge?.rssi_dbm));
@@ -44,7 +51,7 @@ export function renderBridge(state, now = Date.now()) {
   setText(byId('bridge-wdt-feeds'), orUnknown(bridge?.wdt_feeds));
   setText(byId('bridge-wdt-withheld'), orUnknown(bridge?.wdt_withheld));
   setText(byId('bridge-age'), bridge ? formatAge(bridge.ts, now) : 'not reported');
-  setData(byId('bridge-panel'), 'station', station ?? 'unknown');
+  setData(byId('bridge-panel'), 'station', station);
 }
 
 function yesNo(value) {
