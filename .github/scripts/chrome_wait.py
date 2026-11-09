@@ -133,7 +133,7 @@ def start_chrome(chrome: str, user_data_dir: str) -> tuple[subprocess.Popen, int
         if fd not in (3, 4):
             os.close(fd)
 
-    process = subprocess.Popen(  # noqa: S603 - the caller supplies the browser
+    process = subprocess.Popen(
         [
             chrome,
             "--headless=new",

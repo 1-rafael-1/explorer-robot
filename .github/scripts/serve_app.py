@@ -13,7 +13,7 @@ from functools import partial
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, _format, *_args):
+    def log_message(self, format, *args):
         """Suppress the per-request log line."""
 
 
