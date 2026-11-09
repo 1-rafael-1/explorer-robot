@@ -229,3 +229,16 @@ truncating, stalling simulated link. Codecs stay hand-written: no `postcard`, no
 **Amendment (2026-11-08, ticket 15).** The Link Task also publishes `LinkCore::bridge_status()` into
 `state::link` for the panel. It does not re-emit the payload; the Bridge sends the daemon stream
 directly (ADR-0042). The panel's `Link` screen and header indicator extend ADR-0036.
+
+**Amendment (2026-11-09).** `RemoteLinkSession` now owns three retained fields: a
+`UartResources` (the UART1 handle, TX/RX pads, static rings and `power_up`), a
+`PowerControl` (the `EXP_PWR`, `EXP_EN` and `EXP_BOOT` outputs, the `EXP_IRQ`
+handle, `last_power_down` and `complete_power_down`) and the `Trng` that mints
+each Boot Id. `last_power_down` moved from the session onto `PowerControl`.
+Power-up is `UartResources::power_up(&mut control)`. Teardown is
+`drain_uart(uart)` (bounded flush and drop), then
+`PowerControl::complete_power_down(&mut uart)`, which releases the pads, clears
+the UART control and deasserts power; this is the same ADR-0023 order and
+single-owner invariant. The body's
+`RemoteLinkSession` and `LidarSession` method references are historical and
+superseded; the session names stay as the retained-resource owner.
