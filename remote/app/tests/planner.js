@@ -244,7 +244,7 @@ test('a very short and a very long leg both plan without a cap or refusal', asyn
   assertEqual(short.sent[0].name, 'rotate_by', 'a short leg still sends its rotate');
   short.planner.stop();
   assertEqual(short.sent[1].name, 'stop_motion');
-  assertEqual(short.sent[1].args, { brake: 1 });
+  assertEqual(short.sent[1].args, { brake: true });
   short.ack(short.sent[1].seq, { command: 'stop_motion' });
   await shortRun;
 
@@ -462,7 +462,7 @@ test('Stop ends the motion wait and is not confirmed without an ok ACK', async (
 
   h.planner.stop();
   assertEqual(h.sent.map((message) => message.name), ['rotate_by', 'stop_motion']);
-  assertEqual(h.sent[1].args, { brake: 1 }, 'Stop brakes a Manual Drive');
+  assertEqual(h.sent[1].args, { brake: true }, 'Stop brakes a Manual Drive');
 
   h.ack(h.sent[1].seq, {
     command: 'stop_motion',
@@ -485,7 +485,7 @@ test('Stop shows Stopped only on an acked/ok ACK', async () => {
   const stopping = h.planner.stop();
   const stopSeq = h.sent[h.sent.length - 1].seq;
   assertEqual(h.sent[h.sent.length - 1].name, 'stop_motion');
-  assertEqual(h.sent[h.sent.length - 1].args, { brake: 1 });
+  assertEqual(h.sent[h.sent.length - 1].args, { brake: true });
 
   let settled = false;
   running.then(() => {
@@ -502,13 +502,13 @@ test('Stop shows Stopped only on an acked/ok ACK', async () => {
   await stopping;
 });
 
-test('Stop sends stop_motion(brake=1) for a live Manual Drive', async () => {
+test('Stop sends stop_motion with the brake flag for a live Manual Drive', async () => {
   const h = make();
   h.activity(1, 'running');
 
   h.planner.stop();
   assertEqual(h.sent.map((message) => message.name), ['stop_motion']);
-  assertEqual(h.sent[0].args, { brake: 1 });
+  assertEqual(h.sent[0].args, { brake: true });
 
   h.ack(h.sent[0].seq, { command: 'stop_motion' });
   assertEqual(h.store.state.drive.report.title, 'Stopped');

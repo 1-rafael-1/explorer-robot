@@ -473,13 +473,13 @@ export function createPlanner({ store, send = () => 0, now = () => Date.now(), a
 
   /** The contextual stop command: motion for a Manual Drive, procedure for a claim. */
   function stopCommandFor(state, motion) {
-    if (motion) return { name: 'stop_motion', args: { brake: 1 } };
+    if (motion) return { name: 'stop_motion', args: { brake: true } };
     const id = liveActivityId(state);
     // Booting is Activity-only, not a startable Procedure; Stop is idempotent.
     if (id != null && id !== BOOTING_ID && id !== MANUAL_DRIVE_ID) {
       return { name: 'stop_procedure', args: { id } };
     }
-    return { name: 'stop_motion', args: { brake: 1 } };
+    return { name: 'stop_motion', args: { brake: true } };
   }
 
   /** Resolves the Stop wait with the ACK's verdict, never before it. */

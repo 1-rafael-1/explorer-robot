@@ -199,6 +199,20 @@ jobs:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: .github/scripts/run_web_tests.sh
 
+      # The real chain builds the daemon and the Bridge Stub, so this job needs
+      # the repository's Rust pin as well as Chrome.
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "remote -> target"
+
+      - name: Run the real Relay + Bridge Stub chain
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: .github/scripts/run_real_chain.sh
+
   # The live docs: every relative link and image in tracked Markdown must resolve.
   docs:
     runs-on: ubuntu-latest

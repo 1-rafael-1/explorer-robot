@@ -23,6 +23,32 @@ sets the robot's `thumbv8m.main-none-eabihf` default. Run host-workspace command
 directory (or below); `cargo build --manifest-path remote/Cargo.toml` from the root is not
 equivalent and targets the robot. See ADR-0040.
 
+## The Remote App
+
+`app/` is the static **Remote App** the daemon serves at `/`: vanilla ES modules
+and one `<canvas>`, no bundler or build step (ADR-0038, ADR-0043). It connects to
+the Relay's `/ws`, renders the App Snapshot and live Streams/Events in the World
+Frame, drives by point-and-go, and shows Bridge and link status. Serve an edit
+without rebuilding the daemon with the `--assets` override:
+
+```sh
+cargo run -p remote-daemon -- --no-open --assets app
+```
+
+The headless browser suite lives under `app/tests/` and runs from the repository
+root with no Node or npm:
+
+```sh
+.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
+```
+
+The real-chain script builds `remote-daemon` and `bridge-stub`, starts a
+`bridge-stub` with scripted Streams/Events, writes a temporary config with the
+stub's `bench-token`, and runs the daemon with `--assets app --port 0`. See the
+[app README](app/README.md) for the module map, the test pages and the manual
+matrix.
+
 ## Common commands
 
 ```sh
@@ -56,5 +82,6 @@ cargo build --workspace
 
 The end-to-end chain worth naming is the daemon's `host_chain` test: discovery selects a
 Bridge Stub's Beacon, the HMAC preamble succeeds, and a headless WebSocket client receives
-`connecting`, `connected`, a snapshot and streams. The stubs are bench tools, not the robot or
-the Bridge firmware.
+`connecting`, `connected`, a snapshot and streams. The browser level of the same chain is
+`run_real_chain.sh`, which renders `app/tests/real.html` against the real Relay and Bridge
+Stub. The stubs are bench tools, not the robot or the Bridge firmware.

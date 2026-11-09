@@ -41,24 +41,66 @@ rest from the App Snapshot.
 
 ## Test it
 
-The gate is headless Chrome with a fake socket and a fake clock, with no Node or
-npm (see the spec's Testing Decisions). It is also the CI `web` job:
+The gate is headless Chrome, with no Node, npm or bundler (see the spec's
+Testing Decisions). There are three kinds of page under `tests/`:
+
+| page | seam | what it covers |
+|---|---|---|
+| `pure.html` | none | the protocol helpers, geometry and the store's core reducer cases |
+| `state.html` | none | snapshot merging, dedupe, Boot Id reset, Activities, Events and outcome-unknown |
+| `planner.html` | injected send/clock | the Target Point, the two legs, completion, busy/unknown and Stop |
+| `radar.html` | none | the World Frame camera, scan/Pose pairing and the tap guard |
+| `fake.html` | injected socket | the transport handshake, heartbeat, close codes and reconnect |
+| `pairing.html` | injected socket + DOM | auth/pair, 4401, protocol mismatch and the pairing screens |
+| `bridge.html` | none | the Bridge Status message, chip and Robot/Link panel |
+| `accessible.html` | real markup | focus order, targets, contrast tokens and the compact/phone layout |
+| `real.html` | the real `/ws` | the live Relay + Bridge Stub: discovery, Session, App Snapshot, Streams, Events, point-and-go ACKs, Stop and reload reconstruction |
+
+The static suite (and the app boot smoke) is the CI `web` job:
 
 ```sh
 .github/scripts/run_web_tests.sh
 ```
 
-The runner serves this folder same-origin with a small Python server and renders
-every `tests/*.html` page under headless Chrome. A page reports
-`data-result="pass"` on success; a timeout, a load error or a failed assertion
-fails the job. `tests/pure.html` covers the pure modules; `tests/fake.html`
-covers the transport against its injected socket.
+That runner serves this folder same-origin with a small Python server and
+renders every page except `real.html` (which needs the live daemon) under
+headless Chrome with a virtual-time budget. A page reports `data-result="pass"`
+on success; a timeout, a load error or a failed assertion fails the job.
 
-The manual matrix is desktop Chrome and Firefox on loopback and a LAN, the
-844×390 phone-landscape viewport, 200% zoom, a long activity label, a missing
-battery or RSSI value, and a reload that reconstructs the snapshot, the last
-terminal Result Report and the replayed Events. The real Relay and Bridge Stub
-chain is covered by the daemon's `host_chain` and `link_stub` suites.
+The real chain is its own script:
+
+```sh
+.github/scripts/run_real_chain.sh
+```
+
+It builds `remote-daemon` and `bridge-stub` from `remote/`, starts the stub with
+fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop` Events,
+writes a temporary daemon config with the stub's `bench-token`, starts
+`remote-daemon --no-open --assets app --port 0`, waits for `GET /` and the CSP
+header, then drives the real page. `run_real_chain.sh` also loads `/` itself and
+asserts `data-boot="ok"`, which is the embedded/`--assets` boot check; the
+ADR-0039 `frame-ancestors 'none'` CSP deliberately forbids the page from making
+the same assertion in an iframe.
+
+A page finishes asynchronously over a real WebSocket, so `chrome --dump-dom`
+(which dumps at the load event) is too early. The runner uses
+`.github/scripts/chrome_wait.py`, a standard-library DevTools-pipe client that
+polls the page's `data-result`/`data-boot` attribute and prints the page's
+`#results` text on failure. It needs no Node and no Python package.
+
+The real chain also pins the boundary the fake socket cannot: it found that the
+planner's Stop sent `brake: 1` while the Relay's `stop_motion` schema requires a
+boolean. The planner now sends `{ brake: true }`; `tests/planner.html` asserts
+the same shape.
+
+## The manual matrix
+
+The repeatable headless suite is not a substitute for a person at a browser. The
+manual matrix is desktop Chrome and Firefox on loopback and a LAN; the 844×390
+phone-landscape viewport; 200% zoom; a long Activity label; a missing battery or
+RSSI value; and a reload that reconstructs the snapshot, the last terminal
+Result Report and the replayed Events. The daemon's `host_chain` and
+`link_stub` suites cover the same chain at the protocol seam.
 
 ## Accessibility and phone check
 
@@ -104,9 +146,13 @@ Still manual:
 ## Limits
 
 - The real-phone pinch pass is an open item; the 844×390 viewport is a layout
-  check, not a touch test.
+  check, not a touch test. The Firefox pass and the LAN run are manual too.
 - The fixed drive/rotate speeds, icon footprint and preview styling are
   bench-confirmable.
 - The Relay's timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are
   provisional until a real LAN and phone exercise them.
+- The real chain performs the two drive legs as separate `go()` calls (a
+  rotate-only leg and a zero-bearing drive leg) because the Bridge Stub does not
+  script a completion Event; the planner's rotate-then-drive completion path is
+  covered by `tests/planner.html`.
 - The test pages ship inside the embedded folder, unlinked from the app.

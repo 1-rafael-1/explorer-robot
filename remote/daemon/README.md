@@ -66,7 +66,9 @@ commands; the Bridge status survives it.
 ## The app surface
 
 `GET /` serves the SPA (embedded at compile time, or `--assets`). `GET /ws` is one text-frame
-JSON WebSocket; its path never carries a version — `hello.protocol` does. Server messages are
+JSON WebSocket; its path never carries a version — `hello.protocol` does. During app
+development, `cargo run -p remote-daemon -- --no-open --assets app` serves the folder from
+disk so a module or stylesheet edit needs no rebuild. Server messages are
 `hello`, `connection`, `snapshot`, `stream`, `event`, `bridge` and `command_result`; client
 messages are `hello`, `auth`, `pair`, `connect`, `disconnect`, `heartbeat` and `command`. A
 `snapshot` carries the reload-safe state — the latest stream samples, the last terminal Activity, a
@@ -110,6 +112,19 @@ cargo test -p remote-daemon --test host_chain   # discovery → preamble → HEL
 cargo test -p remote-daemon --test link_stub    # daemon link ↔ Bridge Stub
 ```
 
+The app's browser suite is separate and runs from the repository root:
+
+```sh
+.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
+```
+
+`run_real_chain.sh` builds this daemon and `bridge-stub`, writes a temporary config with
+the stub's `bench-token`, and serves `app` with `--assets app --port 0`. The page reports
+through the DOM; the runner polls its `data-result`/`data-boot` attribute with a
+standard-library DevTools-pipe client because `chrome --dump-dom` dumps at load and the
+page finishes over a real WebSocket.
+
 The integration suite covers the relay (`relay_*`), the token store (`config_store`), the
 Beacon listener (`discovery_beacon`), the preamble adapter (`handshake`) and the app adapter
 (`app_auth`, `app_commands`, `app_hooks`, `app_origin`, `app_slow`, `app_static`, `app_ws`).
@@ -128,7 +143,8 @@ cargo build --workspace
 ## Known limits
 
 - The Remote App in `remote/app/` is served at `/` from the embedded copy (or `--assets`);
-  the browser suite runs in CI's `web` job.
+  its pure/fake/real browser suite runs in CI's `web` job, and the manual Firefox, LAN and
+  real-phone steps are listed in the [Remote page](../../docs/components/remote.md).
 - v1 talks to one robot; several discovered Beacons pick one deterministically and name it in
   the app's `detail`.
 - Timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are provisional until a real LAN

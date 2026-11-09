@@ -7,11 +7,19 @@ protocol; the app draws pixels. Nothing here is built for the robot's target.
 There is no installer or release artifact: the operator path is a clone plus
 the commands below.
 
-**Verified:** 2026-11-09 — from `remote/`: `cargo test --workspace` (every
-suite `ok`, 0 failed), `cargo build --workspace` (`Finished` the dev profile,
-exit 0), and `cargo run -p remote-daemon -- --help` (usage printed, exit 0).
-Steps that need a real robot or Bridge, a **Pairing Token**, serial adapters or
-provisioning are **bench-required** and were not verified here.
+**Verified:** 2026-11-09 — from `remote/`: `cargo +nightly fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
+(every suite `ok`, 0 failed) and `cargo build --workspace` (exit 0); from the
+repository root: `.github/scripts/run_web_tests.sh` (the pure, fake-socket and
+accessibility pages), `.github/scripts/run_real_chain.sh` (the real Relay +
+Bridge Stub page and the `/` boot check) and
+`python3 .github/scripts/check_links.py`. A headless Chrome boot smoke at the
+844×390 phone-landscape viewport reported `data-boot="ok"`, and a headless
+Firefox 844×390 render smoke produced a screenshot; neither is a manual matrix
+or touch pass. The manual Firefox, LAN and real-phone steps are listed under
+**Acceptance and known limits**. Steps that need a real robot or Bridge, a
+**Pairing Token**, serial adapters or provisioning are **bench-required** and
+were not verified here.
 
 ## Prerequisites
 
@@ -162,6 +170,79 @@ screenshots. The config store is the only token source. The
 [daemon README](../../remote/daemon/README.md) documents the network defaults,
 the app messages and the headless Bridge Stub recipe.
 
+## The Remote App
+
+The app is the static SPA in `remote/app/`: vanilla ES modules and one `<canvas>`,
+no bundler, no build step, no wasm and no third-party JavaScript. The Relay serves
+it at `/` and the one JSON App Boundary at `/ws`; the app never parses the binary
+wire. The full module map and test commands are in the
+[app README](../../remote/app/README.md).
+
+- **Connection and pairing.** The app derives `ws://<page-host>/ws` from the page
+  origin. The server greets first; the app checks `hello.protocol` and greets
+  back. Loopback needs no token; a LAN peer sends `auth` (stored) or `pair`
+  (submitted) as the first frame. The twelve-character **Pairing Token** is kept
+  in `sessionStorage` for the tab only, is never rendered back, and is cleared on
+  **4401** or a robot `unauthorized`. The connection screen distinguishes
+  searching, connecting, connected, no robots, pairing required, unauthorized,
+  busy, setup mode and reconnecting; a rejected socket never leaves a
+  half-rendered shell.
+- **World Frame radar.** One canvas in the robot's World Frame (identity Pose in
+  v1). Each scan pairs with the Pose at its own timestamp and the robot marker
+  uses the newest Pose. Drag pans, tap picks, wheel/pinch zooms, and the camera
+  cluster offers keyboard pan/zoom/center. The drawn footprint is the tap guard.
+  The radar is the robot's map, not a second one.
+- **Point-and-go.** A tap or the numeric form commits a **Target Point** with a
+  bearing/distance preview; **Go** recomputes the legs from the current Pose and
+  sends `rotate_by` only for a non-zero centidegree, then `drive_distance` at the
+  fixed speeds (35 drive, 60 rotate). There is no clamp, cap, scan-age gate or
+  beyond-range warning: the robot's drive protection owns obstacle safety. The
+  completion Event, not the ACK, is the outcome; a `busy` drive leg is reported
+  without a retry. Stop is always visible and context-sensitive.
+- **Activity, Events and results.** The live Activity and the last terminal
+  Result Report (or a Stopped card, or busy) all read the one store. Labels come
+  from the Catalogue except Idle, Booting and Manual Drive. Events are on demand
+  with an unread badge, replay from the snapshot after a reload, and a sequence
+  gap or overflow marks an in-flight Volatile Command's outcome unknown.
+- **Bridge status.** A header chip (station and RSSI bucket) and a Robot/Link
+  panel (RSSI, channel, provisioning, setup open, link ready, UART/DMA/CRC and
+  watchdog counters). The app shows status only; it does not rotate the token or
+  duplicate the panel's Link screen.
+- **Accessibility and phone.** Native controls, a visible 3 px focus ring,
+  logical focus order, Escape closes overlays and cancels a preview, 34 px
+  targets, and states labelled as well as coloured. One responsive shell: wide
+  radar-first, compact status strip + radar + drive bar + tabbed sheet at
+  `max-width: 900px` or `max-height: 520px`.
+
+### The real-chain test
+
+`tests/real.html` exercises the app modules against the real Relay and Bridge
+Stub, not the fake socket. From the repository root:
+
+```sh
+.github/scripts/run_web_tests.sh     # pure, fake-socket and accessibility pages
+.github/scripts/run_real_chain.sh    # real Relay + Bridge Stub, plus the `/` boot check
+```
+
+`run_real_chain.sh` builds `remote-daemon` and `bridge-stub`, starts the stub with
+fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop` Events,
+writes a temporary config with the stub's `bench-token`, starts the daemon at
+`--assets app --port 0`, waits for `GET /` and the CSP header, then renders
+`tests/real.html`. The page asserts discovery/Session/`connection.connected`, the
+App Snapshot, at least one Stream, the scripted Events, the `rotate_by` and
+`drive_distance` ACKs, `stop_motion` and the Stopped report, a second connection's
+snapshot/replayed Events/event cursor, and `GET /` with the strict CSP. The runner
+also asserts `data-boot="ok"` at `/`; the ADR-0039 `frame-ancestors 'none'` CSP
+blocks the same check in a same-origin iframe. Because the page finishes over a
+real WebSocket, the runner polls the page's `data-*` attribute with a
+standard-library DevTools-pipe client (`chrome_wait.py`); `chrome --dump-dom`
+dumps at the load event and is too early.
+
+The real chain also pins the boundary the fake socket cannot: it found that the
+planner's Stop sent `brake: 1` while the Relay's `stop_motion` schema requires a
+boolean. The planner now sends `{ brake: true }`, and `tests/planner.html` asserts
+the same shape. No Rust or schema changed.
+
 ## App serving and `--assets`
 
 `GET /` serves the static SPA and `GET /ws` is the Relay's one versioned JSON
@@ -173,14 +254,31 @@ instead, so an edit does not need a rebuild:
 cd remote && cargo run -p remote-daemon -- --no-open --assets app
 ```
 
-The Remote App is the static SPA in `remote/app/`: vanilla ES modules and one
-`<canvas>`, no bundler and no build step. It connects to `/ws`, renders the App
-Snapshot and live streams in the World Frame, drives by point-and-go, and shows
-Bridge and link status. On loopback it needs no token; on a LAN it pairs with
-the twelve-character Pairing Token from the robot panel's Link screen and keeps
-the code for the tab only. The headless Chrome suite (the CI `web` job) serves
-the folder same-origin and runs the pure, fake-socket and real-chain pages. See
-the [app README](../../remote/app/README.md).
+The Remote App and its behaviour are described above. The headless Chrome suite
+(the CI `web` job) serves the folder same-origin and runs the pure and
+fake-socket pages; `run_real_chain.sh` adds the real Relay + Bridge Stub page.
+See the [app README](../../remote/app/README.md) for the module map and the
+three test pages.
+
+## Acceptance and known limits
+
+The spec's acceptance is demonstrated by the suite above: connection and
+pairing (fake socket), live state, Events and Activity (state/fake pages), the
+World Frame radar (radar page), point-and-go and Stop (planner page and the real
+chain ACKs), Bridge status (bridge page), the accessible layout (accessible
+page), and the real chain from discovery through `/ws`. Still manual or
+provisional:
+
+- The real-phone pinch and pan pass remains the one open acceptance item; the
+  844×390 and 422 px checks are layout checks, not touch tests.
+- The Firefox pass and the LAN run are manual; the headless gate is Chrome on
+  loopback.
+- The Relay's timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are
+  provisional until a real LAN and a real phone exercise them.
+- The test pages ship inside the embedded folder, unlinked from the app, so they
+  are reachable only by URL (`/tests/...`).
+- The fixed drive/rotate speeds, icon footprint and preview styling are
+  bench-confirmable.
 
 ## What the daemon stores
 
@@ -209,17 +307,18 @@ device id are persisted; nothing is recorded for replay.
 
 ## Bench-required steps
 
-These need hardware and were not verified on this machine:
+These need hardware or a person at the panel and were not verified on this
+machine:
 
 - discovering a real Bridge's Discovery Beacon and opening a Session to the
   real robot;
 - reading the panel's Pairing Token, typing it into the app, and rotating it;
 - running `robot-stub --port /dev/ttyUSB0` (or `/dev/ttyACM*`) against a real
   Bridge;
-- running `bridge-stub` as the daemon's peer;
 - Wi-Fi provisioning and Setup Mode.
 
-The stubs replace hardware but are still bench tools: see the
+The headless `bridge-stub` chain is covered by `run_real_chain.sh` above. The
+stubs replace hardware but are still bench tools: see the
 [robot-stub README](../../remote/robot-stub/README.md) and
 [bridge-stub README](../../remote/bridge-stub/README.md), and the
 [daemon README](../../remote/daemon/README.md#running-against-the-bridge-stub-headlessly)

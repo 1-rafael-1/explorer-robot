@@ -80,6 +80,11 @@ fi
 
 for page in "${pages[@]}"; do
   name="$(basename "$page")"
+  # The real-chain page needs the live Relay and Bridge Stub, so it runs from
+  # run_real_chain.sh rather than this static server.
+  if [[ "$name" == "real.html" ]]; then
+    continue
+  fi
   if [[ -n "$filter" && "$name" != *"$filter"* ]]; then
     continue
   fi
