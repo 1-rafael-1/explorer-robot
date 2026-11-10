@@ -58,7 +58,7 @@ use defmt::{info, warn};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as SpiDev;
 use embassy_futures::select::{Either, select};
 use embassy_rp::{gpio::Output, mode::Async, spi::Spi};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948::{
     Icm20948Driver, SpiInterface,
@@ -258,8 +258,19 @@ enum ImuCommand {
 
 // ── Shared statics ────────────────────────────────────────────────────────────
 
-/// Control signal carrying [`ImuCommand`]s into the IMU task.
-static IMU_CONTROL: Signal<CriticalSectionRawMutex, ImuCommand> = Signal::new();
+/// Depth of the [`IMU_CONTROL`] queue.
+///
+/// Callers issue at most a short burst of commands (mode + start, mode + stop), so
+/// four slots leave headroom without a meaningful RAM cost.
+const IMU_CONTROL_QUEUE_LEN: usize = 4;
+
+/// Ordered queue carrying [`ImuCommand`]s into the IMU task.
+///
+/// This is a channel rather than a single-slot `Signal`: callers send several
+/// commands back-to-back (notably `SetFusionMode` followed by `Start`), and a
+/// signal would let the later command overwrite the earlier one before the task
+/// wakes up. Ordered delivery guarantees each command is acted on in turn.
+static IMU_CONTROL: Channel<CriticalSectionRawMutex, ImuCommand, IMU_CONTROL_QUEUE_LEN> = Channel::new();
 
 /// `true` when `dmp_init_magnetometer` succeeded at start-up; gates `Axis9` usage.
 static MAG_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -300,12 +311,12 @@ pub struct ImuReadings {
 
 /// Signal the IMU task to start continuous DMP measurements.
 pub fn start_imu_readings() {
-    IMU_CONTROL.signal(ImuCommand::Start);
+    send_command(ImuCommand::Start);
 }
 
 /// Signal the IMU task to stop measurements and enter standby.
 pub fn stop_imu_readings() {
-    IMU_CONTROL.signal(ImuCommand::Stop);
+    send_command(ImuCommand::Stop);
 }
 
 /// Select DMP fusion mode.
@@ -313,15 +324,18 @@ pub fn stop_imu_readings() {
 /// `Axis9` is silently downgraded to `Axis6` if the magnetometer was not
 /// available at start-up, preserving the same behaviour as the previous
 /// software-fusion implementation.
+///
+/// Commands are queued in send order, so a mode change issued immediately before
+/// [`start_imu_readings`] is applied instead of being overwritten.
 pub fn set_dmp_fusion_mode(mode: DmpFusionMode) {
-    IMU_CONTROL.signal(ImuCommand::SetFusionMode(mode));
+    send_command(ImuCommand::SetFusionMode(mode));
 }
 
 /// Load magnetometer calibration data (hard/soft-iron + motor-interference).
 ///
 /// Applied to `ImuReadings::calibrated_mag` on every subsequent DMP packet.
 pub fn load_mag_calibration(calibration: MagCalibration) {
-    IMU_CONTROL.signal(ImuCommand::LoadCalibration(calibration));
+    send_command(ImuCommand::LoadCalibration(calibration));
 }
 
 /// Return a snapshot of all latest IMU readings from a single lock.
@@ -330,6 +344,15 @@ pub async fn get_latest_readings() -> ImuReadings {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Enqueue a command for the IMU task, preserving send order.
+fn send_command(command: ImuCommand) {
+    // A full queue means the task stopped draining it; drop the command rather
+    // than stalling the caller, but make the loss visible in the log.
+    if IMU_CONTROL.try_send(command).is_err() {
+        warn!("IMU command queue full — command dropped");
+    }
+}
 
 /// Convert a DMP quaternion to [`Orientation`] (Euler angles in degrees).
 ///
@@ -690,7 +713,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
     let mut rejected_quaternions: u32 = 0;
 
     'command: loop {
-        match IMU_CONTROL.wait().await {
+        match IMU_CONTROL.receive().await {
             // ── Start command ─────────────────────────────────────────────────
             ImuCommand::Start => {
                 info!("Starting IMU readings (DMP mode: {:?})", fusion_mode);
@@ -704,7 +727,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                 let mut fifo_failures: u32 = 0;
 
                 loop {
-                    match select(IMU_CONTROL.wait(), Timer::after(POLL_INTERVAL)).await {
+                    match select(IMU_CONTROL.receive(), Timer::after(POLL_INTERVAL)).await {
                         // ── In-band: Stop ─────────────────────────────────────
                         Either::First(ImuCommand::Stop) => {
                             info!("IMU stopped");
@@ -780,6 +803,13 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                             {
                                                 rejected_quaternions = rejected_quaternions.wrapping_add(1);
                                             }
+
+                                            // The quaternion is unusable, but the raw accel,
+                                            // gyro, and mag fields in the same packet are not.
+                                            // Mag calibration samples them only through this
+                                            // helper, so keep them flowing while suppressing
+                                            // the orientation feedback.
+                                            update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
                                         } else {
                                             let orientation = dmp_quat_to_orientation(quat);
                                             let timestamp_ms = Instant::now().as_millis();
