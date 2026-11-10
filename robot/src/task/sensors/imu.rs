@@ -112,6 +112,12 @@ const IMU_INIT_MAX_ATTEMPTS: u32 = 60; // ≈ 3 s total
 /// Maximum consecutive FIFO-read failures before the IMU task terminates.
 const MAX_FIFO_FAILURES: u32 = 10;
 
+/// Maximum deviation of a DMP quaternion magnitude from 1.0 before rejection.
+const IMU_QUATERNION_NORM_TOLERANCE: f32 = 0.01;
+
+/// Component threshold for treating a quaternion as the identity rotation.
+const IMU_IDENTITY_EPSILON: f32 = 0.01;
+
 // ── Sensor conversion constants ───────────────────────────────────────────────
 
 /// Accelerometer LSB → g for the DMP's ±4 g internal full-scale (8192 LSB/g).
@@ -131,6 +137,10 @@ const MAG_SCALE_UT: f32 = 0.15;
 /// Rate-limiting interval for IMU loop diagnostics when `telemetry_logs` is on.
 #[cfg(feature = "telemetry_logs")]
 const IMU_LOOP_DIAG_LOG_INTERVAL_MS: u32 = 500;
+
+/// Interval between orientation samples printed by `imu_debug`.
+#[cfg(feature = "imu_debug")]
+const IMU_DEBUG_LOG_INTERVAL_MS: u64 = 1_000;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -169,6 +179,16 @@ pub enum DmpFusionMode {
 
 /// System-wide default fusion mode used at start-up.
 pub const DEFAULT_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis6;
+
+/// Fusion mode the sampling loop selects on its first `Start`.
+///
+/// Debug builds start in Axis9 so the magnetometer is exercised; production
+/// starts in Axis6 and the drive subsystem switches modes as needed.
+#[cfg(feature = "imu_debug")]
+const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis9;
+/// Production startup mode: 6-axis fusion, as before `imu_debug` existed.
+#[cfg(not(feature = "imu_debug"))]
+const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis6;
 
 // ── Magnetometer calibration data (local; flash_storage integration TBD) ──────
 
@@ -330,6 +350,14 @@ fn dmp_quat_to_orientation(quat: &icm20948::dmp::Quaternion) -> Orientation {
     }
 }
 
+/// True when `quat` is close to identity (`w = ±1`, `x = y = z = 0`).
+fn is_identity_quaternion(quat: &icm20948::dmp::Quaternion) -> bool {
+    quat.w.abs() >= 1.0 - IMU_IDENTITY_EPSILON
+        && quat.x.abs() <= IMU_IDENTITY_EPSILON
+        && quat.y.abs() <= IMU_IDENTITY_EPSILON
+        && quat.z.abs() <= IMU_IDENTITY_EPSILON
+}
+
 /// Interpolate motor-interference correction for a single track.
 fn interpolate_single_track(calibration: &MagCalibration, speed: f32, is_left: bool) -> (f32, f32, f32) {
     let idx = if is_left { 1 } else { 2 };
@@ -475,6 +503,29 @@ async fn update_statics_from_dmp(
     }
 }
 
+/// Delay provider for the driver's reset poll.
+///
+/// `icm20948-rs` polls `PWR_MGMT_1` every 1 ms after asserting `DEVICE_RESET`.
+/// On this board an SPI read before the reset completes can come back as
+/// `0x00`, which the driver treats as "reset done"; the wake write that follows
+/// is then lost and `init()` reports `InitializationTimeout`. The datasheet
+/// allows up to 100 ms for reset, so make the first poll wait that long.
+struct ResetDelay {
+    /// Whether the post-reset wait still has to be stretched.
+    first_poll: bool,
+}
+
+impl embedded_hal_async::delay::DelayNs for ResetDelay {
+    async fn delay_ns(&mut self, ns: u32) {
+        if self.first_poll {
+            self.first_poll = false;
+            Timer::after(Duration::from_millis(100)).await;
+        } else {
+            Timer::after(Duration::from_nanos(u64::from(ns))).await;
+        }
+    }
+}
+
 /// Power-up, reset, verify, and fully initialise the ICM-20948, retrying on failure.
 ///
 /// Uses `SpiInterface` + `SpiDevice` on the dedicated SPI bus. The SPI
@@ -491,7 +542,6 @@ async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<
     let interface = SpiInterface::new(spi_device);
     let mut imu = Icm20948Driver::new(interface);
 
-    let mut delay = Delay;
     let mut attempt: u32 = 0;
 
     loop {
@@ -501,16 +551,36 @@ async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<
             attempt, IMU_INIT_MAX_ATTEMPTS
         );
 
+        // Fresh provider per attempt: every attempt asserts DEVICE_RESET again.
+        let mut delay = ResetDelay { first_poll: true };
         match imu.init(&mut delay).await {
-            Ok(()) => match imu.verify_who_am_i().await {
-                Ok(()) => {
-                    info!("ICM-20948 initialized successfully via SPI");
-                    Timer::after(Duration::from_millis(100)).await;
-                    return imu;
+            Ok(()) => {
+                // The driver documents this as required for SPI: without it the
+                // ICM-20948 keeps its I2C slave interface enabled.
+                if let Err(e) = imu.enable_spi_mode().await {
+                    warn!("ICM-20948 enable SPI mode failed (attempt {}): {:?}", attempt, e);
+                } else {
+                    match imu.verify_who_am_i().await {
+                        Ok(()) => {
+                            info!("ICM-20948 initialized successfully via SPI");
+                            Timer::after(Duration::from_millis(100)).await;
+                            return imu;
+                        }
+                        Err(e) => warn!("ICM-20948 identity check failed (attempt {}): {:?}", attempt, e),
+                    }
                 }
-                Err(e) => warn!("ICM-20948 identity check failed (attempt {}): {:?}", attempt, e),
-            },
-            Err(e) => warn!("ICM-20948 init failed (attempt {}): {:?}", attempt, e),
+            }
+            Err(e) => {
+                warn!("ICM-20948 init failed (attempt {}): {:?}", attempt, e);
+                // A reset-first init cannot say whether the chip is present or
+                // whether the reset never completed. Probe WHO_AM_I after the
+                // failed attempt: 0xEA means the bus is alive, 0x00/0xFF means
+                // the chip is absent, unpowered, or not selected.
+                match imu.read_who_am_i().await {
+                    Ok(id) => warn!("ICM-20948 WHO_AM_I after failed init: 0x{:02x}", id),
+                    Err(probe_err) => warn!("ICM-20948 WHO_AM_I probe failed: {:?}", probe_err),
+                }
+            }
         }
 
         if attempt >= IMU_INIT_MAX_ATTEMPTS {
@@ -608,10 +678,16 @@ fn effective_mode(requested: DmpFusionMode) -> DmpFusionMode {
 #[allow(clippy::too_many_lines)]
 async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
     let mut current_calibration: Option<MagCalibration> = None;
-    let mut fusion_mode = effective_mode(DEFAULT_FUSION_MODE);
+    let mut fusion_mode = effective_mode(STARTUP_FUSION_MODE);
 
     #[cfg(feature = "telemetry_logs")]
     let mut last_loop_diag_ts_ms: u32 = 0;
+
+    #[cfg(feature = "imu_debug")]
+    let mut last_debug_ts_ms: u64 = 0;
+
+    #[cfg(feature = "imu_debug")]
+    let mut rejected_quaternions: u32 = 0;
 
     'command: loop {
         match IMU_CONTROL.wait().await {
@@ -683,49 +759,95 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                     fifo_failures = 0;
 
                                     // Prefer 9-axis quaternion; fall back to 6-axis.
-                                    let quat_opt =
-                                        packet.quaternion_9axis.as_ref().or(packet.quaternion_6axis.as_ref());
+                                    let quat9 = packet.quaternion_9axis.as_ref();
+                                    let quat6 = packet.quaternion_6axis.as_ref();
+                                    let quat_opt = quat9.or(quat6);
 
                                     if let Some(quat) = quat_opt {
-                                        let orientation = dmp_quat_to_orientation(quat);
-                                        let timestamp_ms = Instant::now().as_millis();
+                                        let has_mag = packet.raw_mag.is_some();
+                                        let magnitude = quat.magnitude();
+                                        let unit_quaternion = magnitude.is_finite()
+                                            && (magnitude - 1.0).abs() <= IMU_QUATERNION_NORM_TOLERANCE;
+                                        // In Axis9, a missing compass sample plus an identity
+                                        // quaternion is the DMP saying "no solution", not a
+                                        // real heading of zero.
+                                        let no_solution_identity = fusion_mode == DmpFusionMode::Axis9
+                                            && !has_mag
+                                            && is_identity_quaternion(quat);
 
-                                        update_statics_from_dmp(
-                                            &packet,
-                                            Some(orientation),
-                                            current_calibration.as_ref(),
-                                        )
-                                        .await;
-
-                                        let measurement = ImuMeasurement {
-                                            orientation,
-                                            timestamp_ms,
-                                        };
-
-                                        #[cfg(feature = "telemetry_logs")]
-                                        {
-                                            #[allow(clippy::cast_possible_truncation)]
-                                            let ts_ms = timestamp_ms as u32;
-                                            if ts_ms.wrapping_sub(last_loop_diag_ts_ms) >= IMU_LOOP_DIAG_LOG_INTERVAL_MS
+                                        if !unit_quaternion || no_solution_identity {
+                                            #[cfg(feature = "imu_debug")]
                                             {
-                                                defmt::info!(
-                                                    "IMU diag: mode={:?} yaw={=f32} pitch={=f32} roll={=f32}",
+                                                rejected_quaternions = rejected_quaternions.wrapping_add(1);
+                                            }
+                                        } else {
+                                            let orientation = dmp_quat_to_orientation(quat);
+                                            let timestamp_ms = Instant::now().as_millis();
+
+                                            update_statics_from_dmp(
+                                                &packet,
+                                                Some(orientation),
+                                                current_calibration.as_ref(),
+                                            )
+                                            .await;
+
+                                            let measurement = ImuMeasurement {
+                                                orientation,
+                                                timestamp_ms,
+                                            };
+
+                                            #[cfg(feature = "imu_debug")]
+                                            if timestamp_ms.wrapping_sub(last_debug_ts_ms) >= IMU_DEBUG_LOG_INTERVAL_MS
+                                            {
+                                                let axis: u8 = if quat9.is_some() { 9 } else { 6 };
+                                                info!(
+                                                    "IMU: axis={} mode={:?} yaw={=f32} pitch={=f32} roll={=f32} mag={} heading_acc={=f32} compass_acc={=u16} rejected={=u32}",
+                                                    axis,
                                                     fusion_mode,
                                                     orientation.yaw,
                                                     orientation.pitch,
-                                                    orientation.roll
+                                                    orientation.roll,
+                                                    has_mag,
+                                                    packet.heading_accuracy.unwrap_or(-1.0),
+                                                    packet.compass_accuracy.unwrap_or(u16::MAX),
+                                                    rejected_quaternions
                                                 );
-                                                last_loop_diag_ts_ms = ts_ms;
+                                                let (ax, ay, az) = packet.raw_accel.unwrap_or((0, 0, 0));
+                                                let (gx, gy, gz) = packet.raw_gyro.unwrap_or((0, 0, 0));
+                                                let (mx, my, mz) = packet.raw_mag.unwrap_or((0, 0, 0));
+                                                info!(
+                                                    "IMU raw: accel=({},{},{}) gyro=({},{},{}) mag=({},{},{})",
+                                                    ax, ay, az, gx, gy, gz, mx, my, mz
+                                                );
+                                                last_debug_ts_ms = timestamp_ms;
                                             }
+
+                                            #[cfg(feature = "telemetry_logs")]
+                                            {
+                                                #[allow(clippy::cast_possible_truncation)]
+                                                let ts_ms = timestamp_ms as u32;
+                                                if ts_ms.wrapping_sub(last_loop_diag_ts_ms)
+                                                    >= IMU_LOOP_DIAG_LOG_INTERVAL_MS
+                                                {
+                                                    defmt::info!(
+                                                        "IMU diag: mode={:?} yaw={=f32} pitch={=f32} roll={=f32}",
+                                                        fusion_mode,
+                                                        orientation.yaw,
+                                                        orientation.pitch,
+                                                        orientation.roll
+                                                    );
+                                                    last_loop_diag_ts_ms = ts_ms;
+                                                }
+                                            }
+
+                                            // Forward to the drive task's IMU feedback channel (capacity 16).
+                                            // The rotation control loop drains it each ~10 ms; dropping a
+                                            // 100 Hz sample when the channel is full is lossy but harmless —
+                                            // the next sample arrives in 10 ms.
+                                            let _ = drive::try_send_imu_measurement(measurement);
+
+                                            IMU_READY.store(true, Ordering::Relaxed);
                                         }
-
-                                        // Forward to the drive task's IMU feedback channel (capacity 16).
-                                        // The rotation control loop drains it each ~10 ms; dropping a
-                                        // 100 Hz sample when the channel is full is lossy but harmless —
-                                        // the next sample arrives in 10 ms.
-                                        let _ = drive::try_send_imu_measurement(measurement);
-
-                                        IMU_READY.store(true, Ordering::Relaxed);
                                     } else {
                                         // Packet present but no quaternion yet (DMP warming up).
                                         update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
@@ -806,10 +928,16 @@ pub async fn inertial_measurement_read(spi_bus: &'static SpiMutex, cs: CsOutput)
     }
 
     info!(
-        "IMU DMP ready. MAG_AVAILABLE={}. Default mode={:?}",
+        "IMU DMP ready. MAG_AVAILABLE={}. Startup mode={:?}",
         MAG_AVAILABLE.load(Ordering::Relaxed),
-        DEFAULT_FUSION_MODE
+        STARTUP_FUSION_MODE
     );
+
+    #[cfg(feature = "imu_debug")]
+    {
+        info!("IMU debug: streaming orientation at 1 Hz");
+        start_imu_readings();
+    }
 
     run_imu_command_loop(&mut sensor).await;
 }

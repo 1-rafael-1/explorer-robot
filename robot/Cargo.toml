@@ -16,6 +16,9 @@ telemetry_logs = []
 # which raises spurious EmergencyBrake interrupts. Enable only to exercise the
 # perception/drive pipeline without sensors.
 floor_drop_stub = []
+# Start the IMU in Axis9 and print one orientation sample per second at INFO.
+# Off by default; useful for sensor bring-up.
+imu_debug = []
 
 [lints]
 workspace = true
