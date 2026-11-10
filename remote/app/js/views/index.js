@@ -3,6 +3,7 @@
 // panel is open); the domain state stays in `store.js`.
 
 import { createRadar, bindRadar } from '../radar.js';
+import { relayNow } from '../store.js';
 import { renderActivity, bindActivity } from './activity.js';
 import { renderBridge } from './bridge.js';
 import { renderCalibration } from './calibration.js';
@@ -100,13 +101,14 @@ export function mountApp({ store, transport, planner, radar = createRadar(byId('
 
   function render() {
     const state = store.state;
+    const now = relayNow(state);
     renderShell(state, ui);
     renderPower(state);
-    renderStreams(state, Date.now());
+    renderStreams(state, now);
     renderPairing(state);
-    renderActivity(state);
+    renderActivity(state, now);
     renderEvents(state, ui);
-    renderBridge(state);
+    renderBridge(state, now);
     renderCalibration(state);
     renderDrive(state);
     renderPanels();
@@ -256,8 +258,9 @@ export function startRenderLoop(store, radar, frame = globalThis.requestAnimatio
   });
   const tick = (time) => {
     if (dirty || time - lastDraw > 250) {
-      renderStreams(store.state, Date.now());
-      radar.render(store.state, Date.now());
+      const now = relayNow(store.state);
+      renderStreams(store.state, now);
+      radar.render(store.state, now);
       dirty = false;
       lastDraw = time;
     }

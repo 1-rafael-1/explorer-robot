@@ -2,14 +2,14 @@
 // zero and false are values, never "unknown" (ADR-0038). Ages come from each
 // sample's `ts` and are display only: they never gate an action.
 
-import { motionView, perceptionView, powerView } from '../store.js';
+import { motionView, perceptionView, powerView, relayNow } from '../store.js';
 import { byId, formatAge, setClass, setData, setText } from './dom.js';
 
 /** The age after which live stream data is shown stale. */
 export const STREAM_STALE_MS = 1000;
 
 /** Renders the motion slots, the perception row and the data ages. */
-export function renderStreams(state, now = Date.now()) {
+export function renderStreams(state, now = relayNow(state)) {
   const motion = motionView(state);
   setText(byId('motion-left'), motion.left == null ? '—' : String(motion.left));
   setText(byId('motion-right'), motion.right == null ? '—' : String(motion.right));

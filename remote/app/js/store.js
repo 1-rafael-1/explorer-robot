@@ -5,11 +5,41 @@
 // Ephemeral view state (overlay, tab, form inputs, camera) lives in the views,
 // not here. `apply` never mutates its argument.
 
-import { BOOTING_ID, EVENT_LIMIT, IDLE_ID, labelForActivity } from './protocol.js';
+import { BOOTING_ID, EVENT_LIMIT, IDLE_ID, MANUAL_DRIVE_ID, labelForActivity } from './protocol.js';
 
 /** Returns the key used to dedupe an Event: `(boot_id, seq)` or a notice's timestamp. */
 export function eventKey(event) {
   return event.boot_id == null ? `notice:${event.ts}` : `${event.boot_id}:${event.seq}`;
+}
+
+/** The wire Event sequence is a `u16`, so ordering must wrap at 65536. */
+export const EVENT_SEQ_WRAP = 65536;
+
+/** Half the sequence space; the nearest timeline value wins inside this range. */
+const EVENT_SEQ_HALF = EVENT_SEQ_WRAP / 2;
+
+/**
+ * Extends a wire `u16` sequence onto the local, monotonic sequence timeline.
+ *
+ * `reference` is the locally extended cursor (or `null` before any Event). The
+ * wire value is placed in the wrap window nearest that cursor, so a live 0 after
+ * 65535 becomes 65536 while a stale 65535 after 0 becomes -1.
+ */
+export function extendSeq(seq, reference = null, known = true) {
+  if (seq == null) return null;
+  if (!known || reference == null) return seq;
+  const base = Math.floor(reference / EVENT_SEQ_WRAP) * EVENT_SEQ_WRAP;
+  let value = base + seq;
+  if (value - reference > EVENT_SEQ_HALF) value -= EVENT_SEQ_WRAP;
+  else if (reference - value >= EVENT_SEQ_HALF) value += EVENT_SEQ_WRAP;
+  return value;
+}
+
+/** Returns the identity of a Result Report entry, stable across a refresh. */
+function resultIdentity(entry) {
+  if (!entry) return null;
+  const value = entry.v ?? entry;
+  return `${value.id ?? ''}:${value.stage ?? ''}:${value.detail ?? ''}`;
 }
 
 /** Returns a fresh initial state. */
@@ -32,8 +62,11 @@ export function initialState() {
     events: [],
     eventCursor: null,
     seenEventSeq: 0,
+    eventSeqKnown: false,
     lastTerminal: null,
-    resultDismissed: false,
+    resultDismissedKey: null,
+    activityRun: null,
+    clockOffset: 0,
     catalogue: [],
     bridge: null,
     commands: {},
@@ -111,12 +144,11 @@ export function activityView(state) {
     };
   }
   // A dismissed Result Report stays dismissed, including the terminal-stream
-  // fallback, until a new Activity or terminal Event arrives.
-  if (!state.resultDismissed && state.lastTerminal) {
-    return { kind: 'result', data: state.lastTerminal.v, ts: state.lastTerminal.ts ?? null };
-  }
-  if (!state.resultDismissed && live && live.id !== IDLE_ID) {
-    return { kind: 'result', data: live, ts: entry?.ts ?? null };
+  // fallback, until a new Activity or terminal Event arrives. Dismissal is keyed
+  // to the result itself so a same-result refresh stays hidden.
+  const result = state.lastTerminal ?? (live && live.id !== IDLE_ID ? entry : null);
+  if (result && resultIdentity(result) !== state.resultDismissedKey) {
+    return { kind: 'result', data: result.v, ts: result.ts ?? null };
   }
   return {
     kind: 'idle',
@@ -189,8 +221,12 @@ export function controlEnabled(state) {
 
 /** Returns the unread Event count after the operator's read cursor. */
 export function unreadEvents(state) {
+  const seen = state.seenEventSeq ?? 0;
   return state.events.filter(
-    (event) => event.seq != null && event.boot_id === state.bootId && event.seq > state.seenEventSeq,
+    (event) =>
+      event.boot_id === state.bootId &&
+      event.seq != null &&
+      (extendSeq(event.seq, seen, state.eventSeqKnown) ?? 0) > seen,
   ).length;
 }
 
@@ -207,17 +243,29 @@ export function outcomeUnknown(state, since = 0) {
 
 /** Marks every current Event as read. */
 export function markEventsSeen(state) {
-  const top = state.events.reduce(
-    (max, event) =>
-      event.boot_id === state.bootId ? Math.max(max, event.seq ?? 0) : max,
-    state.seenEventSeq,
-  );
-  return { ...state, seenEventSeq: top };
+  let top = state.seenEventSeq ?? 0;
+  let known = state.eventSeqKnown ?? false;
+  for (const event of state.events) {
+    if (event.boot_id === state.bootId && event.seq != null) {
+      top = Math.max(top, extendSeq(event.seq, top, known) ?? top);
+      known = true;
+    }
+  }
+  return { ...state, seenEventSeq: top, eventSeqKnown: known };
 }
 
 /** Clears the Result Report and the Stopped card, and keeps them dismissed. */
 export function dismissReport(state) {
-  return { ...state, lastTerminal: null, activityStopped: null, resultDismissed: true };
+  const view = activityView(state);
+  // Dismissing a Stopped card also keeps the older Result Report it covered
+  // dismissed, so a reconnect snapshot cannot resurrect it.
+  const key =
+    view.kind === 'result'
+      ? resultIdentity(view.data)
+      : state.lastTerminal
+        ? resultIdentity(state.lastTerminal)
+        : null;
+  return { ...state, activityStopped: null, resultDismissedKey: key };
 }
 
 /** Returns the active drive stage, or `idle`. */
@@ -234,6 +282,7 @@ function resetForBoot(state, bootId, bridge) {
     server: state.server,
     link: state.link,
     linkDetail: state.linkDetail,
+    clockOffset: state.clockOffset,
     bootId,
     connection: { ...state.connection, boot_id: bootId },
     bridge: bridge ?? state.bridge,
@@ -258,16 +307,14 @@ function mergeEvents(state, incoming) {
   let overflowAt = state.overflowAt ?? null;
   let eventGap = state.eventGap;
   let eventGapAt = state.eventGapAt ?? null;
-  let top = Math.max(
-    state.seenEventSeq ?? 0,
-    state.events.reduce(
-      (max, event) =>
-        event.boot_id != null && event.boot_id === state.bootId && event.seq != null
-          ? Math.max(max, event.seq)
-          : max,
-      0,
-    ),
-  );
+  let seqKnown = state.eventSeqKnown ?? false;
+  let top = state.seenEventSeq ?? 0;
+  for (const event of state.events) {
+    if (event.boot_id != null && event.boot_id === state.bootId && event.seq != null) {
+      top = Math.max(top, extendSeq(event.seq, top, seqKnown) ?? top);
+      seqKnown = true;
+    }
+  }
 
   for (const event of ordered) {
     const key = eventKey(event);
@@ -278,17 +325,19 @@ function mergeEvents(state, incoming) {
       overflowAt = Math.max(overflowAt ?? 0, event.ts ?? 0);
     }
     if (event.boot_id != null && event.boot_id === state.bootId && event.seq != null) {
-      if (top > 0 && event.seq > top + 1) {
+      const extended = extendSeq(event.seq, top, seqKnown);
+      if (seqKnown && extended != null && extended > top + 1) {
         eventGap = true;
         eventGapAt = Math.max(eventGapAt ?? 0, event.ts ?? 0);
       }
-      top = Math.max(top, event.seq);
+      top = Math.max(top, extended ?? top);
+      seqKnown = true;
     }
   }
 
   merged.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || (a.seq ?? 0) - (b.seq ?? 0));
   while (merged.length > EVENT_LIMIT) merged.shift();
-  return { ...state, events: merged, overflowAt, eventGap, eventGapAt };
+  return { ...state, events: merged, overflowAt, eventGap, eventGapAt, eventSeqKnown: seqKnown };
 }
 
 /** Applies a daemon message; unknown types pass through unchanged. */
@@ -399,17 +448,36 @@ function applySnapshot(state, message) {
   const replayedTerminal = newestTerminalEvent(events);
   const lastTerminal =
     message.last_terminal ?? (replayedTerminal ? terminalFromEvent(replayedTerminal) : null);
+  const activity = streams.activity?.v;
+  // A snapshot is a fresh baseline after a reconnect: the latest running sample
+  // is the earliest point this tab can vouch for, so an older completion cannot
+  // be attributed to a run that restarted while the app was away.
+  const activityRun =
+    activity && activity.id !== IDLE_ID && activity.stage === 'running'
+      ? { id: activity.id, startedAt: streams.activity.ts ?? message.ts ?? null }
+      : null;
   const merged = mergeEvents(
     {
       ...next,
       bootId,
       streams,
       lastTerminal,
+      activityRun,
       catalogue: message.catalogue?.procedures ?? [],
       bridge: message.bridge ?? next.bridge,
     },
     events,
   );
+  // Keep a dismissal only when the snapshot replays the same result; a new
+  // terminal that finished while the app was offline becomes visible again.
+  const dismissedKey = next.resultDismissedKey;
+  const resultDismissedKey =
+    dismissedKey != null && lastTerminal && resultIdentity(lastTerminal) === dismissedKey
+      ? dismissedKey
+      : null;
+  const cursor = message.event_cursor;
+  const cursorExt =
+    cursor == null ? null : extendSeq(cursor, merged.seenEventSeq ?? 0, merged.eventSeqKnown);
   return {
     ...merged,
     bootId,
@@ -417,19 +485,31 @@ function applySnapshot(state, message) {
     // only a `connection` message may say `connected`.
     connection: { ...next.connection, boot_id: bootId },
     // The scalar cursor is the Relay's replay cursor; the unread badge counts
-    // after it, so the replayed history is not re-flagged on every reload.
-    eventCursor: message.event_cursor ?? next.eventCursor,
-    seenEventSeq: Math.max(next.seenEventSeq, message.event_cursor ?? 0),
+    // after it, so the replayed history is not re-flagged on every reload. The
+    // locally extended cursor keeps counting across the wire's `u16` wrap.
+    eventCursor: cursor ?? next.eventCursor,
+    seenEventSeq: Math.max(merged.seenEventSeq ?? 0, cursorExt ?? 0),
+    eventSeqKnown: merged.eventSeqKnown || cursor != null,
+    resultDismissedKey,
     // A same-Boot-Id snapshot preserves the in-flight plan; a Boot Id change was
     // already reset by `resetForBoot`, which marks in-flight work unknown.
     drive: next.drive,
   };
 }
 
-/** Returns whether an Event is a terminal completion for the Activity `id`. */
-function isTerminalCompletion(event, id) {
+/**
+ * Returns whether an Event proves that the Activity run started at
+ * `startedAt` finished. A Procedure completion belongs to that Procedure only;
+ * a drive/rotate completion belongs to a Manual Drive only. An Event from before
+ * the run cannot end it.
+ */
+function completionCovers(event, id, startedAt) {
+  if ((event.ts ?? 0) < (startedAt ?? 0)) return false;
   if (event.name === 'procedure_completed') return event.v?.id === id;
-  return event.name === 'drive_distance_completed' || event.name === 'rotate_completed';
+  if (id === MANUAL_DRIVE_ID) {
+    return event.name === 'drive_distance_completed' || event.name === 'rotate_completed';
+  }
+  return false;
 }
 
 function applyStream(state, message) {
@@ -444,11 +524,24 @@ function applyStream(state, message) {
     const after = message.v;
     if (after && after.id !== IDLE_ID && after.stage === 'running') {
       const started = !before || before.id !== after.id || before.stage !== 'running';
+      const activityRun = started
+        ? { id: after.id, startedAt: message.ts ?? null }
+        : (state.activityRun ?? { id: after.id, startedAt: message.ts ?? null });
+      next = { ...next, activityRun };
       if (started) {
-        next = { ...next, activityStopped: null, lastTerminal: null, resultDismissed: false };
+        next = { ...next, activityStopped: null, lastTerminal: null, resultDismissedKey: null };
       }
     } else if (after && after.id !== IDLE_ID && (after.stage === 'complete' || after.stage === 'failed')) {
-      next = { ...next, lastTerminal: entry, activityStopped: null, resultDismissed: false };
+      // A refreshed terminal sample is the same result; only a transition into
+      // that stage (or a different Activity) ends a dismissal.
+      const sameTerminal = before && before.id === after.id && before.stage === after.stage;
+      next = {
+        ...next,
+        lastTerminal: entry,
+        activityStopped: null,
+        activityRun: null,
+        resultDismissedKey: sameTerminal ? state.resultDismissedKey : null,
+      };
     } else if (
       after &&
       after.id === IDLE_ID &&
@@ -456,12 +549,13 @@ function applyStream(state, message) {
       before.id !== IDLE_ID &&
       before.stage === 'running'
     ) {
-      const completed = state.events.some(
-        (event) =>
-          isTerminalCompletion(event, before.id) && (event.ts ?? 0) >= (previous.ts ?? 0) - 5000,
-      );
+      const startedAt = state.activityRun?.id === before.id ? state.activityRun.startedAt : null;
+      const completed =
+        startedAt != null &&
+        state.events.some((event) => completionCovers(event, before.id, startedAt));
       next = {
         ...next,
+        activityRun: null,
         activityStopped: completed
           ? null
           : { id: before.id, label: labelForActivity(before.id, state.catalogue), ts: message.ts },
@@ -479,18 +573,20 @@ function applyEvent(state, message) {
   const exists = state.events.some((event) => eventKey(event) === key);
   if (exists) return state;
 
-  const topSeq = Math.max(
-    state.seenEventSeq,
-    state.events.reduce(
-      (max, event) =>
-        event.boot_id === message.boot_id && event.seq != null ? Math.max(max, event.seq) : max,
-      0,
-    ),
-  );
-  const gap = message.seq != null && message.seq > topSeq + 1;
+  let topSeq = state.seenEventSeq ?? 0;
+  let seqKnown = state.eventSeqKnown ?? false;
+  for (const event of state.events) {
+    if (event.boot_id === message.boot_id && event.seq != null) {
+      topSeq = Math.max(topSeq, extendSeq(event.seq, topSeq, seqKnown) ?? topSeq);
+      seqKnown = true;
+    }
+  }
+  const extended = extendSeq(message.seq, topSeq, seqKnown);
+  const gap = message.seq != null && seqKnown && extended != null && extended > topSeq + 1;
   let next = {
     ...state,
     events: [...state.events, message].slice(-EVENT_LIMIT),
+    eventSeqKnown: seqKnown || message.seq != null,
     eventGap: gap ? true : state.eventGap,
     eventGapAt: gap ? Math.max(state.eventGapAt ?? 0, message.ts ?? 0) : state.eventGapAt,
     overflowAt:
@@ -503,11 +599,11 @@ function applyEvent(state, message) {
       ...next,
       lastTerminal: terminalFromEvent(message),
       activityStopped: null,
-      resultDismissed: false,
+      resultDismissedKey: null,
     };
   }
   if (message.name === 'drive_distance_completed' || message.name === 'rotate_completed') {
-    next = { ...next, activityStopped: null, resultDismissed: false };
+    next = { ...next, activityStopped: null };
   }
   return next;
 }
@@ -520,6 +616,27 @@ function applyCommandResult(state, message) {
     for (const key of keys.slice(0, keys.length - 80)) delete commands[key];
   }
   return { ...state, commands };
+}
+
+/**
+ * Returns the Relay's clock expressed in the page's wall-clock scale. The
+ * Relay stamps every timestamp with `clock::now_ms()` (milliseconds since the
+ * daemon started), so incoming `ts` values are offset from `Date.now()` by a
+ * fixed amount: `clockOffset`.
+ */
+export function relayNow(state, wallNow = Date.now()) {
+  return wallNow - (state?.clockOffset ?? 0);
+}
+
+/**
+ * Stamps an applied message with the Relay-clock offset. Only a message that
+ * changed the state contributes, so an ignored or unknown message leaves the
+ * store exactly as it was.
+ */
+function stampClock(state, message, wallNow) {
+  const ts = message?.ts;
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return state;
+  return { ...state, clockOffset: wallNow - ts };
 }
 
 /** A small observable wrapper around the pure reducer. */
@@ -538,7 +655,7 @@ export function createStore(initial = initialState()) {
     dispatch(message) {
       const next = apply(state, message);
       if (next === state) return;
-      state = next;
+      state = stampClock(next, message, Date.now());
       emit();
     },
     patch(updater) {

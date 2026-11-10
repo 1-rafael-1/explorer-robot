@@ -71,6 +71,21 @@ function liveSession() {
 /** The one session the page drives; every test reads its store. */
 const session = liveSession();
 
+/**
+ * Refuses to drive unless the live Session is the Bridge Stub. The page ships in
+ * the app folder, so a normal loopback daemon could otherwise be made to move a
+ * real robot simply by opening this runner.
+ */
+function requireStub() {
+  const state = session.store.state;
+  assertEqual(state.link, 'open', 'the app socket is open');
+  if (state.connection.robot !== 'Explorer-STUB') {
+    throw new Error(
+      `refusing to drive ${state.connection.robot ?? 'an unknown robot'}: this page is a bench runner`,
+    );
+  }
+}
+
 /** Builds a planner over the live session's store and real command sender. */
 const planner = createPlanner({
   store: session.store,
@@ -122,6 +137,7 @@ test('the scripted Events arrive once each and keep the Relay iterator', async (
 });
 
 test('a zero-bearing Target Point sends drive_distance and the Relay ACKs it', async () => {
+  requireStub();
   const { store } = session;
   assertEqual(planner.preview({ x: 100, y: 0 }), true, 'the Target Point is committed');
   assertEqual(store.state.drive.plan.target, { x: 100, y: 0 });
@@ -154,6 +170,7 @@ test('a zero-bearing Target Point sends drive_distance and the Relay ACKs it', a
 });
 
 test('a bearing Target Point sends rotate_by, and Stop is Stopped only on an ACK', async () => {
+  requireStub();
   const { store } = session;
   assertEqual(planner.preview({ x: 100, y: 100 }), true, 'the Target Point is committed');
   assert(

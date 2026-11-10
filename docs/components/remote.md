@@ -139,6 +139,7 @@ Options:
       --port <PORT>    Serve the app on this port; the default 8765 falls back to an ephemeral port when taken
       --no-open        Do not open the default browser
       --assets <PATH>  Serve the SPA from this folder instead of the embedded copy
+      --serve-tests    Serve the browser test suite under tests/ (bench only)
       --config <PATH>  Use this config file instead of the per-user default
       --verbose        Trace discovery and Session changes to stderr
   -h, --help           Print help
@@ -164,6 +165,7 @@ instead.
 | `--port <PORT>` | app port; default 8765, with an ephemeral fallback when taken |
 | `--no-open` | do not open the default browser |
 | `--assets <PATH>` | serve the SPA from disk instead of the embedded copy |
+| `--serve-tests` | serve the browser bench suite under `tests/`; never a production surface |
 | `--config <PATH>` | use this `config.toml` instead of the per-user default |
 | `--verbose` | trace discovery and Session changes to stderr |
 
@@ -230,7 +232,7 @@ Stub, not the fake socket. From the repository root:
 `run_real_chain.sh` builds `remote-daemon` and `bridge-stub`, starts the stub with
 fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop`/
 `procedure_completed` Events, writes a temporary config with the stub's
-`bench-token`, starts the daemon at `--assets app --port 0`, waits for `GET /` and
+`bench-token`, starts the daemon at `--assets app --serve-tests --port 0`, waits for `GET /` and
 the CSP header, then renders `tests/real.html`. The page asserts
 discovery/Session/`connection.connected`, the App Snapshot, at least one Stream,
 the scripted Events, the `rotate_by` and `drive_distance` ACKs, `stop_motion` and
@@ -259,6 +261,10 @@ instead, so an edit does not need a rebuild:
 cd remote && cargo run -p remote-daemon -- --no-open --assets app
 ```
 
+The browser suite under `tests/` contains a real-chain page that drives on load,
+so it is served only with `--serve-tests`; a normal daemon (embedded or
+`--assets`) never exposes it. `run_real_chain.sh` passes the flag.
+
 The Remote App and its behaviour are described above. The headless Chrome suite
 (the CI `web` job) serves the folder same-origin and runs the app boot smoke and
 every static page (pure, state, radar, planner, fake socket, pairing, bridge and
@@ -282,8 +288,9 @@ discovery through `/ws`. Still manual or provisional:
   loopback.
 - The Relay's timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are
   provisional until a real LAN and a real phone exercise them.
-- The test pages ship inside the embedded folder, unlinked from the app, so they
-  are reachable only by URL (`/tests/...`).
+- The test pages ship inside the embedded folder but are unlinked from the app and
+  served only with `--serve-tests`; `tests/real.html` also refuses to drive unless
+  the Session names the Bridge Stub.
 - The fixed drive/rotate speeds, icon footprint and preview styling are
   bench-confirmable.
 

@@ -24,7 +24,7 @@ import {
   screenToWorld,
   worldToScreen,
 } from './geometry.js';
-import { latestPose } from './store.js';
+import { latestPose, relayNow } from './store.js';
 import { byId, setData, setText } from './views/dom.js';
 
 export { STALE_MS };
@@ -237,7 +237,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     return IDENTITY_POSE;
   }
 
-  function render(state, now = Date.now()) {
+  function render(state, now = relayNow(state)) {
     const source = state ?? { streams: {} };
     const latest = latestPose(source);
     pose = { x: latest.x, y: latest.y, yaw: latest.yaw };
@@ -297,22 +297,43 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     const points = scanPoints(cloudPose, lidar.v);
     const stale = isStaleScan(lidar.ts, now);
 
+    // Group adjacent slots into runs. A lone slot has no line to join, so it is
+    // drawn as a point rather than a `moveTo` that `stroke()` cannot show.
+    const runs = [];
+    let run = null;
+    for (const point of points) {
+      const screen = worldToScreen(view, point);
+      if (run && point.slot === run[run.length - 1].point.slot + 1) {
+        run.push({ point, screen });
+      } else {
+        run = [{ point, screen }];
+        runs.push(run);
+      }
+    }
+
     context.save();
     context.strokeStyle = stale ? COLOR.cloudStale : COLOR.cloud;
     context.lineWidth = 1.6;
     context.lineJoin = 'round';
     context.beginPath();
-    let previousSlot = null;
-    for (const point of points) {
-      const screen = worldToScreen(view, point);
-      if (previousSlot != null && point.slot === previousSlot + 1) {
-        context.lineTo(screen.x, screen.y);
-      } else {
-        context.moveTo(screen.x, screen.y);
+    for (const segment of runs) {
+      if (segment.length < 2) continue;
+      context.moveTo(segment[0].screen.x, segment[0].screen.y);
+      for (let index = 1; index < segment.length; index += 1) {
+        context.lineTo(segment[index].screen.x, segment[index].screen.y);
       }
-      previousSlot = point.slot;
     }
     context.stroke();
+
+    // Isolated returns still count as obstacles.
+    context.fillStyle = stale ? COLOR.cloudStale : COLOR.cloud;
+    for (const segment of runs) {
+      if (segment.length !== 1) continue;
+      const { screen } = segment[0];
+      context.beginPath();
+      context.arc(screen.x, screen.y, 1.6, 0, Math.PI * 2);
+      context.fill();
+    }
 
     // Near returns are the interesting ones: bright dots keep an obstacle
     // legible even when the outline is a thin wall.

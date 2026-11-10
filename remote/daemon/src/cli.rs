@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub assets: Option<PathBuf>,
 
+    /// Serve the browser test suite under `tests/` (bench only).
+    #[arg(long)]
+    pub serve_tests: bool,
+
     /// Use this config file instead of the per-user default.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,

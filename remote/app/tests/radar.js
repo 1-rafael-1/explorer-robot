@@ -89,6 +89,45 @@ test('a null return produces no point, so the cloud draws a gap', () => {
   assertClose(only[0].y, 10, 1e-9);
 });
 
+/** Returns whether the fresh-cloud colour is present near a world point. */
+function cloudNear(canvas, radar, x, y) {
+  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+  const scale = radar.scale;
+  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
+  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
+  const size = 7;
+  const { data } = canvas
+    .getContext('2d')
+    .getImageData(px - (size - 1) / 2, py - (size - 1) / 2, size, size);
+  for (let index = 0; index < data.length; index += 4) {
+    if (data[index + 1] > 160 && data[index + 2] > 200) return true;
+  }
+  return false;
+}
+
+test('an isolated LiDAR return is drawn as a point', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  const ranges = Array.from({ length: 360 }, () => null);
+  ranges[10] = 123;
+  ranges[30] = 187;
+  store.dispatch({
+    type: 'stream',
+    name: 'lidar',
+    seq: 1,
+    ts: 1000,
+    v: { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true },
+  });
+  radar.render(store.state, 1100);
+
+  const first = scanPoints({ x: 0, y: 0, yaw: 0 }, store.state.streams.lidar.v)[0];
+  const second = scanPoints({ x: 0, y: 0, yaw: 0 }, store.state.streams.lidar.v)[1];
+  assert(cloudNear(canvas, radar, first.x, first.y), 'the first isolated return is visible');
+  assert(cloudNear(canvas, radar, second.x, second.y), 'the second isolated return is visible');
+});
+
 test('the camera transform round-trips and fitScale fits the shorter axis', () => {
   const view = cameraView({ width: 800, height: 600, scale: 2, centerX: 50, centerY: -20 });
   assertEqual(worldToScreen(view, { x: 50, y: -20 }), { x: 400, y: 300 });

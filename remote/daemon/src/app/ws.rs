@@ -266,9 +266,11 @@ async fn run(socket: &mut WebSocket, state: &AppState, app: AppId) {
                                 // A loopback peer skips the auth gate, so its `pair` arrives here in
                                 // the steady state. The `!hello_seen` arm above already refuses this
                                 // before the client `hello`; the token store files it under the last
-                                // discovered device (or the manual default), and the next Beacon opens
-                                // the Session.
+                                // discovered device (or the manual default), and the hook makes the
+                                // re-pairing explicit operator intent so a fatal state (a rotated
+                                // token) is retried with the new code.
                                 state.gate.pair(&code);
+                                state.hooks.on_pair();
                             }
                             Ok(Some(ClientMessage::Auth(_)) | None) => {}
                             Err(()) => {

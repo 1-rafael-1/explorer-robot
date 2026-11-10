@@ -2,6 +2,7 @@
 // The app shows status only; it never duplicates the panel's Link screen or
 // rotates the Pairing Token (ADR-0042, ADR-0043).
 
+import { relayNow } from '../store.js';
 import { byId, formatAge, orUnknown, setData, setText } from './dom.js';
 
 /** Returns a stable key for the station state; anything else is `unknown`. */
@@ -29,7 +30,7 @@ export function rssiBucket(rssi) {
 }
 
 /** Renders the header chip and the Robot/Link panel. */
-export function renderBridge(state, now = Date.now()) {
+export function renderBridge(state, now = relayNow(state)) {
   const bridge = state.bridge;
   const station = stationKey(bridge?.station);
   const chip = byId('bridge-chip');

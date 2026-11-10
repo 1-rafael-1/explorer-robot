@@ -24,6 +24,7 @@ cargo run -p remote-daemon -- --no-open
 | `--port <PORT>` | app port; the default 8765 falls back to an ephemeral port when taken |
 | `--no-open` | do not open the default browser |
 | `--assets <PATH>` | serve the SPA from disk instead of the embedded copy |
+| `--serve-tests` | serve the browser bench suite under `tests/` (never a production surface) |
 | `--config <PATH>` | use this `config.toml` instead of the per-user default |
 | `--verbose` | trace discovery and Session changes to stderr |
 
@@ -68,7 +69,8 @@ commands; the Bridge status survives it.
 `GET /` serves the SPA (embedded at compile time, or `--assets`). `GET /ws` is one text-frame
 JSON WebSocket; its path never carries a version — `hello.protocol` does. During app
 development, `cargo run -p remote-daemon -- --no-open --assets app` serves the folder from
-disk so a module or stylesheet edit needs no rebuild. Server messages are
+disk so a module or stylesheet edit needs no rebuild. The browser suite under `tests/`
+contains a page that drives on load, so it is served only with `--serve-tests`. Server messages are
 `hello`, `connection`, `snapshot`, `stream`, `event`, `bridge` and `command_result`; client
 messages are `hello`, `auth`, `pair`, `connect`, `disconnect`, `heartbeat` and `command`. A
 `snapshot` carries the reload-safe state — the latest stream samples, the last terminal Activity, a
@@ -120,7 +122,7 @@ The app's browser suite is separate and runs from the repository root:
 ```
 
 `run_real_chain.sh` builds this daemon and `bridge-stub`, writes a temporary config with
-the stub's `bench-token`, and serves `app` with `--assets app --port 0`. The page reports
+the stub's `bench-token`, and serves `app` with `--assets app --serve-tests --port 0`. The page reports
 through the DOM; the runner polls its `data-result`/`data-boot` attribute with a
 standard-library DevTools-pipe client because `chrome --dump-dom` dumps at load and the
 page finishes over a real WebSocket.
@@ -143,8 +145,9 @@ cargo build --workspace
 ## Known limits
 
 - The Remote App in `remote/app/` is served at `/` from the embedded copy (or `--assets`);
-  its pure/fake/real browser suite runs in CI's `web` job, and the manual Firefox, LAN and
-  real-phone steps are listed in the [Remote page](../../docs/components/remote.md).
+  the browser suite is a bench asset under `--serve-tests`, and its pure/fake/real pages run in
+  CI's `web` job. The manual Firefox, LAN and real-phone steps are listed in the
+  [Remote page](../../docs/components/remote.md).
 - v1 talks to one robot; several discovered Beacons pick one deterministically and name it in
   the app's `detail`.
 - Timers (2 s heartbeat, 3 s stall, 5 s grace, 8 s backoff) are provisional until a real LAN

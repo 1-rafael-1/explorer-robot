@@ -26,6 +26,7 @@ import {
   latestPose,
   liveActivityId,
   outcomeUnknown,
+  relayNow,
 } from './store.js';
 
 /** Formats an angle with one decimal, or an em dash when it is unknown. */
@@ -34,7 +35,12 @@ function angleText(value) {
 }
 
 /** Creates the planner over a store, a command sender and a clock. */
-export function createPlanner({ store, send = () => 0, now = () => Date.now(), announce = () => {} } = {}) {
+export function createPlanner({
+  store,
+  send = () => 0,
+  now = () => relayNow(store.state),
+  announce = () => {},
+} = {}) {
   // The one in-flight plan wait, or `null`. It spans the rotate and the drive.
   let waiting = null;
   // The one in-flight Stop wait, or `null`. Stop is idempotent but not stacked.

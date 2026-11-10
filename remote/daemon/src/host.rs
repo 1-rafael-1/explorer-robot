@@ -101,6 +101,8 @@ pub struct Host {
     pub store: Arc<Store>,
     /// The SPA's bytes: the embedded folder by default, a disk folder for `--assets`.
     pub assets: Assets,
+    /// Whether the browser test suite under `tests/` may be served (`--serve-tests`).
+    pub serve_tests: bool,
     /// The app-facing bind address; loopback unless the operator opts into the LAN.
     pub bind: IpAddr,
     /// The app-facing port; `None` tries [`DEFAULT_HTTP_PORT`] and falls back to an ephemeral port.
@@ -123,6 +125,7 @@ impl Host {
             discovery,
             store,
             assets,
+            serve_tests,
             bind,
             port,
             open_browser,
@@ -164,7 +167,8 @@ impl Host {
         let gate: Arc<dyn TokenGate> = store;
         let app = App::new(Arc::clone(&relay), gate)
             .with_hooks(Arc::new(SessionHooks { control }))
-            .with_assets(assets);
+            .with_assets(assets)
+            .with_tests(serve_tests);
         let listener = bind_listener(bind, port).await?;
         let addr = listener.local_addr()?;
         let app_shutdown = app.shutdown_handle();
@@ -287,6 +291,8 @@ enum Control {
     Disconnect,
     /// An app supplied a manual `host:port`.
     Manual(String, u16),
+    /// An app submitted a new pairing code: retry a fatal state with it.
+    Repair,
 }
 
 /// The [`AppHooks`] the app adapter calls; they forward to the Session manager.
@@ -310,6 +316,10 @@ impl AppHooks for SessionHooks {
 
     fn on_manual_endpoint(&self, host: &str, port: u16) {
         let _ = self.control.send(Control::Manual(host.to_owned(), port));
+    }
+
+    fn on_pair(&self) {
+        let _ = self.control.send(Control::Repair);
     }
 }
 
@@ -442,6 +452,17 @@ impl Manager {
                 self.blocked = None;
                 self.retry_blocked = false;
                 self.set_manual(&host, port).await;
+            }
+            Control::Repair => {
+                self.active = true;
+                self.auto_connect = true;
+                self.acquired_ms = Some(clock::now_ms());
+                // A new code is explicit operator intent: it clears the fatal-state block and
+                // replaces a link that was opened with the old token.
+                self.blocked = None;
+                self.retry_blocked = false;
+                self.stop_link();
+                self.trace("an app re-paired; retrying the Session");
             }
         }
         true

@@ -77,7 +77,7 @@ It builds `remote-daemon` and `bridge-stub` from `remote/`, starts the stub with
 fast `motion`/`activity` Streams and scripted `obstacle`/`floor_drop`/
 `procedure_completed` Events, writes a temporary daemon config with the stub's
 `bench-token`, starts
-`remote-daemon --no-open --assets app --port 0`, waits for `GET /` and the CSP
+`remote-daemon --no-open --assets app --serve-tests --port 0`, waits for `GET /` and the CSP
 header, then drives the real page. `run_real_chain.sh` also loads `/` itself and
 asserts `data-boot="ok"`, which is the embedded/`--assets` boot check; the
 ADR-0039 `frame-ancestors 'none'` CSP deliberately forbids the page from making
@@ -158,4 +158,6 @@ Still manual:
   rotate-then-drive completion path is covered by `tests/planner.html`. The
   scripted `procedure_completed` is replayed after a reload, and the test
   asserts the Result Report reconstructed from it.
-- The test pages ship inside the embedded folder, unlinked from the app.
+- The test pages ship inside the embedded folder but are unlinked from the app and are
+  served only with `--serve-tests`; `real.html` refuses to drive unless the Session is
+  the Bridge Stub.

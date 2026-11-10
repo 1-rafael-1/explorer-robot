@@ -149,4 +149,29 @@ async fn the_embedded_app_folder_is_served() {
     assert!(response.body.contains("Remote App"));
     assert_eq!(response.header("content-type"), Some("text/plain; charset=utf-8"));
     assert_static_headers(&response);
+
+    // The bench suite includes a page that drives the robot on load, so it is not a
+    // production asset.
+    let tests = must(http_get(server.addr(), "/tests/real.html").await, "GET tests page");
+    assert_eq!(tests.status, 404, "the browser suite needs --serve-tests");
+    assert_static_headers(&tests);
+}
+
+/// `--serve-tests` explicitly exposes the bench suite.
+#[tokio::test]
+async fn the_bench_suite_is_served_only_when_asked() {
+    let server = must(
+        TestServer::start_with_tests(
+            relay_with_session(1),
+            FakeGate::empty(),
+            Arc::new(LoopbackFree),
+            Assets::embedded(),
+        )
+        .await,
+        "server",
+    );
+    let page = must(http_get(server.addr(), "/tests/real.html").await, "GET tests page");
+    assert_eq!(page.status, 200);
+    assert_eq!(page.header("content-type"), Some("text/html; charset=utf-8"));
+    assert_static_headers(&page);
 }

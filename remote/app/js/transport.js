@@ -26,8 +26,17 @@ export function defaultWsUrl() {
 }
 
 /** A `sessionStorage`-backed token slot, with an in-memory fallback. */
-export function createTokenStorage(storage = globalThis.sessionStorage) {
+export function createTokenStorage(storage) {
   let fallback = null;
+  // Accessing `globalThis.sessionStorage` can itself throw when browser policy
+  // blocks storage, so it must be resolved inside a guard, not a default argument.
+  if (storage === undefined) {
+    try {
+      storage = globalThis.sessionStorage;
+    } catch {
+      storage = null;
+    }
+  }
   return {
     read() {
       try {
@@ -272,6 +281,10 @@ export function createTransport({
 
   function closeSocket(code = 1000, reason = '') {
     if (!socket) return;
+    // Stop the heartbeat before replacing the socket: the generation bump below
+    // suppresses the old close callback, which would otherwise be the only
+    // place that clears the interval.
+    stopHeartbeat();
     const current = socket;
     socket = null;
     generation += 1;

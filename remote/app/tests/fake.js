@@ -166,6 +166,53 @@ test('1001 is a visible state and then a reconnect', () => {
   assertEqual(session.factory.count(), 2);
 });
 
+test('reconnectNow stops the old heartbeat until the new greeting', () => {
+  const session = setup();
+  const socket = start(session);
+  socket.receive(hello());
+  session.clock.advance(1000);
+  assertEqual(socket.frames('heartbeat').length, 1);
+
+  session.transport.reconnectNow();
+  assertEqual(session.factory.count(), 2, 'a fresh socket is opened');
+  const second = session.factory.last();
+  second.open();
+  session.clock.advance(3000);
+  assertEqual(second.frames('heartbeat').length, 0, 'the heartbeat waits for the new greeting');
+  assertEqual(second.sent.length, 0, 'no client frame precedes the greeting');
+
+  second.receive(hello());
+  session.clock.advance(1000);
+  assertEqual(second.frames('heartbeat').length, 1, 'the heartbeat restarts after the greeting');
+});
+
+test('a blocked global storage still yields the in-memory token slot', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  let blocked = false;
+  try {
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new Error('denied');
+      },
+    });
+    blocked = true;
+  } catch {
+    // The browser refuses to replace the property; the injected-storage test covers storage.
+  }
+  if (!blocked) return;
+  try {
+    const storage = createTokenStorage();
+    storage.write('ABCD2345EFGH');
+    assertEqual(storage.read(), 'ABCD2345EFGH');
+    storage.clear();
+    assertEqual(storage.read(), null);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'sessionStorage', original);
+    else delete globalThis.sessionStorage;
+  }
+});
+
 test('token storage falls back to memory when sessionStorage throws', () => {
   const refusing = {
     getItem() {

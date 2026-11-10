@@ -3,7 +3,7 @@
 
 import { createPlanner } from './planner.js';
 import { createRadar } from './radar.js';
-import { createStore } from './store.js';
+import { createStore, relayNow } from './store.js';
 import { createTransport } from './transport.js';
 import { byId } from './views/dom.js';
 import { announce, mountApp, startRenderLoop } from './views/index.js';
@@ -36,7 +36,7 @@ const transport = createTransport({
 const planner = createPlanner({
   store,
   send: (name, args) => transport.command(name, args),
-  now: () => Date.now(),
+  now: () => relayNow(store.state),
   announce,
 });
 

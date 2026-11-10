@@ -86,7 +86,7 @@ stub_pid=$!
 echo "starting remote-daemon"
 (
   cd "$remote"
-  exec "$daemon_bin" --no-open --assets app --port 0 --config "$config"
+  exec "$daemon_bin" --no-open --assets app --serve-tests --port 0 --config "$config"
 ) >"$daemon_log" 2>&1 &
 daemon_pid=$!
 

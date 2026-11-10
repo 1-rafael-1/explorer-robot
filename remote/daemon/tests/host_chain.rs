@@ -86,6 +86,7 @@ async fn start_host(discovery: Discovery, store: Arc<Store>) -> remote_daemon::h
         discovery,
         store,
         assets: Assets::embedded(),
+        serve_tests: false,
         bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
         port: Some(0),
         open_browser: false,
@@ -310,6 +311,35 @@ async fn an_unauthorized_token_is_surfaced() {
             assert_ne!(value["state"], "connected", "unauthorized must not open a Session");
         }
     }
+
+    must(host.stop().await, "stop host");
+}
+
+/// A re-pair after an Unauthorized Session clears the fatal-state block and retries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_code_after_unauthorized_retries_the_session() {
+    let (discovery, beacon_target) = discovery();
+    let _stub = stub(beacon_target, TOKEN);
+    let (_dir, store) = store_with(Some(DeviceId::new(DEVICE)), "stale-token");
+    let host = start_host(discovery, Arc::clone(&store)).await;
+
+    let mut client = open_app(&host).await;
+    assert!(
+        wait_connection(&mut client, "unauthorized", Duration::from_secs(5)).await,
+        "the stale token was not surfaced as unauthorized"
+    );
+
+    // The same, still-open loopback socket submits the rotated code. This is explicit operator
+    // intent, so the manager must clear the block and try the Session again.
+    send_json(&mut client, &json!({"type": "pair", "code": TOKEN})).await;
+    assert!(
+        wait_token(&store, DeviceId::new(DEVICE), TOKEN, Duration::from_secs(5)).await,
+        "the new code was not stored under the discovered device"
+    );
+    assert!(
+        wait_connection(&mut client, "connected", Duration::from_secs(10)).await,
+        "the corrected code did not open a Session"
+    );
 
     must(host.stop().await, "stop host");
 }

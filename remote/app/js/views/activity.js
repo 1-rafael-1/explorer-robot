@@ -2,7 +2,7 @@
 // Labels come from the Catalogue except Idle, Booting and Manual Drive (ADR-0038).
 
 import { labelForActivity } from '../protocol.js';
-import { activityView } from '../store.js';
+import { activityView, relayNow } from '../store.js';
 import { byId, formatAge, setClass, setData, setHidden, setText } from './dom.js';
 import { STREAM_STALE_MS } from './streams.js';
 
@@ -13,7 +13,7 @@ export function bindActivity({ dismiss = () => {} } = {}) {
 }
 
 /** Renders the Activity card for `state`. */
-export function renderActivity(state) {
+export function renderActivity(state, now = relayNow(state)) {
   const view = activityView(state);
   const label = view.kind === 'idle' ? 'Idle' : labelForActivity(view.data.id, state.catalogue);
   const panel = byId('activity-panel');
@@ -25,7 +25,7 @@ export function renderActivity(state) {
   setText(byId('activity-stage'), stageText(view));
   setText(byId('activity-detail'), detailText(view));
   setHidden(byId('activity-busy'), !view.busy);
-  renderAge(byId('activity-age'), view.ts);
+  renderAge(byId('activity-age'), view.ts, now);
 
   const percent = view.data.percent;
   const progress = byId('activity-progress');
@@ -67,7 +67,7 @@ function detailText(view) {
   return detail;
 }
 
-function renderAge(node, ts) {
+function renderAge(node, ts, now) {
   if (!node) return;
   if (ts == null) {
     setText(node, '');
@@ -75,7 +75,6 @@ function renderAge(node, ts) {
     setData(node, 'stale', 'false');
     return;
   }
-  const now = Date.now();
   const stale = now - ts > STREAM_STALE_MS;
   setText(node, stale ? `${formatAge(ts, now)} · stale` : formatAge(ts, now));
   setClass(node, 'is-stale', stale);

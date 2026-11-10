@@ -25,7 +25,10 @@ export function renderEvents(state, ui = {}) {
   setAttr(byId('events-toggle'), 'aria-expanded', String(Boolean(ui.eventsOpen)));
   const list = byId('events-list');
   if (!list) return;
-  list.replaceChildren(...state.events.slice().reverse().map(row));
+  // Event timestamps are Relay-clock milliseconds, so they need the same offset
+  // as every age and staleness check before they read as wall-clock time.
+  const offset = state.clockOffset ?? 0;
+  list.replaceChildren(...state.events.slice().reverse().map((event) => row(event, offset)));
   if (state.events.length === 0) {
     list.append(element('li', 'events-empty', 'No Events yet.'));
   }
@@ -73,14 +76,14 @@ export function eventDetail(event) {
   }
 }
 
-function row(event) {
+function row(event, offset) {
   const item = element('li', 'event-row');
   setData(item, 'name', event.name ?? 'event');
   setData(item, 'tone', tone(event));
   item.append(element('span', 'event-title', eventTitle(event)));
   const detail = eventDetail(event);
   if (detail) item.append(element('span', 'event-detail', detail));
-  item.append(element('time', 'event-time', timeText(event.ts)));
+  item.append(element('time', 'event-time', timeText(event.ts, offset)));
   return item;
 }
 
@@ -98,10 +101,10 @@ function tone(event) {
   return 'info';
 }
 
-function timeText(ts) {
+function timeText(ts, offset = 0) {
   if (ts == null) return '';
   try {
-    return new Date(ts).toLocaleTimeString();
+    return new Date(ts + offset).toLocaleTimeString();
   } catch {
     return '';
   }

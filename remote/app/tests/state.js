@@ -3,6 +3,7 @@ import {
   activityView,
   apply,
   controlEnabled,
+  createStore,
   initialState,
   latestPose,
   lidarView,
@@ -12,6 +13,7 @@ import {
   outcomeUnknown,
   perceptionView,
   powerView,
+  relayNow,
   unreadEvents,
 } from '../js/store.js';
 import { labelForActivity } from '../js/protocol.js';
@@ -597,6 +599,167 @@ test('apply never mutates the state it is given', () => {
   assertEqual(JSON.stringify(start), before, 'apply must not mutate its argument');
   assertEqual(start.bootId, 1);
   assertEqual(motionView(start).left, 1);
+});
+
+test('the u16 Event sequence wraps without freezing the badge or hiding a gap', () => {
+  let state = apply(initialState(), snapshot({ event_cursor: 65535 }));
+  assertEqual(state.seenEventSeq, 65535);
+
+  state = apply(state, event(0, 10, 'obstacle', { detected: true, source: 'lidar' }));
+  assertEqual(unreadEvents(state), 1, 'sequence 0 after 65535 is a new Event');
+  const seen = markEventsSeen(state);
+  assertEqual(seen.seenEventSeq, 65536, 'the local cursor extends past the wire wrap');
+  assertEqual(unreadEvents(seen), 0);
+
+  const older = apply(seen, event(65535, 20, 'obstacle', { detected: false, source: 'lidar' }));
+  assertEqual(unreadEvents(older), 0, 'a stale pre-wrap Event is not unread again');
+
+  const withGap = apply(
+    apply(initialState(), snapshot({ event_cursor: 65535 })),
+    event(2, 30, 'obstacle', { detected: true, source: 'lidar' }),
+  );
+  assertEqual(withGap.eventGap, true, 'a dropped sequence after the wrap is still a gap');
+});
+
+test('the store derives one Relay-clock offset for planning and rendering', () => {
+  const store = createStore();
+  store.dispatch({ type: 'stream', name: 'power', seq: 1, ts: 5000, v: { level: 50, voltage_mv: 12000 } });
+  const state = store.state;
+  assert(Number.isFinite(state.clockOffset), 'the offset is a number');
+  assert(
+    Math.abs(relayNow(state) - 5000) < 1000,
+    'relayNow reads the Relay clock, not the page clock',
+  );
+});
+
+test('a reconnect snapshot keeps a replayed dismissal and reveals a new Result Report', () => {
+  const dismissed = apply(
+    apply(initialState(), {
+      ...snapshot({
+        catalogue: CATALOGUE,
+        last_terminal: {
+          name: 'activity',
+          seq: 1,
+          ts: 5,
+          v: { id: 5, stage: 'complete', percent: 100, detail: 'done' },
+        },
+      }),
+    }),
+    { type: '@dismiss' },
+  );
+  assertEqual(activityView(dismissed).kind, 'idle');
+
+  const replayed = apply(
+    dismissed,
+    snapshot({
+      catalogue: CATALOGUE,
+      last_terminal: {
+        name: 'activity',
+        seq: 2,
+        ts: 6,
+        v: { id: 5, stage: 'complete', percent: 100, detail: 'done' },
+      },
+    }),
+  );
+  assertEqual(activityView(replayed).kind, 'idle', 'a refresh of the same Result stays dismissed');
+
+  const fresh = apply(
+    dismissed,
+    snapshot({
+      catalogue: CATALOGUE,
+      last_terminal: {
+        name: 'activity',
+        seq: 3,
+        ts: 7,
+        v: { id: 6, stage: 'failed', percent: 100, detail: 'stalled' },
+      },
+    }),
+  );
+  assertEqual(activityView(fresh).kind, 'result', 'a new Result clears the dismissal');
+});
+
+test('a refreshed terminal Activity sample does not restore a dismissed report', () => {
+  let state = apply(initialState(), snapshot({ catalogue: CATALOGUE }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 1,
+    ts: 10,
+    v: { id: 5, stage: 'running', percent: 10, detail: '' },
+  });
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 2,
+    ts: 20,
+    v: { id: 5, stage: 'complete', percent: 100, detail: 'done' },
+  });
+  state = apply(state, { type: '@dismiss' });
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 3,
+    ts: 30,
+    v: { id: 5, stage: 'complete', percent: 100, detail: 'done' },
+  });
+  assertEqual(activityView(state).kind, 'idle', 'the same terminal sample is not a new Result');
+});
+
+test('a Stopped card needs a completion from the current run and the right Activity kind', () => {
+  let state = apply(initialState(), snapshot({ catalogue: CATALOGUE }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 1,
+    ts: 100,
+    v: { id: 5, stage: 'running', percent: 10, detail: '' },
+  });
+  state = apply(state, event(1, 150, 'drive_distance_completed', { target_cm: 100, actual_cm: 100 }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 2,
+    ts: 200,
+    v: { id: 0, stage: 'running', percent: null, detail: '' },
+  });
+  assert(state.activityStopped, 'a Manual Drive completion cannot end a Procedure run');
+
+  state = apply(state, { type: '@dismiss' });
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 3,
+    ts: 300,
+    v: { id: 5, stage: 'running', percent: 10, detail: '' },
+  });
+  state = apply(state, event(2, 320, 'procedure_completed', { id: 5, stage: 'complete', detail: 'done' }));
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 4,
+    ts: 340,
+    v: { id: 0, stage: 'running', percent: null, detail: '' },
+  });
+  assertEqual(state.activityStopped, null, 'the current run completed, so it is not Stopped');
+
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 5,
+    ts: 400,
+    v: { id: 5, stage: 'running', percent: 10, detail: '' },
+  });
+  state = apply(state, {
+    type: 'stream',
+    name: 'activity',
+    seq: 6,
+    ts: 420,
+    v: { id: 0, stage: 'running', percent: null, detail: '' },
+  });
+  assert(
+    state.activityStopped,
+    'a completion from the previous run cannot end the restarted run',
+  );
 });
 
 autorun();
