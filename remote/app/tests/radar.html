@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote App</title> — radar tests</title>
+  </head>
+  <body>
+    <h1>Radar tests</h</h1>1>
+    <p id="status">running</p>
+    <div>
+      <!-- The live scan is rendered onto a real canvas; the age badge is the
+           app's overlay element, so the stale state can be observed directly. -->
+      <canvas id="radar" width="320" height="240"
+              style="width: 320px; height: 240px; display: block"></canvas>
+      <span id="scan-age">No scan</span>
+      <span id="zoom-level">1.0×</span>
+    </div>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+    <script type="module" src="./radar.js"></script>
+  </body>
+</html>

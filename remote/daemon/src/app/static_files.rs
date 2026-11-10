@@ -104,6 +104,17 @@ fn target(path: &str) -> Target {
     Target::File(segments.join("/"))
 }
 
+/// Returns whether `relative` is part of the browser test suite under `tests/`.
+///
+/// The suite includes a real-chain page that drives the robot on load, so it is
+/// a bench asset gated behind `--serve-tests`, never part of the production app.
+fn is_bench_asset(relative: &str) -> bool {
+    relative
+        .split('/')
+        .next()
+        .is_some_and(|first| first.eq_ignore_ascii_case("tests"))
+}
+
 /// The `Content-Type` for an asset path.
 fn content_type(path: &str) -> &'static str {
     let extension = Path::new(path)
@@ -158,6 +169,9 @@ pub async fn static_handler(State(state): State<AppState>, uri: Uri, method: Met
         Target::NotFound => not_found(),
         Target::Index => serve_index(assets, empty).await,
         Target::File(relative) => {
+            if is_bench_asset(&relative) && !state.serve_tests {
+                return not_found();
+            }
             if let Some(body) = assets.load(&relative).await {
                 return respond(
                     StatusCode::OK,
@@ -187,7 +201,7 @@ async fn serve_index(assets: &Assets, empty: bool) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSP, Target, content_type, target};
+    use super::{CSP, Target, content_type, is_bench_asset, target};
 
     /// A missing asset with an extension is 404; an extensionless one falls back.
     #[test]
@@ -199,6 +213,18 @@ mod tests {
         assert_eq!(target("/%2e%2e/Cargo.toml"), Target::NotFound);
         assert_eq!(target("/ws"), Target::NotFound);
         assert_eq!(target("/ws/"), Target::NotFound);
+    }
+
+    /// The browser suite is a bench asset, not an app asset.
+    #[test]
+    fn the_test_suite_is_recognised() {
+        assert!(is_bench_asset("tests/real.html"));
+        assert!(is_bench_asset("tests/js/helper.js"));
+        assert!(is_bench_asset("tests"));
+        assert!(is_bench_asset("Tests/real.html"), "macOS paths are case-insensitive");
+        assert!(!is_bench_asset("testsx/real.html"));
+        assert!(!is_bench_asset("js/main.js"));
+        assert!(!is_bench_asset("index.html"));
     }
 
     /// The CSP literal is the ADR's, not an approximation.

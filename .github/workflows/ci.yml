@@ -179,6 +179,40 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+  # The Remote App's browser suite: the pure modules, the fake socket and the
+  # real Relay chain, served same-origin and rendered under headless Chrome.
+  # There is no Node, npm or bundler (ADR-0038, ADR-0043).
+  web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run the browser suite
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: .github/scripts/run_web_tests.sh
+
+      # The real chain builds the daemon and the Bridge Stub, so this job needs
+      # the repository's Rust pin as well as Chrome.
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "remote -> target"
+
+      - name: Run the real Relay + Bridge Stub chain
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: .github/scripts/run_real_chain.sh
+
   # The live docs: every relative link and image in tracked Markdown must resolve.
   docs:
     runs-on: ubuntu-latest

@@ -228,6 +228,24 @@ impl TestServer {
         Self::start_full(relay, gate, policy, assets, Arc::new(remote_daemon::app::NoHooks)).await
     }
 
+    /// Starts a server that also serves the browser suite under `tests/`.
+    pub async fn start_with_tests(
+        relay: Arc<Mutex<Relay>>,
+        gate: Arc<dyn TokenGate>,
+        policy: Arc<dyn PeerPolicy>,
+        assets: Assets,
+    ) -> io::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let app = App::new(relay, gate)
+            .with_peer_policy(policy)
+            .with_assets(assets)
+            .with_tests(true);
+        let shutdown = app.shutdown_handle();
+        let join = tokio::spawn(app.serve(listener));
+        Ok(Self { addr, shutdown, join })
+    }
+
     /// Starts a server with hooks too.
     pub async fn start_full(
         relay: Arc<Mutex<Relay>>,

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote App — pairing tests</title>
+  </head>
+  <body>
+    <h1>Pairing tests</h1>
+    <p id</title></h1>="status">running</p>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+
+    <!-- A minimal stand-in for the real index.html slots the pairing view binds. -->
+    <section id="fixture" aria-label="Pairing fixture">
+      <p id="connection-state">Pair with this robot</p>
+      <form id="pairing-form" class="pairing" hidden novalidate>
+        <label for="pairing-code">Pairing Token</label>
+        <input id="pairing-code" name="code" autocomplete="off" maxlength="14"
+               aria-describedby="pairing-hint">
+        <p id="pairing-hint" class="hint" aria-live="polite"></p>
+        <button type="submit" class="primary">Pair</button>
+      </form>
+
+      <details id="manual-endpoint" class="manual" hidden>
+        <summary>Connect</summary> to a host and port</summary>
+        <form id="manual-form" novalidate>
+          <label for="manual-host">Host</label>
+          <input id="manual-host" name="host" autocomplete="off">
+          <label for="manual-port">Port</label>
+          <input id="manual-port" name="port" inputmode="numeric">
+          <p id="manual-hint" class="hint" aria-live="polite"></p>
+          <button type="submit" class="secondary">Connect</button>
+        </form>
+      </details>
+
+      <p id="threat-note" class="threat" hidden>
+        On a local network the Pairing Token crosses the WebSocket without TLS.
+      </p>
+    </section>
+
+    <script type="module" src="./pairing.js"></script>
+  </body>
+</html>

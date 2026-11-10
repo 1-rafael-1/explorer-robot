@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote App — bridge tests</title>
+  </head>
+  <body>
+    <h1>Bridge tests</h1>
+    <p id="status">running</p>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+
+    <header class="topbar">
+      <div class="status-strip">
+        <span id="connection-chip" class="chip" data-state="searching">Searching</span>
+        <span id="bridge-chip" class="chip chip-bridge" data-station="unknown">
+          <span id="bridge-chip-station">Bridge</span>
+          <span id="bridge-chip-rssi" aria-hidden="true">—</span>
+        </span>
+      </div>
+    </header>
+
+    <section id="bridge-panel" class="panel" aria-labelledby="bridge-heading" hidden>
+      <h2 id="bridge-heading">Robot / Link</h2>
+      <p>RSSI <span id="bridge-rssi">—</span> <span id="bridge-rssi-bucket"></span></p>
+      <p>Channel <span id="bridge-channel">—</span></p>
+      <p>Provisioned <span id="bridge-provisioned">—</span></p>
+      <p>Setup open <span id="bridge-setup">—</span></p>
+      <p>Link ready <span id="bridge-link-ready">—</span></p>
+      <p>UART dropped <span id="bridge-uart">—</span></p>
+      <p>DMA stalls <span id="bridge-dma">—</span></p>
+      <p>CRC failures <span id="bridge-crc">—</span></p>
+      <p>Resyncs <span id="bridge-resyncs">—</span></p>
+      <p>Watchdog feeds <span id="bridge-wdt-feeds">—</span></p>
+      <p>Watchdog withheld <span id="bridge-wdt-withheld">—</span></p>
+      <p>Bridge age <span id="bridge-age">not reported</span></p>
+    </section>
+
+    <script type="module" src="./bridge.js"></script>
+  </body>
+</html>

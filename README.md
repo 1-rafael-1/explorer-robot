@@ -20,7 +20,7 @@ and the written material.
 |---|---|---|---|
 | Robot firmware | `robot/`, root `Cargo.toml` | The `explorer-robot` Embassy firmware for the RP2350B (`thumbv8m.main-none-eabihf`) and its workspace crates: the Link Protocol, `LinkCore`, the drivers and the host-testable models | [robot](robot/README.md) |
 | Bridge | `bridge/` | Its own workspace: the ESP32-C3 RISC-V firmware (`riscv32imc-unknown-none-elf`, `build-std`) that translates between the home network and the robot's UART1, and the HAL-free `bridge-core` rules | [bridge](bridge/README.md) |
-| Remote | `remote/` | Its own host workspace (`x86_64-unknown-linux-gnu`): the `remote-daemon` relay, the shared `bridge-net` network edge, the two bench stubs and the static app | [remote](remote/README.md) |
+| Remote | `remote/` | Its own host workspace (`x86_64-unknown-linux-gnu`): the `remote-daemon` relay, the shared `bridge-net` network edge, the two bench stubs and the static Remote App with its headless browser suite | [remote](remote/README.md) |
 | Hardware | `hardware/` | FreeCAD chassis and running gear, KiCad schematic and PCB, BOM, print notes, assembly photos and safety notes — no Cargo target | [hardware](hardware/README.md) |
 | Documentation | `docs/`, `CONTEXT.md` | The docs index, [architecture and data flow](docs/architecture.md), the [component pages](docs/README.md#component-pages), the [ADRs](docs/adr/), and the [domain glossary](CONTEXT.md) — no Cargo target | [docs](docs/README.md) |
 
@@ -56,6 +56,7 @@ README](robot/README.md) for the bucket map.
 | Robot | [Robot page](docs/components/robot.md) | `cargo build --workspace --release --target thumbv8m.main-none-eabihf` from the repository root |
 | Bridge | [Bridge page](docs/components/bridge.md) | `cd bridge && cargo build` |
 | Remote | [Remote page](docs/components/remote.md) | `cd remote && cargo test --workspace` |
+| Remote App | [app README](remote/app/README.md) | `.github/scripts/run_web_tests.sh` |
 | Bench | [Bench page](docs/components/bench.md) | Wire the bench first, then `cd remote && cargo run -p bridge-stub -- --help` |
 
 ## Status
@@ -66,12 +67,19 @@ UART1 and the Link Port power. The Bridge implements the network edge: the
 Discovery Beacon, the HMAC preamble, the single-client gate, the credential
 record and Pairing Token, Setup Mode with its portal, Bridge Presence and the
 task watchdog. The Remote daemon implements discovery, the preamble, the Relay
-and the `/ws` boundary.
+and the `/ws` boundary. The Remote App is a static SPA in `remote/app/` that the
+Relay serves at `/`: connection and pairing, the World Frame radar,
+point-and-go, Activity/Events, Bridge status and the phone-landscape layout. Its
+headless browser suite covers the static pages, the fake socket and the real
+Relay + Bridge Stub chain, including reload reconstruction and the Result Report
+(`run_web_tests.sh` and `run_real_chain.sh`); see the
+[Remote page](docs/components/remote.md) and the
+[app README](remote/app/README.md).
 
 Still open: an async VL53L0X driver for the rangefinder pair (the firmware
 ships an opt-in synthetic stub behind the `floor_drop_stub` feature), a Grove
 Vision AI V2 driver (the PIO UART and switched 5 V branch are reserved), and
-the static app, so `GET /` answers 404 until the SPA lands.
+the manual real-phone pinch pass for the app.
 
 ## Read next
 

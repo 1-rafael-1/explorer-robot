@@ -9,7 +9,7 @@ if you are new to the repository.
 |---|---|---|
 | Robot | [robot.md](components/robot.md) | The firmware package on the RP2350B: drive, perception and the panel UI. |
 | Bridge | [bridge.md](components/bridge.md) | The C3 image that translates between the home network and the robot's UART1 Link Port. |
-| Remote | [remote.md](components/remote.md) | The PC-side daemon and the static web app. |
+| Remote | [remote.md](components/remote.md) | The PC-side daemon and the static Remote App: connection/pairing, the World Frame radar, point-and-go, Activity/Events and Bridge status, with the real-chain browser suite. |
 | Bench | [bench.md](components/bench.md) | The harness, wiring, power rules and bench scripts. |
 
 ## Reference

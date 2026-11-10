@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote App - real-chain tests</title>
+  </head>
+  <body>
+    <h1>Real-chain tests</h1>
+    <p id="status">running</p>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+    <!-- Served by the daemon, so `/ws` is the real Relay, the robot is the
+         Bridge Stub, and the app modules are the ones the Relay serves. -->
+    <script type="module" src="./real.js"></script>
+  </body>
+</html>

@@ -86,6 +86,10 @@ pub trait AppHooks: Send + Sync {
 
     /// Called for a manual `host:port` endpoint from an app `connect` message.
     fn on_manual_endpoint(&self, _host: &str, _port: u16) {}
+
+    /// Called when an already-authenticated app sends a new `pair` code. This is explicit
+    /// operator intent to retry a Session a fatal state had blocked (ADR-0037, ADR-0039).
+    fn on_pair(&self) {}
 }
 
 /// The do-nothing [`AppHooks`] used when no Session wiring is installed.
@@ -129,6 +133,8 @@ struct AppState {
     limiter: Arc<auth::AuthLimiter>,
     /// The SPA's bytes.
     assets: Assets,
+    /// Whether the browser test pages under `tests/` may be served.
+    serve_tests: bool,
     /// The robot model advertised in `hello`, when known.
     robot_model: Option<String>,
     /// How long the auth gate waits for the first message.
@@ -210,6 +216,7 @@ impl App {
                 policy: Arc::new(LoopbackFree),
                 limiter: Arc::new(auth::AuthLimiter::default()),
                 assets: Assets::Embedded,
+                serve_tests: false,
                 robot_model: None,
                 auth_deadline: AUTH_DEADLINE,
                 hello_deadline: HELLO_DEADLINE,
@@ -233,6 +240,13 @@ impl App {
     #[must_use]
     pub fn with_assets(mut self, assets: Assets) -> Self {
         self.state.assets = assets;
+        self
+    }
+
+    /// Allows the browser suite under `tests/` to be served (`--serve-tests`).
+    #[must_use]
+    pub const fn with_tests(mut self, serve_tests: bool) -> Self {
+        self.state.serve_tests = serve_tests;
         self
     }
 
