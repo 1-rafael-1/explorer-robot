@@ -77,8 +77,9 @@ Relay + Bridge Stub chain, including reload reconstruction and the Result Report
 [app README](remote/app/README.md).
 
 Still open: an async VL53L0X driver for the rangefinder pair (the firmware
-currently uses a stub), a Grove Vision AI V2 driver (the PIO UART and switched
-5 V branch are reserved), and the manual real-phone pinch pass for the app.
+ships an opt-in synthetic stub behind the `floor_drop_stub` feature), a Grove
+Vision AI V2 driver (the PIO UART and switched 5 V branch are reserved), and
+the manual real-phone pinch pass for the app.
 
 ## Read next
 

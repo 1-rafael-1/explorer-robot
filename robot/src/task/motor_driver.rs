@@ -402,9 +402,11 @@ pub async fn motor_driver(
 ) {
     info!("Motor driver task starting");
 
-    // Split PWM slices into individual channel outputs
+    // Split PWM slices into individual channel outputs. The left motor uses
+    // channel A (GPIO 4, PWM2A) and the right motor channel B (GPIO 7, PWM3B),
+    // so each slice yields the channel in a different position.
     let (left_ch, _) = pwm_left.split();
-    let (right_ch, _) = pwm_right.split();
+    let (_, right_ch) = pwm_right.split();
 
     let (Some(left_pwm), Some(right_pwm)) = (left_ch, right_ch) else {
         warn!("PWM channels not configured; motor driver exiting");

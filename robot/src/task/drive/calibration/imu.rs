@@ -80,8 +80,8 @@ impl ImuReadingsGuard {
         target_mode: crate::task::sensors::imu::DmpFusionMode,
         restore_mode: crate::task::sensors::imu::DmpFusionMode,
     ) -> Self {
-        crate::task::sensors::imu::start_imu_readings();
         crate::task::sensors::imu::set_dmp_fusion_mode(target_mode);
+        crate::task::sensors::imu::start_imu_readings();
         Self {
             restore_fusion_mode: Some(restore_mode),
         }

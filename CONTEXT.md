@@ -69,7 +69,7 @@
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, lifecycle events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
 - **Behavior Handler** — A module under `task/behavior/` that reacts to specific event types. Domain logic lives here — obstacle fusion (perception atomics + EmergencyBrake interrupt), battery state updates, obstacle avoidance completion. Called by the orchestrator.
-- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → motor_driver → encoders → drive_queue_executor → drive → panel → vl53l0x_stub → imu → flash_storage → testing → autonomous_mode → startup. Core1 runs only the LiDAR task.
+- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → motor_driver → encoders → drive_queue_executor → drive → panel → vl53l0x_stub (only with the `floor_drop_stub` feature) → imu → flash_storage → testing → autonomous_mode → startup. Core1 runs only the LiDAR task.
 
 ### Message Passing
 
@@ -77,7 +77,7 @@ Three data flow patterns coexist, chosen by latency requirements:
 
 - **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
 - **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
-- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the floor-drop stub writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex.
+- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the floor-drop stub writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex. With the stub disabled (the default) and no real rangefinder driver yet, `FLOOR_DROP` stays clear.
 
 ### Remote Link
 
