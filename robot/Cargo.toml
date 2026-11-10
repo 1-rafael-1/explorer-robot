@@ -11,6 +11,11 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 # Gate high-frequency diagnostic logging.
 # Keep this OFF by default so release runs without a log consumer don't spend time formatting/queuing logs.
 telemetry_logs = []
+# Feed synthetic floor-drop readings from the VL53L0X stub. Off by default: with
+# no rangefinder attached the stub alternates between solid floor and floor drop,
+# which raises spurious EmergencyBrake interrupts. Enable only to exercise the
+# perception/drive pipeline without sensors.
+floor_drop_stub = []
 
 [lints]
 workspace = true

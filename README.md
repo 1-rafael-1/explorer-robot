@@ -69,9 +69,9 @@ task watchdog. The Remote daemon implements discovery, the preamble, the Relay
 and the `/ws` boundary.
 
 Still open: an async VL53L0X driver for the rangefinder pair (the firmware
-currently uses a stub), a Grove Vision AI V2 driver (the PIO UART and switched 5 V
-branch are reserved), and the static app, so `GET /` answers 404 until the SPA
-lands.
+ships an opt-in synthetic stub behind the `floor_drop_stub` feature), a Grove
+Vision AI V2 driver (the PIO UART and switched 5 V branch are reserved), and
+the static app, so `GET /` answers 404 until the SPA lands.
 
 ## Read next
 

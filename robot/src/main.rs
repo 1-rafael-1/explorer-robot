@@ -251,7 +251,11 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverResources) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Spawn the VL53L0X rangefinder stub task on core0.
+/// Spawn the synthetic VL53L0X rangefinder stub task on core0.
+///
+/// Only compiled with the `floor_drop_stub` feature; the stub does not read a
+/// sensor, it alternates synthetic floor readings to exercise the pipeline.
+#[cfg(feature = "floor_drop_stub")]
 #[allow(clippy::unwrap_used)]
 fn init_vl53l0x_stub(spawner: Spawner) {
     spawner.spawn(task::sensors::vl53l0x_stub::vl53l0x_stub_task().unwrap());
@@ -460,6 +464,7 @@ fn main() -> ! {
         init_rgb_led(spawner, rgb_pins);
         init_motor_driver(spawner, motor_pins);
         init_ui(spawner, panel_pins);
+        #[cfg(feature = "floor_drop_stub")]
         init_vl53l0x_stub(spawner);
         init_imu(spawner, imu_spi, imu_cs);
         init_remote_link(spawner, remote_link_pins, core.trng);
