@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Explorer Remote</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div id="app">
+      <section id="connection-screen" class="connection-screen" aria-labelledby="connection-state">
+        <div class="connection-card" role="status" aria-live="polite">
+          <p class="eyebrow">Explorer Remote</p>
+          <p id="connection-robot" class="connection-robot">Robot</p>
+          <h1 id="connection-state">Looking for robots</h1>
+          <p id="connection-detail" class="connection-detail"></p>
+
+          <form id="pairing-form" class="pairing" hidden novalidate>
+            <label for="pairing-code">Pairing Token</label>
+            <input id="pairing-code" name="code" inputmode="text" autocomplete="off"
+                   autocapitalize="characters" spellcheck="false" maxlength="14"
+                   aria-describedby="pairing-hint">
+            <p id="pairing-hint" class="hint" aria-live="polite"></p>
+            <button type="submit" class="primary">Pair</button>
+          </form>
+
+          <details id="manual-endpoint" class="manual" hidden>
+            <summary>Connect to a host and port</summary>
+            <form id="manual-form" novalidate>
+              <label for="manual-host">Host</label>
+              <input id="manual-host" name="host" autocomplete="off" spellcheck="false"
+                     placeholder="192.168.1.20">
+              <label for="manual-port">Port</label>
+              <input id="manual-port" name="port" inputmode="numeric" value="9000">
+              <p id="manual-hint" class="hint" aria-live="polite"></p>
+              <button type="submit" class="secondary">Connect</button>
+            </form>
+          </details>
+
+          <button id="retry" type="button" class="secondary" hidden>Retry</button>
+          <p id="threat-note" class="threat" hidden>
+            On a local network the Pairing Token crosses the WebSocket without TLS.
+          </p>
+        </div>
+      </section>
+
+      <div id="shell" class="shell" hidden>
+        <header class="topbar">
+          <div class="brand">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span id="robot-label">Robot</span>
+          </div>
+          <div class="status-strip">
+            <span id="connection-chip" class="chip" data-state="searching" role="status">Searching</span>
+            <span id="bridge-chip" class="chip chip-bridge" data-station="unknown" role="status">
+              <span class="slot-label">Bridge</span>
+              <span id="bridge-chip-station">Unknown</span>
+              <span id="bridge-chip-rssi">—</span>
+            </span>
+            <span class="slot"><span class="slot-label">Battery</span><span id="battery-level">—</span><span id="power-age" class="slot-age"></span></span>
+            <span class="slot"><span class="slot-label">Pack</span><span id="battery-voltage">—</span></span>
+            <span class="slot">
+              <span class="slot-label">Motion</span>
+              <span id="motion-left">—</span><span aria-hidden="true">/</span><span id="motion-right">—</span>
+              <span id="motion-age" class="slot-age"></span>
+            </span>
+            <span class="slot"><span class="slot-label">Scan</span><span id="scan-age">No scan</span></span>
+            <span class="slot"><span class="slot-label">Zoom</span><span id="zoom-level">1.0×</span></span>
+          </div>
+          <div class="top-actions">
+            <button id="events-toggle" type="button" class="icon-button" aria-expanded="false"
+                    aria-controls="events-panel" aria-label="Events">
+              Events <span id="events-badge" class="badge" hidden></span>
+            </button>
+            <button id="robot-toggle" type="button" class="icon-button" aria-expanded="false"
+                    aria-controls="bridge-panel">Robot</button>
+            <button id="stop-button" type="button" class="stop" disabled>Stop</button>
+          </div>
+        </header>
+
+        <div id="link-banner" class="link-banner" role="status" hidden>
+          Connection lost — showing the last known state.
+        </div>
+
+        <main class="workspace">
+          <section class="radar-pane" aria-label="Radar">
+            <canvas id="radar" tabindex="0" role="img"
+                    aria-label="World-frame radar. Use the bearing and distance form in the drive bar for keyboard driving."></canvas>
+
+            <div class="camera-cluster" role="group" aria-label="Camera">
+              <button id="zoom-in" type="button" class="cluster-button" aria-label="Zoom in">+</button>
+              <button id="zoom-out" type="button" class="cluster-button" aria-label="Zoom out">−</button>
+              <button id="pan-up" type="button" class="cluster-button" aria-label="Pan up">↑</button>
+              <button id="pan-down" type="button" class="cluster-button" aria-label="Pan down">↓</button>
+              <button id="pan-left" type="button" class="cluster-button" aria-label="Pan left">←</button>
+              <button id="pan-right" type="button" class="cluster-button" aria-label="Pan right">→</button>
+              <button id="center-view" type="button" class="cluster-button" aria-label="Center on the robot">◎</button>
+            </div>
+
+            <div id="target-card" class="target-card" role="region" aria-label="Target Point preview" hidden>
+              <p class="target-title">Target Point</p>
+              <dl class="target-values">
+                <div><dt>Bearing</dt><dd id="target-bearing">—</dd></div>
+                <div><dt>Turn</dt><dd id="target-turn">—</dd></div>
+                <div><dt>Distance</dt><dd id="target-distance">—</dd></div>
+              </dl>
+              <p id="target-status" class="target-status" aria-live="polite"></p>
+              <div class="target-actions">
+                <button id="target-go" type="button" class="primary">Go</button>
+                <button id="target-cancel" type="button" class="secondary">Cancel</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="side" aria-label="Panels">
+            <section id="activity-panel" class="panel" aria-labelledby="activity-label">
+              <header class="panel-head">
+                <h2 id="activity-label">Idle</h2>
+                <span class="panel-stage">
+                  <span id="activity-busy" class="panel-busy" hidden>Busy</span>
+                  <span id="activity-stage"></span>
+                  <span id="activity-age" class="slot-age"></span>
+                </span>
+              </header>
+              <p id="activity-detail" class="panel-detail"></p>
+              <progress id="activity-progress" max="100" value="0" aria-label="Activity progress" hidden></progress>
+              <p id="perception-line" class="perception">
+                <span class="slot-label">Perception</span>
+                <span id="perception-obstacle">Obstacle unknown</span>
+                <span aria-hidden="true">·</span>
+                <span id="perception-floor-drop">Floor drop unknown</span>
+                <span id="perception-age" class="slot-age"></span>
+              </p>
+              <button id="activity-dismiss" type="button" class="secondary small" hidden>Dismiss</button>
+            </section>
+
+            <section id="events-panel" class="panel overlay-panel" aria-labelledby="events-heading" tabindex="-1" hidden>
+              <header class="panel-head">
+                <h2 id="events-heading">Events</h2>
+                <button id="events-close" type="button" class="icon-button" aria-label="Close Events">Close</button>
+              </header>
+              <ol id="events-list" class="events-list"></ol>
+            </section>
+
+            <section id="bridge-panel" class="panel overlay-panel" aria-labelledby="bridge-heading" tabindex="-1" hidden>
+              <header class="panel-head"><h2 id="bridge-heading">Robot / Link</h2></header>
+              <dl class="fields">
+                <div><dt>RSSI</dt><dd><span id="bridge-rssi">—</span> <span id="bridge-rssi-bucket"></span></dd></div>
+                <div><dt>Channel</dt><dd id="bridge-channel">—</dd></div>
+                <div><dt>Provisioned</dt><dd id="bridge-provisioned">—</dd></div>
+                <div><dt>Setup open</dt><dd id="bridge-setup">—</dd></div>
+                <div><dt>Link ready</dt><dd id="bridge-link-ready">—</dd></div>
+                <div><dt>UART dropped</dt><dd id="bridge-uart">—</dd></div>
+                <div><dt>DMA stalls</dt><dd id="bridge-dma">—</dd></div>
+                <div><dt>CRC failures</dt><dd id="bridge-crc">—</dd></div>
+                <div><dt>Resyncs</dt><dd id="bridge-resyncs">—</dd></div>
+                <div><dt>Watchdog feeds</dt><dd id="bridge-wdt-feeds">—</dd></div>
+                <div><dt>Watchdog withheld</dt><dd id="bridge-wdt-withheld">—</dd></div>
+                <div><dt>Bridge age</dt><dd id="bridge-age">not reported</dd></div>
+              </dl>
+              <button id="calibration-toggle" type="button" class="secondary small"
+                      aria-expanded="false" aria-controls="calibration-panel">Calibration</button>
+              <section id="calibration-panel" class="subpanel" aria-label="Calibration" tabindex="-1" hidden>
+                <dl class="fields">
+                  <div><dt>Motor</dt><dd id="calibration-motor">Unknown</dd></div>
+                  <div><dt>IMU</dt><dd id="calibration-imu">Unknown</dd></div>
+                  <div><dt>Mag</dt><dd id="calibration-mag">Unknown</dd></div>
+                  <div><dt>Distance</dt><dd id="calibration-distance">Unknown</dd></div>
+                </dl>
+              </section>
+            </section>
+          </aside>
+        </main>
+
+        <footer id="drive-bar" class="drive-bar" data-stage="idle">
+          <form id="numeric-drive-form" class="numeric-drive" novalidate aria-label="Numeric drive">
+            <label for="numeric-bearing">Bearing</label>
+            <input id="numeric-bearing" name="bearing" inputmode="decimal" autocomplete="off"
+                   placeholder="0" aria-describedby="numeric-hint">
+            <label for="numeric-distance">Distance</label>
+            <input id="numeric-distance" name="distance" inputmode="decimal" autocomplete="off"
+                   placeholder="100" aria-describedby="numeric-hint">
+            <button type="submit" class="secondary">Preview</button>
+          </form>
+          <p id="numeric-hint" class="hint" aria-live="polite"></p>
+          <div id="drive-report" class="drive-report" role="status" hidden>
+            <strong id="drive-report-title"></strong>
+            <span id="drive-report-text"></span>
+            <button id="drive-dismiss" type="button" class="secondary small">Dismiss</button>
+          </div>
+          <nav class="sheet-tabs" role="tablist" aria-label="Panels">
+            <button id="tab-activity" type="button" role="tab" aria-selected="true"
+                    aria-controls="activity-panel" tabindex="0">Activity</button>
+            <button id="tab-events" type="button" role="tab" aria-selected="false"
+                    aria-controls="events-panel" tabindex="-1">Events</button>
+            <button id="tab-robot" type="button" role="tab" aria-selected="false"
+                    aria-controls="bridge-panel" tabindex="-1">Robot</button>
+          </nav>
+        </footer>
+      </div>
+
+      <div id="toast" role="status" aria-live="polite" hidden></div>
+    </div>
+
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>

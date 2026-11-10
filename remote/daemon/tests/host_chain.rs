@@ -86,6 +86,7 @@ async fn start_host(discovery: Discovery, store: Arc<Store>) -> remote_daemon::h
         discovery,
         store,
         assets: Assets::embedded(),
+        serve_tests: false,
         bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
         port: Some(0),
         open_browser: false,
@@ -143,6 +144,18 @@ async fn wait_connection(client: &mut Client, wanted: &str, budget: Duration) ->
             // A quiet read is not a closed socket: keep waiting inside the budget.
             Some(Frame::Json(_) | Frame::Other) | None => {}
         }
+    }
+    false
+}
+
+/// Polls the token store until `device` holds `token`, or the budget elapses.
+async fn wait_token(store: &Store, device: DeviceId, token: &str, budget: Duration) -> bool {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        if store.token_for(Some(device)).as_deref() == Some(token) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
     false
 }
@@ -302,6 +315,35 @@ async fn an_unauthorized_token_is_surfaced() {
     must(host.stop().await, "stop host");
 }
 
+/// A re-pair after an Unauthorized Session clears the fatal-state block and retries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_code_after_unauthorized_retries_the_session() {
+    let (discovery, beacon_target) = discovery();
+    let _stub = stub(beacon_target, TOKEN);
+    let (_dir, store) = store_with(Some(DeviceId::new(DEVICE)), "stale-token");
+    let host = start_host(discovery, Arc::clone(&store)).await;
+
+    let mut client = open_app(&host).await;
+    assert!(
+        wait_connection(&mut client, "unauthorized", Duration::from_secs(5)).await,
+        "the stale token was not surfaced as unauthorized"
+    );
+
+    // The same, still-open loopback socket submits the rotated code. This is explicit operator
+    // intent, so the manager must clear the block and try the Session again.
+    send_json(&mut client, &json!({"type": "pair", "code": TOKEN})).await;
+    assert!(
+        wait_token(&store, DeviceId::new(DEVICE), TOKEN, Duration::from_secs(5)).await,
+        "the new code was not stored under the discovered device"
+    );
+    assert!(
+        wait_connection(&mut client, "connected", Duration::from_secs(10)).await,
+        "the corrected code did not open a Session"
+    );
+
+    must(host.stop().await, "stop host");
+}
+
 /// Several Beacons with no history pick one deterministically and name it in the app's `detail`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn several_beacons_pick_one_and_name_it_in_the_app_detail() {
@@ -354,6 +396,36 @@ async fn a_discovered_robot_without_a_token_requires_pairing() {
     assert!(
         !wait_connection(&mut client, "connected", Duration::from_millis(800)).await,
         "no Session may open without a token"
+    );
+
+    must(host.stop().await, "stop host");
+}
+
+/// A loopback app pairs after its hello, and the next Beacon opens the Session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loopback_app_pairs_after_hello_and_the_next_beacon_connects() {
+    let (discovery, beacon_target) = discovery();
+    let _stub = stub(beacon_target, TOKEN);
+    let dir = must(tempfile::tempdir(), "temp dir");
+    let store = Arc::new(must(Store::open(dir.path().join("config.toml")), "open store"));
+    let host = start_host(discovery, Arc::clone(&store)).await;
+
+    let mut client = open_app(&host).await;
+    assert!(
+        wait_connection(&mut client, "pairing_required", Duration::from_secs(5)).await,
+        "the discovered robot was not reported as pairing_required"
+    );
+
+    // No pre-seeded config: the app pairs over loopback after its hello, and the token is filed
+    // under the device the Beacon recorded.
+    send_json(&mut client, &json!({"type": "pair", "code": TOKEN})).await;
+    assert!(
+        wait_token(&store, DeviceId::new(DEVICE), TOKEN, Duration::from_secs(5)).await,
+        "the loopback pair message did not store the token under the last device"
+    );
+    assert!(
+        wait_connection(&mut client, "connected", Duration::from_secs(10)).await,
+        "the next Beacon after pairing did not open the Session"
     );
 
     must(host.stop().await, "stop host");

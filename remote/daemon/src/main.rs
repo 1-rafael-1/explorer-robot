@@ -41,6 +41,7 @@ fn start(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         discovery,
         store: Arc::new(store),
         assets,
+        serve_tests: cli.serve_tests,
         bind: cli.host,
         port: cli.port,
         open_browser: !cli.no_open,
