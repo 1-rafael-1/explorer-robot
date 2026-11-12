@@ -17,14 +17,15 @@ use link_state::{
 use touch_ui::{
     HeaderStatus, Hit, Item, LinkAction, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE,
     TAP_MIN_DURATION_MS, Ui,
-    buffer::TextBuf,
+    buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
         back_button_rect, cancel_button_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
         link_result_rect, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
-        slider_touch_rect,
+        progress_bar_rect, readout_rect, readout_row_pitch, readout_row_rect, room_scan_caption_rect, save_button_rect,
+        scroll_track_rect, slider_touch_rect,
     },
+    imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MAX_IMU_ROWS, MagDiagnostics, Vector3},
     palette::{SMALL_FONT, TITLE_FONT},
     radar,
     screens::{Screen, StatusView, ValueFlow},
@@ -1581,4 +1582,464 @@ fn the_radar_input_has_three_hundred_and_sixty_slots() {
     assert_eq!(radar::SLOTS, 360);
     let slots: radar::Slots = [None; radar::SLOTS];
     assert_eq!(slots.len(), radar::SLOTS);
+}
+
+/// A representative IMU Test Readout remap row, exactly as wide as the buffer's
+/// documented minimum: 48 ASCII characters, including spaces.
+const IMU_REMAP_ROW: &str = "Remap: ax<-gy ay<-gx az<-az gx<-ax gy<-ay gz<-gz";
+
+/// Test that a 48-character readout row formats and reads back intact, so the
+/// IMU Test Readout can draw a remap row without truncation.
+#[test]
+fn a_forty_eight_character_readout_row_round_trips() {
+    assert_eq!(IMU_REMAP_ROW.len(), 48);
+    assert_eq!(TEXT_BUF_LEN, 48);
+
+    let mut row = TextBuf::new();
+    row.fill(format_args!("{IMU_REMAP_ROW}"));
+    assert_eq!(row.as_str(), IMU_REMAP_ROW);
+}
+
+/// Test that a row wider than the buffer still clears rather than panicking.
+#[test]
+fn an_over_long_row_clears_the_buffer_without_panicking() {
+    let over_long = format_args!("{IMU_REMAP_ROW}!");
+    let mut row = TextBuf::new();
+    row.fill(over_long);
+    assert_eq!(row.as_str(), "");
+}
+
+/// Test that the widest existing value-entry and Link rows keep their text; the
+/// System Info rows are pinned by
+/// [`system_info_renders_the_neutral_snapshot`] and
+/// [`system_info_defaults_are_explicitly_unknown`].
+#[test]
+fn the_widest_existing_value_entry_and_link_rows_are_unchanged() {
+    let mut readout = TextBuf::new();
+    readout.set(5000, "cm");
+    assert_eq!(readout.as_str(), "5000 cm");
+
+    let mut presence = TextBuf::new();
+    presence.fill(format_args!("Bridge: Waiting for board"));
+    assert_eq!(presence.as_str(), "Bridge: Waiting for board");
+
+    let mut station = TextBuf::new();
+    station.fill(format_args!("Station: Associated"));
+    assert_eq!(station.as_str(), "Station: Associated");
+}
+
+/// A fully populated six-axis readout: Euler, accelerometer and both gyros.
+const fn sample_readout() -> ImuReadout {
+    ImuReadout::waiting(ImuReadoutKind::SixAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_raw_accel(Vector3 {
+            x: 0.01,
+            y: -0.02,
+            z: 1.0,
+        })
+        .with_raw_gyro(Vector3 {
+            x: 1.2,
+            y: -3.4,
+            z: 5.6,
+        })
+        .with_calibrated_gyro(Vector3 {
+            x: -1.2,
+            y: 3.4,
+            z: -5.6,
+        })
+}
+
+/// Test that the six-axis readout renders exactly five rows, in order, with the
+/// agreed labels, precision and units.
+#[test]
+fn the_six_axis_readout_has_five_rows_in_order() {
+    let readout = sample_readout();
+    assert_eq!(readout.row_count(), 5);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=12.3 pitch=-45.6 roll=78.9",
+        "Accel x=0.01 y=-0.02 z=1.00 g",
+        "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
+        "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
+        "Live miss=0 magcal n/a",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that before the first sample every value shows `--` and the health row
+/// says Waiting, so zeros are never mistaken for readings.
+#[test]
+fn the_six_axis_readout_shows_placeholders_before_the_first_sample() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::SixAxis);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=-- pitch=-- roll=--",
+        "Accel x=-- y=-- z=-- g",
+        "Gyro raw x=-- y=-- z=-- dps",
+        "Gyro cal x=-- y=-- z=-- dps",
+        "Waiting miss=0 magcal n/a",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that the health row distinguishes Waiting, Live and a silent IMU, and
+/// that the missing count is capped at four digits.
+#[test]
+fn the_health_row_names_waiting_live_and_not_responding() {
+    for (health, missing, expected) in [
+        (ImuHealth::Waiting, 0, "Waiting miss=0 magcal n/a"),
+        (ImuHealth::Live, 7, "Live miss=7 magcal n/a"),
+        (ImuHealth::NotResponding, 100, "IMU not responding miss=100 magcal n/a"),
+        (
+            ImuHealth::NotResponding,
+            10_000,
+            "IMU not responding miss=9999 magcal n/a",
+        ),
+    ] {
+        let readout = ImuReadout::waiting(ImuReadoutKind::SixAxis).with_health(health, missing);
+        assert_eq!(readout.rows()[4].as_str(), expected);
+    }
+}
+
+/// Test that a same-value readout reports no change while a changed health or
+/// value reports one, so the 10 Hz tick flushes only on a visible change.
+#[test]
+fn a_readout_redraws_only_when_a_displayed_value_changes() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    assert!(!ui.set_status(view));
+
+    let not_responding = view.with_readout(sample_readout().with_health(ImuHealth::NotResponding, 100));
+    assert!(ui.set_status(not_responding));
+    assert!(!ui.set_status(not_responding));
+
+    let moved = view.with_readout(sample_readout().with_orientation(Euler {
+        yaw: 13.3,
+        pitch: -45.6,
+        roll: 78.9,
+    }));
+    assert!(ui.set_status(moved));
+}
+
+/// Test that a `StatusView` carrying a readout renders into the existing discard
+/// target.
+#[test]
+fn a_running_screen_with_a_readout_renders() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    render_ok(&ui);
+}
+
+/// Test that the six-axis row block fits inside the status panel, with the last
+/// row strictly inside its top and bottom edges, and that the pitch compresses
+/// for a full twelve-row readout while the five-row block is capped and centred.
+#[test]
+fn the_readout_rows_fit_inside_the_status_panel() {
+    let panel = panel_rect();
+
+    let last = readout_row_rect(4, 5);
+    assert!(last.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last).y < bottom_right(panel).y);
+
+    assert_eq!(readout_row_pitch(5), 26);
+    assert_eq!(readout_row_pitch(MAX_IMU_ROWS), 11);
+    let last_full = readout_row_rect(MAX_IMU_ROWS - 1, MAX_IMU_ROWS);
+    assert!(last_full.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last_full).y < bottom_right(panel).y);
+}
+
+/// Test that the readout kind names both IMU Procedures and leaves every other
+/// Procedure without a readout.
+#[test]
+fn the_readout_kind_maps_both_imu_procedures() {
+    assert_eq!(
+        ImuReadoutKind::for_procedure(Procedure::Imu6Axis),
+        Some(ImuReadoutKind::SixAxis)
+    );
+    assert_eq!(
+        ImuReadoutKind::for_procedure(Procedure::Imu9Axis),
+        Some(ImuReadoutKind::NineAxis)
+    );
+    assert_eq!(ImuReadoutKind::for_procedure(Procedure::BasicMotor), None);
+    assert_eq!(ImuReadoutKind::for_procedure(Procedure::MotorCalibration), None);
+}
+
+/// The XY-plane remap headings the sample readout carries, including negative
+/// and zero values and the full right-aligned width.
+const SAMPLE_REMAP_XY: [i32; 8] = [-179, -135, -90, -45, 0, 45, 90, 134];
+
+/// The XZ-plane remap headings the sample readout carries, including negative
+/// and zero values.
+const SAMPLE_REMAP_XZ: [i32; 8] = [-180, -90, -1, 0, 1, 90, 179, 180];
+
+/// The YZ-plane remap headings the sample readout carries, including negative
+/// and zero values.
+const SAMPLE_REMAP_YZ: [i32; 8] = [0, 10, -10, 100, -100, 45, -45, 90];
+
+/// A fully populated nine-axis readout: the six-axis values plus both
+/// magnetometer vectors, a loaded magnetometer calibration, a passing gate and
+/// the heading and remap diagnostics.
+const fn sample_nine_axis_readout() -> ImuReadout {
+    ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_raw_accel(Vector3 {
+            x: 0.01,
+            y: -0.02,
+            z: 1.0,
+        })
+        .with_raw_gyro(Vector3 {
+            x: 1.2,
+            y: -3.4,
+            z: 5.6,
+        })
+        .with_calibrated_gyro(Vector3 {
+            x: -1.2,
+            y: 3.4,
+            z: -5.6,
+        })
+        .with_raw_mag(Vector3 {
+            x: 12.3,
+            y: -45.6,
+            z: 78.9,
+        })
+        .with_calibrated_mag(Vector3 {
+            x: -1.5,
+            y: 2.5,
+            z: -3.5,
+        })
+        .with_mag_calibration(CalibrationStatus::Loaded)
+        .with_mag_available(true)
+        .with_mag(MagDiagnostics {
+            norm: 50.0,
+            use_mag: true,
+            raw_heading: -179.0,
+            tilt_heading: 45.6,
+            remap_xy: SAMPLE_REMAP_XY,
+            remap_xz: SAMPLE_REMAP_XZ,
+            remap_yz: SAMPLE_REMAP_YZ,
+        })
+}
+
+/// Test that the nine-axis readout renders exactly twelve rows, in order, with
+/// the agreed labels, precision and units, and no unused slots.
+#[test]
+fn the_nine_axis_readout_has_twelve_rows_in_order() {
+    let readout = sample_nine_axis_readout();
+    assert_eq!(readout.row_count(), 12);
+    assert_eq!(readout.row_count(), MAX_IMU_ROWS);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=12.3 pitch=-45.6 roll=78.9",
+        "Accel x=0.01 y=-0.02 z=1.00 g",
+        "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
+        "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
+        "Mag raw x=12.3 y=-45.6 z=78.9 uT",
+        "Mag cal x=-1.5 y=2.5 z=-3.5 uT",
+        "Hdg raw=-179.0 tilt=45.6 dmp=12.3",
+        "XY -179 -135  -90  -45    0   45   90  134",
+        "XZ -180  -90   -1    0    1   90  179  180",
+        "YZ    0   10  -10  100 -100   45  -45   90",
+        "Live miss=0 magcal loaded",
+        "|m|=50.0 uT use_mag=yes",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that each plane's remap row prints all eight headings as integers,
+/// right-aligned in five-character fields, so negatives and zero line up.
+#[test]
+fn the_remap_rows_pin_eight_right_aligned_integers_per_plane() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: -179.0,
+        tilt_heading: 0.0,
+        remap_xy: SAMPLE_REMAP_XY,
+        remap_xz: SAMPLE_REMAP_XZ,
+        remap_yz: SAMPLE_REMAP_YZ,
+    });
+
+    let rows = readout.rows();
+    assert_eq!(rows[7].as_str(), "XY -179 -135  -90  -45    0   45   90  134");
+    assert_eq!(rows[8].as_str(), "XZ -180  -90   -1    0    1   90  179  180");
+    assert_eq!(rows[9].as_str(), "YZ    0   10  -10  100 -100   45  -45   90");
+    for row in &rows[7..10] {
+        assert_eq!(row.as_str().len(), 42);
+    }
+}
+
+/// Test that the heading row shows `dmp=--` when the magnetometer is present
+/// but the fused orientation is not.
+#[test]
+fn the_heading_row_shows_a_dmp_placeholder_without_orientation() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: -179.0,
+        tilt_heading: 45.6,
+        remap_xy: SAMPLE_REMAP_XY,
+        remap_xz: SAMPLE_REMAP_XZ,
+        remap_yz: SAMPLE_REMAP_YZ,
+    });
+
+    assert_eq!(readout.rows()[6].as_str(), "Hdg raw=-179.0 tilt=45.6 dmp=--");
+}
+
+/// Test that the raw and calibrated magnetometer rows use one decimal place and
+/// the ASCII `uT` unit.
+#[test]
+fn the_magnetometer_rows_use_one_decimal_and_ut() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_raw_mag(Vector3 {
+            x: 12.34,
+            y: -45.67,
+            z: 78.91,
+        })
+        .with_calibrated_mag(Vector3 {
+            x: -1.23,
+            y: 2.34,
+            z: -3.45,
+        });
+
+    let rows = readout.rows();
+    assert_eq!(rows[4].as_str(), "Mag raw x=12.3 y=-45.7 z=78.9 uT");
+    assert_eq!(rows[5].as_str(), "Mag cal x=-1.2 y=2.3 z=-3.5 uT");
+}
+
+/// Test that the magnetometer gate row shows the norm and the driver's verdict,
+/// and a placeholder with `use_mag=no` when no verdict exists.
+#[test]
+fn the_magnetometer_gate_reports_the_use_mag_verdict() {
+    let below = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 5.0,
+        use_mag: false,
+        raw_heading: 0.0,
+        tilt_heading: 0.0,
+        remap_xy: [0; 8],
+        remap_xz: [0; 8],
+        remap_yz: [0; 8],
+    });
+    assert_eq!(below.rows()[11].as_str(), "|m|=5.0 uT use_mag=no");
+
+    let in_range = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: 0.0,
+        tilt_heading: 0.0,
+        remap_xy: [0; 8],
+        remap_xz: [0; 8],
+        remap_yz: [0; 8],
+    });
+    assert_eq!(in_range.rows()[11].as_str(), "|m|=50.0 uT use_mag=yes");
+
+    let absent = ImuReadout::waiting(ImuReadoutKind::NineAxis);
+    assert_eq!(absent.rows()[11].as_str(), "|m|=-- uT use_mag=no");
+}
+
+/// Test that the nine-axis health row names Waiting, Live and a silent IMU, and
+/// distinguishes a loaded, missing and unknown magnetometer calibration.
+#[test]
+fn the_nine_axis_health_row_names_the_magnetometer_calibration() {
+    for (health, missing, calibration, expected) in [
+        (
+            ImuHealth::Waiting,
+            0,
+            CalibrationStatus::Unknown,
+            "Waiting miss=0 magcal unknown",
+        ),
+        (
+            ImuHealth::Live,
+            7,
+            CalibrationStatus::Loaded,
+            "Live miss=7 magcal loaded",
+        ),
+        (
+            ImuHealth::NotResponding,
+            100,
+            CalibrationStatus::Missing,
+            "IMU not responding miss=100 magcal missing",
+        ),
+        (
+            ImuHealth::Live,
+            10_000,
+            CalibrationStatus::Unknown,
+            "Live miss=9999 magcal unknown",
+        ),
+    ] {
+        let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+            .with_health(health, missing)
+            .with_mag_calibration(calibration);
+        assert_eq!(readout.rows()[10].as_str(), expected);
+    }
+
+    // A readout that has not learned the calibration status defaults to the
+    // conservative `unknown`.
+    assert_eq!(
+        ImuReadout::waiting(ImuReadoutKind::NineAxis).rows()[10].as_str(),
+        "Waiting miss=0 magcal unknown"
+    );
+}
+
+/// Test that an unavailable magnetometer shows the six-axis fallback line, `--`
+/// magnetometer, heading and remap values and `use_mag=no`, while the Euler row
+/// keeps the fallback yaw the fused orientation still provides.
+#[test]
+fn an_unavailable_magnetometer_falls_back_to_six_axis() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_mag_calibration(CalibrationStatus::Loaded)
+        .with_mag_available(false);
+    assert_eq!(readout.row_count(), 12);
+
+    let rows = readout.rows();
+    assert_eq!(rows[0].as_str(), "Euler yaw=12.3 pitch=-45.6 roll=78.9");
+    assert_eq!(rows[1].as_str(), "Accel x=-- y=-- z=-- g");
+    assert_eq!(rows[2].as_str(), "Gyro raw x=-- y=-- z=-- dps");
+    assert_eq!(rows[3].as_str(), "Gyro cal x=-- y=-- z=-- dps");
+    assert_eq!(rows[4].as_str(), "Mag raw x=-- y=-- z=-- uT");
+    assert_eq!(rows[5].as_str(), "Mag cal x=-- y=-- z=-- uT");
+    assert_eq!(rows[6].as_str(), "Hdg --");
+    assert_eq!(rows[7].as_str(), "XY --");
+    assert_eq!(rows[8].as_str(), "XZ --");
+    assert_eq!(rows[9].as_str(), "YZ --");
+    assert_eq!(rows[10].as_str(), "mag unavailable - 6-axis fallback");
+    assert_eq!(rows[11].as_str(), "|m|=-- uT use_mag=no");
+}
+
+/// Test that the last of the twelve nine-axis rows fits inside the status panel
+/// at the compressed pitch, so the full page needs no paging or scrolling.
+#[test]
+fn the_nine_axis_last_row_fits_inside_the_status_panel() {
+    let panel = panel_rect();
+
+    assert_eq!(readout_row_pitch(12), 11);
+    let last = readout_row_rect(11, 12);
+    assert!(last.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last).y < bottom_right(panel).y);
 }

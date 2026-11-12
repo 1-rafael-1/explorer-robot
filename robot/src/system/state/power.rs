@@ -9,6 +9,7 @@
 //! 3) perception mutex (use accessor functions, see `perception` module)
 //! 4) `MOTION_STATE`
 //! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
+//! 6) `IMU_TEST_STATE` — independent leaf; never taken while another state mutex is held
 //!
 //! Callers that need both Power and Calibration data should call Power
 //! accessors before locking `CALIBRATION_STATE`.

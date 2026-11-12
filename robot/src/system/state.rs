@@ -6,12 +6,13 @@
 //! State is compartmentalized into domain-specific modules, each with its own
 //! synchronization. Shared enums live here; domain state lives in dedicated
 //! submodules (e.g. `power`, `motion`, `perception`, `calibration`, `activity`,
-//! `link`).
+//! `link`, `imu_test`).
 
 use defmt::Format;
 
 pub mod activity;
 pub mod calibration;
+pub mod imu_test;
 pub mod link;
 pub mod motion;
 pub mod perception;

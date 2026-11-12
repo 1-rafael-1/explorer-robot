@@ -83,6 +83,12 @@ pub async fn start(claim: Claim, procedure: Procedure) {
         }
     };
 
+    // A new IMU test clears the previous run's readout, so a panel- or
+    // Remote-started test never flashes stale telemetry.
+    if matches!(command, TestCommand::Imu | TestCommand::Imu6) {
+        crate::system::state::imu_test::clear().await;
+    }
+
     TESTMODE_COMMAND.send((command, claim)).await;
 }
 

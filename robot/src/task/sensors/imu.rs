@@ -344,6 +344,16 @@ pub async fn get_latest_readings() -> ImuReadings {
     *LATEST_READINGS.lock().await
 }
 
+/// Whether the magnetometer initialised at start-up.
+///
+/// Reports the `dmp_init_magnetometer` outcome recorded when the IMU came up. It
+/// gates `Axis9` fusion, and the IMU test readout uses it to explain a nine-axis
+/// run that fell back to six-axis fusion instead of showing magnetometer values
+/// the driver will never produce.
+pub fn is_mag_available() -> bool {
+    MAG_AVAILABLE.load(Ordering::Relaxed)
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Enqueue a command for the IMU task, preserving send order.

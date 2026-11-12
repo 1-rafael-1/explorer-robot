@@ -9,11 +9,13 @@ use core::fmt::{self, Write as _};
 
 /// Capacity of [`TextBuf`], in bytes.
 ///
-/// Wide enough for the widest value-entry readout (a five-digit
-/// attempt-straight value plus its unit, e.g. `5000 cm`), the widest System
-/// Info row (e.g. `Motor: Unknown`), and the widest Link row (e.g.
-/// `Bridge: Waiting for board` and `Station: Associated`).
-pub const TEXT_BUF_LEN: usize = 32;
+/// Wide enough for an IMU Test Readout row of at least 48 ASCII characters
+/// (e.g. a remap row such as `Remap: ax<-gy ay<-gx ...` or a health row), the
+/// widest value-entry readout (a five-digit attempt-straight value plus its
+/// unit, e.g. `5000 cm`), the widest System Info row (e.g. `Motor: Unknown`),
+/// and the widest Link row (e.g. `Bridge: Waiting for board` and
+/// `Station: Associated`).
+pub const TEXT_BUF_LEN: usize = 48;
 
 /// A tiny fixed-capacity ASCII buffer for formatting short strings.
 ///

@@ -78,6 +78,15 @@ pub const PROGRESS_INSET: u32 = 24;
 /// Stroke width of the status panel's border, in pixels.
 pub const PANEL_BORDER: u32 = 2;
 
+/// Inset of the IMU Test Readout from the status panel's edges, in pixels.
+pub const READOUT_INSET: u32 = 4;
+
+/// Tallest row pitch the IMU Test Readout uses, in pixels.
+///
+/// A sparse readout grows its rows to fill the panel up to this pitch; a dense
+/// one compresses below it so every row still fits.
+pub const READOUT_MAX_PITCH: u32 = 26;
+
 /// Height of one System Info row, in pixels.
 pub const INFO_ROW_H: u32 = 26;
 
@@ -290,6 +299,61 @@ pub const fn progress_bar_rect() -> Rectangle {
             panel.top_left.y + panel.size.height as i32 - PROGRESS_INSET as i32 - PROGRESS_H as i32,
         ),
         Size::new(panel.size.width - 2 * PROGRESS_INSET, PROGRESS_H),
+    )
+}
+
+/// The on-screen rectangle of the IMU Test Readout, the status panel inset on
+/// every side.
+#[must_use]
+pub const fn readout_area() -> Rectangle {
+    let panel = panel_rect();
+    Rectangle::new(
+        Point::new(
+            panel.top_left.x + READOUT_INSET as i32,
+            panel.top_left.y + READOUT_INSET as i32,
+        ),
+        Size::new(
+            panel.size.width - 2 * READOUT_INSET,
+            panel.size.height - 2 * READOUT_INSET,
+        ),
+    )
+}
+
+/// The row pitch the IMU Test Readout uses for `rows` rows, in pixels.
+///
+/// The pitch grows to fill [`readout_area`] and is capped at
+/// [`READOUT_MAX_PITCH`], so a short readout is evenly spaced instead of
+/// crowded. Zero rows use a zero pitch.
+#[must_use]
+pub const fn readout_row_pitch(rows: usize) -> u32 {
+    if rows == 0 {
+        return 0;
+    }
+    let fill = readout_area().size.height / rows as u32;
+    if fill < READOUT_MAX_PITCH {
+        fill
+    } else {
+        READOUT_MAX_PITCH
+    }
+}
+
+/// The on-screen rectangle of readout row `index` of `rows`.
+///
+/// Each row is one pitch tall and the whole block is vertically centred in
+/// [`readout_area`], so five rows sit in the middle of the panel and twelve
+/// fill it without touching the border.
+#[must_use]
+pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
+    let area = readout_area();
+    let pitch = readout_row_pitch(rows);
+    let block = (rows as u32).saturating_mul(pitch);
+    let offset = area.size.height.saturating_sub(block) / 2;
+    Rectangle::new(
+        Point::new(
+            area.top_left.x,
+            area.top_left.y + (offset as i32) + (index as u32).saturating_mul(pitch) as i32,
+        ),
+        Size::new(area.size.width, pitch),
     )
 }
 

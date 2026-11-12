@@ -39,8 +39,8 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, Item, Procedure, Screen, ScreenEntry, SensorState,
-    StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
+    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, Screen,
+    ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
@@ -48,7 +48,7 @@ use crate::{
     system::state::{
         CalibrationStatus,
         activity::{self, Activity, Snapshot, Stage},
-        calibration, link, perception, power,
+        calibration, imu_test, link, perception, power,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
@@ -137,11 +137,10 @@ const BOOT_POLL_MS: u64 = 100;
 
 /// Idle tick period, in milliseconds.
 ///
-/// Battery and calibration state move slowly, and a running screen's phase and
-/// progress advance by hand or by stage; 250 ms keeps both current without
-/// reading the state locks or flushing a full frame more often than either can
-/// change.
-const TICK_INTERVAL_MS: u64 = 250;
+/// The IMU Test Readout updates at 10 Hz, so the tick is 100 ms. Equality checks
+/// on the status view keep the other screens from flushing a full frame unless a
+/// displayed value changes; only an IMU test redraws at this rate.
+const TICK_INTERVAL_MS: u64 = 100;
 
 /// Continuous no-contact window, in milliseconds, that ends a gesture whose
 /// interrupt line is stuck low.
@@ -578,7 +577,7 @@ async fn start_procedure(ui: &mut Ui, procedure: Procedure) {
     match procedure::dispatch(procedure, ClaimOrigin::Panel).await {
         StartOutcome::Started(_) => {
             let snapshot = activity::snapshot().await;
-            ui.show_status(status_view(&snapshot));
+            ui.show_status(status_view(&snapshot, None));
         }
         StartOutcome::Busy | StartOutcome::Rejected => {
             ui.show_screen(procedure.landing_screen());
@@ -675,7 +674,7 @@ async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
     match snapshot.activity {
         Activity::Procedure(procedure) if procedure.is_calibration() => {
             if snapshot.stage == Stage::Failed {
-                ui.set_status(status_view(&snapshot));
+                ui.set_status(status_view(&snapshot, None));
             } else {
                 let landing = procedure.landing_screen();
                 activity::clear().await;
@@ -709,7 +708,7 @@ async fn enter_distance_entry(ui: &mut Ui) {
     }
 
     if snapshot.stage == Stage::Failed {
-        ui.set_status(status_view(&snapshot));
+        ui.set_status(status_view(&snapshot, None));
     } else {
         ui.show_value_entry(ValueFlow::DistanceCalibration);
     }
@@ -723,7 +722,12 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// each tick so the screen reports the sensor warming up while the bring-up
 /// runs, then streaming once it settles, without the controller formatting text
 /// of its own.
-fn status_view(snapshot: &Snapshot) -> StatusView {
+///
+/// `readout` is the IMU Test Telemetry snapshot. An IMU Procedure attaches it to
+/// the view; every other Procedure ignores it. When no snapshot has been
+/// published yet the view carries an empty Waiting readout, so the panel shows
+/// placeholders from the moment the test starts.
+fn status_view(snapshot: &Snapshot, readout: Option<ImuReadout>) -> StatusView {
     // A running Procedure names itself: its title and where Stop returns both come
     // from the Menu Entry that started it. The boot flow and the idle state have no
     // entry, so they fall back to their own title and the Main Menu.
@@ -739,6 +743,12 @@ fn status_view(snapshot: &Snapshot) -> StatusView {
         },
         |procedure| StatusView::for_procedure(procedure, body),
     );
+    let view = snapshot
+        .procedure()
+        .and_then(ImuReadoutKind::for_procedure)
+        .map_or(view, |kind| {
+            view.with_readout(readout.unwrap_or_else(|| ImuReadout::waiting(kind)))
+        });
     let view = snapshot.percent.map_or(view, |percent| view.with_progress(percent));
     if matches!(snapshot.stage, Stage::Complete | Stage::Failed) {
         view.finished()
@@ -789,7 +799,7 @@ const fn map_sensor_state(status: LidarStatus) -> SensorState {
 async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
     let snapshot = activity::snapshot().await;
     let previous = *last_activity;
-    let mut redraw = refresh_running_screen(ui, &snapshot);
+    let mut redraw = refresh_running_screen(ui, &snapshot).await;
 
     // The header indicator reads only the link state and power, never the Link
     // Task or the port power, so its values cannot block the panel.
@@ -799,7 +809,7 @@ async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
     if ui.screen() != Screen::Status {
         if previous == Activity::Idle && matches!(snapshot.activity, Activity::Procedure(_) | Activity::ManualDrive(_))
         {
-            redraw |= ui.show_status(status_view(&snapshot));
+            redraw |= ui.show_status(status_view(&snapshot, None));
         }
     } else if snapshot.activity == Activity::Idle
         && matches!(previous, Activity::Procedure(_) | Activity::ManualDrive(_))
@@ -840,12 +850,20 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
 /// that has not published its first phase yet leaves the screen as it was. The
 /// caller has already read the snapshot, so the follow rule and this refresh
 /// share one Activity read.
-fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
+///
+/// For an IMU Procedure the IMU Test Telemetry snapshot is read on the same
+/// tick, so the readout updates at the tick rate. Other screens never take that
+/// lock.
+async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
     if ui.screen() != Screen::Status || snapshot.activity == Activity::Idle {
         return false;
     }
 
-    ui.set_status(status_view(snapshot))
+    let readout = match snapshot.procedure() {
+        Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => imu_test::snapshot().await,
+        _ => None,
+    };
+    ui.set_status(status_view(snapshot, readout))
 }
 
 /// Refresh the System Info snapshot when the model is showing that screen.

@@ -15,6 +15,7 @@
 //! 3) perception mutex (private — use accessor functions)
 //! 4) `MOTION_STATE`
 //! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
+//! 6) `IMU_TEST_STATE` — independent leaf; never taken while another state mutex is held
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

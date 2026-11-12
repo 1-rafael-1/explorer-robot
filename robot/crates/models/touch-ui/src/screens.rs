@@ -13,7 +13,7 @@
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
-use crate::buffer::TextBuf;
+use crate::{buffer::TextBuf, imu::ImuReadout};
 
 /// One entry in a list screen.
 ///
@@ -557,17 +557,24 @@ impl ValueFlow {
 /// running. `body` is a compile-time line; a runtime-formatted line (such as a
 /// Manual Drive's command label) travels in a fixed-capacity [`TextBuf`] and is
 /// drawn instead of `body`. The model never formats a number, so no dynamic text
-/// is produced here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// is produced here. When a readout is present it replaces the body line and any
+/// progress bar: the IMU tests use the panel for their five-row telemetry rather
+/// than a phase line.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusView {
     /// The header title.
     pub title: &'static str,
     /// The compile-time body line: the procedure's phase or the sensor's state.
+    /// Ignored when [`StatusView::readout`] is present.
     pub body: &'static str,
     /// A runtime-formatted body line, drawn instead of [`StatusView::body`] when
     /// present.
     text_body: Option<TextBuf>,
-    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
+    /// An IMU Test Readout, drawn instead of the body line and any progress bar
+    /// when present.
+    readout: Option<ImuReadout>,
+    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar. Ignored
+    /// when [`StatusView::readout`] is present.
     pub progress: Option<u8>,
     /// The screen the header action returns to.
     pub parent: Screen,
@@ -584,6 +591,7 @@ impl StatusView {
             title,
             body,
             text_body: None,
+            readout: None,
             progress: None,
             parent,
             finished: false,
@@ -602,6 +610,7 @@ impl StatusView {
             title: procedure.label(),
             body,
             text_body: None,
+            readout: None,
             progress: None,
             parent: procedure.landing_screen(),
             finished: false,
@@ -626,6 +635,25 @@ impl StatusView {
     #[must_use]
     pub fn body_text(&self) -> &str {
         self.text_body.as_ref().map_or(self.body, |body| body.as_str())
+    }
+
+    /// Give the view an IMU Test Readout, drawn instead of the body line and any
+    /// progress bar.
+    ///
+    /// The IMU tests use this; every other running screen leaves it empty and
+    /// keeps its ordinary body line.
+    #[must_use]
+    pub const fn with_readout(self, readout: ImuReadout) -> Self {
+        Self {
+            readout: Some(readout),
+            ..self
+        }
+    }
+
+    /// The IMU Test Readout to draw, if this view carries one.
+    #[must_use]
+    pub const fn readout(&self) -> Option<&ImuReadout> {
+        self.readout.as_ref()
     }
 
     /// The same view carrying a percent progress bar.

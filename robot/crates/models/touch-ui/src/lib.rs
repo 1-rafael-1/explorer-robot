@@ -25,6 +25,8 @@
 //! - [`widgets`] holds the drawing functions.
 //! - [`system_info`] holds the neutral System Info snapshot the firmware maps
 //!   onto.
+//! - [`imu`] holds the neutral IMU Test Readout the firmware maps onto and the
+//!   row formatting the panel draws.
 //! - [`sensor`] holds the neutral sensor lifecycle state the Room Scan caption
 //!   shows.
 //! - [`radar`] holds the Room Scan radar widget, fed by a neutral 360-slot
@@ -57,6 +59,7 @@
 pub mod buffer;
 pub mod geometry;
 pub mod hit;
+pub mod imu;
 pub mod palette;
 pub mod radar;
 pub mod screens;
@@ -67,6 +70,7 @@ pub mod widgets;
 
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction};
+pub use imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MagDiagnostics, Vector3};
 pub use screens::{Item, Procedure, Screen, ScreenEntry, StatusView, Submenu, ValueFlow};
 pub use sensor::SensorState;
 pub use system_info::{CalibrationStatus, SystemInfo};
