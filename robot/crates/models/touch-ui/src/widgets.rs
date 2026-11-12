@@ -21,14 +21,15 @@ use crate::{
         BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H, SCROLL_W,
         footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
         link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, readout_area, readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect,
-        scroll_track_rect, slider_thumb_rect, slider_track_rect,
+        progress_bar_rect, prompt_instruction_rect, prompt_progress_rect, prompt_status_rect, readout_area,
+        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
+        slider_track_rect,
     },
-    hit::{HeaderAction, Hit, LinkAction},
+    hit::{HeaderAction, Hit, LinkAction, PromptAction},
     imu::ImuReadout,
     palette::{ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT},
     radar,
-    screens::{StatusView, ValueFlow},
+    screens::{PromptView, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     ui::HeaderStatus,
@@ -281,6 +282,74 @@ where
             Rectangle::new(track.top_left, Size::new(filled, track.size.height))
                 .into_styled(PrimitiveStyle::with_fill(ACCENT))
                 .draw(d)?;
+        }
+    }
+    Ok(())
+}
+
+/// Draw a guided prompt screen.
+///
+/// The status panel carries the instruction and the dynamic status line, an
+/// optional progress bar, and the available Done/Redo actions. The header
+/// carries the dynamic title and the Stop button.
+///
+/// A disabled action is not drawn, so a movement step shows only Done while the
+/// final Compass Checks show Done and Redo. Both text lines are clipped to their
+/// own rectangles, so a long instruction cannot paint over the panel border or
+/// the action row.
+///
+/// # Errors
+///
+/// Returns the draw target's error if a primitive or text fails to draw.
+pub fn draw_prompt<D>(d: &mut D, view: &PromptView, pressed: Option<Hit>) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let panel = panel_rect();
+    panel.into_styled(PrimitiveStyle::with_fill(BUTTON_BG)).draw(d)?;
+    panel
+        .into_styled(PrimitiveStyle::with_stroke(ACCENT, PANEL_BORDER))
+        .draw(d)?;
+
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    draw_centered_text(
+        &mut d.clipped(&prompt_instruction_rect()),
+        prompt_instruction_rect(),
+        view.instruction,
+        style,
+    )?;
+    draw_centered_text(
+        &mut d.clipped(&prompt_status_rect()),
+        prompt_status_rect(),
+        view.status_text(),
+        style,
+    )?;
+
+    if let Some(percent) = view.progress {
+        let track = prompt_progress_rect();
+        track.into_styled(PrimitiveStyle::with_fill(BUTTON_BORDER)).draw(d)?;
+        let filled = track.size.width * u32::from(percent.min(100)) / 100;
+        if filled > 0 {
+            Rectangle::new(track.top_left, Size::new(filled, track.size.height))
+                .into_styled(PrimitiveStyle::with_fill(ACCENT))
+                .draw(d)?;
+        }
+    }
+
+    for action in PromptAction::ALL {
+        let available = match action {
+            PromptAction::Done => view.done,
+            PromptAction::Redo => view.redo,
+        };
+        if available {
+            draw_button(
+                d,
+                action.rect(),
+                action.label(),
+                LABEL_FONT,
+                pressed == Some(Hit::PromptAction(action)),
+                true,
+            )?;
         }
     }
     Ok(())

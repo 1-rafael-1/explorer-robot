@@ -71,6 +71,26 @@ pub const PANEL_MARGIN: u32 = 24;
 /// Height of the status panel's progress bar, in pixels.
 pub const PROGRESS_H: u32 = 14;
 
+/// Inset of the prompt's text lines and action row from the panel's side edges,
+/// in pixels.
+pub const PROMPT_INSET: u32 = 16;
+
+/// Bottom inset of the prompt's action row from the panel's bottom edge, in
+/// pixels.
+pub const PROMPT_ACTION_MARGIN: u32 = 16;
+
+/// Height of the prompt's instruction and status lines, in pixels.
+pub const PROMPT_LINE_H: u32 = 24;
+
+/// Vertical gap between the prompt's instruction and status lines, in pixels.
+pub const PROMPT_LINE_GAP: u32 = 4;
+
+/// Width of a prompt action button, in pixels.
+pub const PROMPT_ACTION_W: u32 = 112;
+
+/// Horizontal gap between the prompt's Done and Redo buttons, in pixels.
+pub const PROMPT_ACTION_GAP: u32 = 16;
+
 /// Inset of the status panel's progress bar from the panel's side and bottom
 /// edges, in pixels.
 pub const PROGRESS_INSET: u32 = 24;
@@ -300,6 +320,77 @@ pub const fn progress_bar_rect() -> Rectangle {
         ),
         Size::new(panel.size.width - 2 * PROGRESS_INSET, PROGRESS_H),
     )
+}
+
+/// The on-screen rectangle of the prompt's instruction line, near the top of
+/// the status panel.
+#[must_use]
+pub const fn prompt_instruction_rect() -> Rectangle {
+    let panel = panel_rect();
+    Rectangle::new(
+        Point::new(
+            panel.top_left.x + PROMPT_INSET as i32,
+            panel.top_left.y + PROMPT_INSET as i32,
+        ),
+        Size::new(panel.size.width - 2 * PROMPT_INSET, PROMPT_LINE_H),
+    )
+}
+
+/// The on-screen rectangle of the prompt's dynamic status line, directly below
+/// the instruction line.
+#[must_use]
+pub const fn prompt_status_rect() -> Rectangle {
+    let instruction = prompt_instruction_rect();
+    Rectangle::new(
+        Point::new(
+            instruction.top_left.x,
+            instruction.top_left.y + PROMPT_LINE_H as i32 + PROMPT_LINE_GAP as i32,
+        ),
+        instruction.size,
+    )
+}
+
+/// The on-screen rectangle of the prompt's optional progress bar, between the
+/// status line and the action row.
+#[must_use]
+pub const fn prompt_progress_rect() -> Rectangle {
+    let status = prompt_status_rect();
+    Rectangle::new(
+        Point::new(
+            status.top_left.x,
+            status.top_left.y + PROMPT_LINE_H as i32 + PROMPT_LINE_GAP as i32,
+        ),
+        Size::new(status.size.width, PROGRESS_H),
+    )
+}
+
+/// The on-screen rectangle of prompt action button `index` (Done is 0, Redo is
+/// 1), centered as a pair in a row above the panel's bottom edge.
+///
+/// The row never moves with progress, so the two actions stay where the operator
+/// learned them.
+#[must_use]
+pub const fn prompt_action_rect(index: usize) -> Rectangle {
+    let panel = panel_rect();
+    let row_width = 2 * PROMPT_ACTION_W + PROMPT_ACTION_GAP;
+    let left = panel.top_left.x + (panel.size.width as i32 - row_width as i32) / 2;
+    let y = panel.top_left.y + panel.size.height as i32 - PROMPT_ACTION_MARGIN as i32 - BUTTON_H as i32;
+    Rectangle::new(
+        Point::new(left + index as i32 * (PROMPT_ACTION_W + PROMPT_ACTION_GAP) as i32, y),
+        Size::new(PROMPT_ACTION_W, BUTTON_H),
+    )
+}
+
+/// The on-screen rectangle of the prompt's Done button.
+#[must_use]
+pub const fn prompt_done_rect() -> Rectangle {
+    prompt_action_rect(0)
+}
+
+/// The on-screen rectangle of the prompt's Redo button.
+#[must_use]
+pub const fn prompt_redo_rect() -> Rectangle {
+    prompt_action_rect(1)
 }
 
 /// The on-screen rectangle of the IMU Test Readout, the status panel inset on

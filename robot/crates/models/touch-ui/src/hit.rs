@@ -8,7 +8,7 @@
 use embedded_graphics::{prelude::Point, primitives::Rectangle};
 
 use crate::{
-    geometry::{back_button_rect, cancel_button_rect, link_action_rect},
+    geometry::{back_button_rect, cancel_button_rect, link_action_rect, prompt_done_rect, prompt_redo_rect},
     screens::Item,
 };
 
@@ -34,6 +34,58 @@ pub enum Hit {
     NudgePlus,
     /// One of the Link screen's Bridge Control action buttons.
     LinkAction(LinkAction),
+    /// One of a prompt screen's Done/Redo action buttons.
+    PromptAction(PromptAction),
+}
+
+/// A Prompt screen action offered to the operator.
+///
+/// The actions are neutral: the panel names what the operator asked for and the
+/// firmware decides what it means for the running Procedure. Activating one is
+/// reported through [`crate::Ui::last_activation`] and does not itself
+/// navigate, like [`LinkAction`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PromptAction {
+    /// Accept the current step and advance.
+    Done,
+    /// Restart the procedure's movement sequence.
+    Redo,
+}
+
+impl PromptAction {
+    /// Every action, in screen order.
+    pub const ALL: [Self; 2] = [Self::Done, Self::Redo];
+
+    /// The button label for this action.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Done => "Done",
+            Self::Redo => "Redo",
+        }
+    }
+
+    /// The button's on-screen rectangle.
+    #[must_use]
+    pub const fn rect(self) -> Rectangle {
+        match self {
+            Self::Done => prompt_done_rect(),
+            Self::Redo => prompt_redo_rect(),
+        }
+    }
+}
+
+/// The prompt action whose rectangle contains `p`, if that action is available.
+///
+/// A disabled action (the movement steps have no Redo) is not hittable, so a tap
+/// on its rectangle reports nothing. The rectangles come from [`crate::geometry`],
+/// so this and the drawing pass cannot disagree about where an action is.
+#[must_use]
+pub fn prompt_action_hit(p: Point, done: bool, redo: bool) -> Option<PromptAction> {
+    PromptAction::ALL.into_iter().find(|action| match action {
+        PromptAction::Done => done && prompt_done_rect().contains(p),
+        PromptAction::Redo => redo && prompt_redo_rect().contains(p),
+    })
 }
 
 /// A Bridge Control action offered on the Link screen.

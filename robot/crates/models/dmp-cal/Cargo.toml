@@ -1,0 +1,19 @@
+[package]
+name = "dmp-cal"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "HAL-free DMP compass calibration model: steps, Compass Heading, Compass Check, motion hints, and the DMP Bias Snapshot"
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+
+[[test]]
+name = "dmp_cal"
+required-features = ["std"]

@@ -15,15 +15,16 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station,
 };
 use touch_ui::{
-    HeaderStatus, Hit, Item, LinkAction, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE,
-    TAP_MIN_DURATION_MS, Ui,
+    HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction, PromptView, ScreenEntry, SensorState, Submenu,
+    TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
         back_button_rect, cancel_button_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
         link_result_rect, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, readout_rect, readout_row_pitch, readout_row_rect, room_scan_caption_rect, save_button_rect,
-        scroll_track_rect, slider_touch_rect,
+        progress_bar_rect, prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect,
+        prompt_redo_rect, prompt_status_rect, readout_rect, readout_row_pitch, readout_row_rect,
+        room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_touch_rect,
     },
     imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MAX_IMU_ROWS, MagDiagnostics, Vector3},
     palette::{SMALL_FONT, TITLE_FONT},
@@ -222,9 +223,9 @@ fn the_menu_tree_matches_the_robot() {
         ]
     );
 
-    assert!(Screen::SystemInfo.items().is_empty());
-    assert!(Screen::Link.items().is_empty());
-    assert!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items().is_empty());
+    assert_eq!(Screen::SystemInfo.items(), []);
+    assert_eq!(Screen::Link.items(), []);
+    assert_eq!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items(), []);
 }
 
 /// Test that every list screen's entries are distinct and each one is labelled.
@@ -552,10 +553,11 @@ fn a_procedure_supplies_its_running_views_title_and_parent() {
         assert_eq!(view.parent, parent, "{procedure:?} states where Stop returns");
     }
 
-    // The three calibrations are the ones a calibration lifecycle belongs to.
+    // The calibrations are the ones a calibration lifecycle belongs to.
     for procedure in [
         Procedure::MotorCalibration,
         Procedure::MagCalibration,
+        Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
     ] {
         assert!(procedure.is_calibration(), "{procedure:?} is a calibration");
@@ -1009,7 +1011,7 @@ fn link_opens_from_the_main_menu_and_back_returns() {
     );
     assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
     assert_eq!(Screen::Link.parent(), Some(Screen::MainMenu));
-    assert!(Screen::Link.items().is_empty());
+    assert_eq!(Screen::Link.items(), []);
 
     let mut ui = Ui::new();
     drag_scroll_to_bottom(&mut ui);
@@ -1392,7 +1394,7 @@ fn room_scan_opens_from_test_mode_and_back_returns() {
     );
     assert_eq!(Item::ScreenEntry(ScreenEntry::RoomScan).label(), "Room Scan");
     assert_eq!(Screen::RoomScan.parent(), Some(Screen::TestMode));
-    assert!(Screen::RoomScan.items().is_empty());
+    assert_eq!(Screen::RoomScan.items(), []);
 
     let mut ui = open_room_scan();
     assert_eq!(ui.title(), "Room Scan");
@@ -1494,7 +1496,7 @@ fn the_sensor_states_are_distinguishable() {
         SensorState::Failed.label(),
     ];
     for (index, label) in labels.iter().enumerate() {
-        assert!(!label.is_empty());
+        assert_ne!(*label, "");
         assert!(!labels[..index].contains(label), "duplicate sensor label {label}");
     }
 
@@ -2066,4 +2068,278 @@ fn the_nine_axis_last_row_fits_inside_the_status_panel() {
     let last = readout_row_rect(11, 12);
     assert!(last.top_left.y > panel.top_left.y);
     assert!(bottom_right(last).y < bottom_right(panel).y);
+}
+
+/// Every Procedure the crate models.
+const ALL_PROCEDURES: [Procedure; 12] = [
+    Procedure::MotorCalibration,
+    Procedure::MagCalibration,
+    Procedure::DmpCompassCalibration,
+    Procedure::DistanceCalibration,
+    Procedure::CoastAndAvoid,
+    Procedure::AttemptStraight,
+    Procedure::BasicMotor,
+    Procedure::Turns,
+    Procedure::StraightDrive,
+    Procedure::ArcDrive,
+    Procedure::Imu6Axis,
+    Procedure::Imu9Axis,
+];
+
+/// Build the prompt for the DMP compass calibration: the Procedure supplies the
+/// title and the screen Stop returns to.
+const fn dmp_prompt(instruction: &'static str) -> PromptView {
+    PromptView::for_procedure(Procedure::DmpCompassCalibration, instruction)
+}
+
+/// Test the DMP compass calibration identity: its label, parent, calibration
+/// flag, destination, hands-on metadata, and that it is not a menu item yet.
+#[test]
+fn the_dmp_compass_calibration_is_hands_on_and_not_yet_listed() {
+    let procedure = Procedure::DmpCompassCalibration;
+    assert_eq!(procedure.label(), "DMP Mag");
+    assert_eq!(procedure.parent(), Some(Screen::Calibrate));
+    assert_eq!(procedure.landing_screen(), Screen::Calibrate);
+    assert!(
+        procedure.is_calibration(),
+        "the DMP compass calibration is a calibration"
+    );
+    assert_eq!(procedure.destination(), Screen::Prompt);
+    assert!(procedure.is_hands_on(), "an operator must hold the robot while it runs");
+    assert_eq!(Item::Procedure(procedure).interactive(), procedure.interactive());
+
+    // The Prompt screen has no Menu Entry of its own; its parent and title come
+    // from the active view like the shared running screen.
+    assert_eq!(Screen::Prompt.entry(), None);
+    assert_eq!(Screen::Prompt.parent(), None);
+    assert_eq!(Screen::Prompt.items(), []);
+    assert_eq!(Screen::Prompt.title(), "Prompt");
+
+    // Deliberately not offered by any list screen until the firmware Procedure
+    // exists; ticket 03 adds the Calibrate entry.
+    for screen in [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode] {
+        assert!(
+            screen.items().iter().all(|item| item.as_procedure() != Some(procedure)),
+            "{procedure:?} is not listed on {screen:?} yet"
+        );
+    }
+}
+
+/// Test that the model's hands-on set is the firmware's Remote-availability rule
+/// and nothing else, so a future edit cannot introduce a second contradicting
+/// rule.
+#[test]
+fn the_hands_on_set_mirrors_the_firmware_availability_rule() {
+    let hands_on = [
+        Procedure::MotorCalibration,
+        Procedure::MagCalibration,
+        Procedure::DmpCompassCalibration,
+        Procedure::DistanceCalibration,
+        Procedure::BasicMotor,
+        Procedure::AttemptStraight,
+    ];
+    for procedure in ALL_PROCEDURES {
+        assert_eq!(
+            procedure.is_hands_on(),
+            hands_on.contains(&procedure),
+            "{procedure:?} hands-on membership"
+        );
+    }
+    // The Remote-startable Procedures stay startable.
+    for procedure in [
+        Procedure::CoastAndAvoid,
+        Procedure::Turns,
+        Procedure::StraightDrive,
+        Procedure::ArcDrive,
+        Procedure::Imu6Axis,
+        Procedure::Imu9Axis,
+    ] {
+        assert!(!procedure.is_hands_on(), "{procedure:?} may be started from the Remote");
+    }
+}
+
+/// Test that a prompt carries the Procedure title, instruction, dynamic status
+/// line, action availability and parent, and that the UI shows it with its own
+/// title.
+#[test]
+fn a_prompt_carries_its_title_instruction_status_and_parent() {
+    let mut status_line = TextBuf::new();
+    status_line.fill(format_args!("Hdg 12 target 0 acc 2"));
+    let view = dmp_prompt("Place flat. Hold still.").with_status(status_line);
+
+    assert_eq!(view.title, "DMP Mag");
+    assert_eq!(view.parent, Screen::Calibrate);
+    assert_eq!(view.instruction, "Place flat. Hold still.");
+    assert_eq!(view.status_text(), "Hdg 12 target 0 acc 2");
+    assert_eq!(view.progress, None);
+    assert!(view.done, "Done is offered on every prompt");
+    assert!(!view.redo, "a movement step offers no Redo");
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert_eq!(ui.screen(), Screen::Prompt);
+    assert_eq!(ui.title(), "DMP Mag");
+    assert_eq!(ui.prompt_view(), Some(view));
+    assert_eq!(ui.status_view(), None);
+    render_ok(&ui);
+}
+
+/// Test that a prompt update reports only real changes, and is a no-op away from
+/// the prompt screen.
+#[test]
+fn a_prompt_reports_only_real_changes() {
+    let mut first = TextBuf::new();
+    first.fill(format_args!("Waiting for motion"));
+    let view = dmp_prompt("Place flat. Hold still.").with_status(first);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert!(!ui.set_prompt(view), "the view is already shown");
+
+    let mut second = TextBuf::new();
+    second.fill(format_args!("Hdg 0 acc 3"));
+    let changed = view.with_status(second).with_progress(25).with_redo();
+    assert!(ui.set_prompt(changed));
+    assert_eq!(ui.prompt_view(), Some(changed));
+    assert!(!ui.set_prompt(changed));
+    assert_eq!(ui.prompt_view().map(|view| view.progress), Some(Some(25)));
+
+    let mut other = Ui::new();
+    assert!(!other.set_prompt(changed), "no prompt screen is shown");
+    assert_eq!(other.prompt_view(), None);
+}
+
+/// Test that Done is hittable only inside its drawn rectangle, and that tapping
+/// it is reported through `last_activation` without navigating.
+#[test]
+fn a_prompt_done_is_hittable_and_reported_without_navigating() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+
+    let done = prompt_done_rect().center();
+    assert_eq!(ui.hit_test(done), Some(Hit::PromptAction(PromptAction::Done)));
+    tap(&mut ui, done);
+    assert_eq!(ui.last_activation(), Some(Hit::PromptAction(PromptAction::Done)));
+    assert_eq!(ui.screen(), Screen::Prompt, "the firmware decides what Done means");
+}
+
+/// Test that Redo is drawn and hittable only when the prompt offers it, and that
+/// a disabled Redo is not hittable.
+#[test]
+fn a_prompt_redo_is_hittable_only_when_available() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Front at magnetic north.").with_redo()));
+    let redo = prompt_redo_rect().center();
+    assert_eq!(ui.hit_test(redo), Some(Hit::PromptAction(PromptAction::Redo)));
+    tap(&mut ui, redo);
+    assert_eq!(ui.last_activation(), Some(Hit::PromptAction(PromptAction::Redo)));
+    assert_eq!(ui.screen(), Screen::Prompt);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Tilt nose up and down 90 deg.")));
+    assert_eq!(ui.hit_test(prompt_redo_rect().center()), None);
+    tap(&mut ui, prompt_redo_rect().center());
+    assert_eq!(ui.last_activation(), None, "a disabled Redo activates nothing");
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Done)),
+        "Done stays available"
+    );
+}
+
+/// Test that the header Stop and the prompt's Done/Redo never report each
+/// other, and that only the action rectangles are interactive.
+#[test]
+fn prompt_actions_and_header_stop_never_swap() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Front at magnetic east.").with_redo()));
+
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Done))
+    );
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+    assert_eq!(ui.hit_test(prompt_instruction_rect().center()), None);
+    assert_eq!(ui.hit_test(prompt_status_rect().center()), None);
+
+    // The regions stay disjoint.
+    assert!(!prompt_done_rect().contains(prompt_redo_rect().center()));
+    assert!(!prompt_redo_rect().contains(prompt_done_rect().center()));
+    assert!(!prompt_done_rect().contains(back_button_rect().center()));
+    assert!(!back_button_rect().contains(prompt_done_rect().center()));
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().top_left),
+        Some(Hit::PromptAction(PromptAction::Done))
+    );
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().top_left),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+}
+
+/// Test that the prompt's actions sit inside the panel, below both text lines,
+/// and are reported by the shared geometry.
+#[test]
+fn the_prompt_actions_sit_inside_the_panel_below_the_text() {
+    let panel = panel_rect();
+    let done = prompt_done_rect();
+    let redo = prompt_redo_rect();
+
+    for rect in [done, redo] {
+        assert!(rect.top_left.x >= panel.top_left.x);
+        assert!(rect.top_left.y >= panel.top_left.y);
+        assert!(bottom_right(rect).x < bottom_right(panel).x);
+        assert!(bottom_right(rect).y < bottom_right(panel).y);
+    }
+    assert!(bottom_right(prompt_instruction_rect()).y <= prompt_status_rect().top_left.y);
+    assert!(bottom_right(prompt_status_rect()).y < done.top_left.y);
+    assert!(bottom_right(done).x < redo.top_left.x);
+    assert_eq!(prompt_action_rect(0), done);
+    assert_eq!(prompt_action_rect(1), redo);
+    assert_eq!(PromptAction::ALL, [PromptAction::Done, PromptAction::Redo]);
+    assert_eq!(PromptAction::Done.rect(), done);
+    assert_eq!(PromptAction::Redo.rect(), redo);
+}
+
+/// Test that a prompt renders with and without progress, and that the progress
+/// bar sits between the status line and the action row.
+#[test]
+fn a_prompt_with_and_without_progress_renders() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("On the table, spin 360 deg both ways.")));
+    render_ok(&ui);
+
+    let with_progress = dmp_prompt("Flip wheels up, spin 360 deg both ways.")
+        .with_progress(50)
+        .with_redo();
+    assert!(ui.set_prompt(with_progress));
+    render_ok(&ui);
+
+    let bar = prompt_progress_rect();
+    assert!(bar.top_left.y > prompt_status_rect().top_left.y);
+    assert!(bottom_right(bar).y < prompt_done_rect().top_left.y);
+    assert!(bar.top_left.x >= panel_rect().top_left.x);
+    assert!(bottom_right(bar).x < bottom_right(panel_rect()).x);
+}
+
+/// Test that Stop from a prompt returns to the prompt's parent, the Calibrate
+/// submenu for the DMP compass calibration.
+#[test]
+fn a_prompt_stops_back_to_the_calibrate_submenu() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.last_activation(), Some(Hit::Stop));
+    assert_eq!(ui.screen(), Screen::Calibrate);
+    assert_eq!(ui.prompt_view(), None);
+
+    // The firmware can also land the Procedure through the command-level seam.
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+    assert!(ui.show_screen(Procedure::DmpCompassCalibration.landing_screen()));
+    assert_eq!(ui.screen(), Screen::Calibrate);
 }

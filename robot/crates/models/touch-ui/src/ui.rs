@@ -20,9 +20,9 @@ use crate::{
         cancel_button_rect, list_top, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect,
         save_button_rect, slider_touch_rect, slider_value,
     },
-    hit::{HeaderAction, Hit, link_action_hit},
+    hit::{HeaderAction, Hit, link_action_hit, prompt_action_hit},
     palette, radar,
-    screens::{Item, Screen, StatusView, ValueFlow},
+    screens::{Item, PromptView, Screen, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     widgets,
@@ -106,6 +106,8 @@ pub struct Ui {
     system_info: SystemInfo,
     /// The content shown by [`Screen::Status`].
     status: StatusView,
+    /// The content shown by [`Screen::Prompt`].
+    prompt: PromptView,
     /// The radar frame shown by [`Screen::RoomScan`], or `None` when no snapshot
     /// has been supplied yet.
     radar: Option<radar::Slots>,
@@ -144,6 +146,7 @@ impl Ui {
             value: 0,
             system_info: SystemInfo::new(),
             status: StatusView::new("Running", "", Screen::MainMenu),
+            prompt: PromptView::new("Prompt", "", Screen::MainMenu),
             radar: None,
             radar_sequence: None,
             sensor_state: SensorState::Off,
@@ -161,12 +164,14 @@ impl Ui {
 
     /// The header title for the current screen.
     ///
-    /// A running screen supplies its own title through the active
-    /// [`StatusView`]; every other screen uses its [`Screen::title`].
+    /// A running or prompt screen supplies its own title through the active
+    /// [`StatusView`] or [`PromptView`]; every other screen uses its
+    /// [`Screen::title`].
     #[must_use]
     pub const fn title(&self) -> &'static str {
         match self.screen {
             Screen::Status => self.status.title,
+            Screen::Prompt => self.prompt.title,
             other => other.title(),
         }
     }
@@ -231,6 +236,15 @@ impl Ui {
     pub const fn status_view(&self) -> Option<StatusView> {
         match self.screen {
             Screen::Status => Some(self.status),
+            _ => None,
+        }
+    }
+
+    /// The active prompt screen's content, or `None` on any other screen.
+    #[must_use]
+    pub const fn prompt_view(&self) -> Option<PromptView> {
+        match self.screen {
+            Screen::Prompt => Some(self.prompt),
             _ => None,
         }
     }
@@ -349,6 +363,34 @@ impl Ui {
         true
     }
 
+    /// Open a guided prompt screen, resetting the list scroll and value.
+    ///
+    /// Always reports a redraw: entering the screen is itself a state change.
+    /// The firmware calls this for each Compass Step, and the header offers Stop
+    /// for as long as the Procedure runs.
+    pub const fn show_prompt(&mut self, view: PromptView) -> bool {
+        self.screen = Screen::Prompt;
+        self.prompt = view;
+        self.scroll = 0;
+        self.value = 0;
+        true
+    }
+
+    /// Replace the prompt screen's content, reporting whether it changed.
+    ///
+    /// Unlike [`Ui::show_prompt`] this neither changes the screen nor resets the
+    /// scroll and value, so it is the update call for a producer reporting the
+    /// live status line, progress, or action availability. A no-op on any screen
+    /// other than [`Screen::Prompt`], and when the view is already what was
+    /// supplied.
+    pub fn set_prompt(&mut self, view: PromptView) -> bool {
+        if self.screen != Screen::Prompt || self.prompt == view {
+            return false;
+        }
+        self.prompt = view;
+        true
+    }
+
     /// Show `screen`, resetting the list scroll and the value-entry value.
     ///
     /// This is the command-level entry point: a caller declares the screen it
@@ -404,6 +446,12 @@ impl Ui {
         // the only interactive regions on it besides the header Back button.
         if self.screen == Screen::Link {
             return link_action_hit(p).map(Hit::LinkAction);
+        }
+        // A prompt screen's Done/Redo actions come after the header Stop, so a
+        // tap can never be confused with the header action. A disabled action is
+        // not hittable.
+        if self.screen == Screen::Prompt {
+            return prompt_action_hit(p, self.prompt.done, self.prompt.redo).map(Hit::PromptAction);
         }
         // Items scrolled above the list top must not be reachable through the
         // header region.
@@ -547,6 +595,7 @@ impl Ui {
             Screen::SystemInfo => widgets::draw_system_info(d, &self.system_info)?,
             Screen::ValueEntry(flow) => widgets::draw_value_entry(d, flow, self.value, pressed)?,
             Screen::Status => widgets::draw_status(d, &self.status)?,
+            Screen::Prompt => widgets::draw_prompt(d, &self.prompt, pressed)?,
             Screen::RoomScan => widgets::draw_room_scan(d, self.radar.as_ref(), self.sensor_state)?,
             Screen::Link => widgets::draw_link(d, &self.link, pressed)?,
             Screen::MainMenu | Screen::Calibrate | Screen::DriveMode | Screen::TestMode => {
@@ -568,18 +617,19 @@ impl Ui {
             Screen::MainMenu => None,
             Screen::ValueEntry(_) => Some(HeaderAction::Cancel),
             Screen::Status if self.status.finished => Some(HeaderAction::Back),
-            Screen::Status => Some(HeaderAction::Stop),
+            Screen::Status | Screen::Prompt => Some(HeaderAction::Stop),
             _ => Some(HeaderAction::Back),
         }
     }
 
     /// The screen Back/Stop returns to.
     ///
-    /// A running screen's parent lives in its [`StatusView`]; every other screen
-    /// answers through [`Screen::parent`].
+    /// A running or prompt screen's parent lives in its [`StatusView`] or
+    /// [`PromptView`]; every other screen answers through [`Screen::parent`].
     const fn parent(&self) -> Option<Screen> {
         match self.screen {
             Screen::Status => Some(self.status.parent),
+            Screen::Prompt => Some(self.prompt.parent),
             other => other.parent(),
         }
     }
@@ -625,9 +675,10 @@ impl Ui {
             Hit::MenuItem(item) => self.open_item(item),
             Hit::NudgeMinus => self.nudge(-1),
             Hit::NudgePlus => self.nudge(1),
-            // A Link action is reported to the firmware through last_activation;
-            // the model itself changes nothing on the tap.
-            Hit::Slider | Hit::LinkAction(_) => false,
+            // A Link action and a prompt action are reported to the firmware
+            // through last_activation; the model itself changes nothing on the
+            // tap.
+            Hit::Slider | Hit::LinkAction(_) | Hit::PromptAction(_) => false,
         }
     }
 

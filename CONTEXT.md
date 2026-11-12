@@ -212,17 +212,25 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Motor Calibration** — Per-track speed multipliers (`left_factor`/`right_factor`, range `(0.0, 1.0]`). The faster track is always the reference at 1.0; the slower track gets a factor < 1.0. Computed by running each track at fixed PWM and measuring encoder pulses.
 - **Distance Calibration** — Single factor (range 0.5–2.0) mapping encoder pulses to real-world centimeters. Corrects for surface friction and tire wear.
-- **IMU Calibration** — Magnetometer hard/soft iron calibration and motor interference compensation (`MagCalibration`). Gyroscope and accelerometer bias are handled internally by the ICM-20948 DMP.
-- **Boot Sequence** — On `Initialize` event, the initialization module sends individual `GetData` commands to flash storage for motor, IMU, distance, and IMU flag calibration data. Each response raises a `CalibrationDataLoaded` event. When all four are received, the UI shows the main menu.
-- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and magnetometer calibration flags (`ImuCalibrationFlags`) to dedicated FLASH_STORAGE region (last 8KB of flash).
+- **DMP Compass Calibration** — A guided Procedure that walks the operator through a fixed sequence of movements, verifies the resulting magnetic heading at two known headings, and saves the ICM-20948 DMP's bias snapshot. Starting it does not start the DMP calibration engine; the engine runs continuously while nine-axis fusion is enabled, and the Procedure only guides the motion and snapshots the result.
+  _Avoid_: Mag Calibration (retains the retired host meaning), mag ceremony
+- **Compass Step** — One instructed movement in a DMP Compass Calibration, advanced by the operator's Done action.
+- **Compass Check** — The final two-heading verification of a DMP Compass Calibration: the robot's front is pointed at magnetic north and then east, and the displayed Compass Heading must agree within ±10° while the DMP reports Compass Accuracy 3 and the heading is stable.
+- **Compass Heading** — The magnetic bearing derived from DMP yaw by the fixed mounting/sign conversion; it is magnetic north, not true north, and carries no declination.
+- **Compass Accuracy** — The DMP's 0–3 confidence in its compass calibration, where 3 is most accurate; the final Compass Check requires 3.
+- **DMP Bias Snapshot** — The nine raw DMP bias words (gyroscope, accelerometer and compass) saved to flash after a successful DMP Compass Calibration and restored to the DMP at boot. It does not include the DMP's internal accuracy/covariance state.
+- **Host Mag Calibration (retired)** — The former host-side hard/soft-iron and motor-interference procedure. It is superseded by DMP Compass Calibration because the DMP cannot consume host-corrected magnetometer values.
+- **Boot Sequence** — On `Initialize`, the initialization module sends individual `GetData` commands to flash storage for motor, DMP bias snapshot, and distance calibration data. Each response raises a `CalibrationDataLoaded` event. When all three are received, the UI shows the main menu.
+- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and the DMP Bias Snapshot (nine i32 plus version/checksum) to the dedicated FLASH_STORAGE region (last 8KB of flash).
 
 ## IMU Test
 
 - **IMU Test** — A Procedure that runs the IMU in isolation in six-axis or nine-axis fusion and streams its live readings to the panel and the log until the operator stops it.
-- **IMU Test Readout** — The live block inside the IMU Test's running screen: Euler angles, raw accelerometer/gyroscope/magnetometer vectors, DMP-calibrated gyroscope and host-calibrated magnetometer vectors, the magnetometer norm and gate, the three headings, the per-plane heading remaps, and an IMU Test Health line. It is not part of Activity State.
+- **IMU Test Readout** — The live block inside the IMU Test's running screen: Euler angles, raw accelerometer/gyroscope/magnetometer vectors, DMP-calibrated gyroscope and magnetometer vectors, the magnetometer norm and gate, the three headings, the per-plane heading remaps, and an IMU Test Health line. It is not part of Activity State.
 - **IMU Test Telemetry** — The 10 Hz snapshot of the latest IMU readings and derived diagnostics behind an IMU Test Readout. It is panel-only and never reaches the Link Protocol.
-- **Raw Reading** — A sensor value before DMP or host correction: raw accelerometer in `g`, raw gyroscope in `deg/s`, raw magnetometer in `µT`.
-- **Calibrated Reading** — A sensor value after correction: the DMP bias-corrected gyroscope, or the host-corrected magnetometer. The accelerometer has no calibrated form.
+- **Raw Reading** — A sensor value before DMP correction: raw accelerometer in `g`, raw gyroscope in `deg/s`, raw magnetometer in `µT`.
+- **Calibrated Reading** — A sensor value after correction: the DMP bias-corrected gyroscope or magnetometer. The accelerometer has no calibrated form.
+- **DMP-Calibrated Magnetometer** — The magnetometer vector after the DMP's internal compass bias correction, shown as `M dmp`; it is distinct from the raw `M raw` vector.
 - **IMU Test Health** — Whether the IMU is producing samples during an IMU Test: `Waiting` before the first sample, `Live` while samples arrive, and **IMU Not Responding** after a sustained gap. The last state is shown in the readout rather than ending the Procedure.
 - **Heading Remap** — A candidate magnetometer heading from one of eight axis-sign permutations of a magnetometer plane, used to diagnose the sensor's mounting and axis mapping; the nine-axis readout shows eight per plane for XY, XZ and YZ.
 

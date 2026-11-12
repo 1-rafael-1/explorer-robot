@@ -171,15 +171,22 @@ impl Submenu {
 
 /// A unit of work the Panel can start.
 ///
-/// Ten run today: motor, magnetometer and distance calibration; coast-and-avoid;
-/// and the six test modes. Attempt-straight is modelled the same way but the
-/// firmware does not start it yet.
+/// Twelve are modelled: motor, magnetometer, distance and DMP compass
+/// calibration; coast-and-avoid; and the six test modes, beside the deferred
+/// attempt-straight. Eleven are listed in the live menus; the DMP compass
+/// calibration joins the Calibrate submenu once its firmware Procedure exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Procedure {
     /// Calibrate: motor calibration, opening the running screen.
     MotorCalibration,
     /// Calibrate: magnetometer calibration, opening the running screen.
     MagCalibration,
+    /// Calibrate: DMP compass calibration, opening the Prompt screen.
+    ///
+    /// Not yet listed in the Calibrate submenu: the entry is added when the
+    /// firmware Procedure exists, so the model does not offer a tap that cannot
+    /// start anything.
+    DmpCompassCalibration,
     /// Calibrate: the distance-calibration value screen, after its drive step.
     DistanceCalibration,
     /// Drive Mode: coast-and-avoid, opening the running screen.
@@ -207,6 +214,7 @@ impl Procedure {
         match self {
             Self::MotorCalibration => "Motor",
             Self::MagCalibration => "Mag",
+            Self::DmpCompassCalibration => "DMP Mag",
             Self::DistanceCalibration => "Distance",
             Self::CoastAndAvoid => "Coast & Avoid",
             Self::AttemptStraight => "Attempt Straight",
@@ -222,13 +230,16 @@ impl Procedure {
     /// The screen this Procedure opens.
     ///
     /// Distance calibration finishes its drive step before its value-entry screen
-    /// opens, and the deferred attempt-straight is only a value screen; every
-    /// other Procedure opens the running [`Screen::Status`].
+    /// opens, and the deferred attempt-straight is only a value screen. The DMP
+    /// compass calibration is guided prompt by prompt, so it opens
+    /// [`Screen::Prompt`]; every other Procedure opens the running
+    /// [`Screen::Status`].
     #[must_use]
     pub const fn destination(self) -> Screen {
         match self {
             Self::DistanceCalibration => Screen::ValueEntry(ValueFlow::DistanceCalibration),
             Self::AttemptStraight => Screen::ValueEntry(ValueFlow::AttemptStraight),
+            Self::DmpCompassCalibration => Screen::Prompt,
             Self::MotorCalibration
             | Self::MagCalibration
             | Self::CoastAndAvoid
@@ -250,7 +261,9 @@ impl Procedure {
     #[must_use]
     pub const fn parent(self) -> Option<Screen> {
         match self {
-            Self::MotorCalibration | Self::MagCalibration | Self::DistanceCalibration => Some(Screen::Calibrate),
+            Self::MotorCalibration | Self::MagCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration => {
+                Some(Screen::Calibrate)
+            }
             Self::CoastAndAvoid | Self::AttemptStraight => Some(Screen::DriveMode),
             Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
                 Some(Screen::TestMode)
@@ -272,12 +285,33 @@ impl Procedure {
         }
     }
 
-    /// Whether this Procedure is one of the three calibrations.
+    /// Whether this Procedure is one of the calibrations.
     #[must_use]
     pub const fn is_calibration(self) -> bool {
         matches!(
             self,
-            Self::MotorCalibration | Self::MagCalibration | Self::DistanceCalibration
+            Self::MotorCalibration | Self::MagCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration
+        )
+    }
+
+    /// Whether this Procedure needs an operator physically at the robot, and so
+    /// can never be started from the Remote.
+    ///
+    /// This mirrors the firmware's one availability rule
+    /// (`procedure::is_startable(_, ClaimOrigin::Remote)`) rather than restating
+    /// a second hands-on set: motor, magnetometer, DMP compass and distance
+    /// calibration, the basic-motor test, and attempt-straight. A Procedure left
+    /// out of this set is Remote-startable.
+    #[must_use]
+    pub const fn is_hands_on(self) -> bool {
+        matches!(
+            self,
+            Self::MotorCalibration
+                | Self::MagCalibration
+                | Self::DmpCompassCalibration
+                | Self::DistanceCalibration
+                | Self::BasicMotor
+                | Self::AttemptStraight
         )
     }
 
@@ -404,6 +438,13 @@ pub enum Screen {
     /// It is not a running procedure: its header offers Back, and the firmware
     /// enables the `LiDAR` on entry and disables it on exit.
     RoomScan,
+    /// A guided prompt screen, whose content is supplied by [`PromptView`].
+    ///
+    /// A DMP compass calibration step shows one instruction, one dynamic status
+    /// line, optional progress, and its Done/Redo actions. The header offers
+    /// Stop. Its parent lives in the active [`PromptView`], so it returns to the
+    /// Calibrate submenu when the Procedure ends.
+    Prompt,
     /// The Link screen: a read-only status view of the link state.
     ///
     /// It is not a running procedure and takes no Active Claim: its header
@@ -415,14 +456,15 @@ pub enum Screen {
 impl Screen {
     /// The Menu Entry whose destination this screen is, if any.
     ///
-    /// Every screen but the Main Menu and the running screen is a Menu Entry's
-    /// destination. The Main Menu is the root, and the running screen is shared by
-    /// many Procedures, so its parent is held in the active [`StatusView`] and
-    /// resolved by [`crate::Ui`].
+    /// Every screen but the Main Menu, the running screen and the prompt screen
+    /// is a Menu Entry's destination. The Main Menu is the root, and the running
+    /// and prompt screens are shared by many Procedures, so their parents are
+    /// held in the active [`StatusView`] and [`PromptView`] and resolved by
+    /// [`crate::Ui`].
     #[must_use]
     pub const fn entry(self) -> Option<Item> {
         match self {
-            Self::MainMenu | Self::Status => None,
+            Self::MainMenu | Self::Status | Self::Prompt => None,
             Self::Calibrate => Some(Item::Submenu(Submenu::Calibrate)),
             Self::DriveMode => Some(Item::Submenu(Submenu::DriveMode)),
             Self::TestMode => Some(Item::Submenu(Submenu::TestMode)),
@@ -439,18 +481,20 @@ impl Screen {
     /// Every screen that is a Menu Entry's destination takes its title from that
     /// entry, so the header and the button that opened it are one string.
     /// [`Screen::MainMenu`] is the root, so it names itself; [`Screen::Status`]
-    /// has no title of its own — [`crate::Ui::title`] returns the dynamic title
-    /// from the active [`StatusView`] instead, and this fallback is only used if
-    /// the enum is matched on directly.
+    /// and [`Screen::Prompt`] have no title of their own — [`crate::Ui::title`]
+    /// returns the dynamic title from the active [`StatusView`] or [`PromptView`]
+    /// instead, and this fallback is only used if the enum is matched on
+    /// directly.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self.entry() {
             Some(entry) => entry.title(),
-            // The two screens that are not a Menu Entry's destination name
-            // themselves: the root menu, and the running screen, whose title
-            // comes from its own content instead.
+            // The screens that are not a Menu Entry's destination name
+            // themselves: the root menu and the running and prompt screens,
+            // whose titles come from their own content instead.
             None => match self {
                 Self::MainMenu => "Main Menu",
+                Self::Prompt => "Prompt",
                 _ => "Running",
             },
         }
@@ -462,8 +506,8 @@ impl Screen {
     /// what the screen draws and what a caller resolves through
     /// [`Item::destination`].
     ///
-    /// System Info, Link, status, and value-entry screens are not lists, so they
-    /// have none.
+    /// System Info, Link, status, prompt and value-entry screens are not lists,
+    /// so they have none.
     #[must_use]
     pub const fn items(self) -> &'static [Item] {
         match self {
@@ -471,7 +515,7 @@ impl Screen {
             Self::Calibrate => &CALIBRATE_ITEMS,
             Self::DriveMode => &DRIVE_MODE_ITEMS,
             Self::TestMode => &TEST_MODE_ITEMS,
-            Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::RoomScan | Self::Link => &[],
+            Self::SystemInfo | Self::ValueEntry(_) | Self::Status | Self::Prompt | Self::RoomScan | Self::Link => &[],
         }
     }
 
@@ -479,9 +523,9 @@ impl Screen {
     ///
     /// Every screen that is an entry's destination takes its parent from that
     /// entry, so the tree has one parent relation rather than a second table.
-    /// [`Screen::Status`] is shared by many Procedures, so its parent is held in
-    /// the active [`StatusView`] and resolved by [`crate::Ui`]; this returns
-    /// `None` for it.
+    /// [`Screen::Status`] and [`Screen::Prompt`] are shared by many Procedures,
+    /// so their parents are held in the active [`StatusView`] and [`PromptView`]
+    /// and resolved by [`crate::Ui`]; this returns `None` for them.
     #[must_use]
     pub const fn parent(self) -> Option<Self> {
         match self.entry() {
@@ -669,5 +713,93 @@ impl StatusView {
     #[must_use]
     pub const fn finished(self) -> Self {
         Self { finished: true, ..self }
+    }
+}
+
+/// The neutral content of a guided prompt screen.
+///
+/// A DMP Compass Calibration maps its current Compass Step or Compass Check onto
+/// this and calls [`crate::Ui::show_prompt`] on entry and [`crate::Ui::set_prompt`]
+/// as the step advances. It carries the Procedure title (drawn in the header), one
+/// compile-time instruction line, one runtime-formatted status line in a
+/// fixed-capacity [`TextBuf`] (so the model never allocates and stays `Copy`), the
+/// optional percent progress, the availability of the Done and Redo actions, and
+/// the screen Stop returns to. The header always offers Stop.
+///
+/// The status line is deliberately one line: the fixed-capacity buffer and the
+/// single-line layout are the established pattern, so instructions stay short and
+/// the numbers carry the detail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PromptView {
+    /// The header title: the Procedure's label.
+    pub title: &'static str,
+    /// The compile-time instruction line for this prompt.
+    pub instruction: &'static str,
+    /// The runtime-formatted status line (heading, target, accuracy and hint),
+    /// drawn below the instruction when a producer has supplied one.
+    status: TextBuf,
+    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
+    pub progress: Option<u8>,
+    /// Whether the Done action is available.
+    pub done: bool,
+    /// Whether the Redo action is available. It is offered only on the final
+    /// Compass Checks, and a disabled Redo is neither drawn nor hittable.
+    pub redo: bool,
+    /// The screen the header Stop returns to.
+    pub parent: Screen,
+}
+
+impl PromptView {
+    /// Build a prompt with an empty status line, Done available, Redo unavailable
+    /// and no progress bar.
+    #[must_use]
+    pub const fn new(title: &'static str, instruction: &'static str, parent: Screen) -> Self {
+        Self {
+            title,
+            instruction,
+            status: TextBuf::new(),
+            progress: None,
+            done: true,
+            redo: false,
+            parent,
+        }
+    }
+
+    /// Build a prompt for `procedure`, taking its title and the screen Stop
+    /// returns to from the entry's own identity.
+    ///
+    /// This is the constructor the firmware uses while a DMP Compass Calibration
+    /// runs, so it never restates either a title or a parent. A Procedure with no
+    /// parent is rooted at the Main Menu.
+    #[must_use]
+    pub const fn for_procedure(procedure: Procedure, instruction: &'static str) -> Self {
+        Self::new(procedure.label(), instruction, procedure.landing_screen())
+    }
+
+    /// Give the prompt its runtime-formatted status line.
+    #[must_use]
+    pub const fn with_status(self, status: TextBuf) -> Self {
+        Self { status, ..self }
+    }
+
+    /// The status line to draw, empty when the producer has supplied none.
+    #[must_use]
+    pub fn status_text(&self) -> &str {
+        self.status.as_str()
+    }
+
+    /// The same prompt carrying a percent progress bar.
+    #[must_use]
+    pub const fn with_progress(self, percent: u8) -> Self {
+        Self {
+            progress: Some(percent),
+            ..self
+        }
+    }
+
+    /// Offer the Redo action as well as Done.
+    #[must_use]
+    pub const fn with_redo(self) -> Self {
+        Self { redo: true, ..self }
     }
 }
