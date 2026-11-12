@@ -4,9 +4,9 @@
 //! The panel is the primary view: the task publishes a typed
 //! [`touch_ui::ImuReadout`] into the IMU Test Telemetry snapshot at 10 Hz, and
 //! the touch UI formats it into the running screen's rows — the raw and
-//! calibrated magnetometer vectors, the calibration status and the `use_mag`
-//! gate included. The periodic log is diagnostics only, so its reports are
-//! `debug`.
+//! DMP-calibrated magnetometer vectors, the DMP calibration status and the
+//! `use_mag` gate included. The periodic log is diagnostics only, so its reports
+//! are `debug`.
 //!
 //! The screen still reads its phase from the activity state. ICM-20948
 //! communicates over SPI.
@@ -57,10 +57,10 @@ async fn imu_test_task(claim: Claim) {
     claim.phase("9-axis streaming", None).await;
 
     // Both magnetometer facts are start-up state: whether the driver initialised
-    // the magnetometer, and the stored calibration. They are read once so the
+    // the magnetometer, and the stored DMP calibration. They are read once so the
     // publish path takes no other lock.
     let mag_available = is_mag_available();
-    let mag_calibration = mag_calibration_status().await;
+    let dmp_calibration = dmp_calibration_status().await;
 
     let mut tick: u32 = 0;
     let mut missing: u32 = 0;
@@ -92,7 +92,7 @@ async fn imu_test_task(claim: Claim) {
                 missing,
                 readings,
                 mag_available,
-                mag_calibration,
+                dmp_calibration,
                 diagnostics,
             ))
             .await;
@@ -128,14 +128,14 @@ async fn imu_test_task(claim: Claim) {
     claim.finish().await;
 }
 
-/// Read the stored magnetometer calibration status once for the whole run.
+/// Read the stored DMP calibration status once for the whole run.
 ///
 /// Only `CALIBRATION_STATE` is locked, and the guard is released before the task
 /// takes any other lock, so the documented lock order is kept.
-async fn mag_calibration_status() -> UiCalibrationStatus {
+async fn dmp_calibration_status() -> UiCalibrationStatus {
     let status = {
         let state = calibration::CALIBRATION_STATE.lock().await;
-        state.mag_cal_status
+        state.dmp_cal_status
     };
     calibration::ui_status(status)
 }
@@ -150,11 +150,11 @@ fn build_readout(
     missing: u32,
     readings: ImuReadings,
     mag_available: bool,
-    mag_calibration: UiCalibrationStatus,
+    dmp_calibration: UiCalibrationStatus,
     diagnostics: Option<MagDiagnostics>,
 ) -> ImuReadout {
     let mut readout = base_readout(ImuReadoutKind::NineAxis, health, missing, readings)
-        .with_mag_calibration(mag_calibration)
+        .with_dmp_calibration(dmp_calibration)
         .with_mag_available(mag_available);
     if !mag_available {
         return readout;

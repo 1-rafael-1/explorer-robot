@@ -352,7 +352,7 @@ const DRAG_RENDER_MS: u64 = 50;
 const MAIN_MENU: [&str; 4] = ["System Info", "Calibrate", "Drive Mode", "Test Mode"];
 
 /// The Calibrate submenu labels, transcribed from the firmware (no in-list Back).
-const CALIBRATE_MENU: [&str; 3] = ["Motor", "Mag", "Distance"];
+const CALIBRATE_MENU: [&str; 3] = ["Motor", "DMP Mag", "Distance"];
 
 /// The Drive Mode submenu labels, transcribed from the firmware (no in-list Back).
 const DRIVE_MODE_MENU: [&str; 2] = ["Coast & Avoid", "Attempt Straight"];
@@ -383,8 +383,8 @@ struct SystemInfoData {
     battery_voltage: &'static str,
     /// Motor calibration status row.
     motor_calibration: &'static str,
-    /// Magnetometer calibration status row.
-    mag_calibration: &'static str,
+    /// DMP calibration status row.
+    dmp_calibration: &'static str,
     /// Distance calibration status row.
     distance_calibration: &'static str,
 }
@@ -396,7 +396,7 @@ impl SystemInfoData {
             self.battery_level,
             self.battery_voltage,
             self.motor_calibration,
-            self.mag_calibration,
+            self.dmp_calibration,
             self.distance_calibration,
         ]
     }
@@ -407,7 +407,7 @@ const SYSTEM_INFO: SystemInfoData = SystemInfoData {
     battery_level: "Batt  87%",
     battery_voltage: "Batt  7.4V",
     motor_calibration: "Motor: Loaded",
-    mag_calibration: "Mag: Unknown",
+    dmp_calibration: "DMP Cal: Unknown",
     distance_calibration: "Dist: Missing",
 };
 
@@ -479,8 +479,8 @@ impl Screen {
 enum PlaceholderKind {
     /// Motor calibration.
     Motor,
-    /// Magnetometer calibration.
-    Mag,
+    /// DMP compass calibration.
+    DmpMag,
     /// Coast-and-avoid drive mode.
     CoastAndAvoid,
     /// Basic motor test.
@@ -502,7 +502,7 @@ impl PlaceholderKind {
     const fn title(self) -> &'static str {
         match self {
             Self::Motor => "Motor",
-            Self::Mag => "Mag",
+            Self::DmpMag => "DMP Mag",
             Self::CoastAndAvoid => "Coast & Avoid",
             Self::BasicMotor => "Basic Motor Test",
             Self::Turns => "Turns Test",
@@ -517,7 +517,7 @@ impl PlaceholderKind {
     const fn body(self) -> &'static str {
         match self {
             Self::Motor => "Would run: Motor calibration",
-            Self::Mag => "Would run: Magnetometer calibration",
+            Self::DmpMag => "Would run: DMP compass calibration",
             Self::CoastAndAvoid => "Would run: Coast & avoid drive",
             Self::BasicMotor => "Would run: Basic motor test",
             Self::Turns => "Would run: Turns test",
@@ -531,7 +531,7 @@ impl PlaceholderKind {
     /// The submenu this placeholder was opened from.
     const fn parent(self) -> Screen {
         match self {
-            Self::Motor | Self::Mag => Screen::Calibrate,
+            Self::Motor | Self::DmpMag => Screen::Calibrate,
             Self::CoastAndAvoid => Screen::DriveMode,
             Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
                 Screen::TestMode
@@ -845,7 +845,7 @@ impl Ui {
             (Screen::MainMenu, 2) => Screen::DriveMode,
             (Screen::MainMenu, 3) => Screen::TestMode,
             (Screen::Calibrate, 0) => Screen::Placeholder(PlaceholderKind::Motor),
-            (Screen::Calibrate, 1) => Screen::Placeholder(PlaceholderKind::Mag),
+            (Screen::Calibrate, 1) => Screen::Placeholder(PlaceholderKind::DmpMag),
             (Screen::Calibrate, 2) => Screen::ValueEntry(ValueFlow::DistanceCalibration),
             (Screen::DriveMode, 0) => Screen::Placeholder(PlaceholderKind::CoastAndAvoid),
             (Screen::DriveMode, 1) => Screen::ValueEntry(ValueFlow::AttemptStraight),

@@ -171,15 +171,13 @@ impl Submenu {
 
 /// A unit of work the Panel can start.
 ///
-/// Twelve are modelled and all twelve are listed: motor, magnetometer, DMP
-/// compass and distance calibration; coast-and-avoid; the six test modes beside
-/// the deferred attempt-straight.
+/// Eleven are modelled and all eleven are listed: motor, DMP compass and
+/// distance calibration; coast-and-avoid; the six test modes beside the deferred
+/// attempt-straight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Procedure {
     /// Calibrate: motor calibration, opening the running screen.
     MotorCalibration,
-    /// Calibrate: magnetometer calibration, opening the running screen.
-    MagCalibration,
     /// Calibrate: DMP compass calibration, opening the Prompt screen.
     ///
     /// The firmware Procedure guides the operator through the Compass Steps and
@@ -211,7 +209,6 @@ impl Procedure {
     pub const fn label(self) -> &'static str {
         match self {
             Self::MotorCalibration => "Motor",
-            Self::MagCalibration => "Mag",
             Self::DmpCompassCalibration => "DMP Mag",
             Self::DistanceCalibration => "Distance",
             Self::CoastAndAvoid => "Coast & Avoid",
@@ -239,7 +236,6 @@ impl Procedure {
             Self::AttemptStraight => Screen::ValueEntry(ValueFlow::AttemptStraight),
             Self::DmpCompassCalibration => Screen::Prompt,
             Self::MotorCalibration
-            | Self::MagCalibration
             | Self::CoastAndAvoid
             | Self::BasicMotor
             | Self::Turns
@@ -259,9 +255,7 @@ impl Procedure {
     #[must_use]
     pub const fn parent(self) -> Option<Screen> {
         match self {
-            Self::MotorCalibration | Self::MagCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration => {
-                Some(Screen::Calibrate)
-            }
+            Self::MotorCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration => Some(Screen::Calibrate),
             Self::CoastAndAvoid | Self::AttemptStraight => Some(Screen::DriveMode),
             Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
                 Some(Screen::TestMode)
@@ -288,7 +282,7 @@ impl Procedure {
     pub const fn is_calibration(self) -> bool {
         matches!(
             self,
-            Self::MotorCalibration | Self::MagCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration
+            Self::MotorCalibration | Self::DmpCompassCalibration | Self::DistanceCalibration
         )
     }
 
@@ -297,15 +291,14 @@ impl Procedure {
     ///
     /// This is the firmware's one availability rule
     /// (`procedure::is_startable(_, ClaimOrigin::Remote)`), which reads this set
-    /// rather than keeping a second copy: motor, magnetometer, DMP compass and
-    /// distance calibration, the basic-motor test, and attempt-straight. A
-    /// Procedure left out of this set is Remote-startable.
+    /// rather than keeping a second copy: motor, DMP compass and distance
+    /// calibration, the basic-motor test, and attempt-straight. A Procedure left
+    /// out of this set is Remote-startable.
     #[must_use]
     pub const fn is_hands_on(self) -> bool {
         matches!(
             self,
             Self::MotorCalibration
-                | Self::MagCalibration
                 | Self::DmpCompassCalibration
                 | Self::DistanceCalibration
                 | Self::BasicMotor
@@ -385,11 +378,10 @@ const MAIN_MENU_ITEMS: [Item; 5] = [
 
 /// The Calibrate submenu's entries, in display order.
 ///
-/// `DMP Mag` sits beside the existing `Mag` while the DMP calibration replaces
-/// the host one; `Distance` keeps its place at the end.
-const CALIBRATE_ITEMS: [Item; 4] = [
+/// `DMP Mag` is the only magnetometer calibration: the retired host `Mag` entry
+/// is gone. `Distance` keeps its place at the end.
+const CALIBRATE_ITEMS: [Item; 3] = [
     Item::Procedure(Procedure::MotorCalibration),
-    Item::Procedure(Procedure::MagCalibration),
     Item::Procedure(Procedure::DmpCompassCalibration),
     Item::Procedure(Procedure::DistanceCalibration),
 ];

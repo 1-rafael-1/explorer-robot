@@ -436,10 +436,7 @@ pub async fn dispatch(procedure: Procedure, origin: ClaimOrigin) -> StartOutcome
             testmode::start(claim, procedure).await;
             true
         }
-        Procedure::MotorCalibration
-        | Procedure::MagCalibration
-        | Procedure::DmpCompassCalibration
-        | Procedure::DistanceCalibration => {
+        Procedure::MotorCalibration | Procedure::DmpCompassCalibration | Procedure::DistanceCalibration => {
             drive::calibration::start(claim, procedure).await;
             true
         }

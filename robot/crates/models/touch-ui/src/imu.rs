@@ -11,11 +11,11 @@
 //! A six-axis readout has five rows, in order: Euler angles, the raw
 //! accelerometer, the raw gyroscope, the DMP-calibrated gyroscope, and the health
 //! line. A nine-axis readout has twelve rows: the same four vectors, the raw and
-//! host-calibrated magnetometer, the heading line, the XY, XZ and YZ heading-remap
+//! DMP-calibrated magnetometer, the heading line, the XY, XZ and YZ heading-remap
 //! rows, the health line and the magnetometer gate. Absent values render as `--`,
 //! so a row is never omitted for a transient absence. The health line names the
-//! state, the consecutive missing-sample count and the magnetometer calibration;
-//! the six-axis screen explains the absent magnetometer section with `magcal n/a`,
+//! state, the consecutive missing-sample count and the DMP calibration;
+//! the six-axis screen explains the absent magnetometer section with `dmpcal n/a`,
 //! and an unavailable nine-axis magnetometer keeps the health line, shows
 //! `mag unavailable - 6-axis fallback use_mag=no` on the gate row, and renders
 //! `--` heading and remap rows.
@@ -153,10 +153,10 @@ pub struct ImuReadout {
     pub calibrated_gyro: Option<Vector3>,
     /// Raw magnetometer in µT, or `None`.
     pub raw_mag: Option<Vector3>,
-    /// Host-calibrated magnetometer in µT, or `None`.
+    /// DMP-calibrated magnetometer in µT, or `None`.
     pub calibrated_mag: Option<Vector3>,
-    /// The stored magnetometer calibration status.
-    pub mag_calibration: CalibrationStatus,
+    /// The stored DMP calibration status.
+    pub dmp_calibration: CalibrationStatus,
     /// Whether the magnetometer was available at start-up.
     pub mag_available: bool,
     /// The magnetometer gate diagnostics, or `None` before the first sample and
@@ -179,7 +179,7 @@ impl ImuReadout {
             calibrated_gyro: None,
             raw_mag: None,
             calibrated_mag: None,
-            mag_calibration: CalibrationStatus::Unknown,
+            dmp_calibration: CalibrationStatus::Unknown,
             mag_available: true,
             mag: None,
         }
@@ -240,7 +240,7 @@ impl ImuReadout {
         }
     }
 
-    /// The same readout with a host-calibrated magnetometer vector, in µT.
+    /// The same readout with a DMP-calibrated magnetometer vector, in µT.
     #[must_use]
     pub const fn with_calibrated_mag(self, mag: Vector3) -> Self {
         Self {
@@ -249,11 +249,11 @@ impl ImuReadout {
         }
     }
 
-    /// The same readout with a magnetometer calibration status.
+    /// The same readout with a DMP calibration status.
     #[must_use]
-    pub const fn with_mag_calibration(self, status: CalibrationStatus) -> Self {
+    pub const fn with_dmp_calibration(self, status: CalibrationStatus) -> Self {
         Self {
-            mag_calibration: status,
+            dmp_calibration: status,
             ..self
         }
     }
@@ -303,15 +303,15 @@ impl ImuReadout {
                 rows[1] = accel_line(self.raw_accel);
                 rows[2] = gyro_line("raw", self.raw_gyro);
                 rows[3] = gyro_line("cal", self.calibrated_gyro);
-                rows[4] = mag_line("raw", self.raw_mag);
-                rows[5] = mag_line("cal", self.calibrated_mag);
+                rows[4] = mag_line("M raw", self.raw_mag);
+                rows[5] = mag_line("M dmp", self.calibrated_mag);
                 let [heading, xy_row, xz_row, yz_row] =
                     heading_and_remap_rows(self.mag, self.mag_available, self.orientation);
                 rows[6] = heading;
                 rows[7] = xy_row;
                 rows[8] = xz_row;
                 rows[9] = yz_row;
-                rows[10] = nine_axis_health_line(self.health, self.missing, self.mag_calibration);
+                rows[10] = nine_axis_health_line(self.health, self.missing, self.dmp_calibration);
                 rows[11] = mag_gate_line(self.mag, self.mag_available);
             }
         }
@@ -437,29 +437,29 @@ fn gyro_line(prefix: &'static str, gyro: Option<Vector3>) -> TextBuf {
 fn health_line(health: ImuHealth, missing: u32) -> TextBuf {
     let mut line = TextBuf::new();
     line.fill(format_args!(
-        "{} miss={} magcal n/a",
+        "{} miss={} dmpcal n/a",
         health.label(),
         missing.min(MAX_MISSING)
     ));
     line
 }
 
-/// Format the nine-axis health row: the state, the missing count and the
-/// magnetometer calibration. It always names those facts, even when the
-/// magnetometer was unavailable; the fallback notice lives on the gate row.
-fn nine_axis_health_line(health: ImuHealth, missing: u32, mag_calibration: CalibrationStatus) -> TextBuf {
+/// Format the nine-axis health row: the state, the missing count and the DMP
+/// calibration. It always names those facts, even when the magnetometer was
+/// unavailable; the fallback notice lives on the gate row.
+fn nine_axis_health_line(health: ImuHealth, missing: u32, dmp_calibration: CalibrationStatus) -> TextBuf {
     let mut line = TextBuf::new();
     line.fill(format_args!(
-        "{} miss={} magcal {}",
+        "{} miss={} dmpcal {}",
         health.label(),
         missing.min(MAX_MISSING),
-        mag_calibration_word(mag_calibration)
+        dmp_calibration_word(dmp_calibration)
     ));
     line
 }
 
 /// The lowercase word the nine-axis health row uses for a calibration status.
-const fn mag_calibration_word(status: CalibrationStatus) -> &'static str {
+const fn dmp_calibration_word(status: CalibrationStatus) -> &'static str {
     match status {
         CalibrationStatus::Loaded => "loaded",
         CalibrationStatus::Missing => "missing",
@@ -467,15 +467,16 @@ const fn mag_calibration_word(status: CalibrationStatus) -> &'static str {
     }
 }
 
-/// Format one magnetometer row, one decimal in µT.
-fn mag_line(prefix: &'static str, mag: Option<Vector3>) -> TextBuf {
+/// Format one magnetometer row, one decimal in µT. `label` names whether the
+/// vector is the raw `M raw` reading or the DMP-calibrated `M dmp` one.
+fn mag_line(label: &'static str, mag: Option<Vector3>) -> TextBuf {
     let mut line = TextBuf::new();
     match mag {
         Some(vector) => line.fill(format_args!(
-            "Mag {prefix} x={:.1} y={:.1} z={:.1} uT",
+            "{label} x={:.1} y={:.1} z={:.1} uT",
             vector.x, vector.y, vector.z
         )),
-        None => line.fill(format_args!("Mag {prefix} x=-- y=-- z=-- uT")),
+        None => line.fill(format_args!("{label} x=-- y=-- z=-- uT")),
     }
     line
 }

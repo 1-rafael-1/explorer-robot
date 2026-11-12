@@ -2,7 +2,7 @@
 //!
 //! This module provides a task that manages storing and retrieving calibration data
 //! to/from flash memory using the `sequential-storage` crate. It handles motor
-//! calibration, distance calibration, and IMU calibration flags.
+//! calibration, distance calibration, and the DMP Bias Snapshot.
 //!
 //! The data is stored in the `FLASH_STORAGE` section of flash memory defined in
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
@@ -47,12 +47,6 @@ static FLASH_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FlashCommand, COM
 static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Option<CalibrationData>> =
     embassy_sync::mutex::Mutex::new(None);
 
-/// Return the latest cached IMU calibration flags, if available.
-pub async fn get_cached_imu_flags() -> Option<ImuCalibrationFlags> {
-    let data = CALIBRATION_DATA.lock().await;
-    data.as_ref().map(|cal| cal.imu_flags)
-}
-
 /// Return the latest cached DMP Bias Snapshot, if the boot query found one.
 ///
 /// `None` before the boot query runs, after a query that found no snapshot, and
@@ -80,8 +74,6 @@ async fn receive_flash_command() -> FlashCommand {
 pub enum CalibrationKind {
     /// Motor calibration data.
     Motor,
-    /// IMU calibration flags.
-    ImuFlags,
     /// Distance calibration data.
     Distance,
     /// DMP Bias Snapshot.
@@ -93,8 +85,6 @@ pub enum CalibrationKind {
 pub enum CalibrationDataKind {
     /// Motor calibration data (2 track factors).
     Motor(MotorCalibration),
-    /// IMU calibration flags.
-    ImuFlags(ImuCalibrationFlags),
     /// Distance calibration factor.
     Distance(f32),
     /// DMP Bias Snapshot (nine raw bias words).
@@ -113,23 +103,11 @@ pub enum FlashCommand {
 
 // ── Persisted data structures ───────────────────────────────────────────────────
 
-/// IMU calibration completion flags persisted in flash.
-///
-/// Separate from calibration values so flags can be written independently
-/// without touching the larger IMU calibration blob.
-#[derive(Debug, Clone, Copy, defmt::Format, Default, PartialEq, Eq)]
-pub struct ImuCalibrationFlags {
-    /// Magnetometer calibration completed.
-    pub mag: bool,
-}
-
 /// Combined calibration data cached in RAM.
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct CalibrationData {
     /// Motor calibration factors (2 × f32).
     pub motor: MotorCalibration,
-    /// IMU calibration flags.
-    pub imu_flags: ImuCalibrationFlags,
     /// Distance calibration factor.
     pub distance: f32,
     /// DMP Bias Snapshot, if flash held a valid one.
@@ -140,7 +118,6 @@ impl Default for CalibrationData {
     fn default() -> Self {
         Self {
             motor: MotorCalibration::default(),
-            imu_flags: ImuCalibrationFlags::default(),
             distance: 1.0,
             dmp_bias: None,
         }
@@ -187,6 +164,10 @@ impl From<DmpBiasWords> for DmpBiasSnapshot {
 enum StorageKey {
     MotorCalibration = 0,
     DistanceFactor = 1,
+    /// Retired host-calibration key. Never requested or written again, but kept
+    /// so the numeric key is never reused and an old flash entry stays a known,
+    /// ignored record rather than corrupting the map.
+    #[allow(dead_code)]
     ImuFlags = 2,
     DmpBias = 3,
 }
@@ -269,28 +250,6 @@ impl Value<'_> for DistanceFactor {
     }
 }
 
-// ── Value impl for ImuCalibrationFlags (1 byte) ─────────────────────────────────
-
-impl Value<'_> for ImuCalibrationFlags {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.is_empty() {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        buffer[0] = u8::from(self.mag);
-        Ok(1)
-    }
-
-    fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError>
-    where
-        Self: Sized,
-    {
-        if buffer.is_empty() {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        Ok((Self { mag: buffer[0] != 0 }, 1))
-    }
-}
-
 // ── Value impl for DmpBiasWords (DMP Bias Snapshot, 39 bytes) ───────────────────
 
 /// Persists the DMP Bias Snapshot through the model's versioned, checksummed
@@ -345,8 +304,8 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
     let mut storage = MapStorage::<StorageKey, _, _>::new(flash, MapConfig::new(flash_range.clone()), NoCache::new());
 
     // Scratch buffer for serialization/deserialization. Motor calibration needs
-    // 8 bytes, distance factor 4 bytes, IMU flags 1 byte, and the DMP Bias
-    // Snapshot 39 bytes. 64 bytes leaves headroom.
+    // 8 bytes, distance factor 4 bytes, and the DMP Bias Snapshot 39 bytes. 64
+    // bytes leaves headroom.
     let mut data_buffer: [u8; 64] = [0; 64];
 
     // Main command processing loop
@@ -396,42 +355,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         }
                     }
                 }
-                CalibrationKind::ImuFlags => {
-                    info!("Loading IMU calibration flags from flash...");
-                    match storage
-                        .fetch_item::<ImuCalibrationFlags>(&mut data_buffer, &StorageKey::ImuFlags)
-                        .await
-                    {
-                        Ok(Some(flags)) => {
-                            info!("IMU calibration flags loaded: mag={}", flags.mag);
 
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.imu_flags = flags;
-                            } else {
-                                *data = Some(CalibrationData {
-                                    imu_flags: flags,
-                                    ..CalibrationData::default()
-                                });
-                            }
-                            drop(data);
-
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::ImuFlags,
-                                Some(CalibrationDataKind::ImuFlags(flags)),
-                            ))
-                            .await;
-                        }
-                        Ok(None) => {
-                            info!("No IMU calibration flags found in flash");
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::ImuFlags, None)).await;
-                        }
-                        Err(e) => {
-                            error!("Failed to load IMU calibration flags: {}", defmt::Debug2Format(&e));
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::ImuFlags, None)).await;
-                        }
-                    }
-                }
                 CalibrationKind::Distance => {
                     info!("Loading distance calibration from flash...");
                     match storage
@@ -545,37 +469,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         }
                     }
                 }
-                CalibrationDataKind::ImuFlags(flags) => {
-                    info!("Saving IMU calibration flags to flash...");
 
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    if let Some(ref mut cal) = *data {
-                        cal.imu_flags = flags;
-                    } else {
-                        *data = Some(CalibrationData {
-                            imu_flags: flags,
-                            ..CalibrationData::default()
-                        });
-                    }
-                    drop(data);
-
-                    match storage
-                        .store_item(&mut data_buffer, &StorageKey::ImuFlags, &flags)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!("IMU calibration flags saved successfully");
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::ImuFlags,
-                                Some(CalibrationDataKind::ImuFlags(flags)),
-                            ))
-                            .await;
-                        }
-                        Err(e) => {
-                            error!("Failed to save IMU calibration flags: {}", defmt::Debug2Format(&e));
-                        }
-                    }
-                }
                 CalibrationDataKind::Distance(factor) => {
                     info!("Saving distance calibration to flash...");
 

@@ -283,7 +283,7 @@ const fn completion_stage(stage: Stage) -> ActivityStage {
 const fn wire_calibration_kind(kind: FlashCalibrationKind) -> WireCalibrationKind {
     match kind {
         FlashCalibrationKind::Motor => WireCalibrationKind::Motor,
-        FlashCalibrationKind::ImuFlags | FlashCalibrationKind::DmpBias => WireCalibrationKind::ImuFlags,
+        FlashCalibrationKind::DmpBias => WireCalibrationKind::ImuFlags,
         FlashCalibrationKind::Distance => WireCalibrationKind::Distance,
     }
 }

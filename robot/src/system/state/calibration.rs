@@ -19,8 +19,6 @@ use crate::system::state::CalibrationStatus;
 /// Global calibration state protected by a mutex.
 pub static CALIBRATION_STATE: Mutex<CriticalSectionRawMutex, CalibrationState> = Mutex::new(CalibrationState {
     motor_cal_status: CalibrationStatus::NotLoaded,
-    imu_cal_status: CalibrationStatus::NotLoaded,
-    mag_cal_status: CalibrationStatus::NotLoaded,
     distance_cal_status: CalibrationStatus::NotLoaded,
     dmp_cal_status: CalibrationStatus::NotLoaded,
     distance_factor: 1.0,
@@ -30,10 +28,6 @@ pub static CALIBRATION_STATE: Mutex<CriticalSectionRawMutex, CalibrationState> =
 pub struct CalibrationState {
     /// Motor calibration status.
     pub motor_cal_status: CalibrationStatus,
-    /// IMU calibration status (aggregate).
-    pub imu_cal_status: CalibrationStatus,
-    /// Magnetometer calibration status.
-    pub mag_cal_status: CalibrationStatus,
     /// Distance calibration status.
     pub distance_cal_status: CalibrationStatus,
     /// DMP Bias Snapshot status.
@@ -50,7 +44,6 @@ impl CalibrationState {
     /// Checks if system initialization is complete.
     pub fn is_initialized(&self) -> bool {
         self.motor_cal_status != CalibrationStatus::NotLoaded
-            && self.imu_cal_status != CalibrationStatus::NotLoaded
             && self.distance_cal_status != CalibrationStatus::NotLoaded
             && self.dmp_cal_status != CalibrationStatus::NotLoaded
     }

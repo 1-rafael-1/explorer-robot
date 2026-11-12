@@ -11,7 +11,7 @@ use core::fmt::{self, Write as _};
 /// Capacity of [`TextBuf`], in bytes.
 ///
 /// The longest real IMU Test Readout rows are about 43–44 ASCII characters
-/// (the nine-axis health line `IMU not responding miss=9999 magcal unknown` and
+/// (the nine-axis health line `IMU not responding miss=9999 dmpcal unknown` and
 /// the fallback gate line `mag unavailable - 6-axis fallback use_mag=no`). The
 /// capacity is 48 because ticket 01 requires a 48-character readout row to
 /// round-trip intact; it also holds the widest value-entry readout (a five-digit

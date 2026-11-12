@@ -16,7 +16,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use crate::{
     system::state::{CalibrationStatus, calibration},
     task::{
-        io::flash_storage::{self, CalibrationDataKind, CalibrationKind, ImuCalibrationFlags},
+        io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
         motor_driver::{self, MotorCommand},
         procedure::{self, Claim, ClaimKind, ClaimOrigin},
         sensors::imu,
@@ -46,13 +46,6 @@ pub async fn handle_initialize() {
     info!("Requesting motor calibration from flash");
     flash_storage::send_flash_command(flash_storage::FlashCommand::GetData(
         flash_storage::CalibrationKind::Motor,
-    ))
-    .await;
-
-    // Request IMU calibration from flash.
-    info!("Requesting IMU calibration from flash");
-    flash_storage::send_flash_command(flash_storage::FlashCommand::GetData(
-        flash_storage::CalibrationKind::ImuFlags,
     ))
     .await;
 
@@ -90,13 +83,6 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
     match kind {
         CalibrationKind::Motor => load_motor_calibration(data).await,
         CalibrationKind::Distance => load_distance_calibration(data).await,
-        CalibrationKind::ImuFlags => {
-            let flags = data.as_ref().and_then(|d| match d {
-                CalibrationDataKind::ImuFlags(flags) => Some(*flags),
-                _ => None,
-            });
-            handle_imu_calibration_flags_loaded(flags).await;
-        }
         CalibrationKind::DmpBias => {
             let words = data.and_then(|data| match data {
                 CalibrationDataKind::DmpBias(words) => Some(words),
@@ -190,35 +176,6 @@ async fn load_distance_calibration(data: Option<CalibrationDataKind>) {
     }
 }
 
-/// Handle IMU calibration flags loaded from flash.
-///
-/// This result settles both IMU statuses, because nothing else ever queries
-/// them. The aggregate status records that the query completed: a board whose
-/// flash holds no flags yet is `NotAvailable`, not left as `NotLoaded` — a
-/// `NotLoaded` status would hold `is_initialized` false forever, keeping the
-/// boot gate shut and the panel dark.
-async fn handle_imu_calibration_flags_loaded(flags: Option<ImuCalibrationFlags>) {
-    {
-        let mut state = calibration::CALIBRATION_STATE.lock().await;
-        state.mag_cal_status = if flags.is_some_and(|flags| flags.mag) {
-            CalibrationStatus::Loaded
-        } else {
-            CalibrationStatus::NotAvailable
-        };
-        state.imu_cal_status = if flags.is_some() {
-            CalibrationStatus::Loaded
-        } else {
-            CalibrationStatus::NotAvailable
-        };
-    }
-
-    if ui::ui_initialized().await {
-        ui::show_main_menu().await;
-    }
-
-    check_initialization_complete().await;
-}
-
 /// Check if initialization is complete and hand the panel to the main menu.
 async fn check_initialization_complete() {
     let should_show_menu = {
@@ -227,7 +184,6 @@ async fn check_initialization_complete() {
         if state.is_initialized() {
             info!("System initialization complete");
             info!("  Motor calibration: {:?}", state.motor_cal_status);
-            info!("  IMU calibration: {:?}", state.imu_cal_status);
             info!("  Distance calibration: {:?}", state.distance_cal_status);
             info!("  DMP calibration: {:?}", state.dmp_cal_status);
             true

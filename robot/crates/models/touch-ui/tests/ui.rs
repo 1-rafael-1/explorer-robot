@@ -111,7 +111,7 @@ fn open_value_entry(flow: ValueFlow) -> Ui {
     match flow {
         ValueFlow::DistanceCalibration => {
             tap_item(&mut ui, 1);
-            tap_item(&mut ui, 3);
+            tap_item(&mut ui, 2);
         }
         ValueFlow::AttemptStraight => {
             tap_item(&mut ui, 2);
@@ -177,7 +177,6 @@ fn the_menu_tree_matches_the_robot() {
         Screen::Calibrate.items(),
         [
             Item::Procedure(Procedure::MotorCalibration),
-            Item::Procedure(Procedure::MagCalibration),
             Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
         ]
@@ -210,7 +209,7 @@ fn the_menu_tree_matches_the_robot() {
         labels(Screen::MainMenu),
         ["System Info", "Calibrate", "Drive Mode", "Test Mode", "Link"]
     );
-    assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "DMP Mag", "Distance"]);
+    assert_eq!(labels(Screen::Calibrate), ["Motor", "DMP Mag", "Distance"]);
     assert_eq!(labels(Screen::DriveMode), ["Coast & Avoid", "Attempt Straight"]);
     assert_eq!(
         labels(Screen::TestMode),
@@ -263,7 +262,6 @@ fn every_menu_entry_is_a_listed_item() {
             Item::Submenu(Submenu::TestMode),
             Item::ScreenEntry(ScreenEntry::Link),
             Item::Procedure(Procedure::MotorCalibration),
-            Item::Procedure(Procedure::MagCalibration),
             Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
             Item::Procedure(Procedure::CoastAndAvoid),
@@ -285,8 +283,8 @@ fn every_menu_entry_is_a_listed_item() {
     assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
 }
 
-/// Test that the menus list twelve Procedures: the eleven the firmware runs
-/// today plus the deferred attempt-straight, and no Procedure twice.
+/// Test that the menus list eleven Procedures: the ten the firmware runs today
+/// plus the deferred attempt-straight, and no Procedure twice.
 #[test]
 fn the_menus_list_every_procedure_once() {
     let procedures: Vec<Procedure> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
@@ -294,7 +292,7 @@ fn the_menus_list_every_procedure_once() {
         .flat_map(|screen| screen.items().iter().copied())
         .filter_map(Item::as_procedure)
         .collect();
-    assert_eq!(procedures.len(), 12);
+    assert_eq!(procedures.len(), 11);
     for (index, procedure) in procedures.iter().enumerate() {
         assert!(!procedure.label().is_empty(), "{procedure:?} is labelled");
         assert!(!procedures[..index].contains(procedure), "{procedure:?} is listed once");
@@ -349,14 +347,13 @@ fn back_returns_from_every_submenu() {
 #[test]
 fn every_entry_names_its_own_title_and_parent() {
     // Every entry the crate ships, with the parent it states for itself.
-    let expected: [(Item, Screen); 18] = [
+    let expected: [(Item, Screen); 17] = [
         (Item::ScreenEntry(ScreenEntry::SystemInfo), Screen::MainMenu),
         (Item::Submenu(Submenu::Calibrate), Screen::MainMenu),
         (Item::Submenu(Submenu::DriveMode), Screen::MainMenu),
         (Item::Submenu(Submenu::TestMode), Screen::MainMenu),
         (Item::ScreenEntry(ScreenEntry::Link), Screen::MainMenu),
         (Item::Procedure(Procedure::MotorCalibration), Screen::Calibrate),
-        (Item::Procedure(Procedure::MagCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::DmpCompassCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::DistanceCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::CoastAndAvoid), Screen::DriveMode),
@@ -439,7 +436,6 @@ fn interactive_procedures_match_their_producers() {
     }
     for procedure in [
         Procedure::MotorCalibration,
-        Procedure::MagCalibration,
         Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
         Procedure::AttemptStraight,
@@ -543,7 +539,6 @@ fn a_running_screen_reports_stop() {
 fn a_procedure_supplies_its_running_views_title_and_parent() {
     for (procedure, parent) in [
         (Procedure::MotorCalibration, Screen::Calibrate),
-        (Procedure::MagCalibration, Screen::Calibrate),
         (Procedure::DistanceCalibration, Screen::Calibrate),
         (Procedure::CoastAndAvoid, Screen::DriveMode),
         (Procedure::AttemptStraight, Screen::DriveMode),
@@ -561,7 +556,6 @@ fn a_procedure_supplies_its_running_views_title_and_parent() {
     // The calibrations are the ones a calibration lifecycle belongs to.
     for procedure in [
         Procedure::MotorCalibration,
-        Procedure::MagCalibration,
         Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
     ] {
@@ -931,7 +925,6 @@ fn system_info_renders_the_neutral_snapshot() {
         battery_level: Some(87),
         battery_voltage: Some(7.4),
         motor_calibration: CalibrationStatus::Loaded,
-        mag_calibration: CalibrationStatus::Unknown,
         distance_calibration: CalibrationStatus::Missing,
         dmp_calibration: CalibrationStatus::Loaded,
     };
@@ -939,12 +932,11 @@ fn system_info_renders_the_neutral_snapshot() {
     assert_eq!(rows[0].as_str(), "Batt  87%");
     assert_eq!(rows[1].as_str(), "Batt  7.4V");
     assert_eq!(rows[2].as_str(), "Motor: Loaded");
-    assert_eq!(rows[3].as_str(), "Mag: Unknown");
-    assert_eq!(rows[4].as_str(), "Dist: Missing");
-    assert_eq!(rows[5].as_str(), "DMP Cal: Loaded");
-    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[3].as_str(), "Dist: Missing");
+    assert_eq!(rows[4].as_str(), "DMP Cal: Loaded");
+    assert_eq!(rows.len(), 5);
 
-    // The sixth row must still fit the existing System Info layout.
+    // The fifth row must still fit the existing System Info layout.
     let last = info_row_rect(rows.len() - 1);
     assert!(bottom_right(last).y < i32::try_from(FB_H).unwrap_or(i32::MAX));
 }
@@ -957,9 +949,8 @@ fn system_info_defaults_are_explicitly_unknown() {
     assert_eq!(rows[0].as_str(), "Batt --%");
     assert_eq!(rows[1].as_str(), "Batt --.-V");
     assert_eq!(rows[2].as_str(), "Motor: Unknown");
-    assert_eq!(rows[3].as_str(), "Mag: Unknown");
-    assert_eq!(rows[4].as_str(), "Dist: Unknown");
-    assert_eq!(rows[5].as_str(), "DMP Cal: Unknown");
+    assert_eq!(rows[3].as_str(), "Dist: Unknown");
+    assert_eq!(rows[4].as_str(), "DMP Cal: Unknown");
 }
 
 /// Test that the UI holds the System Info snapshot the firmware supplies.
@@ -1682,7 +1673,7 @@ fn the_six_axis_readout_has_five_rows_in_order() {
         "Accel x=0.01 y=-0.02 z=1.00 g",
         "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
         "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
-        "Live miss=0 magcal n/a",
+        "Live miss=0 dmpcal n/a",
     ];
     for (row, expected) in rows.iter().zip(expected) {
         assert_eq!(row.as_str(), expected);
@@ -1701,7 +1692,7 @@ fn the_six_axis_readout_shows_placeholders_before_the_first_sample() {
         "Accel x=-- y=-- z=-- g",
         "Gyro raw x=-- y=-- z=-- dps",
         "Gyro cal x=-- y=-- z=-- dps",
-        "Waiting miss=0 magcal n/a",
+        "Waiting miss=0 dmpcal n/a",
     ];
     for (row, expected) in rows.iter().zip(expected) {
         assert_eq!(row.as_str(), expected);
@@ -1713,13 +1704,13 @@ fn the_six_axis_readout_shows_placeholders_before_the_first_sample() {
 #[test]
 fn the_health_row_names_waiting_live_and_not_responding() {
     for (health, missing, expected) in [
-        (ImuHealth::Waiting, 0, "Waiting miss=0 magcal n/a"),
-        (ImuHealth::Live, 7, "Live miss=7 magcal n/a"),
-        (ImuHealth::NotResponding, 100, "IMU not responding miss=100 magcal n/a"),
+        (ImuHealth::Waiting, 0, "Waiting miss=0 dmpcal n/a"),
+        (ImuHealth::Live, 7, "Live miss=7 dmpcal n/a"),
+        (ImuHealth::NotResponding, 100, "IMU not responding miss=100 dmpcal n/a"),
         (
             ImuHealth::NotResponding,
             10_000,
-            "IMU not responding miss=9999 magcal n/a",
+            "IMU not responding miss=9999 dmpcal n/a",
         ),
     ] {
         let readout = ImuReadout::waiting(ImuReadoutKind::SixAxis).with_health(health, missing);
@@ -1805,8 +1796,8 @@ const SAMPLE_REMAP_XZ: [f32; 8] = [-180.0, -90.0, -1.0, 0.0, 1.0, 90.0, 179.0, 1
 const SAMPLE_REMAP_YZ: [f32; 8] = [0.0, 10.0, -10.0, 100.0, -100.0, 45.0, -45.0, 90.0];
 
 /// A fully populated nine-axis readout: the six-axis values plus both
-/// magnetometer vectors, a loaded magnetometer calibration, a passing gate and
-/// the heading and remap diagnostics.
+/// magnetometer vectors, a loaded DMP calibration, a passing gate and the heading
+/// and remap diagnostics.
 const fn sample_nine_axis_readout() -> ImuReadout {
     ImuReadout::waiting(ImuReadoutKind::NineAxis)
         .with_health(ImuHealth::Live, 0)
@@ -1840,7 +1831,7 @@ const fn sample_nine_axis_readout() -> ImuReadout {
             y: 2.5,
             z: -3.5,
         })
-        .with_mag_calibration(CalibrationStatus::Loaded)
+        .with_dmp_calibration(CalibrationStatus::Loaded)
         .with_mag_available(true)
         .with_mag(MagDiagnostics {
             norm: 50.0,
@@ -1867,13 +1858,13 @@ fn the_nine_axis_readout_has_twelve_rows_in_order() {
         "Accel x=0.01 y=-0.02 z=1.00 g",
         "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
         "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
-        "Mag raw x=12.3 y=-45.6 z=78.9 uT",
-        "Mag cal x=-1.5 y=2.5 z=-3.5 uT",
+        "M raw x=12.3 y=-45.6 z=78.9 uT",
+        "M dmp x=-1.5 y=2.5 z=-3.5 uT",
         "Hdg raw=-179.0 tilt=45.6 dmp=12.3",
         "XY -179 -135  -90  -45    0   45   90  134",
         "XZ -180  -90   -1    0    1   90  179  180",
         "YZ    0   10  -10  100 -100   45  -45   90",
-        "Live miss=0 magcal loaded",
+        "Live miss=0 dmpcal loaded",
         "|m|=50.0 uT use_mag=yes",
     ];
     for (row, expected) in rows.iter().zip(expected) {
@@ -1961,8 +1952,8 @@ fn the_magnetometer_rows_use_one_decimal_and_ut() {
         });
 
     let rows = readout.rows();
-    assert_eq!(rows[4].as_str(), "Mag raw x=12.3 y=-45.7 z=78.9 uT");
-    assert_eq!(rows[5].as_str(), "Mag cal x=-1.2 y=2.3 z=-3.5 uT");
+    assert_eq!(rows[4].as_str(), "M raw x=12.3 y=-45.7 z=78.9 uT");
+    assert_eq!(rows[5].as_str(), "M dmp x=-1.2 y=2.3 z=-3.5 uT");
 }
 
 /// Test that the magnetometer gate row shows the norm and the driver's verdict,
@@ -1996,38 +1987,38 @@ fn the_magnetometer_gate_reports_the_use_mag_verdict() {
 }
 
 /// Test that the nine-axis health row names Waiting, Live and a silent IMU, and
-/// distinguishes a loaded, missing and unknown magnetometer calibration.
+/// distinguishes a loaded, missing and unknown DMP calibration.
 #[test]
-fn the_nine_axis_health_row_names_the_magnetometer_calibration() {
+fn the_nine_axis_health_row_names_the_dmp_calibration() {
     for (health, missing, calibration, expected) in [
         (
             ImuHealth::Waiting,
             0,
             CalibrationStatus::Unknown,
-            "Waiting miss=0 magcal unknown",
+            "Waiting miss=0 dmpcal unknown",
         ),
         (
             ImuHealth::Live,
             7,
             CalibrationStatus::Loaded,
-            "Live miss=7 magcal loaded",
+            "Live miss=7 dmpcal loaded",
         ),
         (
             ImuHealth::NotResponding,
             100,
             CalibrationStatus::Missing,
-            "IMU not responding miss=100 magcal missing",
+            "IMU not responding miss=100 dmpcal missing",
         ),
         (
             ImuHealth::Live,
             10_000,
             CalibrationStatus::Unknown,
-            "Live miss=9999 magcal unknown",
+            "Live miss=9999 dmpcal unknown",
         ),
     ] {
         let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
             .with_health(health, missing)
-            .with_mag_calibration(calibration);
+            .with_dmp_calibration(calibration);
         assert_eq!(readout.rows()[10].as_str(), expected);
     }
 
@@ -2035,7 +2026,7 @@ fn the_nine_axis_health_row_names_the_magnetometer_calibration() {
     // conservative `unknown`.
     assert_eq!(
         ImuReadout::waiting(ImuReadoutKind::NineAxis).rows()[10].as_str(),
-        "Waiting miss=0 magcal unknown"
+        "Waiting miss=0 dmpcal unknown"
     );
 }
 
@@ -2052,7 +2043,7 @@ fn an_unavailable_magnetometer_falls_back_to_six_axis() {
             pitch: -45.6,
             roll: 78.9,
         })
-        .with_mag_calibration(CalibrationStatus::Loaded)
+        .with_dmp_calibration(CalibrationStatus::Loaded)
         .with_mag_available(false);
     assert_eq!(readout.row_count(), 12);
 
@@ -2061,13 +2052,13 @@ fn an_unavailable_magnetometer_falls_back_to_six_axis() {
     assert_eq!(rows[1].as_str(), "Accel x=-- y=-- z=-- g");
     assert_eq!(rows[2].as_str(), "Gyro raw x=-- y=-- z=-- dps");
     assert_eq!(rows[3].as_str(), "Gyro cal x=-- y=-- z=-- dps");
-    assert_eq!(rows[4].as_str(), "Mag raw x=-- y=-- z=-- uT");
-    assert_eq!(rows[5].as_str(), "Mag cal x=-- y=-- z=-- uT");
+    assert_eq!(rows[4].as_str(), "M raw x=-- y=-- z=-- uT");
+    assert_eq!(rows[5].as_str(), "M dmp x=-- y=-- z=-- uT");
     assert_eq!(rows[6].as_str(), "Hdg --");
     assert_eq!(rows[7].as_str(), "XY --");
     assert_eq!(rows[8].as_str(), "XZ --");
     assert_eq!(rows[9].as_str(), "YZ --");
-    assert_eq!(rows[10].as_str(), "Live miss=0 magcal loaded");
+    assert_eq!(rows[10].as_str(), "Live miss=0 dmpcal loaded");
     assert_eq!(rows[11].as_str(), "mag unavailable - 6-axis fallback use_mag=no");
 }
 
@@ -2084,9 +2075,8 @@ fn the_nine_axis_last_row_fits_inside_the_status_panel() {
 }
 
 /// Every Procedure the crate models.
-const ALL_PROCEDURES: [Procedure; 12] = [
+const ALL_PROCEDURES: [Procedure; 11] = [
     Procedure::MotorCalibration,
-    Procedure::MagCalibration,
     Procedure::DmpCompassCalibration,
     Procedure::DistanceCalibration,
     Procedure::CoastAndAvoid,
@@ -2106,9 +2096,10 @@ const fn dmp_prompt(instruction: &'static str) -> PromptView {
 }
 
 /// Test the DMP compass calibration identity: its label, parent, calibration
-/// flag, destination, hands-on metadata, and that it is listed beside `Mag`.
+/// flag, destination, hands-on metadata, and that it is the Calibrate submenu's
+/// only magnetometer entry.
 #[test]
-fn the_dmp_compass_calibration_is_hands_on_and_listed_beside_mag() {
+fn the_dmp_compass_calibration_is_hands_on_and_listed_on_calibrate() {
     let procedure = Procedure::DmpCompassCalibration;
     assert_eq!(procedure.label(), "DMP Mag");
     assert_eq!(procedure.parent(), Some(Screen::Calibrate));
@@ -2128,13 +2119,12 @@ fn the_dmp_compass_calibration_is_hands_on_and_listed_beside_mag() {
     assert_eq!(Screen::Prompt.items(), []);
     assert_eq!(Screen::Prompt.title(), "Prompt");
 
-    // The temporary expand phase lists DMP Mag beside Mag on Calibrate and
-    // nowhere else.
+    // Calibrate lists Motor, DMP Mag and Distance; the retired host Mag entry is
+    // gone, and DMP Mag is listed nowhere else.
     assert_eq!(
         Screen::Calibrate.items(),
         [
             Item::Procedure(Procedure::MotorCalibration),
-            Item::Procedure(Procedure::MagCalibration),
             Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
         ]
@@ -2286,7 +2276,6 @@ fn a_dmp_check_failure_names_its_reason() {
 fn the_hands_on_set_mirrors_the_firmware_availability_rule() {
     let hands_on = [
         Procedure::MotorCalibration,
-        Procedure::MagCalibration,
         Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
         Procedure::BasicMotor,

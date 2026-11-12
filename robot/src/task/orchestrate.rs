@@ -90,7 +90,7 @@ async fn handle_procedure_finished(procedure: Procedure, stage: Stage, detail: &
         Procedure::Turns | Procedure::StraightDrive | Procedure::ArcDrive if stage == Stage::Complete => {
             ui::send_ui_event(UiEvent::TestingCompleted { procedure, generation }).await;
         }
-        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DmpCompassCalibration => {
+        Procedure::MotorCalibration | Procedure::DmpCompassCalibration => {
             ui::send_ui_event(UiEvent::CalibrationCompleted { generation }).await;
         }
         Procedure::DistanceCalibration

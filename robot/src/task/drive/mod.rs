@@ -89,7 +89,7 @@
 //! - [`sensors::control`]: IMU and encoder start/stop helpers.
 //!
 //! ## Calibration
-//! - [`calibration`]: Calibration controller and the motor, magnetometer and
+//! - [`calibration`]: Calibration controller and the motor, DMP compass and
 //!   distance procedures.
 
 // ── Loop orchestration ────────────────────────────────────────────────────────
@@ -123,8 +123,8 @@ use intent::{ActiveIntentOutcome, apply_completion, poll_active_intent, step_idl
 pub use queue::{DriveQueueBuilder, drive_queue_executor};
 use rotation::RotationStepResult;
 pub use sensors::data::{
-    clear_encoder_measurement, clear_imu_measurements, get_latest_encoder_measurement, send_mag_measurement,
-    try_send_encoder_measurement, try_send_imu_measurement,
+    clear_encoder_measurement, clear_imu_measurements, get_latest_encoder_measurement, try_send_encoder_measurement,
+    try_send_imu_measurement,
 };
 use state::DriveLoop;
 pub use types::{
@@ -139,7 +139,7 @@ pub use types::{
 /// This is a high-level control task that:
 /// - Receives drive commands via queue.
 /// - Receives encoder feedback via channel (from encoder task).
-/// - Receives IMU feedback via channel (from IMU task); orientation is calibrated when the IMU task has loaded calibration data.
+/// - Receives IMU feedback via channel (from IMU task).
 /// - Receives interrupts via signal.
 /// - Sends motor commands to the `motor_driver` task.
 /// - Services drive commands while the calibrations run on their own tasks.

@@ -29,11 +29,11 @@
 //!
 //! # Calibration
 //!
-//! Magnetometer hard/soft-iron and motor-interference correction are applied in
-//! software; the corrected result is exposed via `ImuReadings::calibrated_mag`
-//! (raw readings are in `raw_mag`). The DMP's
-//! own internal calibration engines handle gyroscope and accelerometer bias correction
-//! automatically — no host-injected bias values are needed for those axes.
+//! The DMP's own internal calibration engines handle all three axes. In nine-axis
+//! fusion its calibrated magnetometer is exposed via `ImuReadings::calibrated_mag`
+//! (the raw reading is in `raw_mag`); no host-side correction is applied. The DMP
+//! compass bias snapshot is read, applied and cleared through the bias commands so
+//! the DMP Compass Calibration can persist and restore it.
 //!
 //! # Orientation reference frame
 //!
@@ -49,7 +49,6 @@
 //!
 //! - Dedicated SPI bus for the ICM-20948 via `SpiDevice`.
 //! - `inertial_measurement_read` takes the bus `Mutex` + CS `Output` pin.
-//! - `MagCalibration` is defined locally (`flash_storage` integration TBD).
 //! - Chip initialisation retries on transient failures.
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +67,7 @@ use icm20948::{
 };
 use nalgebra::Vector3;
 
-use crate::{system::state::motion, task::drive};
+use crate::task::drive;
 
 // ── Type aliases ─────────────────────────────────────────────────────────────
 
@@ -131,8 +130,12 @@ const ACCEL_SCALE_G: f32 = 1.0 / 8192.0;
 /// Exact conversion: 32768 LSB / 2000 dps = 16.384 LSB/dps.
 const GYRO_SCALE_DPS: f32 = 1.0 / 16.384;
 
-/// AK09916 magnetometer sensitivity: 0.15 µT per LSB.
+/// Raw AK09916 magnetometer sensitivity: 0.15 µT per LSB.
 const MAG_SCALE_UT: f32 = 0.15;
+
+/// DMP-calibrated magnetometer sensitivity: the 32-bit compass words are µT
+/// scaled by 2^16 (`ICM_20948_DMP.h`: "The unit is uT scaled by 2^16").
+const CALIBRATED_MAG_SCALE_UT: f32 = 1.0 / 65_536.0;
 
 /// Lower bound of the magnetometer-norm gate, in µT.
 pub const MAG_NORM_MIN_UT: f32 = 20.0;
@@ -251,58 +254,6 @@ const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis9;
 #[cfg(not(feature = "imu_debug"))]
 const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis6;
 
-// ── Magnetometer calibration data (local; flash_storage integration TBD) ──────
-
-/// Host-side magnetometer calibration data (hard/soft-iron + motor interference).
-///
-/// Defined locally until flash storage integration is completed.
-#[derive(Debug, Clone, Copy)]
-pub struct MagCalibration {
-    /// Hard-iron bias correction (µT).
-    pub x_bias: f32,
-    /// Hard-iron bias correction (µT).
-    pub y_bias: f32,
-    /// Hard-iron bias correction (µT).
-    pub z_bias: f32,
-    /// Soft-iron scale correction.
-    pub x_scale: f32,
-    /// Soft-iron scale correction.
-    pub y_scale: f32,
-    /// Soft-iron scale correction.
-    pub z_scale: f32,
-    /// Motor interference at 50% speed — index [0]=both, [1]=left, [2]=right (µT).
-    pub x_interference_50: [f32; 3],
-    /// Motor interference at 50% speed (µT).
-    pub y_interference_50: [f32; 3],
-    /// Motor interference at 50% speed (µT).
-    pub z_interference_50: [f32; 3],
-    /// Motor interference at 100% speed — index [0]=both, [1]=left, [2]=right (µT).
-    pub x_interference_100: [f32; 3],
-    /// Motor interference at 100% speed (µT).
-    pub y_interference_100: [f32; 3],
-    /// Motor interference at 100% speed (µT).
-    pub z_interference_100: [f32; 3],
-}
-
-impl Default for MagCalibration {
-    fn default() -> Self {
-        Self {
-            x_bias: 0.0,
-            y_bias: 0.0,
-            z_bias: 0.0,
-            x_scale: 1.0,
-            y_scale: 1.0,
-            z_scale: 1.0,
-            x_interference_50: [0.0; 3],
-            y_interference_50: [0.0; 3],
-            z_interference_50: [0.0; 3],
-            x_interference_100: [0.0; 3],
-            y_interference_100: [0.0; 3],
-            z_interference_100: [0.0; 3],
-        }
-    }
-}
-
 // ── Internal command type ─────────────────────────────────────────────────────
 
 /// Commands delivered to the IMU task via [`IMU_CONTROL`].
@@ -311,8 +262,6 @@ enum ImuCommand {
     Start,
     /// Stop reading; enter standby.
     Stop,
-    /// Replace the active calibration data (mag hard/soft-iron + interference).
-    LoadCalibration(MagCalibration),
     /// Switch DMP fusion mode at runtime.
     SetFusionMode(DmpFusionMode),
     /// Read the nine DMP bias words and answer through [`BIAS_REPLY`].
@@ -381,8 +330,7 @@ pub struct ImuReadings {
     pub orientation: Option<Orientation>,
     /// DMP-calibrated gyroscope (deg/s, internal bias subtracted).
     pub calibrated_gyro: Option<Vector3<f32>>,
-    /// Magnetometer reading (µT). Host-corrected when calibration is loaded;
-    /// otherwise the raw value.
+    /// DMP-calibrated magnetometer (µT, the DMP's compass bias applied).
     pub calibrated_mag: Option<Vector3<f32>>,
     /// Raw accelerometer (g, before DMP correction).
     pub raw_accel: Option<Vector3<f32>>,
@@ -442,13 +390,6 @@ pub fn stop_imu_readings() {
 /// [`start_imu_readings`] is applied instead of being overwritten.
 pub fn set_dmp_fusion_mode(mode: DmpFusionMode) {
     send_command(ImuCommand::SetFusionMode(mode));
-}
-
-/// Load magnetometer calibration data (hard/soft-iron + motor-interference).
-///
-/// Applied to `ImuReadings::calibrated_mag` on every subsequent DMP packet.
-pub fn load_mag_calibration(calibration: MagCalibration) {
-    send_command(ImuCommand::LoadCalibration(calibration));
 }
 
 /// Return a snapshot of all latest IMU readings from a single lock.
@@ -568,79 +509,8 @@ fn is_identity_quaternion(quat: &icm20948::dmp::Quaternion) -> bool {
         && quat.z.abs() <= IMU_IDENTITY_EPSILON
 }
 
-/// Interpolate motor-interference correction for a single track.
-fn interpolate_single_track(calibration: &MagCalibration, speed: f32, is_left: bool) -> (f32, f32, f32) {
-    let idx = if is_left { 1 } else { 2 };
-
-    if speed <= 50.0 {
-        let factor = speed / 50.0;
-        (
-            calibration.x_interference_50[idx] * factor,
-            calibration.y_interference_50[idx] * factor,
-            calibration.z_interference_50[idx] * factor,
-        )
-    } else {
-        let factor = (speed - 50.0) / 50.0;
-        (
-            calibration.x_interference_50[idx]
-                + (calibration.x_interference_100[idx] - calibration.x_interference_50[idx]) * factor,
-            calibration.y_interference_50[idx]
-                + (calibration.y_interference_100[idx] - calibration.y_interference_50[idx]) * factor,
-            calibration.z_interference_50[idx]
-                + (calibration.z_interference_100[idx] - calibration.z_interference_50[idx]) * factor,
-        )
-    }
-}
-
-/// Interpolate motor-interference correction when both tracks run at equal speed.
-fn interpolate_equal_motors(calibration: &MagCalibration, speed: f32) -> (f32, f32, f32) {
-    const ALL: usize = 0;
-
-    if speed <= 50.0 {
-        let factor = speed / 50.0;
-        (
-            calibration.x_interference_50[ALL] * factor,
-            calibration.y_interference_50[ALL] * factor,
-            calibration.z_interference_50[ALL] * factor,
-        )
-    } else {
-        let factor = (speed - 50.0) / 50.0;
-        (
-            calibration.x_interference_50[ALL]
-                + (calibration.x_interference_100[ALL] - calibration.x_interference_50[ALL]) * factor,
-            calibration.y_interference_50[ALL]
-                + (calibration.y_interference_100[ALL] - calibration.y_interference_50[ALL]) * factor,
-            calibration.z_interference_50[ALL]
-                + (calibration.z_interference_100[ALL] - calibration.z_interference_50[ALL]) * factor,
-        )
-    }
-}
-
-/// Compute the total motor-interference correction vector given current track speeds.
-fn interpolate_interference(calibration: &MagCalibration, left_speed: i8, right_speed: i8) -> (f32, f32, f32) {
-    let left_abs = f32::from(left_speed.abs());
-    let right_abs = f32::from(right_speed.abs());
-
-    if left_abs == 0.0 && right_abs == 0.0 {
-        (0.0, 0.0, 0.0)
-    } else if (left_abs - right_abs).abs() < 10.0 {
-        interpolate_equal_motors(calibration, f32::midpoint(left_abs, right_abs))
-    } else {
-        let (lx, ly, lz) = interpolate_single_track(calibration, left_abs, true);
-        let (rx, ry, rz) = interpolate_single_track(calibration, right_abs, false);
-        let total = left_abs + right_abs;
-        let lw = left_abs / total;
-        let rw = right_abs / total;
-        (lx * lw + rx * rw, ly * lw + ry * rw, lz * lw + rz * rw)
-    }
-}
-
-/// Update the shared `LATEST_READINGS` and drive-task sensor channels from a DMP packet.
-async fn update_statics_from_dmp(
-    packet: &icm20948::dmp::DmpData,
-    orientation: Option<Orientation>,
-    calibration: Option<&MagCalibration>,
-) {
+/// Update the shared `LATEST_READINGS` from a DMP packet.
+async fn update_statics_from_dmp(packet: &icm20948::dmp::DmpData, orientation: Option<Orientation>) {
     // ── Precompute all scaled vectors outside the critical section ──────────
     let raw_accel_opt: Option<Vector3<f32>> = packet.raw_accel.map(|(ax, ay, az)| {
         Vector3::new(
@@ -668,25 +538,29 @@ async fn update_statics_from_dmp(
         )
     });
 
-    // Raw magnetometer with optional host-side calibration ------------------
-    let mag_data: Option<(Vector3<f32>, Vector3<f32>)> = packet.dmp_compass.map(|(mx, my, mz)| {
-        let v = Vector3::new(
+    // Raw magnetometer: the DMP's 16-bit compass words at 0.15 µT/LSB.
+    let raw_mag_opt: Option<Vector3<f32>> = packet.dmp_compass.map(|(mx, my, mz)| {
+        Vector3::new(
             f32::from(mx) * MAG_SCALE_UT,
             f32::from(my) * MAG_SCALE_UT,
             f32::from(mz) * MAG_SCALE_UT,
-        );
-        let mut mag_cal = v;
-        if let Some(cal) = calibration {
-            let (left_speed, right_speed) = motion::get_track_speeds_atomic();
-            let (ix, iy, iz) = interpolate_interference(cal, left_speed, right_speed);
-            mag_cal.x = (v.x - ix - cal.x_bias) * cal.x_scale;
-            mag_cal.y = (v.y - iy - cal.y_bias) * cal.y_scale;
-            mag_cal.z = (v.z - iz - cal.z_bias) * cal.z_scale;
-        }
-        (v, mag_cal)
+        )
     });
 
-    // ── Commit snapshot under one lock, then release for the async send ────
+    // DMP-calibrated magnetometer: the 32-bit compass words are µT scaled by
+    // 2^16. It is read independently of the raw compass output.
+    #[allow(clippy::cast_precision_loss)]
+    // The calibrated words are i32 but the nominal field is far inside f32's
+    // exact-integer range at this scale.
+    let calibrated_mag_opt: Option<Vector3<f32>> = packet.calibrated_mag.map(|(mx, my, mz)| {
+        Vector3::new(
+            mx as f32 * CALIBRATED_MAG_SCALE_UT,
+            my as f32 * CALIBRATED_MAG_SCALE_UT,
+            mz as f32 * CALIBRATED_MAG_SCALE_UT,
+        )
+    });
+
+    // ── Commit the snapshot under one lock ────────────────────────────────
     let mut readings = LATEST_READINGS.lock().await;
 
     if let Some(o) = orientation {
@@ -701,21 +575,17 @@ async fn update_statics_from_dmp(
     if let Some(v) = calibrated_gyro_opt {
         readings.calibrated_gyro = Some(v);
     }
-    if let Some((raw, cal)) = mag_data {
-        readings.raw_mag = Some(raw);
-        readings.calibrated_mag = Some(cal);
+    if let Some(v) = raw_mag_opt {
+        readings.raw_mag = Some(v);
+    }
+    if let Some(v) = calibrated_mag_opt {
+        readings.calibrated_mag = Some(v);
     }
     // The compass accuracy accompanies the compass sample. Keep the last one
     // when a packet does not carry it, and clear it with the magnetometer values
     // when the fusion mode switches to `Axis6`.
     if let Some(accuracy) = packet.compass_accuracy {
         readings.compass_accuracy = Some(accuracy);
-    }
-    drop(readings);
-
-    // Forward raw mag to the drive task for the magnetometer calibration procedure.
-    if let Some((raw, _cal)) = mag_data {
-        drive::send_mag_measurement(raw).await;
     }
 }
 
@@ -824,6 +694,8 @@ const fn build_dmp_config(mode: DmpFusionMode) -> DmpConfig {
             .with_raw_gyro()
             .with_calibrated_gyro()
             .with_dmp_compass()
+            // The 32-bit DMP-calibrated compass, shown as `M dmp`.
+            .with_calibrated_mag()
             .with_sample_rate(DMP_SAMPLE_RATE),
     }
 }
@@ -956,10 +828,9 @@ fn effective_mode(requested: DmpFusionMode) -> DmpFusionMode {
 /// Core command/sampling loop.
 ///
 /// Waits for [`ImuCommand::Start`], then polls the DMP FIFO on a fixed timer
-/// while also handling in-band commands (stop, mode switch, calibration load).
+/// while also handling in-band commands (stop, mode switch, bias access).
 #[allow(clippy::too_many_lines)]
 async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
-    let mut current_calibration: Option<MagCalibration> = None;
     let mut fusion_mode = effective_mode(STARTUP_FUSION_MODE);
 
     #[cfg(feature = "telemetry_logs")]
@@ -1033,12 +904,6 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                             }
                         }
 
-                        // ── In-band: calibration load ─────────────────────────
-                        Either::First(ImuCommand::LoadCalibration(cal)) => {
-                            current_calibration = Some(cal);
-                            info!("IMU calibration data loaded");
-                        }
-
                         // ── In-band: bias snapshot read ───────────────────────
                         Either::First(ImuCommand::ReadBias) => {
                             let snapshot = read_bias_snapshot(sensor).await;
@@ -1090,20 +955,14 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
 
                                             // The quaternion is unusable, but the raw accel,
                                             // gyro, and mag fields in the same packet are not.
-                                            // Mag calibration samples them only through this
-                                            // helper, so keep them flowing while suppressing
-                                            // the orientation feedback.
-                                            update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
+                                            // Keep them flowing while suppressing the
+                                            // orientation feedback.
+                                            update_statics_from_dmp(&packet, None).await;
                                         } else {
                                             let orientation = dmp_quat_to_orientation(quat);
                                             let timestamp_ms = Instant::now().as_millis();
 
-                                            update_statics_from_dmp(
-                                                &packet,
-                                                Some(orientation),
-                                                current_calibration.as_ref(),
-                                            )
-                                            .await;
+                                            update_statics_from_dmp(&packet, Some(orientation)).await;
 
                                             let measurement = ImuMeasurement {
                                                 orientation,
@@ -1164,7 +1023,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         }
                                     } else {
                                         // Packet present but no quaternion yet (DMP warming up).
-                                        update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
+                                        update_statics_from_dmp(&packet, None).await;
                                     }
                                 }
 
@@ -1205,10 +1064,6 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
             ImuCommand::Stop => {
                 info!("IMU stop received (already in standby)");
                 IMU_READY.store(false, Ordering::Relaxed);
-            }
-            ImuCommand::LoadCalibration(cal) => {
-                current_calibration = Some(cal);
-                info!("IMU calibration loaded (standby)");
             }
             ImuCommand::SetFusionMode(mode) => {
                 fusion_mode = effective_mode(mode);
