@@ -62,7 +62,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948::{
     Icm20948Driver, SpiInterface,
-    dmp::DmpConfig,
+    dmp::{DmpConfig, DmpFifoReader, DmpSampleRate},
     sensors::{GyroConfig, GyroDlpf, GyroFullScale},
 };
 use nalgebra::Vector3;
@@ -88,12 +88,13 @@ type ImuSensor<'a> = Icm20948Driver<SpiInterface<SpiDeviceType<'a>>>;
 
 // ── Timing constants ──────────────────────────────────────────────────────────
 
-/// DMP output rate in Hz. The DMP firmware emits packets at this rate.
-const DMP_SAMPLE_RATE_HZ: u16 = 100;
+/// DMP output rate. The driver only accepts its validated rates; `Hz112`
+/// produces an actual 112.5 Hz packet rate, the closest to the previous 100 Hz.
+const DMP_SAMPLE_RATE: DmpSampleRate = DmpSampleRate::Hz112;
 
-/// FIFO poll interval. Polling faster than the DMP rate ensures packets are
-/// drained promptly; `10 ms` (100 Hz) matches `DMP_SAMPLE_RATE_HZ`.
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// FIFO poll interval. At the 112.5 Hz DMP output a packet arrives every
+/// ~8.9 ms, so a 4 ms poll drains the FIFO before it can back up.
+const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
 /// Set to `true` after the first successful DMP FIFO sample, cleared when the
 /// IMU is stopped. The drive dispatch uses this to gate movement commands and
@@ -482,7 +483,7 @@ async fn update_statics_from_dmp(
     });
 
     // Raw magnetometer with optional host-side calibration ------------------
-    let mag_data: Option<(Vector3<f32>, Vector3<f32>)> = packet.raw_mag.map(|(mx, my, mz)| {
+    let mag_data: Option<(Vector3<f32>, Vector3<f32>)> = packet.dmp_compass.map(|(mx, my, mz)| {
         let v = Vector3::new(
             f32::from(mx) * MAG_SCALE_UT,
             f32::from(my) * MAG_SCALE_UT,
@@ -526,37 +527,15 @@ async fn update_statics_from_dmp(
     }
 }
 
-/// Delay provider for the driver's reset poll.
-///
-/// `icm20948-rs` polls `PWR_MGMT_1` every 1 ms after asserting `DEVICE_RESET`.
-/// On this board an SPI read before the reset completes can come back as
-/// `0x00`, which the driver treats as "reset done"; the wake write that follows
-/// is then lost and `init()` reports `InitializationTimeout`. The datasheet
-/// allows up to 100 ms for reset, so make the first poll wait that long.
-struct ResetDelay {
-    /// Whether the post-reset wait still has to be stretched.
-    first_poll: bool,
-}
-
-impl embedded_hal_async::delay::DelayNs for ResetDelay {
-    async fn delay_ns(&mut self, ns: u32) {
-        if self.first_poll {
-            self.first_poll = false;
-            Timer::after(Duration::from_millis(100)).await;
-        } else {
-            Timer::after(Duration::from_nanos(u64::from(ns))).await;
-        }
-    }
-}
-
 /// Power-up, reset, verify, and fully initialise the ICM-20948, retrying on failure.
 ///
 /// Uses `SpiInterface` + `SpiDevice` on the dedicated SPI bus. The SPI
-/// interface owns the bus by value. The device is reset *before* its identity is
-/// verified: the RP2350 resets its GPIOs pulled low, so the IMU can power up
-/// with CS asserted, which the ICM-20948 does not support as a power-up state.
-/// Resetting first puts it in a known state, and the retry loop covers a
-/// marginal first transaction.
+/// interface owns the bus by value. `init_spi` resets the device, restores SPI
+/// mode with write-only accesses before any read, wakes it, and verifies
+/// `WHO_AM_I`. Resetting first matters because the RP2350 resets its GPIOs
+/// pulled low, so the IMU can power up with CS asserted, which the ICM-20948
+/// does not support as a power-up state; the retry loop covers a marginal first
+/// transaction.
 async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<'static> {
     info!("Waiting {}ms for IMU power-up...", IMU_BOOT_DELAY_MS);
     Timer::after(Duration::from_millis(IMU_BOOT_DELAY_MS)).await;
@@ -574,31 +553,23 @@ async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<
             attempt, IMU_INIT_MAX_ATTEMPTS
         );
 
-        // Fresh provider per attempt: every attempt asserts DEVICE_RESET again.
-        let mut delay = ResetDelay { first_poll: true };
-        match imu.init(&mut delay).await {
+        // `init_spi` performs the reset, SPI-mode restore, wake, and identity
+        // check, including the datasheet's 100 ms post-reset settle delay.
+        let mut delay = Delay;
+        match imu.init_spi(&mut delay).await {
             Ok(()) => {
-                // The driver documents this as required for SPI: without it the
-                // ICM-20948 keeps its I2C slave interface enabled.
-                if let Err(e) = imu.enable_spi_mode().await {
-                    warn!("ICM-20948 enable SPI mode failed (attempt {}): {:?}", attempt, e);
-                } else {
-                    match imu.verify_who_am_i().await {
-                        Ok(()) => {
-                            info!("ICM-20948 initialized successfully via SPI");
-                            Timer::after(Duration::from_millis(100)).await;
-                            return imu;
-                        }
-                        Err(e) => warn!("ICM-20948 identity check failed (attempt {}): {:?}", attempt, e),
-                    }
-                }
+                info!("ICM-20948 initialized successfully via SPI");
+                Timer::after(Duration::from_millis(100)).await;
+                return imu;
             }
             Err(e) => {
                 warn!("ICM-20948 init failed (attempt {}): {:?}", attempt, e);
                 // A reset-first init cannot say whether the chip is present or
                 // whether the reset never completed. Probe WHO_AM_I after the
                 // failed attempt: 0xEA means the bus is alive, 0x00/0xFF means
-                // the chip is absent, unpowered, or not selected.
+                // the chip is absent, unpowered, or not selected. The probe
+                // only reads if `init_spi` restored SPI mode; otherwise it
+                // fails and the error alone is reported.
                 match imu.read_who_am_i().await {
                     Ok(id) => warn!("ICM-20948 WHO_AM_I after failed init: 0x{:02x}", id),
                     Err(probe_err) => warn!("ICM-20948 WHO_AM_I probe failed: {:?}", probe_err),
@@ -655,13 +626,13 @@ const fn build_dmp_config(mode: DmpFusionMode) -> DmpConfig {
             .with_raw_accel()
             .with_raw_gyro()
             .with_calibrated_gyro()
-            .with_sample_rate(DMP_SAMPLE_RATE_HZ),
+            .with_sample_rate(DMP_SAMPLE_RATE),
         DmpFusionMode::Axis9 => DmpConfig::nine_axis()
             .with_raw_accel()
             .with_raw_gyro()
             .with_calibrated_gyro()
-            .with_raw_mag()
-            .with_sample_rate(DMP_SAMPLE_RATE_HZ),
+            .with_dmp_compass()
+            .with_sample_rate(DMP_SAMPLE_RATE),
     }
 }
 
@@ -725,6 +696,9 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                 }
 
                 let mut fifo_failures: u32 = 0;
+                // Caller-owned reader keeps partial packets across polls. Recreated
+                // per Start so a stopped session cannot leak framing state.
+                let mut reader = DmpFifoReader::new();
 
                 loop {
                     match select(IMU_CONTROL.receive(), Timer::after(POLL_INTERVAL)).await {
@@ -746,6 +720,9 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                 let new_config = build_dmp_config(new_mode);
                                 if apply_dmp_config(sensor, &new_config).await {
                                     fusion_mode = new_mode;
+                                    // `apply_dmp_config` reset the device FIFO, so any
+                                    // partial packet the reader retained is stale.
+                                    reader.clear();
                                     info!("Switched DMP fusion mode to {:?}", fusion_mode);
                                     // Axis6 never produces magnetometer data — clear
                                     // any stale values left from a previous Axis9 session.
@@ -761,6 +738,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         warn!("DMP restore failed — returning to standby");
                                         continue 'command;
                                     }
+                                    reader.clear();
                                 }
                                 fifo_failures = 0;
                             }
@@ -777,7 +755,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
 
                         // ── Timer: poll FIFO ──────────────────────────────────
                         Either::Second(()) => {
-                            match sensor.dmp_read_fifo().await {
+                            match reader.read_packet_async(sensor).await {
                                 Ok(Some(packet)) => {
                                     fifo_failures = 0;
 
@@ -787,7 +765,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                     let quat_opt = quat9.or(quat6);
 
                                     if let Some(quat) = quat_opt {
-                                        let has_mag = packet.raw_mag.is_some();
+                                        let has_mag = packet.dmp_compass.is_some();
                                         let magnitude = quat.magnitude();
                                         let unit_quaternion = magnitude.is_finite()
                                             && (magnitude - 1.0).abs() <= IMU_QUATERNION_NORM_TOLERANCE;
@@ -844,7 +822,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                                 );
                                                 let (ax, ay, az) = packet.raw_accel.unwrap_or((0, 0, 0));
                                                 let (gx, gy, gz) = packet.raw_gyro.unwrap_or((0, 0, 0));
-                                                let (mx, my, mz) = packet.raw_mag.unwrap_or((0, 0, 0));
+                                                let (mx, my, mz) = packet.dmp_compass.unwrap_or((0, 0, 0));
                                                 info!(
                                                     "IMU raw: accel=({},{},{}) gyro=({},{},{}) mag=({},{},{})",
                                                     ax, ay, az, gx, gy, gz, mx, my, mz
@@ -871,9 +849,9 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                             }
 
                                             // Forward to the drive task's IMU feedback channel (capacity 16).
-                                            // The rotation control loop drains it each ~10 ms; dropping a
-                                            // 100 Hz sample when the channel is full is lossy but harmless —
-                                            // the next sample arrives in 10 ms.
+                                            // The rotation control loop drains it each ~10 ms; dropping a
+                                            // ~112 Hz sample when the channel is full is lossy but harmless —
+                                            // the next sample arrives in ~9 ms.
                                             let _ = drive::try_send_imu_measurement(measurement);
 
                                             IMU_READY.store(true, Ordering::Relaxed);
@@ -888,12 +866,23 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                     // FIFO not ready — normal during DMP warm-up.
                                 }
 
+                                Err(icm20948::Error::FifoOverflow) => {
+                                    // The reader already cleared its framing and reset
+                                    // the device FIFO. Overflow usually means this task
+                                    // was starved past a full FIFO, so resync and keep
+                                    // sampling rather than counting it as fatal.
+                                    fifo_failures = 0;
+                                    warn!("DMP FIFO overflow — resynchronised");
+                                }
+
                                 Err(e) => {
                                     fifo_failures += 1;
                                     warn!("DMP FIFO read error ({}/{}): {:?}", fifo_failures, MAX_FIFO_FAILURES, e);
 
-                                    // Attempt a FIFO reset to clear any overflow.
+                                    // Reset the device FIFO and discard any partial
+                                    // packet the reader retained before the error.
                                     let _ = sensor.reset_fifo().await;
+                                    reader.clear();
 
                                     if fifo_failures >= MAX_FIFO_FAILURES {
                                         warn!("Max FIFO failures reached — IMU task terminating");

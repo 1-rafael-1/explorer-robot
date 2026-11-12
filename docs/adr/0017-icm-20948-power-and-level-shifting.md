@@ -69,8 +69,11 @@ and interrupt need level translation.
   TXB's output driver. The A-side pull-up proposed in the review could not override the
   TXB's weak low driver (its own VOL equation gives ~0.08 V at 100 kΩ).
 - Firmware resets the IMU before verifying its identity: `init_imu_sensor` constructs
-  with `Icm20948Driver::new`, calls `init()` (soft reset), then `verify_who_am_i()`,
-  both inside the retry loop. This is defence in depth with R46.
+  with `Icm20948Driver::new` and calls `init_spi()`, which performs the soft reset,
+  restores SPI mode with write-only accesses, wakes the device, and then calls
+  `verify_who_am_i()` — all inside the retry loop. (Since `icm20948-rs` 0.3.0 this is
+  the SPI bring-up path; the former `init()` + `enable_spi_mode()` pair is the I2C
+  path and fails on SPI after the reset.) This is defence in depth with R46.
 - Tie **every unused TXB0108 I/O pair to GND on both sides** — A1–A3 and B1–B3
   (`U4` pins 1/3/4 and 17/18/20) — as the datasheet requires (both sides of an unused
   pair must be held in the same state). This produces six benign ERC `pin_to_pin`

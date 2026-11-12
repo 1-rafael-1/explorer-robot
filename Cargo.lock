@@ -1039,9 +1039,9 @@ dependencies = [
 
 [[package]]
 name = "icm20948-rs"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f466105cb38fef04690901bc267d84a19baf7df4dc72c537afe09111dcd2b3ea"
+checksum = "bb261e9265a937f96c74eebe42dc7b6ef047bc657fde7225623512bbcb5c829f"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if",
