@@ -554,6 +554,14 @@ async fn request_link_action(action: touch_ui::LinkAction) {
     }
 }
 
+/// Whether `procedure`'s own identity opens the Prompt screen.
+///
+/// The model owns which screen a Procedure opens (ADR-0013), so the UI does not
+/// re-test the DMP variant here.
+const fn is_prompt_procedure(procedure: Procedure) -> bool {
+    matches!(procedure.destination(), Screen::Prompt)
+}
+
 /// Act on the menu entry the model activated.
 ///
 /// The match is exhaustive over the crate's [`Item`], so adding an entry — or
@@ -585,7 +593,7 @@ async fn handle_menu_item(ui: &mut Ui, item: Item) {
 async fn start_procedure(ui: &mut Ui, procedure: Procedure) {
     match procedure::dispatch(procedure, ClaimOrigin::Panel).await {
         StartOutcome::Started(_) => {
-            if procedure == Procedure::DmpCompassCalibration {
+            if is_prompt_procedure(procedure) {
                 // The runner fills in the live snapshot on its first tick; until
                 // then the Prompt shows the first Compass Step's instruction with
                 // placeholder values.
@@ -689,7 +697,7 @@ async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
 
     match snapshot.activity {
         Activity::Procedure(procedure) if procedure.is_calibration() => {
-            if procedure == Procedure::DmpCompassCalibration {
+            if is_prompt_procedure(procedure) {
                 // This slice ends the movement ceremony with an explicit "not
                 // saved" result, so hold both terminal stages on the Result
                 // Report until the operator's Back dismisses it. Ticket 04 keeps
@@ -857,7 +865,7 @@ async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
 /// A DMP compass calibration guides the operator with the Prompt; every other
 /// Procedure and a Manual Drive use the shared running screen.
 async fn follow_activity(ui: &mut Ui, snapshot: &Snapshot) -> bool {
-    if snapshot.procedure() == Some(Procedure::DmpCompassCalibration) {
+    if snapshot.procedure().is_some_and(is_prompt_procedure) {
         let view = dmp_cal::snapshot()
             .await
             .unwrap_or_else(DmpCalibrationSnapshot::starting);
@@ -898,7 +906,7 @@ async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
     // A DMP compass calibration's live step, heading, accuracy and hint travel in
     // the panel-only snapshot; the Prompt is refreshed from it on the same tick.
     if ui.screen() == Screen::Prompt {
-        if snapshot.procedure() != Some(Procedure::DmpCompassCalibration) {
+        if !snapshot.procedure().is_some_and(is_prompt_procedure) {
             return false;
         }
         let Some(prompt) = dmp_cal::snapshot().await else {

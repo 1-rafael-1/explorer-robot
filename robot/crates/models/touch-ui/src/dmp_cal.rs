@@ -19,6 +19,7 @@ use core::fmt::Write as _;
 use crate::{
     buffer::TextBuf,
     screens::{Procedure, PromptView},
+    system_info::CalibrationStatus,
 };
 // The leading `::` selects the `dmp-cal` crate, not this module.
 use ::dmp_cal::{CheckFailure, CheckOutcome, CompassStep, MotionHint};
@@ -143,6 +144,11 @@ pub struct DmpCalibrationSnapshot {
     pub check: DmpCheckState,
     /// Whether the Prompt offers `Redo` as well as `Done`.
     pub redo: bool,
+    /// The DMP calibration status when the Procedure started.
+    ///
+    /// A ceremony started without a saved snapshot says so before asking the
+    /// operator to move the robot; a loaded one keeps the line uncluttered.
+    pub prior_status: CalibrationStatus,
 }
 
 impl DmpCalibrationSnapshot {
@@ -161,6 +167,7 @@ impl DmpCalibrationSnapshot {
             hint: DmpHint::None,
             check: DmpCheckState::NotChecking,
             redo: false,
+            prior_status: CalibrationStatus::Unknown,
         }
     }
 
@@ -198,6 +205,9 @@ impl DmpCalibrationSnapshot {
     #[must_use]
     pub fn status_text(&self) -> TextBuf {
         let mut line = TextBuf::new();
+        if self.prior_status != CalibrationStatus::Loaded {
+            let _ = write!(line, "Cal {} ", prior_word(self.prior_status));
+        }
         let _ = match self.heading_deg {
             Some(heading) => write!(line, "Hdg {heading:.0}"),
             None => write!(line, "Hdg --"),
@@ -232,6 +242,15 @@ impl DmpCalibrationSnapshot {
             .with_status(self.status_text())
             .with_progress(self.progress());
         if self.redo { view.with_redo() } else { view }
+    }
+}
+
+/// The lowercase word the status line uses for a non-loaded starting state.
+const fn prior_word(status: CalibrationStatus) -> &'static str {
+    match status {
+        CalibrationStatus::Loaded => "loaded",
+        CalibrationStatus::Unknown => "unknown",
+        CalibrationStatus::Missing => "missing",
     }
 }
 

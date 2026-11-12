@@ -57,6 +57,14 @@ pub async fn set_dmp_cal_status(status: CalibrationStatus) {
     CALIBRATION_STATE.lock().await.dmp_cal_status = status;
 }
 
+/// Read the DMP Bias Snapshot status.
+///
+/// A ceremony reads this once at start, so its first Prompt can say whether the
+/// operator is working from a saved calibration.
+pub async fn get_dmp_cal_status() -> CalibrationStatus {
+    CALIBRATION_STATE.lock().await.dmp_cal_status
+}
+
 /// Checks if system initialization is complete (async helper).
 pub async fn is_initialized() -> bool {
     let state = CALIBRATION_STATE.lock().await;

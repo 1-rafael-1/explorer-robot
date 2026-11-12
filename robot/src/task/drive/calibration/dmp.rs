@@ -133,6 +133,10 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
     info!("=== Starting DMP Compass Calibration ===");
     dmp_cal_state::clear().await;
 
+    // Read once: the first Prompt tells the operator whether a saved calibration
+    // exists before asking for any movement.
+    let prior_status = calibration::get_dmp_cal_status().await;
+
     if !is_mag_available() {
         warn!("DMP compass calibration: magnetometer unavailable at start-up");
         restore_cached_dmp_bias().await;
@@ -209,7 +213,14 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
             DmpCheckState::NotChecking
         };
 
-        dmp_cal_state::publish(build_snapshot(step, calibration.hint(), readings, check_state)).await;
+        dmp_cal_state::publish(build_snapshot(
+            step,
+            calibration.hint(),
+            readings,
+            check_state,
+            prior_status,
+        ))
+        .await;
 
         if claim.wait_or_stop(PROMPT_INTERVAL_MS).await {
             break 'run RunOutcome::Stopped;
@@ -308,6 +319,7 @@ fn build_snapshot(
     hint: MotionHint,
     readings: ImuReadings,
     check: DmpCheckState,
+    prior_status: CalibrationStatus,
 ) -> DmpCalibrationSnapshot {
     DmpCalibrationSnapshot {
         step,
@@ -319,6 +331,7 @@ fn build_snapshot(
         hint: DmpHint::from(hint),
         check,
         redo: step.redo_allowed(),
+        prior_status: calibration::ui_status(prior_status),
     }
 }
 

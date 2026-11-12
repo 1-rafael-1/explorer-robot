@@ -177,10 +177,10 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 ## State Modules
 
 Lock order (documented in each module): **power → calibration → perception → motion → activity**.
-`imu_test` is an independent leaf that is never held with another state lock.
+`imu_test` and `dmp_cal` are independent leaves that are never held with another state lock.
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
-- **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
+- **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
 - **Procedure** — A long-running, operator-started, stoppable unit of work: a test mode, a calibration, or a drive mode. Identified by the Menu Entry that starts it, and it holds the **Active Claim** while it runs.
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
 - **Active Claim** — The single exclusive right to be the robot's current Activity and to produce motion: held by the boot flow, one Procedure, one **Manual Drive**, or the Room Scan screen. A second claimant is `BUSY`; the holder is the only writer of a live Activity. Any operator may stop the holder; there is no owner, no takeover mode and no authority derived from the link lease (ADR-0034).
@@ -190,6 +190,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). The old zero-distance sentinel is retired: a slot is `None` for no return.
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
+- **DMP Calibration Snapshot State** — The panel-only typed `DmpCalibrationSnapshot` a DMP Compass Calibration publishes at the panel's telemetry rate: the current Compass Step, heading, target, Compass Accuracy, hint and check outcome. It is an independent leaf and never enters Activity State or the Link Protocol.
 - **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.
 - **Link State** — The operator-facing snapshot of the link: **Bridge Presence**, **Peer** state, the latest **Bridge Status** and the latest **Bridge Control** outcome, with staleness. Written by the **Link Task**; read by the **Panel** and the PC app through their own adapters. It is not the wire `BRIDGE_STATUS` payload.
 

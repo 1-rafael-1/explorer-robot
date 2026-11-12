@@ -75,6 +75,9 @@ jobs:
       - name: Test lidar-cloud (host)
         run: cargo test -p lidar-cloud --features std --target x86_64-unknown-linux-gnu --tests
 
+      - name: Test dmp-cal (host)
+        run: cargo test -p dmp-cal --features std --target x86_64-unknown-linux-gnu --tests
+
       - name: Test touch-ui (host)
         run: cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
 

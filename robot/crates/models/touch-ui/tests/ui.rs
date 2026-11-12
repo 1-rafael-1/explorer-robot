@@ -2147,14 +2147,14 @@ fn a_dmp_snapshot_starts_on_the_first_step_with_placeholders() {
     assert_eq!(snapshot.step_index(), 0);
     assert_eq!(snapshot.step_count(), CompassStep::ALL.len());
     assert_eq!(snapshot.instruction(), "Place flat. Hold still.");
-    assert_eq!(snapshot.status_text().as_str(), "Hdg -- Acc --");
+    assert_eq!(snapshot.status_text().as_str(), "Cal unknown Hdg -- Acc --");
     assert_eq!(snapshot.progress(), 0);
 
     let view = snapshot.prompt_view();
     assert_eq!(view.title, "DMP Mag");
     assert_eq!(view.parent, Screen::Calibrate);
     assert_eq!(view.instruction, "Place flat. Hold still.");
-    assert_eq!(view.status_text(), "Hdg -- Acc --");
+    assert_eq!(view.status_text(), "Cal unknown Hdg -- Acc --");
     assert_eq!(view.progress, Some(0));
     assert!(view.done);
     assert!(!view.redo);
@@ -2177,6 +2177,7 @@ fn a_dmp_movement_snapshot_formats_heading_and_span() {
         hint: DmpHint::YawSpanDeg(45.2),
         check: DmpCheckState::NotChecking,
         redo: false,
+        prior_status: CalibrationStatus::Loaded,
     };
 
     assert_eq!(snapshot.status_text().as_str(), "Hdg 123 Acc 3 Span 45");
@@ -2198,6 +2199,7 @@ fn a_dmp_hold_and_check_snapshot_format_their_hints() {
         hint: DmpHint::StillMillis(2_500),
         check: DmpCheckState::NotChecking,
         redo: false,
+        prior_status: CalibrationStatus::Loaded,
     };
     assert_eq!(hold.status_text().as_str(), "Hdg 12 Acc 3 Still 2s");
 
@@ -2209,6 +2211,7 @@ fn a_dmp_hold_and_check_snapshot_format_their_hints() {
         hint: DmpHint::None,
         check: DmpCheckState::Waiting,
         redo: true,
+        prior_status: CalibrationStatus::Loaded,
     };
     assert_eq!(check.status_text().as_str(), "Hdg 5 Tgt 0 Acc 3 Check Waiting");
     assert!(check.status_text().as_str().len() <= TEXT_BUF_LEN);
@@ -2222,6 +2225,21 @@ fn a_dmp_hold_and_check_snapshot_format_their_hints() {
         Some(Hit::PromptAction(PromptAction::Redo))
     );
     render_ok(&ui);
+}
+
+/// The first Prompt frame says when the starting DMP calibration is missing, so
+/// an operator without a saved snapshot is not asked to move blindly.
+#[test]
+fn a_dmp_snapshot_says_when_the_starting_calibration_is_missing() {
+    let mut snapshot = DmpCalibrationSnapshot::starting();
+    assert_eq!(snapshot.status_text().as_str(), "Cal unknown Hdg -- Acc --");
+
+    snapshot.prior_status = CalibrationStatus::Missing;
+    assert_eq!(snapshot.status_text().as_str(), "Cal missing Hdg -- Acc --");
+
+    snapshot.prior_status = CalibrationStatus::Loaded;
+    assert_eq!(snapshot.status_text().as_str(), "Hdg -- Acc --");
+    assert!(snapshot.status_text().as_str().len() <= TEXT_BUF_LEN);
 }
 
 /// A failed Compass Check names the rule it broke, keeps the measured heading,
@@ -2251,6 +2269,7 @@ fn a_dmp_check_failure_names_its_reason() {
         hint: DmpHint::None,
         check: DmpCheckState::Fail(DmpCheckFail::Accuracy),
         redo: true,
+        prior_status: CalibrationStatus::Loaded,
     };
     assert_eq!(accuracy.status_text().as_str(), "Hdg 5 Tgt 0 Acc 1 Check Acc");
     assert!(accuracy.status_text().as_str().len() <= TEXT_BUF_LEN);
@@ -2264,6 +2283,7 @@ fn a_dmp_check_failure_names_its_reason() {
         hint: DmpHint::None,
         check: DmpCheckState::Fail(DmpCheckFail::Heading),
         redo: true,
+        prior_status: CalibrationStatus::Loaded,
     };
     assert_eq!(heading.status_text().as_str(), "Hdg 130 Tgt 90 Acc 3 Check Hdg");
     assert!(heading.status_text().as_str().len() <= TEXT_BUF_LEN);
