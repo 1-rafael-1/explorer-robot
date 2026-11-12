@@ -133,6 +133,21 @@ const GYRO_SCALE_DPS: f32 = 1.0 / 16.384;
 /// AK09916 magnetometer sensitivity: 0.15 µT per LSB.
 const MAG_SCALE_UT: f32 = 0.15;
 
+/// Lower bound of the magnetometer-norm gate, in µT.
+pub const MAG_NORM_MIN_UT: f32 = 20.0;
+
+/// Upper bound of the magnetometer-norm gate, in µT.
+pub const MAG_NORM_MAX_UT: f32 = 200.0;
+
+/// Whether a magnetometer norm passes the driver's gate.
+///
+/// The driver accepts a sample only when the measured field is strictly inside
+/// the bounds; the IMU test readout reports the same verdict.
+#[must_use]
+pub const fn mag_gate_passes(norm: f32) -> bool {
+    norm > MAG_NORM_MIN_UT && norm < MAG_NORM_MAX_UT
+}
+
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 
 /// Rate-limiting interval for IMU loop diagnostics when `telemetry_logs` is on.

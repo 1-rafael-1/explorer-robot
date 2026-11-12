@@ -54,6 +54,19 @@ pub async fn is_initialized() -> bool {
     state.is_initialized()
 }
 
+/// Map the firmware's calibration status onto the UI's neutral one.
+///
+/// A never-queried status is *unknown*, not missing: only flash reporting that
+/// no calibration exists is *missing*.
+#[must_use]
+pub const fn ui_status(status: CalibrationStatus) -> touch_ui::CalibrationStatus {
+    match status {
+        CalibrationStatus::Loaded => touch_ui::CalibrationStatus::Loaded,
+        CalibrationStatus::NotLoaded => touch_ui::CalibrationStatus::Unknown,
+        CalibrationStatus::NotAvailable => touch_ui::CalibrationStatus::Missing,
+    }
+}
+
 /// Return the distance calibration factor from the global state.
 pub async fn get_distance_factor() -> f32 {
     let state = CALIBRATION_STATE.lock().await;

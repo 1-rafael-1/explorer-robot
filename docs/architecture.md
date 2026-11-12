@@ -111,9 +111,10 @@ task ([CONTEXT.md § Architecture](../CONTEXT.md#architecture)).
 
 ### State modules
 
-The state modules live in `robot/src/system/state/`: `power`, `calibration`, `perception`, `motion`
-and `activity`. The lock order is **power → calibration → perception → motion → activity**, and the
-Link Task samples them one lock at a time. Hot-path readers use the lock-free mirrors, while the
+The state modules live in `robot/src/system/state/`: `power`, `calibration`, `perception`, `motion`,
+`activity` and `imu_test`. The lock order is **power → calibration → perception → motion → activity**;
+`imu_test` is an independent leaf that is never held with another state lock. The Link Task samples
+them one lock at a time. Hot-path readers use the lock-free mirrors, while the
 touch UI is the only module that draws. The LiDAR cloud lives in `lidar-cloud` and the pose work is
 described by [ADR-0007](adr/0007-odometry-architecture.md) /
 [CONTEXT.md § Odometry](../CONTEXT.md#odometry).

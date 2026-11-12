@@ -39,14 +39,13 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    CalibrationStatus as UiCalibrationStatus, DRAG_RENDER_MS, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, Screen,
-    ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
+    DRAG_RENDER_MS, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, Screen, ScreenEntry, SensorState, StatusView,
+    SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
     resources::PanelResources,
     system::state::{
-        CalibrationStatus,
         activity::{self, Activity, Snapshot, Stage},
         calibration, imu_test, link, perception, power,
     },
@@ -888,20 +887,8 @@ async fn read_system_info() -> SystemInfo {
     SystemInfo {
         battery_level: battery.level,
         battery_voltage: battery.voltage,
-        motor_calibration: map_calibration_status(motor),
-        mag_calibration: map_calibration_status(mag),
-        distance_calibration: map_calibration_status(distance),
-    }
-}
-
-/// Map the firmware's calibration status onto the UI's neutral one.
-///
-/// A never-queried status is *unknown*, not missing: only flash reporting that
-/// no calibration exists is *missing*.
-const fn map_calibration_status(status: CalibrationStatus) -> UiCalibrationStatus {
-    match status {
-        CalibrationStatus::Loaded => UiCalibrationStatus::Loaded,
-        CalibrationStatus::NotLoaded => UiCalibrationStatus::Unknown,
-        CalibrationStatus::NotAvailable => UiCalibrationStatus::Missing,
+        motor_calibration: calibration::ui_status(motor),
+        mag_calibration: calibration::ui_status(mag),
+        distance_calibration: calibration::ui_status(distance),
     }
 }

@@ -16,8 +16,9 @@
 //! so a row is never omitted for a transient absence. The health line names the
 //! state, the consecutive missing-sample count and the magnetometer calibration;
 //! the six-axis screen explains the absent magnetometer section with `magcal n/a`,
-//! and an unavailable nine-axis magnetometer falls back to
-//! `mag unavailable - 6-axis fallback` with `--` heading and remap rows.
+//! and an unavailable nine-axis magnetometer keeps the health line, shows
+//! `mag unavailable - 6-axis fallback use_mag=no` on the gate row, and renders
+//! `--` heading and remap rows.
 
 use crate::{buffer::TextBuf, screens::Procedure, system_info::CalibrationStatus};
 
@@ -53,15 +54,7 @@ impl ImuReadoutKind {
         match procedure {
             Procedure::Imu6Axis => Some(Self::SixAxis),
             Procedure::Imu9Axis => Some(Self::NineAxis),
-            Procedure::MotorCalibration
-            | Procedure::MagCalibration
-            | Procedure::DistanceCalibration
-            | Procedure::CoastAndAvoid
-            | Procedure::AttemptStraight
-            | Procedure::BasicMotor
-            | Procedure::Turns
-            | Procedure::StraightDrive
-            | Procedure::ArcDrive => None,
+            _ => None,
         }
     }
 }
@@ -117,23 +110,24 @@ pub struct Vector3 {
 /// heading remaps for each plane. The model only formats them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MagDiagnostics {
-    /// Raw magnetometer norm in uT.
+    /// Raw magnetometer norm in µT.
     pub norm: f32,
     /// The driver's norm gate verdict.
     pub use_mag: bool,
     /// The raw XY heading in degrees.
     pub raw_heading: f32,
-    /// The tilt-compensated heading in degrees.
-    pub tilt_heading: f32,
+    /// The tilt-compensated heading in degrees, or `None` when no accelerometer
+    /// sample was available to compute it.
+    pub tilt_heading: Option<f32>,
     /// The eight XY-plane heading remaps in degrees, one per axis-sign
     /// permutation.
-    pub remap_xy: [i32; 8],
+    pub remap_xy: [f32; 8],
     /// The eight XZ-plane heading remaps in degrees, one per axis-sign
     /// permutation.
-    pub remap_xz: [i32; 8],
+    pub remap_xz: [f32; 8],
     /// The eight YZ-plane heading remaps in degrees, one per axis-sign
     /// permutation.
-    pub remap_yz: [i32; 8],
+    pub remap_yz: [f32; 8],
 }
 
 /// A neutral IMU Test Readout: the typed values the panel formats into rows.
@@ -153,13 +147,13 @@ pub struct ImuReadout {
     pub orientation: Option<Euler>,
     /// Raw accelerometer in `g`, or `None`.
     pub raw_accel: Option<Vector3>,
-    /// Raw gyroscope in `dps`, or `None`.
+    /// Raw gyroscope in `deg/s`, or `None`.
     pub raw_gyro: Option<Vector3>,
-    /// DMP-calibrated gyroscope in `dps`, or `None`.
+    /// DMP-calibrated gyroscope in `deg/s`, or `None`.
     pub calibrated_gyro: Option<Vector3>,
-    /// Raw magnetometer in uT, or `None`.
+    /// Raw magnetometer in µT, or `None`.
     pub raw_mag: Option<Vector3>,
-    /// Host-calibrated magnetometer in uT, or `None`.
+    /// Host-calibrated magnetometer in µT, or `None`.
     pub calibrated_mag: Option<Vector3>,
     /// The stored magnetometer calibration status.
     pub mag_calibration: CalibrationStatus,
@@ -237,7 +231,7 @@ impl ImuReadout {
         }
     }
 
-    /// The same readout with a raw magnetometer vector, in uT.
+    /// The same readout with a raw magnetometer vector, in µT.
     #[must_use]
     pub const fn with_raw_mag(self, mag: Vector3) -> Self {
         Self {
@@ -246,7 +240,7 @@ impl ImuReadout {
         }
     }
 
-    /// The same readout with a host-calibrated magnetometer vector, in uT.
+    /// The same readout with a host-calibrated magnetometer vector, in µT.
     #[must_use]
     pub const fn with_calibrated_mag(self, mag: Vector3) -> Self {
         Self {
@@ -317,8 +311,8 @@ impl ImuReadout {
                 rows[7] = xy_row;
                 rows[8] = xz_row;
                 rows[9] = yz_row;
-                rows[10] = nine_axis_health_line(self.health, self.missing, self.mag_available, self.mag_calibration);
-                rows[11] = mag_gate_line(self.mag);
+                rows[10] = nine_axis_health_line(self.health, self.missing, self.mag_calibration);
+                rows[11] = mag_gate_line(self.mag, self.mag_available);
             }
         }
         rows
@@ -356,29 +350,45 @@ fn heading_and_remap_placeholders() -> [TextBuf; 4] {
 }
 
 /// Format the heading row: the raw and tilt-compensated headings at one decimal
-/// place and the DMP yaw, or `--` when the fused orientation is absent.
+/// place and the DMP yaw, with `--` for a heading the samples cannot yet provide.
 fn heading_line(diagnostics: MagDiagnostics, orientation: Option<Euler>) -> TextBuf {
     let mut line = TextBuf::new();
-    match orientation {
-        Some(euler) => line.fill(format_args!(
+    match (diagnostics.tilt_heading, orientation) {
+        (Some(tilt), Some(euler)) => line.fill(format_args!(
             "Hdg raw={:.1} tilt={:.1} dmp={:.1}",
-            diagnostics.raw_heading, diagnostics.tilt_heading, euler.yaw
+            diagnostics.raw_heading, tilt, euler.yaw
         )),
-        None => line.fill(format_args!(
+        (Some(tilt), None) => line.fill(format_args!(
             "Hdg raw={:.1} tilt={:.1} dmp=--",
-            diagnostics.raw_heading, diagnostics.tilt_heading
+            diagnostics.raw_heading, tilt
         )),
+        (None, Some(euler)) => line.fill(format_args!(
+            "Hdg raw={:.1} tilt=-- dmp={:.1}",
+            diagnostics.raw_heading, euler.yaw
+        )),
+        (None, None) => line.fill(format_args!("Hdg raw={:.1} tilt=-- dmp=--", diagnostics.raw_heading)),
     }
     line
 }
 
 /// Format one remap row: the plane label and eight integer headings, each
 /// right-aligned in a five-character field so negatives and zero line up.
-fn remap_line(label: &'static str, headings: [i32; 8]) -> TextBuf {
+///
+/// The diagnostics carry full-precision headings; the cast happens here, only
+/// for the fixed-width row.
+#[allow(clippy::cast_possible_truncation)]
+fn remap_line(label: &'static str, headings: [f32; 8]) -> TextBuf {
     let mut line = TextBuf::new();
     line.fill(format_args!(
         "{label}{:>5}{:>5}{:>5}{:>5}{:>5}{:>5}{:>5}{:>5}",
-        headings[0], headings[1], headings[2], headings[3], headings[4], headings[5], headings[6], headings[7]
+        headings[0] as i32,
+        headings[1] as i32,
+        headings[2] as i32,
+        headings[3] as i32,
+        headings[4] as i32,
+        headings[5] as i32,
+        headings[6] as i32,
+        headings[7] as i32
     ));
     line
 }
@@ -409,7 +419,7 @@ fn accel_line(accel: Option<Vector3>) -> TextBuf {
     line
 }
 
-/// Format one gyroscope row, one decimal in `dps`.
+/// Format one gyroscope row, one decimal in `deg/s`.
 fn gyro_line(prefix: &'static str, gyro: Option<Vector3>) -> TextBuf {
     let mut line = TextBuf::new();
     match gyro {
@@ -435,19 +445,10 @@ fn health_line(health: ImuHealth, missing: u32) -> TextBuf {
 }
 
 /// Format the nine-axis health row: the state, the missing count and the
-/// magnetometer calibration, or the fallback notice when the magnetometer was
-/// unavailable at start-up.
-fn nine_axis_health_line(
-    health: ImuHealth,
-    missing: u32,
-    mag_available: bool,
-    mag_calibration: CalibrationStatus,
-) -> TextBuf {
+/// magnetometer calibration. It always names those facts, even when the
+/// magnetometer was unavailable; the fallback notice lives on the gate row.
+fn nine_axis_health_line(health: ImuHealth, missing: u32, mag_calibration: CalibrationStatus) -> TextBuf {
     let mut line = TextBuf::new();
-    if !mag_available {
-        line.fill(format_args!("mag unavailable - 6-axis fallback"));
-        return line;
-    }
     line.fill(format_args!(
         "{} miss={} magcal {}",
         health.label(),
@@ -466,7 +467,7 @@ const fn mag_calibration_word(status: CalibrationStatus) -> &'static str {
     }
 }
 
-/// Format one magnetometer row, one decimal in `uT`.
+/// Format one magnetometer row, one decimal in µT.
 fn mag_line(prefix: &'static str, mag: Option<Vector3>) -> TextBuf {
     let mut line = TextBuf::new();
     match mag {
@@ -480,9 +481,14 @@ fn mag_line(prefix: &'static str, mag: Option<Vector3>) -> TextBuf {
 }
 
 /// Format the magnetometer gate row: the raw-field norm and the driver's
-/// verdict, or a placeholder with no verdict.
-fn mag_gate_line(mag: Option<MagDiagnostics>) -> TextBuf {
+/// verdict, a placeholder with no verdict when nothing has been sampled, or the
+/// six-axis fallback notice when the magnetometer was unavailable at start-up.
+fn mag_gate_line(mag: Option<MagDiagnostics>, mag_available: bool) -> TextBuf {
     let mut line = TextBuf::new();
+    if !mag_available {
+        line.fill(format_args!("mag unavailable - 6-axis fallback use_mag=no"));
+        return line;
+    }
     match mag {
         Some(diagnostics) => line.fill(format_args!(
             "|m|={:.1} uT use_mag={}",

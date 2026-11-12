@@ -12,8 +12,9 @@
 use defmt::{debug, error};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use touch_ui::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, Vector3};
+use touch_ui::ImuReadoutKind;
 
+use super::imu_common::{LOG_EVERY_TICKS, PUBLISH_EVERY_TICKS, SAMPLE_INTERVAL_MS, base_readout, health};
 use crate::{
     system::state::imu_test,
     task::{
@@ -23,19 +24,6 @@ use crate::{
         },
     },
 };
-
-/// Sampling period, in milliseconds.
-const SAMPLE_INTERVAL_MS: u64 = 20;
-
-/// Ticks between log reports (50 ticks ≈ 1 s).
-const LOG_EVERY_TICKS: u32 = 50;
-
-/// Ticks between telemetry publishes (5 ticks ≈ 10 Hz).
-const PUBLISH_EVERY_TICKS: u32 = 5;
-
-/// Consecutive missing samples that mean the IMU is not responding (100 ticks
-/// ≈ 2 s).
-const NOT_RESPONDING_TICKS: u32 = 100;
 
 /// Spawn the IMU 6-axis test task via the controller.
 ///
@@ -69,13 +57,9 @@ async fn imu6_test_task(claim: Claim) {
     let mut received = false;
 
     while !claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
-        let r = get_latest_readings().await;
-        let orientation = r.orientation;
-        let gyro = r.calibrated_gyro;
-        let raw_accel = r.raw_accel;
-        let raw_gyro = r.raw_gyro;
+        let readings = get_latest_readings().await;
 
-        if orientation.is_none() && gyro.is_none() {
+        if readings.orientation.is_none() && readings.calibrated_gyro.is_none() {
             missing = missing.saturating_add(1);
         } else {
             received = true;
@@ -84,85 +68,29 @@ async fn imu6_test_task(claim: Claim) {
 
         tick = tick.wrapping_add(1);
         if tick.is_multiple_of(PUBLISH_EVERY_TICKS) {
-            imu_test::publish(build_readout(
+            imu_test::publish(base_readout(
+                ImuReadoutKind::SixAxis,
                 health(received, missing),
                 missing,
-                orientation,
-                raw_accel,
-                raw_gyro,
-                gyro,
+                readings,
             ))
             .await;
         }
         if tick.is_multiple_of(LOG_EVERY_TICKS) {
             debug!(
                 "imu6: ori={} gyro={} missing={=u32}",
-                orientation.is_some(),
-                gyro.is_some(),
+                readings.orientation.is_some(),
+                readings.calibrated_gyro.is_some(),
                 missing
             );
-            log_orientation(orientation);
-            log_raw(raw_accel, raw_gyro);
+            log_orientation(readings.orientation);
+            log_raw(readings.raw_accel, readings.raw_gyro);
         }
     }
 
     stop_imu_readings();
     imu_test::clear().await;
     claim.finish().await;
-}
-
-/// The health state for the current sample run.
-const fn health(received: bool, missing: u32) -> ImuHealth {
-    if missing >= NOT_RESPONDING_TICKS {
-        ImuHealth::NotResponding
-    } else if received {
-        ImuHealth::Live
-    } else {
-        ImuHealth::Waiting
-    }
-}
-
-/// Build the typed readout the touch UI formats.
-fn build_readout(
-    health: ImuHealth,
-    missing: u32,
-    orientation: Option<Orientation>,
-    raw_accel: Option<nalgebra::Vector3<f32>>,
-    raw_gyro: Option<nalgebra::Vector3<f32>>,
-    calibrated_gyro: Option<nalgebra::Vector3<f32>>,
-) -> ImuReadout {
-    let mut readout = ImuReadout::waiting(ImuReadoutKind::SixAxis).with_health(health, missing);
-    if let Some(orientation) = orientation {
-        readout = readout.with_orientation(to_euler(orientation));
-    }
-    if let Some(accel) = raw_accel {
-        readout = readout.with_raw_accel(to_vector(accel));
-    }
-    if let Some(gyro) = raw_gyro {
-        readout = readout.with_raw_gyro(to_vector(gyro));
-    }
-    if let Some(gyro) = calibrated_gyro {
-        readout = readout.with_calibrated_gyro(to_vector(gyro));
-    }
-    readout
-}
-
-/// Map the driver's fused orientation onto the UI's neutral Euler angles.
-const fn to_euler(orientation: Orientation) -> Euler {
-    Euler {
-        yaw: orientation.yaw,
-        pitch: orientation.pitch,
-        roll: orientation.roll,
-    }
-}
-
-/// Map a driver vector onto the UI's neutral three-component vector.
-fn to_vector(vector: nalgebra::Vector3<f32>) -> Vector3 {
-    Vector3 {
-        x: vector.x,
-        y: vector.y,
-        z: vector.z,
-    }
 }
 
 /// Log the fused orientation in Euler angles, when there is one.

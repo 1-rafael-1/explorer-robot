@@ -31,6 +31,8 @@ pub mod imu_9axis;
 pub mod straight_drive;
 pub mod turns;
 
+mod imu_common;
+
 /// Command sent to the testmode controller, paired with the claim it runs under.
 #[derive(Clone, Copy)]
 pub(super) enum TestCommand {

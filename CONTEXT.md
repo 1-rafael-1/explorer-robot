@@ -176,7 +176,8 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 
 ## State Modules
 
-Lock order (documented in each module): **power → calibration → perception → motion → activity**
+Lock order (documented in each module): **power → calibration → perception → motion → activity**.
+`imu_test` is an independent leaf that is never held with another state lock.
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.

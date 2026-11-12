@@ -1,20 +1,23 @@
-//! A tiny fixed-capacity text buffer for the couple of runtime-formatted
+//! A tiny fixed-capacity text buffer for the handful of runtime-formatted
 //! strings the UI produces.
 //!
 //! `alloc` and `heapless` are unavailable here, and the only strings that are
-//! not compile-time constants are the value-entry readout and the System Info
-//! rows, so a small stack buffer implementing [`core::fmt::Write`] is enough.
+//! not compile-time constants are the value-entry readout, the System Info,
+//! Link and IMU Test Readout rows, so a small stack buffer implementing
+//! [`core::fmt::Write`] is enough.
 
 use core::fmt::{self, Write as _};
 
 /// Capacity of [`TextBuf`], in bytes.
 ///
-/// Wide enough for an IMU Test Readout row of at least 48 ASCII characters
-/// (e.g. a remap row such as `Remap: ax<-gy ay<-gx ...` or a health row), the
-/// widest value-entry readout (a five-digit attempt-straight value plus its
-/// unit, e.g. `5000 cm`), the widest System Info row (e.g. `Motor: Unknown`),
-/// and the widest Link row (e.g. `Bridge: Waiting for board` and
-/// `Station: Associated`).
+/// The longest real IMU Test Readout rows are about 43–44 ASCII characters
+/// (the nine-axis health line `IMU not responding miss=9999 magcal unknown` and
+/// the fallback gate line `mag unavailable - 6-axis fallback use_mag=no`). The
+/// capacity is 48 because ticket 01 requires a 48-character readout row to
+/// round-trip intact; it also holds the widest value-entry readout (a five-digit
+/// attempt-straight value plus its unit, e.g. `5000 cm`), the widest System Info
+/// row (e.g. `Motor: Unknown`), and the widest Link row (e.g.
+/// `Bridge: Waiting for board` and `Station: Associated`).
 pub const TEXT_BUF_LEN: usize = 48;
 
 /// A tiny fixed-capacity ASCII buffer for formatting short strings.

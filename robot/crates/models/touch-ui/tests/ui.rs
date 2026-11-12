@@ -1584,26 +1584,26 @@ fn the_radar_input_has_three_hundred_and_sixty_slots() {
     assert_eq!(slots.len(), radar::SLOTS);
 }
 
-/// A representative IMU Test Readout remap row, exactly as wide as the buffer's
-/// documented minimum: 48 ASCII characters, including spaces.
-const IMU_REMAP_ROW: &str = "Remap: ax<-gy ay<-gx az<-az gx<-ax gy<-ay gz<-gz";
+/// A synthetic ASCII row exactly as wide as the buffer's documented minimum:
+/// 48 characters. It is not a real rendered row, only a round-trip probe.
+const FORTY_EIGHT_CHAR_ROW: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijkl";
 
 /// Test that a 48-character readout row formats and reads back intact, so the
-/// IMU Test Readout can draw a remap row without truncation.
+/// IMU Test Readout can draw a row without truncation.
 #[test]
 fn a_forty_eight_character_readout_row_round_trips() {
-    assert_eq!(IMU_REMAP_ROW.len(), 48);
+    assert_eq!(FORTY_EIGHT_CHAR_ROW.len(), 48);
     assert_eq!(TEXT_BUF_LEN, 48);
 
     let mut row = TextBuf::new();
-    row.fill(format_args!("{IMU_REMAP_ROW}"));
-    assert_eq!(row.as_str(), IMU_REMAP_ROW);
+    row.fill(format_args!("{FORTY_EIGHT_CHAR_ROW}"));
+    assert_eq!(row.as_str(), FORTY_EIGHT_CHAR_ROW);
 }
 
 /// Test that a row wider than the buffer still clears rather than panicking.
 #[test]
 fn an_over_long_row_clears_the_buffer_without_panicking() {
-    let over_long = format_args!("{IMU_REMAP_ROW}!");
+    let over_long = format_args!("{FORTY_EIGHT_CHAR_ROW}!");
     let mut row = TextBuf::new();
     row.fill(over_long);
     assert_eq!(row.as_str(), "");
@@ -1779,15 +1779,15 @@ fn the_readout_kind_maps_both_imu_procedures() {
 
 /// The XY-plane remap headings the sample readout carries, including negative
 /// and zero values and the full right-aligned width.
-const SAMPLE_REMAP_XY: [i32; 8] = [-179, -135, -90, -45, 0, 45, 90, 134];
+const SAMPLE_REMAP_XY: [f32; 8] = [-179.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 134.0];
 
 /// The XZ-plane remap headings the sample readout carries, including negative
 /// and zero values.
-const SAMPLE_REMAP_XZ: [i32; 8] = [-180, -90, -1, 0, 1, 90, 179, 180];
+const SAMPLE_REMAP_XZ: [f32; 8] = [-180.0, -90.0, -1.0, 0.0, 1.0, 90.0, 179.0, 180.0];
 
 /// The YZ-plane remap headings the sample readout carries, including negative
 /// and zero values.
-const SAMPLE_REMAP_YZ: [i32; 8] = [0, 10, -10, 100, -100, 45, -45, 90];
+const SAMPLE_REMAP_YZ: [f32; 8] = [0.0, 10.0, -10.0, 100.0, -100.0, 45.0, -45.0, 90.0];
 
 /// A fully populated nine-axis readout: the six-axis values plus both
 /// magnetometer vectors, a loaded magnetometer calibration, a passing gate and
@@ -1831,7 +1831,7 @@ const fn sample_nine_axis_readout() -> ImuReadout {
             norm: 50.0,
             use_mag: true,
             raw_heading: -179.0,
-            tilt_heading: 45.6,
+            tilt_heading: Some(45.6),
             remap_xy: SAMPLE_REMAP_XY,
             remap_xz: SAMPLE_REMAP_XZ,
             remap_yz: SAMPLE_REMAP_YZ,
@@ -1874,7 +1874,7 @@ fn the_remap_rows_pin_eight_right_aligned_integers_per_plane() {
         norm: 50.0,
         use_mag: true,
         raw_heading: -179.0,
-        tilt_heading: 0.0,
+        tilt_heading: Some(0.0),
         remap_xy: SAMPLE_REMAP_XY,
         remap_xz: SAMPLE_REMAP_XZ,
         remap_yz: SAMPLE_REMAP_YZ,
@@ -1897,13 +1897,36 @@ fn the_heading_row_shows_a_dmp_placeholder_without_orientation() {
         norm: 50.0,
         use_mag: true,
         raw_heading: -179.0,
-        tilt_heading: 45.6,
+        tilt_heading: Some(45.6),
         remap_xy: SAMPLE_REMAP_XY,
         remap_xz: SAMPLE_REMAP_XZ,
         remap_yz: SAMPLE_REMAP_YZ,
     });
 
     assert_eq!(readout.rows()[6].as_str(), "Hdg raw=-179.0 tilt=45.6 dmp=--");
+}
+
+/// Test that the heading row shows `tilt=--` when the magnetometer is present
+/// but there was no accelerometer sample to tilt-compensate with.
+#[test]
+fn the_heading_row_shows_a_tilt_placeholder_without_an_accelerometer() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_mag(MagDiagnostics {
+            norm: 50.0,
+            use_mag: true,
+            raw_heading: -179.0,
+            tilt_heading: None,
+            remap_xy: SAMPLE_REMAP_XY,
+            remap_xz: SAMPLE_REMAP_XZ,
+            remap_yz: SAMPLE_REMAP_YZ,
+        });
+
+    assert_eq!(readout.rows()[6].as_str(), "Hdg raw=-179.0 tilt=-- dmp=12.3");
 }
 
 /// Test that the raw and calibrated magnetometer rows use one decimal place and
@@ -1935,10 +1958,10 @@ fn the_magnetometer_gate_reports_the_use_mag_verdict() {
         norm: 5.0,
         use_mag: false,
         raw_heading: 0.0,
-        tilt_heading: 0.0,
-        remap_xy: [0; 8],
-        remap_xz: [0; 8],
-        remap_yz: [0; 8],
+        tilt_heading: Some(0.0),
+        remap_xy: [0.0; 8],
+        remap_xz: [0.0; 8],
+        remap_yz: [0.0; 8],
     });
     assert_eq!(below.rows()[11].as_str(), "|m|=5.0 uT use_mag=no");
 
@@ -1946,10 +1969,10 @@ fn the_magnetometer_gate_reports_the_use_mag_verdict() {
         norm: 50.0,
         use_mag: true,
         raw_heading: 0.0,
-        tilt_heading: 0.0,
-        remap_xy: [0; 8],
-        remap_xz: [0; 8],
-        remap_yz: [0; 8],
+        tilt_heading: Some(0.0),
+        remap_xy: [0.0; 8],
+        remap_xz: [0.0; 8],
+        remap_yz: [0.0; 8],
     });
     assert_eq!(in_range.rows()[11].as_str(), "|m|=50.0 uT use_mag=yes");
 
@@ -2001,9 +2024,10 @@ fn the_nine_axis_health_row_names_the_magnetometer_calibration() {
     );
 }
 
-/// Test that an unavailable magnetometer shows the six-axis fallback line, `--`
-/// magnetometer, heading and remap values and `use_mag=no`, while the Euler row
-/// keeps the fallback yaw the fused orientation still provides.
+/// Test that an unavailable magnetometer keeps the health line naming the state
+/// and calibration, shows the six-axis fallback and `use_mag=no` on the gate
+/// row, and renders `--` magnetometer, heading and remap values, while the Euler
+/// row keeps the fallback yaw the fused orientation still provides.
 #[test]
 fn an_unavailable_magnetometer_falls_back_to_six_axis() {
     let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
@@ -2028,8 +2052,8 @@ fn an_unavailable_magnetometer_falls_back_to_six_axis() {
     assert_eq!(rows[7].as_str(), "XY --");
     assert_eq!(rows[8].as_str(), "XZ --");
     assert_eq!(rows[9].as_str(), "YZ --");
-    assert_eq!(rows[10].as_str(), "mag unavailable - 6-axis fallback");
-    assert_eq!(rows[11].as_str(), "|m|=-- uT use_mag=no");
+    assert_eq!(rows[10].as_str(), "Live miss=0 magcal loaded");
+    assert_eq!(rows[11].as_str(), "mag unavailable - 6-axis fallback use_mag=no");
 }
 
 /// Test that the last of the twelve nine-axis rows fits inside the status panel
