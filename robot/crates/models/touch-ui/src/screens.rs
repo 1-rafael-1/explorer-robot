@@ -171,10 +171,9 @@ impl Submenu {
 
 /// A unit of work the Panel can start.
 ///
-/// Twelve are modelled: motor, magnetometer, distance and DMP compass
-/// calibration; coast-and-avoid; and the six test modes, beside the deferred
-/// attempt-straight. Eleven are listed in the live menus; the DMP compass
-/// calibration joins the Calibrate submenu once its firmware Procedure exists.
+/// Twelve are modelled and all twelve are listed: motor, magnetometer, DMP
+/// compass and distance calibration; coast-and-avoid; the six test modes beside
+/// the deferred attempt-straight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Procedure {
     /// Calibrate: motor calibration, opening the running screen.
@@ -183,9 +182,8 @@ pub enum Procedure {
     MagCalibration,
     /// Calibrate: DMP compass calibration, opening the Prompt screen.
     ///
-    /// Not yet listed in the Calibrate submenu: the entry is added when the
-    /// firmware Procedure exists, so the model does not offer a tap that cannot
-    /// start anything.
+    /// The firmware Procedure guides the operator through the Compass Steps and
+    /// publishes the panel-only [`crate::DmpCalibrationSnapshot`].
     DmpCompassCalibration,
     /// Calibrate: the distance-calibration value screen, after its drive step.
     DistanceCalibration,
@@ -297,11 +295,11 @@ impl Procedure {
     /// Whether this Procedure needs an operator physically at the robot, and so
     /// can never be started from the Remote.
     ///
-    /// This mirrors the firmware's one availability rule
-    /// (`procedure::is_startable(_, ClaimOrigin::Remote)`) rather than restating
-    /// a second hands-on set: motor, magnetometer, DMP compass and distance
-    /// calibration, the basic-motor test, and attempt-straight. A Procedure left
-    /// out of this set is Remote-startable.
+    /// This is the firmware's one availability rule
+    /// (`procedure::is_startable(_, ClaimOrigin::Remote)`), which reads this set
+    /// rather than keeping a second copy: motor, magnetometer, DMP compass and
+    /// distance calibration, the basic-motor test, and attempt-straight. A
+    /// Procedure left out of this set is Remote-startable.
     #[must_use]
     pub const fn is_hands_on(self) -> bool {
         matches!(
@@ -386,9 +384,13 @@ const MAIN_MENU_ITEMS: [Item; 5] = [
 ];
 
 /// The Calibrate submenu's entries, in display order.
-const CALIBRATE_ITEMS: [Item; 3] = [
+///
+/// `DMP Mag` sits beside the existing `Mag` while the DMP calibration replaces
+/// the host one; `Distance` keeps its place at the end.
+const CALIBRATE_ITEMS: [Item; 4] = [
     Item::Procedure(Procedure::MotorCalibration),
     Item::Procedure(Procedure::MagCalibration),
+    Item::Procedure(Procedure::DmpCompassCalibration),
     Item::Procedure(Procedure::DistanceCalibration),
 ];
 

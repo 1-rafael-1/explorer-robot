@@ -76,6 +76,7 @@ pub async fn start(claim: Claim, procedure: Procedure) {
         Procedure::Imu9Axis => TestCommand::Imu,
         Procedure::MotorCalibration
         | Procedure::MagCalibration
+        | Procedure::DmpCompassCalibration
         | Procedure::DistanceCalibration
         | Procedure::CoastAndAvoid
         | Procedure::AttemptStraight => {

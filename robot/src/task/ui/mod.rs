@@ -39,21 +39,21 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    DRAG_RENDER_MS, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, Screen, ScreenEntry, SensorState, StatusView,
-    SystemInfo, TICK_MS, Ui, ValueFlow,
+    DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, PromptAction, Screen,
+    ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
     resources::PanelResources,
     system::state::{
         activity::{self, Activity, Snapshot, Stage},
-        calibration, imu_test, link, perception, power,
+        calibration, dmp_cal, imu_test, link, perception, power,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
         drive::{
             InterruptKind,
-            calibration::{self as drive_calibration, distance::DistanceDecision},
+            calibration::{self as drive_calibration, distance::DistanceDecision, dmp as dmp_runner},
         },
         io::panel::Panel,
         procedure::{self, Claim, ClaimKind, ClaimOrigin, ScreenKind, StartOutcome, StopOutcome},
@@ -511,10 +511,20 @@ async fn handle_activation(ui: &mut Ui, screen_before: Screen, value_before: i32
             record_attempt_straight(value_before).await;
         }
         (Screen::Status, Some(Hit::Back)) => activity::clear().await,
-        (Screen::Status, Some(Hit::Stop)) => stop_running(),
+        (Screen::Status | Screen::Prompt, Some(Hit::Stop)) => stop_running(),
+        (Screen::Prompt, Some(Hit::PromptAction(action))) => send_prompt_action(action),
         (Screen::Link, Some(Hit::LinkAction(action))) => request_link_action(action).await,
         _ => {}
     }
+}
+
+/// Deliver a Prompt action to the DMP compass calibration runner.
+///
+/// The model reports the tap without acting on it; the runner owns what `Done`
+/// and `Redo` mean. A tap that arrives after the runner finished is harmless:
+/// the queued action has no receiver.
+fn send_prompt_action(action: PromptAction) {
+    dmp_runner::send_action(action.into());
 }
 
 /// Ask the Link Task to send one Bridge Control request.
@@ -575,8 +585,15 @@ async fn handle_menu_item(ui: &mut Ui, item: Item) {
 async fn start_procedure(ui: &mut Ui, procedure: Procedure) {
     match procedure::dispatch(procedure, ClaimOrigin::Panel).await {
         StartOutcome::Started(_) => {
-            let snapshot = activity::snapshot().await;
-            ui.show_status(status_view(&snapshot, None));
+            if procedure == Procedure::DmpCompassCalibration {
+                // The runner fills in the live snapshot on its first tick; until
+                // then the Prompt shows the first Compass Step's instruction with
+                // placeholder values.
+                ui.show_prompt(DmpCalibrationSnapshot::starting().prompt_view());
+            } else {
+                let snapshot = activity::snapshot().await;
+                ui.show_status(status_view(&snapshot, None));
+            }
         }
         StartOutcome::Busy | StartOutcome::Rejected => {
             ui.show_screen(procedure.landing_screen());
@@ -672,7 +689,13 @@ async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
 
     match snapshot.activity {
         Activity::Procedure(procedure) if procedure.is_calibration() => {
-            if snapshot.stage == Stage::Failed {
+            if procedure == Procedure::DmpCompassCalibration {
+                // This slice ends the movement ceremony with an explicit "not
+                // saved" result, so hold both terminal stages on the Result
+                // Report until the operator's Back dismisses it. Ticket 04 keeps
+                // the same contract for a saved or failed snapshot.
+                ui.show_status(status_view(&snapshot, None));
+            } else if snapshot.stage == Stage::Failed {
                 ui.set_status(status_view(&snapshot, None));
             } else {
                 let landing = procedure.landing_screen();
@@ -805,10 +828,10 @@ async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
     redraw |= ui.set_link(link::snapshot(Instant::now().as_millis()).await);
     redraw |= ui.set_battery(power::get_battery_snapshot().await.level);
 
-    if ui.screen() != Screen::Status {
+    if ui.screen() != Screen::Status && ui.screen() != Screen::Prompt {
         if previous == Activity::Idle && matches!(snapshot.activity, Activity::Procedure(_) | Activity::ManualDrive(_))
         {
-            redraw |= ui.show_status(status_view(&snapshot, None));
+            redraw |= follow_activity(ui, &snapshot).await;
         }
     } else if snapshot.activity == Activity::Idle
         && matches!(previous, Activity::Procedure(_) | Activity::ManualDrive(_))
@@ -827,6 +850,20 @@ async fn refresh_screens(ui: &mut Ui, last_activity: &mut Activity) -> bool {
     }
 
     redraw
+}
+
+/// Open the screen a newly started Activity is followed onto.
+///
+/// A DMP compass calibration guides the operator with the Prompt; every other
+/// Procedure and a Manual Drive use the shared running screen.
+async fn follow_activity(ui: &mut Ui, snapshot: &Snapshot) -> bool {
+    if snapshot.procedure() == Some(Procedure::DmpCompassCalibration) {
+        let view = dmp_cal::snapshot()
+            .await
+            .unwrap_or_else(DmpCalibrationSnapshot::starting);
+        return ui.show_prompt(view.prompt_view());
+    }
+    ui.show_status(status_view(snapshot, None))
 }
 
 /// Refresh the Room Scan radar frame and sensor caption, reporting a change.
@@ -854,7 +891,23 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
 /// tick, so the readout updates at the tick rate. Other screens never take that
 /// lock.
 async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
-    if ui.screen() != Screen::Status || snapshot.activity == Activity::Idle {
+    if snapshot.activity == Activity::Idle {
+        return false;
+    }
+
+    // A DMP compass calibration's live step, heading, accuracy and hint travel in
+    // the panel-only snapshot; the Prompt is refreshed from it on the same tick.
+    if ui.screen() == Screen::Prompt {
+        if snapshot.procedure() != Some(Procedure::DmpCompassCalibration) {
+            return false;
+        }
+        let Some(prompt) = dmp_cal::snapshot().await else {
+            return false;
+        };
+        return ui.set_prompt(prompt.prompt_view());
+    }
+
+    if ui.screen() != Screen::Status {
         return false;
     }
 

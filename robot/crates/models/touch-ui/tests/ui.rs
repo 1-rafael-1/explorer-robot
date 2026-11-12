@@ -7,6 +7,7 @@
 //! so a reordering cannot rotate the radar unnoticed; other drawing is not
 //! asserted and is validated on glass.
 
+use dmp_cal::CompassStep;
 use embedded_graphics::{
     Pixel, draw_target::DrawTarget, geometry::OriginDimensions, pixelcolor::Rgb565, prelude::*, primitives::Rectangle,
 };
@@ -15,8 +16,8 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station,
 };
 use touch_ui::{
-    HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction, PromptView, ScreenEntry, SensorState, Submenu,
-    TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    DmpCalibrationSnapshot, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction,
+    PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
@@ -110,7 +111,7 @@ fn open_value_entry(flow: ValueFlow) -> Ui {
     match flow {
         ValueFlow::DistanceCalibration => {
             tap_item(&mut ui, 1);
-            tap_item(&mut ui, 2);
+            tap_item(&mut ui, 3);
         }
         ValueFlow::AttemptStraight => {
             tap_item(&mut ui, 2);
@@ -177,6 +178,7 @@ fn the_menu_tree_matches_the_robot() {
         [
             Item::Procedure(Procedure::MotorCalibration),
             Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
         ]
         .as_slice()
@@ -208,7 +210,7 @@ fn the_menu_tree_matches_the_robot() {
         labels(Screen::MainMenu),
         ["System Info", "Calibrate", "Drive Mode", "Test Mode", "Link"]
     );
-    assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "Distance"]);
+    assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "DMP Mag", "Distance"]);
     assert_eq!(labels(Screen::DriveMode), ["Coast & Avoid", "Attempt Straight"]);
     assert_eq!(
         labels(Screen::TestMode),
@@ -262,6 +264,7 @@ fn every_menu_entry_is_a_listed_item() {
             Item::ScreenEntry(ScreenEntry::Link),
             Item::Procedure(Procedure::MotorCalibration),
             Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
             Item::Procedure(Procedure::CoastAndAvoid),
             Item::Procedure(Procedure::AttemptStraight),
@@ -282,8 +285,8 @@ fn every_menu_entry_is_a_listed_item() {
     assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
 }
 
-/// Test that the menus list eleven Procedures: the ten the firmware runs today
-/// plus the deferred attempt-straight, and no Procedure twice.
+/// Test that the menus list twelve Procedures: the eleven the firmware runs
+/// today plus the deferred attempt-straight, and no Procedure twice.
 #[test]
 fn the_menus_list_every_procedure_once() {
     let procedures: Vec<Procedure> = [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode]
@@ -291,7 +294,7 @@ fn the_menus_list_every_procedure_once() {
         .flat_map(|screen| screen.items().iter().copied())
         .filter_map(Item::as_procedure)
         .collect();
-    assert_eq!(procedures.len(), 11);
+    assert_eq!(procedures.len(), 12);
     for (index, procedure) in procedures.iter().enumerate() {
         assert!(!procedure.label().is_empty(), "{procedure:?} is labelled");
         assert!(!procedures[..index].contains(procedure), "{procedure:?} is listed once");
@@ -346,7 +349,7 @@ fn back_returns_from_every_submenu() {
 #[test]
 fn every_entry_names_its_own_title_and_parent() {
     // Every entry the crate ships, with the parent it states for itself.
-    let expected: [(Item, Screen); 17] = [
+    let expected: [(Item, Screen); 18] = [
         (Item::ScreenEntry(ScreenEntry::SystemInfo), Screen::MainMenu),
         (Item::Submenu(Submenu::Calibrate), Screen::MainMenu),
         (Item::Submenu(Submenu::DriveMode), Screen::MainMenu),
@@ -354,6 +357,7 @@ fn every_entry_names_its_own_title_and_parent() {
         (Item::ScreenEntry(ScreenEntry::Link), Screen::MainMenu),
         (Item::Procedure(Procedure::MotorCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::MagCalibration), Screen::Calibrate),
+        (Item::Procedure(Procedure::DmpCompassCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::DistanceCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::CoastAndAvoid), Screen::DriveMode),
         (Item::Procedure(Procedure::AttemptStraight), Screen::DriveMode),
@@ -436,6 +440,7 @@ fn interactive_procedures_match_their_producers() {
     for procedure in [
         Procedure::MotorCalibration,
         Procedure::MagCalibration,
+        Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
         Procedure::AttemptStraight,
         Procedure::Turns,
@@ -2093,9 +2098,9 @@ const fn dmp_prompt(instruction: &'static str) -> PromptView {
 }
 
 /// Test the DMP compass calibration identity: its label, parent, calibration
-/// flag, destination, hands-on metadata, and that it is not a menu item yet.
+/// flag, destination, hands-on metadata, and that it is listed beside `Mag`.
 #[test]
-fn the_dmp_compass_calibration_is_hands_on_and_not_yet_listed() {
+fn the_dmp_compass_calibration_is_hands_on_and_listed_beside_mag() {
     let procedure = Procedure::DmpCompassCalibration;
     assert_eq!(procedure.label(), "DMP Mag");
     assert_eq!(procedure.parent(), Some(Screen::Calibrate));
@@ -2115,14 +2120,110 @@ fn the_dmp_compass_calibration_is_hands_on_and_not_yet_listed() {
     assert_eq!(Screen::Prompt.items(), []);
     assert_eq!(Screen::Prompt.title(), "Prompt");
 
-    // Deliberately not offered by any list screen until the firmware Procedure
-    // exists; ticket 03 adds the Calibrate entry.
-    for screen in [Screen::MainMenu, Screen::Calibrate, Screen::DriveMode, Screen::TestMode] {
+    // The temporary expand phase lists DMP Mag beside Mag on Calibrate and
+    // nowhere else.
+    assert_eq!(
+        Screen::Calibrate.items(),
+        [
+            Item::Procedure(Procedure::MotorCalibration),
+            Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
+            Item::Procedure(Procedure::DistanceCalibration),
+        ]
+        .as_slice()
+    );
+    for screen in [Screen::MainMenu, Screen::DriveMode, Screen::TestMode] {
         assert!(
             screen.items().iter().all(|item| item.as_procedure() != Some(procedure)),
-            "{procedure:?} is not listed on {screen:?} yet"
+            "{procedure:?} is not listed on {screen:?}"
         );
     }
+}
+
+/// A neutral DMP snapshot formats a placeholder status line and the first step's
+/// Prompt without any measured values.
+#[test]
+fn a_dmp_snapshot_starts_on_the_first_step_with_placeholders() {
+    let snapshot = DmpCalibrationSnapshot::starting();
+    assert_eq!(snapshot.step, CompassStep::FlatHold);
+    assert_eq!(snapshot.step_index(), 0);
+    assert_eq!(snapshot.step_count(), CompassStep::ALL.len());
+    assert_eq!(snapshot.instruction(), "Place flat. Hold still.");
+    assert_eq!(snapshot.status_text().as_str(), "Hdg -- Acc --");
+    assert_eq!(snapshot.progress(), 0);
+
+    let view = snapshot.prompt_view();
+    assert_eq!(view.title, "DMP Mag");
+    assert_eq!(view.parent, Screen::Calibrate);
+    assert_eq!(view.instruction, "Place flat. Hold still.");
+    assert_eq!(view.status_text(), "Hdg -- Acc --");
+    assert_eq!(view.progress, Some(0));
+    assert!(view.done);
+    assert!(!view.redo);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert_eq!(ui.title(), "DMP Mag");
+    render_ok(&ui);
+}
+
+/// A movement step formats the heading, accuracy and span hint on the one status
+/// line, and its Prompt carries the step's instruction and progress.
+#[test]
+fn a_dmp_movement_snapshot_formats_heading_and_span() {
+    let snapshot = DmpCalibrationSnapshot {
+        step: CompassStep::FlatSpin,
+        heading_deg: Some(123.4),
+        target_heading_deg: None,
+        accuracy: Some(3),
+        hint: DmpHint::YawSpanDeg(45.2),
+        check: DmpCheckState::NotChecking,
+        redo: false,
+    };
+
+    assert_eq!(snapshot.status_text().as_str(), "Hdg 123 Acc 3 Span 45");
+    assert!(snapshot.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert_eq!(snapshot.prompt_view().instruction, CompassStep::FlatSpin.instruction());
+    assert_eq!(snapshot.prompt_view().progress, Some(12));
+    assert!(!snapshot.prompt_view().redo);
+}
+
+/// A hold step formats elapsed stillness in whole seconds, and a Compass Check
+/// formats its target and state, offering Redo as well as Done.
+#[test]
+fn a_dmp_hold_and_check_snapshot_format_their_hints() {
+    let hold = DmpCalibrationSnapshot {
+        step: CompassStep::FlatHold,
+        heading_deg: Some(12.0),
+        target_heading_deg: None,
+        accuracy: Some(3),
+        hint: DmpHint::StillMillis(2_500),
+        check: DmpCheckState::NotChecking,
+        redo: false,
+    };
+    assert_eq!(hold.status_text().as_str(), "Hdg 12 Acc 3 Still 2s");
+
+    let check = DmpCalibrationSnapshot {
+        step: CompassStep::NorthCheck,
+        heading_deg: Some(5.0),
+        target_heading_deg: Some(0.0),
+        accuracy: Some(3),
+        hint: DmpHint::None,
+        check: DmpCheckState::Waiting,
+        redo: true,
+    };
+    assert_eq!(check.status_text().as_str(), "Hdg 5 Tgt 0 Acc 3 Check Waiting");
+    assert!(check.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert!(check.prompt_view().redo);
+    assert_eq!(check.prompt_view().progress, Some(75));
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(check.prompt_view()));
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+    render_ok(&ui);
 }
 
 /// Test that the model's hands-on set is the firmware's Remote-availability rule

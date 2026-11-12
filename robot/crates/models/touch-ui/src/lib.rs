@@ -27,6 +27,8 @@
 //!   onto.
 //! - [`imu`] holds the neutral IMU Test Readout the firmware maps onto and the
 //!   row formatting the panel draws.
+//! - [`dmp_cal`] holds the neutral DMP Compass Calibration snapshot the firmware
+//!   maps onto, its status line, and the Prompt view it builds.
 //! - [`sensor`] holds the neutral sensor lifecycle state the Room Scan caption
 //!   shows.
 //! - [`radar`] holds the Room Scan radar widget, fed by a neutral 360-slot
@@ -57,6 +59,7 @@
 )]
 
 pub mod buffer;
+pub mod dmp_cal;
 pub mod geometry;
 pub mod hit;
 pub mod imu;
@@ -68,6 +71,7 @@ pub mod system_info;
 pub mod ui;
 pub mod widgets;
 
+pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckState, DmpHint};
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction, PromptAction};
 pub use imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MagDiagnostics, Vector3};

@@ -12,6 +12,7 @@ use defmt::Format;
 
 pub mod activity;
 pub mod calibration;
+pub mod dmp_cal;
 pub mod imu_test;
 pub mod link;
 pub mod motion;

@@ -28,6 +28,7 @@
 //! 5) `ACTIVITY_STATE` — the innermost lock. Take it last, and never call another
 //!    state accessor while holding it, so it can never close a lock cycle.
 //! 6) `IMU_TEST_STATE` — independent leaf; never taken while another state mutex is held
+//! 7) `DMP_CAL_STATE` — independent leaf; never taken while another state mutex is held
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use touch_ui::{Procedure, buffer::TextBuf};

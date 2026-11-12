@@ -70,9 +70,9 @@ async fn handle_event(event: Events) {
 /// Map a terminal Procedure outcome onto the panel's existing reaction.
 ///
 /// The event carries the identity, so this needs no Activity read. The
-/// run-to-completion tests leave the running screen only on success, the motor
-/// and magnetometer calibrations react on either terminal stage so a finished
-/// calibration never looks hung, and every other Procedure — distance
+/// run-to-completion tests leave the running screen only on success, the motor,
+/// magnetometer and DMP compass calibrations react on either terminal stage so a
+/// finished calibration never looks hung, and every other Procedure — distance
 /// calibration, the interactive tests and coast-and-avoid — has no UI event.
 /// The same decision is the one place that names which Procedures have a panel
 /// lifecycle; the claim raises the event once. The detail is logged so the
@@ -90,7 +90,7 @@ async fn handle_procedure_finished(procedure: Procedure, stage: Stage, detail: &
         Procedure::Turns | Procedure::StraightDrive | Procedure::ArcDrive if stage == Stage::Complete => {
             ui::send_ui_event(UiEvent::TestingCompleted { procedure, generation }).await;
         }
-        Procedure::MotorCalibration | Procedure::MagCalibration => {
+        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DmpCompassCalibration => {
             ui::send_ui_event(UiEvent::CalibrationCompleted { generation }).await;
         }
         Procedure::DistanceCalibration

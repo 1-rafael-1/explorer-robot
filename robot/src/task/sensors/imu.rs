@@ -299,13 +299,16 @@ static LATEST_READINGS: Mutex<CriticalSectionRawMutex, ImuReadings> = Mutex::new
     raw_accel: None,
     raw_gyro: None,
     raw_mag: None,
+    compass_accuracy: None,
 });
 
 /// Snapshot of all IMU sensor data updated on every valid DMP packet.
 ///
 /// Fields are `None` before the first packet arrives. Magnetometer fields
 /// (`calibrated_mag`, `raw_mag`) are `None` before the first `Axis9` packet
-/// arrives and are cleared when switching to `Axis6` fusion mode.
+/// arrives and are cleared when switching to `Axis6` fusion mode. The DMP
+/// `compass_accuracy` is the fused compass's `0..=3` quality word and is
+/// cleared with them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ImuReadings {
     /// DMP-derived orientation.
@@ -321,6 +324,9 @@ pub struct ImuReadings {
     pub raw_gyro: Option<Vector3<f32>>,
     /// Raw magnetometer (µT, before any host correction).
     pub raw_mag: Option<Vector3<f32>>,
+    /// DMP Compass Accuracy (`0..=3`, most accurate at 3), or `None` while
+    /// nine-axis fusion has not produced one.
+    pub compass_accuracy: Option<u16>,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -544,6 +550,12 @@ async fn update_statics_from_dmp(
         readings.raw_mag = Some(raw);
         readings.calibrated_mag = Some(cal);
     }
+    // The compass accuracy accompanies the compass sample. Keep the last one
+    // when a packet does not carry it, and clear it with the magnetometer values
+    // when the fusion mode switches to `Axis6`.
+    if let Some(accuracy) = packet.compass_accuracy {
+        readings.compass_accuracy = Some(accuracy);
+    }
     drop(readings);
 
     // Forward raw mag to the drive task for the magnetometer calibration procedure.
@@ -755,6 +767,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         let mut readings = LATEST_READINGS.lock().await;
                                         readings.raw_mag = None;
                                         readings.calibrated_mag = None;
+                                        readings.compass_accuracy = None;
                                     }
                                 } else {
                                     warn!("DMP mode switch failed — restoring previous {:?}", fusion_mode);
