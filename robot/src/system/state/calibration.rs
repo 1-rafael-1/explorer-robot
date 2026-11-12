@@ -22,6 +22,7 @@ pub static CALIBRATION_STATE: Mutex<CriticalSectionRawMutex, CalibrationState> =
     imu_cal_status: CalibrationStatus::NotLoaded,
     mag_cal_status: CalibrationStatus::NotLoaded,
     distance_cal_status: CalibrationStatus::NotLoaded,
+    dmp_cal_status: CalibrationStatus::NotLoaded,
     distance_factor: 1.0,
 });
 
@@ -35,6 +36,12 @@ pub struct CalibrationState {
     pub mag_cal_status: CalibrationStatus,
     /// Distance calibration status.
     pub distance_cal_status: CalibrationStatus,
+    /// DMP Bias Snapshot status.
+    ///
+    /// `Loaded` means the snapshot was actually written to the DMP, not merely
+    /// found in flash; `NotAvailable` covers an absent, corrupt or rejected
+    /// snapshot.
+    pub dmp_cal_status: CalibrationStatus,
     /// Distance calibration factor (1.0 = no correction).
     pub distance_factor: f32,
 }
@@ -45,7 +52,16 @@ impl CalibrationState {
         self.motor_cal_status != CalibrationStatus::NotLoaded
             && self.imu_cal_status != CalibrationStatus::NotLoaded
             && self.distance_cal_status != CalibrationStatus::NotLoaded
+            && self.dmp_cal_status != CalibrationStatus::NotLoaded
     }
+}
+
+/// Record the DMP Bias Snapshot status after the boot apply attempt.
+///
+/// The caller must not hold [`CALIBRATION_STATE`] across the DMP write; this
+/// helper takes the lock only to store the settled result.
+pub async fn set_dmp_cal_status(status: CalibrationStatus) {
+    CALIBRATION_STATE.lock().await.dmp_cal_status = status;
 }
 
 /// Checks if system initialization is complete (async helper).

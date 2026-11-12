@@ -53,6 +53,16 @@ pub async fn get_cached_imu_flags() -> Option<ImuCalibrationFlags> {
     data.as_ref().map(|cal| cal.imu_flags)
 }
 
+/// Return the latest cached DMP Bias Snapshot, if the boot query found one.
+///
+/// `None` before the boot query runs, after a query that found no snapshot, and
+/// before any save. The DMP calibration runner uses it to restore the DMP after
+/// a Stop or failure without writing flash again.
+pub async fn get_cached_dmp_bias() -> Option<DmpBiasWords> {
+    let data = CALIBRATION_DATA.lock().await;
+    data.as_ref().and_then(|cal| cal.dmp_bias)
+}
+
 /// Send a flash storage command.
 pub async fn send_flash_command(command: FlashCommand) {
     FLASH_COMMAND_CHANNEL.send(command).await;
@@ -75,7 +85,6 @@ pub enum CalibrationKind {
     /// Distance calibration data.
     Distance,
     /// DMP Bias Snapshot.
-    #[allow(dead_code)] // Ticket 05 requests this kind at boot; nothing constructs it yet.
     DmpBias,
 }
 

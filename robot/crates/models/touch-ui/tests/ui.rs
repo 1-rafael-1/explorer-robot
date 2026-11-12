@@ -933,6 +933,7 @@ fn system_info_renders_the_neutral_snapshot() {
         motor_calibration: CalibrationStatus::Loaded,
         mag_calibration: CalibrationStatus::Unknown,
         distance_calibration: CalibrationStatus::Missing,
+        dmp_calibration: CalibrationStatus::Loaded,
     };
     let rows = info.rows();
     assert_eq!(rows[0].as_str(), "Batt  87%");
@@ -940,6 +941,12 @@ fn system_info_renders_the_neutral_snapshot() {
     assert_eq!(rows[2].as_str(), "Motor: Loaded");
     assert_eq!(rows[3].as_str(), "Mag: Unknown");
     assert_eq!(rows[4].as_str(), "Dist: Missing");
+    assert_eq!(rows[5].as_str(), "DMP Cal: Loaded");
+    assert_eq!(rows.len(), 6);
+
+    // The sixth row must still fit the existing System Info layout.
+    let last = info_row_rect(rows.len() - 1);
+    assert!(bottom_right(last).y < i32::try_from(FB_H).unwrap_or(i32::MAX));
 }
 
 /// Test that an unread snapshot reads as explicitly unknown, not as dummy
@@ -952,6 +959,7 @@ fn system_info_defaults_are_explicitly_unknown() {
     assert_eq!(rows[2].as_str(), "Motor: Unknown");
     assert_eq!(rows[3].as_str(), "Mag: Unknown");
     assert_eq!(rows[4].as_str(), "Dist: Unknown");
+    assert_eq!(rows[5].as_str(), "DMP Cal: Unknown");
 }
 
 /// Test that the UI holds the System Info snapshot the firmware supplies.

@@ -17,7 +17,9 @@
 //! completes the Procedure.
 //!
 //! On every exit path the fusion mode returns to [`DEFAULT_FUSION_MODE`], IMU
-//! readings stop, and the panel-only snapshot is cleared.
+//! readings stop, and the panel-only snapshot is cleared. A Stop or a terminal
+//! failure restores the last saved DMP Bias Snapshot to the DMP when flash holds
+//! one, and never writes flash.
 
 use defmt::{info, warn};
 use dmp_cal::{
@@ -28,13 +30,14 @@ use embassy_time::Instant;
 use touch_ui::{DmpCalibrationSnapshot, DmpCheckState, DmpHint, PromptAction};
 
 use crate::{
-    system::state::dmp_cal as dmp_cal_state,
+    system::state::{CalibrationStatus, calibration, dmp_cal as dmp_cal_state},
     task::{
         io::flash_storage::{self, CalibrationDataKind, DmpBiasWords, FlashCommand},
         procedure::Claim,
         sensors::imu::{
-            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, clear_dmp_compass_bias, get_latest_readings,
-            is_mag_available, read_dmp_bias, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
+            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, apply_dmp_bias, clear_dmp_compass_bias,
+            get_latest_readings, is_mag_available, read_dmp_bias, set_dmp_fusion_mode, start_imu_readings,
+            stop_imu_readings,
         },
     },
 };
@@ -132,6 +135,7 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
 
     if !is_mag_available() {
         warn!("DMP compass calibration: magnetometer unavailable at start-up");
+        restore_cached_dmp_bias().await;
         claim.fail(MAG_UNAVAILABLE).await;
         return;
     }
@@ -153,10 +157,16 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
                 DmpAction::Done => handle_done(&mut calibration, &mut check),
                 DmpAction::Redo => {
                     // Only the two Compass Checks offer Redo; `redo` is inert on a
-                    // movement step. It restarts at the first movement step and
-                    // clears only the DMP compass bias — never flash.
+                    // movement step. It restarts at the first movement step,
+                    // re-applies the saved gyroscope and accelerometer biases,
+                    // and clears only the DMP compass bias — never flash.
                     if calibration.redo() {
                         check = CompassCheck::new();
+                        if let Some(words) = flash_storage::get_cached_dmp_bias().await
+                            && let Err(error) = apply_dmp_bias(words.into()).await
+                        {
+                            warn!("DMP calibration: Redo bias apply failed: {:?}", error);
+                        }
                         clear_dmp_compass_bias();
                         shown_step = None;
                     }
@@ -213,7 +223,10 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
 
     match outcome {
         RunOutcome::Complete => save_bias_snapshot(claim).await,
-        RunOutcome::Stopped => claim.finish().await,
+        RunOutcome::Stopped => {
+            restore_cached_dmp_bias().await;
+            claim.finish().await;
+        }
     }
 }
 
@@ -251,12 +264,41 @@ async fn save_bias_snapshot(claim: &Claim) {
                 DmpBiasWords::from(snapshot),
             )))
             .await;
+            // The DMP already holds the biases that were just read, so the
+            // status is truthful before the flash write finishes.
+            calibration::set_dmp_cal_status(CalibrationStatus::Loaded).await;
             claim.complete(RESULT_SAVED).await;
         }
         Err(error) => {
             warn!("DMP compass calibration: DMP bias read failed: {:?}", error);
+            restore_cached_dmp_bias().await;
             claim.fail(RESULT_READ_FAILED).await;
         }
+    }
+}
+
+/// Restore the last saved DMP Bias Snapshot to the DMP after a Stop or failure.
+///
+/// Never writes flash. When flash holds a snapshot, its nine words are applied
+/// and the status becomes `Loaded` only when the DMP write succeeds. With no
+/// snapshot the DMP's current RAM state is left alone, and the status records
+/// that no persisted calibration exists.
+async fn restore_cached_dmp_bias() {
+    if let Some(words) = flash_storage::get_cached_dmp_bias().await {
+        info!("DMP calibration: restoring the saved bias snapshot");
+        match apply_dmp_bias(words.into()).await {
+            Ok(()) => {
+                info!("DMP calibration: saved bias snapshot restored");
+                calibration::set_dmp_cal_status(CalibrationStatus::Loaded).await;
+            }
+            Err(error) => {
+                warn!("DMP calibration: restoring the saved bias snapshot failed: {:?}", error);
+                calibration::set_dmp_cal_status(CalibrationStatus::NotAvailable).await;
+            }
+        }
+    } else {
+        info!("DMP calibration: no saved snapshot — leaving DMP RAM state alone");
+        calibration::set_dmp_cal_status(CalibrationStatus::NotAvailable).await;
     }
 }
 

@@ -183,6 +183,16 @@ const DMP_CPASS_BIAS_Z: u16 = DMP_CPASS_BIAS_Y + 4;
 /// reconfiguration that is already in flight.
 const DMP_BIAS_READ_TIMEOUT_MS: u64 = 500;
 
+/// How long [`apply_dmp_bias`] waits for the IMU task before reporting failure.
+///
+/// This bounds a dead or marginal IMU without falsely reporting `Missing` for a
+/// healthy-but-slow bring-up. The command is queued before `dmp_init` has run,
+/// so the wait must cover the 200 ms power-up delay, the reset/settle delay,
+/// up to 60 × 50 ms initialisation retries (~3 s), and the DMP firmware load
+/// before `run_imu_command_loop` drains the queue. It remains bounded so a dead
+/// task cannot keep the boot gate dark forever.
+const DMP_BIAS_APPLY_TIMEOUT_MS: u64 = 5_000;
+
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 
 /// Rate-limiting interval for IMU loop diagnostics when `telemetry_logs` is on.
@@ -307,6 +317,9 @@ enum ImuCommand {
     SetFusionMode(DmpFusionMode),
     /// Read the nine DMP bias words and answer through [`BIAS_REPLY`].
     ReadBias,
+    /// Write the nine DMP bias words from a snapshot, answering through
+    /// [`BIAS_APPLY_REPLY`].
+    ApplyBias(DmpBiasSnapshot),
     /// Zero the DMP's three compass bias words; the gyroscope and accelerometer
     /// biases are kept.
     ClearCompassBias,
@@ -334,6 +347,12 @@ static IMU_CONTROL: Channel<CriticalSectionRawMutex, ImuCommand, IMU_CONTROL_QUE
 /// a time. Capacity one is enough for the single answer; a stale answer is
 /// drained before the next request.
 static BIAS_REPLY: Channel<CriticalSectionRawMutex, Result<DmpBiasSnapshot, BiasReadError>, 1> = Channel::new();
+
+/// Reply slot for one in-flight [`apply_dmp_bias`] request.
+///
+/// Like [`BIAS_REPLY`], capacity one is enough for the single answer and a stale
+/// answer is drained before the next request.
+static BIAS_APPLY_REPLY: Channel<CriticalSectionRawMutex, Result<(), BiasApplyError>, 1> = Channel::new();
 
 /// `true` when `dmp_init_magnetometer` succeeded at start-up; gates `Axis9` usage.
 static MAG_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -387,6 +406,17 @@ pub enum BiasReadError {
     /// The IMU command could not be enqueued, or its task did not answer in
     /// time. The calibration reports this as a failed read rather than holding
     /// the Active Claim indefinitely.
+    NoResponse,
+}
+
+/// Why writing a DMP Bias Snapshot to the DMP failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum BiasApplyError {
+    /// A DMP memory write failed before all nine words were written.
+    WriteFailed,
+    /// The IMU command could not be enqueued, or its task did not answer in
+    /// time. The boot flow reports this as a missing calibration rather than
+    /// keeping the panel dark forever.
     NoResponse,
 }
 
@@ -459,6 +489,34 @@ pub async fn read_dmp_bias() -> Result<DmpBiasSnapshot, BiasReadError> {
         Either::Second(()) => {
             warn!("DMP bias read timed out after {}ms", DMP_BIAS_READ_TIMEOUT_MS);
             Err(BiasReadError::NoResponse)
+        }
+    }
+}
+
+/// Write the nine DMP bias words from `snapshot` to the DMP.
+///
+/// Drains any stale answer, enqueues [`ImuCommand::ApplyBias`], and waits for
+/// the task to finish the nine memory writes. `Ok` means all nine words were
+/// written; a partial write is [`BiasApplyError::WriteFailed`]. A command that
+/// cannot be enqueued or a task that does not answer is
+/// [`BiasApplyError::NoResponse`], so an absent IMU task cannot hold the boot
+/// gate shut forever.
+pub async fn apply_dmp_bias(snapshot: DmpBiasSnapshot) -> Result<(), BiasApplyError> {
+    while BIAS_APPLY_REPLY.receiver().try_receive().is_ok() {}
+    if IMU_CONTROL.try_send(ImuCommand::ApplyBias(snapshot)).is_err() {
+        warn!("DMP bias apply request dropped — IMU command queue full");
+        return Err(BiasApplyError::NoResponse);
+    }
+    match select(
+        BIAS_APPLY_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_APPLY_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(reply) => reply,
+        Either::Second(()) => {
+            warn!("DMP bias apply timed out after {}ms", DMP_BIAS_APPLY_TIMEOUT_MS);
+            Err(BiasApplyError::NoResponse)
         }
     }
 }
@@ -819,6 +877,52 @@ async fn read_bias_snapshot(sensor: &mut ImuSensor<'_>) -> Result<DmpBiasSnapsho
     Ok(DmpBiasSnapshot::new(gyro, accel, compass))
 }
 
+/// Write one big-endian 32-bit DMP bias word.
+async fn write_bias_word(sensor: &mut ImuSensor<'_>, address: u16, word: i32) -> Result<(), BiasApplyError> {
+    sensor
+        .write_dmp_memory_async(address, &word.to_be_bytes())
+        .await
+        .map_err(|error| {
+            warn!("DMP bias write at 0x{:04x} failed: {:?}", address, error);
+            BiasApplyError::WriteFailed
+        })
+}
+
+/// Write the three consecutive bias words at `addresses`.
+async fn write_bias_triplet(
+    sensor: &mut ImuSensor<'_>,
+    words: [i32; 3],
+    addresses: [u16; 3],
+) -> Result<(), BiasApplyError> {
+    for (word, address) in words.iter().zip(addresses) {
+        write_bias_word(sensor, address, *word).await?;
+    }
+    Ok(())
+}
+
+/// Write all nine words from `snapshot`; `Ok` only when every write landed.
+async fn apply_bias_snapshot(sensor: &mut ImuSensor<'_>, snapshot: &DmpBiasSnapshot) -> Result<(), BiasApplyError> {
+    write_bias_triplet(
+        sensor,
+        snapshot.gyro_bias(),
+        [DMP_GYRO_BIAS_X, DMP_GYRO_BIAS_Y, DMP_GYRO_BIAS_Z],
+    )
+    .await?;
+    write_bias_triplet(
+        sensor,
+        snapshot.accel_bias(),
+        [DMP_ACCEL_BIAS_X, DMP_ACCEL_BIAS_Y, DMP_ACCEL_BIAS_Z],
+    )
+    .await?;
+    write_bias_triplet(
+        sensor,
+        snapshot.compass_bias(),
+        [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Zero the DMP's three compass bias words.
 ///
 /// A failed write is logged; `Redo` still restarts the movement sequence, so a
@@ -939,6 +1043,12 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                         Either::First(ImuCommand::ReadBias) => {
                             let snapshot = read_bias_snapshot(sensor).await;
                             BIAS_REPLY.send(snapshot).await;
+                        }
+
+                        // ── In-band: bias snapshot apply ─────────────────────
+                        Either::First(ImuCommand::ApplyBias(snapshot)) => {
+                            let result = apply_bias_snapshot(sensor, &snapshot).await;
+                            BIAS_APPLY_REPLY.send(result).await;
                         }
 
                         // ── In-band: compass bias clear ───────────────────────
@@ -1107,6 +1217,10 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
             ImuCommand::ReadBias => {
                 let snapshot = read_bias_snapshot(sensor).await;
                 BIAS_REPLY.send(snapshot).await;
+            }
+            ImuCommand::ApplyBias(snapshot) => {
+                let result = apply_bias_snapshot(sensor, &snapshot).await;
+                BIAS_APPLY_REPLY.send(result).await;
             }
             ImuCommand::ClearCompassBias => {
                 clear_compass_bias_memory(sensor).await;

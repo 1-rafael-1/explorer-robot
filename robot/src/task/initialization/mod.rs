@@ -10,7 +10,7 @@
 //! no Result Report. When another claim already holds the slot, boot loads
 //! silently: it never writes over, or clears, a Procedure's Activity.
 
-use defmt::info;
+use defmt::{info, warn};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
         io::flash_storage::{self, CalibrationDataKind, CalibrationKind, ImuCalibrationFlags},
         motor_driver::{self, MotorCommand},
         procedure::{self, Claim, ClaimKind, ClaimOrigin},
+        sensors::imu,
         ui,
     },
 };
@@ -62,6 +63,14 @@ pub async fn handle_initialize() {
     ))
     .await;
 
+    // Request the DMP Bias Snapshot from flash. Its response applies the snapshot
+    // to the DMP and settles `dmp_cal_status`, which the boot gate waits for.
+    info!("Requesting DMP bias snapshot from flash");
+    flash_storage::send_flash_command(flash_storage::FlashCommand::GetData(
+        flash_storage::CalibrationKind::DmpBias,
+    ))
+    .await;
+
     // Note: initialization completes when calibration data arrives via events.
 }
 
@@ -89,18 +98,45 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
             handle_imu_calibration_flags_loaded(flags).await;
         }
         CalibrationKind::DmpBias => {
-            // Ticket 05 applies the snapshot to the DMP and publishes
-            // `DMP Cal: Loaded/Missing/Unknown`. This ticket only records that
-            // the flash query completed, so the boot gate is unchanged.
-            if let Some(CalibrationDataKind::DmpBias(_)) = data {
-                info!("DMP bias snapshot found");
-            } else {
-                info!("No DMP bias snapshot found");
-            }
+            let words = data.and_then(|data| match data {
+                CalibrationDataKind::DmpBias(words) => Some(words),
+                _ => None,
+            });
+            load_dmp_calibration(words).await;
         }
     }
 
     check_initialization_complete().await;
+}
+
+/// Apply the DMP Bias Snapshot to the DMP, or record that none is available.
+///
+/// `Loaded` is published only when the nine words were actually written to the
+/// DMP. An absent, corrupt or wrong-version snapshot arrives as `None` (flash
+/// validation rejects it), and a failed DMP write leaves the robot uncalibrated;
+/// both are `NotAvailable` so System Info reports `Missing` and the boot gate is
+/// not held shut once the query has settled.
+async fn load_dmp_calibration(words: Option<flash_storage::DmpBiasWords>) {
+    let status = if let Some(words) = words {
+        info!("DMP bias snapshot found — applying to the DMP");
+        match imu::apply_dmp_bias(words.into()).await {
+            Ok(()) => {
+                info!("DMP bias snapshot applied to the DMP");
+                CalibrationStatus::Loaded
+            }
+            Err(error) => {
+                warn!("DMP bias snapshot apply failed: {:?}", error);
+                CalibrationStatus::NotAvailable
+            }
+        }
+    } else {
+        warn!("No valid DMP bias snapshot found — DMP calibration missing");
+        CalibrationStatus::NotAvailable
+    };
+
+    // Never hold the state lock across the DMP write; it is taken only to store
+    // the settled result. `check_initialization_complete` reads it next.
+    calibration::set_dmp_cal_status(status).await;
 }
 
 /// Apply the motor calibration, or record that none was found.
@@ -193,6 +229,7 @@ async fn check_initialization_complete() {
             info!("  Motor calibration: {:?}", state.motor_cal_status);
             info!("  IMU calibration: {:?}", state.imu_cal_status);
             info!("  Distance calibration: {:?}", state.distance_cal_status);
+            info!("  DMP calibration: {:?}", state.dmp_cal_status);
             true
         } else {
             false

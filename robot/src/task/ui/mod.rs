@@ -932,9 +932,14 @@ async fn refresh_system_info_on_entry(ui: &mut Ui) {
 /// accessor is called before `CALIBRATION_STATE` is locked.
 async fn read_system_info() -> SystemInfo {
     let battery = power::get_battery_snapshot().await;
-    let (motor, mag, distance) = {
+    let (motor, mag, distance, dmp) = {
         let state = calibration::CALIBRATION_STATE.lock().await;
-        (state.motor_cal_status, state.mag_cal_status, state.distance_cal_status)
+        (
+            state.motor_cal_status,
+            state.mag_cal_status,
+            state.distance_cal_status,
+            state.dmp_cal_status,
+        )
     };
 
     SystemInfo {
@@ -943,5 +948,6 @@ async fn read_system_info() -> SystemInfo {
         motor_calibration: calibration::ui_status(motor),
         mag_calibration: calibration::ui_status(mag),
         distance_calibration: calibration::ui_status(distance),
+        dmp_calibration: calibration::ui_status(dmp),
     }
 }
