@@ -21,11 +21,23 @@ use crate::{
     screens::{Procedure, PromptView},
 };
 // The leading `::` selects the `dmp-cal` crate, not this module.
-use ::dmp_cal::{CompassStep, MotionHint};
+use ::dmp_cal::{CheckFailure, CheckOutcome, CompassStep, MotionHint};
 
 /// The neutral Compass Accuracy: the DMP's `0..=3` scale, or `None` before the
 /// first sample.
 pub type DmpAccuracy = u8;
+
+/// Why a Compass Check is failing, as the Prompt draws it.
+///
+/// The measured heading, target and accuracy stay on the same status line, so the
+/// reason only needs to say which rule the check is breaking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmpCheckFail {
+    /// A sample in the stability window does not report Compass Accuracy 3.
+    Accuracy,
+    /// The measured Compass Heading is outside tolerance of the target.
+    Heading,
+}
 
 /// The outcome of a Compass Check, as the Prompt draws it.
 ///
@@ -43,7 +55,7 @@ pub enum DmpCheckState {
     /// The check passed and accepts `Done`.
     Pass,
     /// The check failed and needs the operator's attention.
-    Fail,
+    Fail(DmpCheckFail),
 }
 
 impl DmpCheckState {
@@ -56,7 +68,24 @@ impl DmpCheckState {
             Self::Waiting => Some("Waiting"),
             Self::Unstable => Some("Unstable"),
             Self::Pass => Some("Pass"),
-            Self::Fail => Some("Fail"),
+            Self::Fail(DmpCheckFail::Accuracy) => Some("Acc"),
+            Self::Fail(DmpCheckFail::Heading) => Some("Hdg"),
+        }
+    }
+}
+
+impl From<CheckOutcome> for DmpCheckState {
+    /// Map the model's check outcome onto the panel's check vocabulary.
+    ///
+    /// The measured values stay in the snapshot, so a failure is reduced to the
+    /// rule it breaks.
+    fn from(outcome: CheckOutcome) -> Self {
+        match outcome {
+            CheckOutcome::Waiting => Self::Waiting,
+            CheckOutcome::Unstable => Self::Unstable,
+            CheckOutcome::Pass => Self::Pass,
+            CheckOutcome::Fail(CheckFailure::Accuracy { .. }) => Self::Fail(DmpCheckFail::Accuracy),
+            CheckOutcome::Fail(CheckFailure::Heading { .. }) => Self::Fail(DmpCheckFail::Heading),
         }
     }
 }

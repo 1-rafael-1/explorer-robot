@@ -1,22 +1,28 @@
-//! DMP Compass Calibration procedure: the guided movement ceremony.
+//! DMP Compass Calibration procedure: the guided movement ceremony, the two
+//! Compass Checks, and the DMP Bias Snapshot save.
 //!
 //! The runner selects nine-axis fusion, starts IMU readings, and walks the
-//! operator through the six Compass Steps of the DMP Compass Calibration. It
+//! operator through the eight Compass Steps of the DMP Compass Calibration: six
+//! movements followed by a check at magnetic north and one at magnetic east. It
 //! publishes a typed [`touch_ui::DmpCalibrationSnapshot`] at the panel's 10 Hz
 //! telemetry rate for the Prompt screen; Activity State carries only the
 //! lifecycle phase. `Done` and `Redo` reach the runner through [`DMP_ACTION`],
 //! sent by the UI task when the Prompt reports them.
 //!
-//! Ticket 03 covers the movement ceremony only: after the sixth step it records
-//! "Movement complete — not saved" and stops. It runs no Compass Check, reads no
-//! DMP bias and writes no flash; ticket 04 replaces the sixth-step completion
-//! branch with the two checks and adds the snapshot save.
+//! A `Done` on a Compass Check advances only when [`CompassCheck::accept`]
+//! accepts a passing result, so a bad heading is never skipped or saved. `Redo`
+//! restarts at the first movement step and clears only the DMP compass bias. The
+//! save path reads the nine raw bias words through the IMU task, writes a
+//! [`DmpBiasWords`] snapshot through the existing flash-storage command, and
+//! completes the Procedure.
 //!
 //! On every exit path the fusion mode returns to [`DEFAULT_FUSION_MODE`], IMU
 //! readings stop, and the panel-only snapshot is cleared.
 
 use defmt::{info, warn};
-use dmp_cal::{CompassCalibration, CompassStep, MotionHint, MotionSample, compass_heading};
+use dmp_cal::{
+    CompassCalibration, CompassCheck, CompassSample, CompassStep, MotionHint, MotionSample, compass_heading,
+};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::Instant;
 use touch_ui::{DmpCalibrationSnapshot, DmpCheckState, DmpHint, PromptAction};
@@ -24,10 +30,11 @@ use touch_ui::{DmpCalibrationSnapshot, DmpCheckState, DmpHint, PromptAction};
 use crate::{
     system::state::dmp_cal as dmp_cal_state,
     task::{
+        io::flash_storage::{self, CalibrationDataKind, DmpBiasWords, FlashCommand},
         procedure::Claim,
         sensors::imu::{
-            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, get_latest_readings, is_mag_available,
-            set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
+            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, clear_dmp_compass_bias, get_latest_readings,
+            is_mag_available, read_dmp_bias, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
         },
     },
 };
@@ -35,10 +42,12 @@ use crate::{
 /// The panel's existing telemetry rate: one snapshot per 100 ms.
 const PROMPT_INTERVAL_MS: u64 = 100;
 
-/// The temporary result this slice records after the sixth step.
-///
-/// Ticket 04 replaces it with the Compass Check outcome and the saved snapshot.
-const RESULT_NOT_SAVED: &str = "Movement complete — not saved";
+/// The result recorded once the snapshot is written to flash.
+const RESULT_SAVED: &str = "Calibration saved";
+
+/// The failure reason when the DMP bias words cannot be read, so nothing is
+/// written.
+const RESULT_READ_FAILED: &str = "DMP bias read failed";
 
 /// The reason recorded when the magnetometer never initialised.
 const MAG_UNAVAILABLE: &str = "Magnetometer unavailable";
@@ -104,15 +113,15 @@ impl Drop for ReadingsGuard {
     }
 }
 
-/// How the movement ceremony ended.
-enum MovementOutcome {
-    /// The sixth movement step was accepted.
+/// How the run ended.
+enum RunOutcome {
+    /// Both Compass Checks were accepted.
     Complete,
     /// The operator stopped the Procedure.
     Stopped,
 }
 
-/// Run the DMP Compass Calibration movement ceremony under `claim`.
+/// Run the DMP Compass Calibration under `claim`.
 ///
 /// `claim` is the one Active Claim the caller took and published. The runner
 /// makes the claim's terminal call itself, after restoring the IMU and clearing
@@ -129,6 +138,7 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
 
     let imu_guard = ReadingsGuard::start();
     let mut calibration = CompassCalibration::new();
+    let mut check = CompassCheck::new();
     let mut shown_step: Option<CompassStep> = None;
 
     // A tap that landed as the previous run ended is stale; discard it so it
@@ -136,47 +146,63 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
     while DMP_ACTION.try_receive().is_ok() {}
 
     let outcome = 'run: loop {
-        // Drain the operator's taps first, so a Done is reflected by this tick's
-        // snapshot.
+        // Drain the operator's taps first, so a Done or Redo is reflected by this
+        // tick's snapshot.
         while let Ok(action) = DMP_ACTION.try_receive() {
             match action {
-                DmpAction::Done => {
-                    let _ = calibration.done();
-                }
-                // Movement steps do not offer Redo, so this is inert until the
-                // Compass Checks arrive in ticket 04. The plumbing stays.
+                DmpAction::Done => handle_done(&mut calibration, &mut check),
                 DmpAction::Redo => {
-                    let _ = calibration.redo();
+                    // Only the two Compass Checks offer Redo; `redo` is inert on a
+                    // movement step. It restarts at the first movement step and
+                    // clears only the DMP compass bias — never flash.
+                    if calibration.redo() {
+                        check = CompassCheck::new();
+                        clear_dmp_compass_bias();
+                        shown_step = None;
+                    }
                 }
             }
         }
 
         let Some(step) = calibration.step() else {
-            break 'run MovementOutcome::Complete;
+            break 'run RunOutcome::Complete;
         };
-        // Ticket 03 ends the ceremony after the sixth movement step. Ticket 04
-        // replaces this branch with the two Compass Checks.
-        if step == CompassStep::NorthCheck {
-            break 'run MovementOutcome::Complete;
-        }
         if shown_step != Some(step) {
             claim.phase(phase_label(step), None).await;
             shown_step = Some(step);
         }
 
         let readings = get_latest_readings().await;
+        let timestamp_ms = Instant::now().as_millis();
         if let Some(orientation) = readings.orientation {
             calibration.observe(MotionSample {
-                timestamp_ms: Instant::now().as_millis(),
+                timestamp_ms,
                 yaw_deg: orientation.yaw,
                 pitch_deg: orientation.pitch,
                 roll_deg: orientation.roll,
             });
         }
-        dmp_cal_state::publish(build_snapshot(step, calibration.hint(), readings)).await;
+
+        let accuracy = readings
+            .compass_accuracy
+            .and_then(|accuracy| u8::try_from(accuracy).ok());
+        let check_state = if is_check_step(Some(step)) {
+            if let (Some(orientation), Some(accuracy)) = (readings.orientation, accuracy) {
+                check.sample(CompassSample {
+                    timestamp_ms,
+                    heading_deg: compass_heading(orientation.yaw),
+                    accuracy,
+                });
+            }
+            DmpCheckState::from(check.outcome())
+        } else {
+            DmpCheckState::NotChecking
+        };
+
+        dmp_cal_state::publish(build_snapshot(step, calibration.hint(), readings, check_state)).await;
 
         if claim.wait_or_stop(PROMPT_INTERVAL_MS).await {
-            break 'run MovementOutcome::Stopped;
+            break 'run RunOutcome::Stopped;
         }
     };
 
@@ -186,13 +212,61 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
     dmp_cal_state::clear().await;
 
     match outcome {
-        MovementOutcome::Complete => claim.complete(RESULT_NOT_SAVED).await,
-        MovementOutcome::Stopped => claim.finish().await,
+        RunOutcome::Complete => save_bias_snapshot(claim).await,
+        RunOutcome::Stopped => claim.finish().await,
+    }
+}
+
+/// Apply a `Done` tap to the step model and, on a Compass Check, to the check.
+///
+/// A movement step advances unconditionally because its hint never gates `Done`.
+/// A Compass Check advances only when [`CompassCheck::accept`] accepts a passing
+/// result: a bad heading leaves the Procedure on the Prompt with the reason and
+/// `Redo`.
+const fn handle_done(calibration: &mut CompassCalibration, check: &mut CompassCheck) {
+    if is_check_step(calibration.step()) {
+        if check.accept() {
+            let _ = calibration.done();
+        }
+    } else {
+        let _ = calibration.done();
+    }
+}
+
+/// Whether `step` is one of the two Compass Checks.
+const fn is_check_step(step: Option<CompassStep>) -> bool {
+    matches!(step, Some(CompassStep::NorthCheck | CompassStep::EastCheck))
+}
+
+/// Read the nine bias words and save the snapshot, then finish the claim.
+///
+/// A failed read fails the Procedure and writes nothing. A flash-save failure has
+/// no acknowledgement in the existing contract, so the flash task logs it and the
+/// result still names the save attempt; no second persistence path is invented.
+async fn save_bias_snapshot(claim: &Claim) {
+    match read_dmp_bias().await {
+        Ok(snapshot) => {
+            info!("DMP compass calibration: saving bias snapshot");
+            flash_storage::send_flash_command(FlashCommand::SaveData(CalibrationDataKind::DmpBias(
+                DmpBiasWords::from(snapshot),
+            )))
+            .await;
+            claim.complete(RESULT_SAVED).await;
+        }
+        Err(error) => {
+            warn!("DMP compass calibration: DMP bias read failed: {:?}", error);
+            claim.fail(RESULT_READ_FAILED).await;
+        }
     }
 }
 
 /// Build the snapshot the Prompt formats for `step`.
-fn build_snapshot(step: CompassStep, hint: MotionHint, readings: ImuReadings) -> DmpCalibrationSnapshot {
+fn build_snapshot(
+    step: CompassStep,
+    hint: MotionHint,
+    readings: ImuReadings,
+    check: DmpCheckState,
+) -> DmpCalibrationSnapshot {
     DmpCalibrationSnapshot {
         step,
         heading_deg: readings.orientation.map(|orientation| compass_heading(orientation.yaw)),
@@ -201,8 +275,7 @@ fn build_snapshot(step: CompassStep, hint: MotionHint, readings: ImuReadings) ->
             .compass_accuracy
             .and_then(|accuracy| u8::try_from(accuracy).ok()),
         hint: DmpHint::from(hint),
-        // Ticket 04 evaluates the Compass Checks; ticket 03 never enters one.
-        check: DmpCheckState::NotChecking,
+        check,
         redo: step.redo_allowed(),
     }
 }

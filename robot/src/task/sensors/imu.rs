@@ -55,6 +55,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::{info, warn};
+use dmp_cal::DmpBiasSnapshot;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as SpiDev;
 use embassy_futures::select::{Either, select};
 use embassy_rp::{gpio::Output, mode::Async, spi::Spi};
@@ -147,6 +148,40 @@ pub const MAG_NORM_MAX_UT: f32 = 200.0;
 pub const fn mag_gate_passes(norm: f32) -> bool {
     norm > MAG_NORM_MIN_UT && norm < MAG_NORM_MAX_UT
 }
+
+// ── DMP bias words ────────────────────────────────────────────────────────────
+//
+// The nine words are the DMP's own gyroscope, accelerometer and compass bias
+// registers, each a 32-bit big-endian `i32` at a 4-byte stride. The addresses
+// match SparkFun's `ICM_20948_DMP.h` (`util/ICM_20948_DMP.h`), which the DMP
+// firmware image and the icm20948-rs driver both use.
+
+/// DMP memory address of the X gyroscope bias word (`SparkFun` `GYRO_BIAS_X`).
+const DMP_GYRO_BIAS_X: u16 = 139 * 16 + 4;
+/// DMP memory address of the Y gyroscope bias word.
+const DMP_GYRO_BIAS_Y: u16 = DMP_GYRO_BIAS_X + 4;
+/// DMP memory address of the Z gyroscope bias word.
+const DMP_GYRO_BIAS_Z: u16 = DMP_GYRO_BIAS_Y + 4;
+
+/// DMP memory address of the X accelerometer bias word (`SparkFun` `ACCEL_BIAS_X`).
+const DMP_ACCEL_BIAS_X: u16 = 110 * 16 + 4;
+/// DMP memory address of the Y accelerometer bias word.
+const DMP_ACCEL_BIAS_Y: u16 = DMP_ACCEL_BIAS_X + 4;
+/// DMP memory address of the Z accelerometer bias word.
+const DMP_ACCEL_BIAS_Z: u16 = DMP_ACCEL_BIAS_Y + 4;
+
+/// DMP memory address of the X compass bias word (`SparkFun` `CPASS_BIAS_X`).
+const DMP_CPASS_BIAS_X: u16 = 126 * 16 + 4;
+/// DMP memory address of the Y compass bias word.
+const DMP_CPASS_BIAS_Y: u16 = DMP_CPASS_BIAS_X + 4;
+/// DMP memory address of the Z compass bias word.
+const DMP_CPASS_BIAS_Z: u16 = DMP_CPASS_BIAS_Y + 4;
+
+/// How long [`read_dmp_bias`] waits for the IMU task before reporting failure.
+///
+/// Nine SPI memory reads take well under this; the margin covers a fusion-mode
+/// reconfiguration that is already in flight.
+const DMP_BIAS_READ_TIMEOUT_MS: u64 = 500;
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 
@@ -270,6 +305,11 @@ enum ImuCommand {
     LoadCalibration(MagCalibration),
     /// Switch DMP fusion mode at runtime.
     SetFusionMode(DmpFusionMode),
+    /// Read the nine DMP bias words and answer through [`BIAS_REPLY`].
+    ReadBias,
+    /// Zero the DMP's three compass bias words; the gyroscope and accelerometer
+    /// biases are kept.
+    ClearCompassBias,
 }
 
 // ── Shared statics ────────────────────────────────────────────────────────────
@@ -287,6 +327,13 @@ const IMU_CONTROL_QUEUE_LEN: usize = 4;
 /// signal would let the later command overwrite the earlier one before the task
 /// wakes up. Ordered delivery guarantees each command is acted on in turn.
 static IMU_CONTROL: Channel<CriticalSectionRawMutex, ImuCommand, IMU_CONTROL_QUEUE_LEN> = Channel::new();
+
+/// Reply slot for one in-flight [`read_dmp_bias`] request.
+///
+/// The calibration is the only caller, and one Active Claim means one caller at
+/// a time. Capacity one is enough for the single answer; a stale answer is
+/// drained before the next request.
+static BIAS_REPLY: Channel<CriticalSectionRawMutex, Result<DmpBiasSnapshot, BiasReadError>, 1> = Channel::new();
 
 /// `true` when `dmp_init_magnetometer` succeeded at start-up; gates `Axis9` usage.
 static MAG_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -327,6 +374,20 @@ pub struct ImuReadings {
     /// DMP Compass Accuracy (`0..=3`, most accurate at 3), or `None` while
     /// nine-axis fusion has not produced one.
     pub compass_accuracy: Option<u16>,
+}
+
+/// Why reading the DMP bias words failed.
+///
+/// The IMU task reports a failure instead of building a snapshot from whatever
+/// words happened to read, so an incomplete calibration can never be saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum BiasReadError {
+    /// A DMP memory read failed before all nine words were available.
+    ReadFailed,
+    /// The IMU command could not be enqueued, or its task did not answer in
+    /// time. The calibration reports this as a failed read rather than holding
+    /// the Active Claim indefinitely.
+    NoResponse,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -373,6 +434,42 @@ pub async fn get_latest_readings() -> ImuReadings {
 /// the driver will never produce.
 pub fn is_mag_available() -> bool {
     MAG_AVAILABLE.load(Ordering::Relaxed)
+}
+
+/// Read the DMP's nine raw bias words through the owning IMU task.
+///
+/// Drains any stale answer, enqueues [`ImuCommand::ReadBias`], and waits for the
+/// task to finish the nine memory reads. A failed read is reported as
+/// [`BiasReadError`] rather than returning a partial snapshot; a command that
+/// cannot be enqueued or an unresponsive task resolves the same way, so the
+/// caller's claim is always released.
+pub async fn read_dmp_bias() -> Result<DmpBiasSnapshot, BiasReadError> {
+    while BIAS_REPLY.receiver().try_receive().is_ok() {}
+    if IMU_CONTROL.try_send(ImuCommand::ReadBias).is_err() {
+        warn!("DMP bias read request dropped — IMU command queue full");
+        return Err(BiasReadError::NoResponse);
+    }
+    match select(
+        BIAS_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_READ_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(reply) => reply,
+        Either::Second(()) => {
+            warn!("DMP bias read timed out after {}ms", DMP_BIAS_READ_TIMEOUT_MS);
+            Err(BiasReadError::NoResponse)
+        }
+    }
+}
+
+/// Ask the IMU task to zero the DMP's three compass bias words.
+///
+/// The calibration's `Redo` uses this so the DMP engine re-converges from a
+/// known compass state while the gyroscope and accelerometer biases are kept.
+/// Never blocks, and a failed clear is logged rather than fatal.
+pub fn clear_dmp_compass_bias() {
+    send_command(ImuCommand::ClearCompassBias);
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -692,6 +789,56 @@ async fn apply_dmp_config(sensor: &mut ImuSensor<'_>, config: &DmpConfig) -> boo
     true
 }
 
+/// Read one big-endian 32-bit DMP bias word.
+async fn read_bias_word(sensor: &mut ImuSensor<'_>, address: u16) -> Result<i32, BiasReadError> {
+    let mut bytes = [0_u8; 4];
+    sensor
+        .read_dmp_memory_async(address, &mut bytes)
+        .await
+        .map_err(|error| {
+            warn!("DMP bias read at 0x{:04x} failed: {:?}", address, error);
+            BiasReadError::ReadFailed
+        })?;
+    Ok(i32::from_be_bytes(bytes))
+}
+
+/// Read the three consecutive bias words at `addresses`.
+async fn read_bias_triplet(sensor: &mut ImuSensor<'_>, addresses: [u16; 3]) -> Result<[i32; 3], BiasReadError> {
+    let mut words = [0_i32; 3];
+    for (word, address) in words.iter_mut().zip(addresses) {
+        *word = read_bias_word(sensor, address).await?;
+    }
+    Ok(words)
+}
+
+/// Read all nine bias words into a snapshot.
+async fn read_bias_snapshot(sensor: &mut ImuSensor<'_>) -> Result<DmpBiasSnapshot, BiasReadError> {
+    let gyro = read_bias_triplet(sensor, [DMP_GYRO_BIAS_X, DMP_GYRO_BIAS_Y, DMP_GYRO_BIAS_Z]).await?;
+    let accel = read_bias_triplet(sensor, [DMP_ACCEL_BIAS_X, DMP_ACCEL_BIAS_Y, DMP_ACCEL_BIAS_Z]).await?;
+    let compass = read_bias_triplet(sensor, [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z]).await?;
+    Ok(DmpBiasSnapshot::new(gyro, accel, compass))
+}
+
+/// Zero the DMP's three compass bias words.
+///
+/// A failed write is logged; `Redo` still restarts the movement sequence, so a
+/// clear that does not fully land cannot strand the operator.
+async fn clear_compass_bias_memory(sensor: &mut ImuSensor<'_>) {
+    let zeros = [0_u8; 4];
+    let mut failed = false;
+    for address in [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z] {
+        if let Err(error) = sensor.write_dmp_memory_async(address, &zeros).await {
+            failed = true;
+            warn!("DMP compass bias clear at 0x{:04x} failed: {:?}", address, error);
+        }
+    }
+    if failed {
+        warn!("DMP compass bias clear incomplete");
+    } else {
+        info!("DMP compass bias cleared");
+    }
+}
+
 /// Resolve the effective mode: downgrade `Axis9` to `Axis6` if mag is unavailable.
 fn effective_mode(requested: DmpFusionMode) -> DmpFusionMode {
     if requested == DmpFusionMode::Axis9 && !MAG_AVAILABLE.load(Ordering::Relaxed) {
@@ -786,6 +933,17 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                         Either::First(ImuCommand::LoadCalibration(cal)) => {
                             current_calibration = Some(cal);
                             info!("IMU calibration data loaded");
+                        }
+
+                        // ── In-band: bias snapshot read ───────────────────────
+                        Either::First(ImuCommand::ReadBias) => {
+                            let snapshot = read_bias_snapshot(sensor).await;
+                            BIAS_REPLY.send(snapshot).await;
+                        }
+
+                        // ── In-band: compass bias clear ───────────────────────
+                        Either::First(ImuCommand::ClearCompassBias) => {
+                            clear_compass_bias_memory(sensor).await;
                         }
 
                         // ── In-band: Start (already running — ignore) ─────────
@@ -945,6 +1103,13 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
             ImuCommand::SetFusionMode(mode) => {
                 fusion_mode = effective_mode(mode);
                 info!("IMU fusion mode set to {:?} (standby)", fusion_mode);
+            }
+            ImuCommand::ReadBias => {
+                let snapshot = read_bias_snapshot(sensor).await;
+                BIAS_REPLY.send(snapshot).await;
+            }
+            ImuCommand::ClearCompassBias => {
+                clear_compass_bias_memory(sensor).await;
             }
         }
     }

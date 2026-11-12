@@ -88,6 +88,16 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
             });
             handle_imu_calibration_flags_loaded(flags).await;
         }
+        CalibrationKind::DmpBias => {
+            // Ticket 05 applies the snapshot to the DMP and publishes
+            // `DMP Cal: Loaded/Missing/Unknown`. This ticket only records that
+            // the flash query completed, so the boot gate is unchanged.
+            if let Some(CalibrationDataKind::DmpBias(_)) = data {
+                info!("DMP bias snapshot found");
+            } else {
+                info!("No DMP bias snapshot found");
+            }
+        }
     }
 
     check_initialization_complete().await;

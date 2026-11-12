@@ -7,7 +7,7 @@
 //! so a reordering cannot rotate the radar unnoticed; other drawing is not
 //! asserted and is validated on glass.
 
-use dmp_cal::CompassStep;
+use dmp_cal::{CheckFailure, CheckOutcome, CompassStep};
 use embedded_graphics::{
     Pixel, draw_target::DrawTarget, geometry::OriginDimensions, pixelcolor::Rgb565, prelude::*, primitives::Rectangle,
 };
@@ -16,8 +16,8 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station,
 };
 use touch_ui::{
-    DmpCalibrationSnapshot, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction,
-    PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure,
+    PromptAction, PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
@@ -2224,6 +2224,51 @@ fn a_dmp_hold_and_check_snapshot_format_their_hints() {
         Some(Hit::PromptAction(PromptAction::Redo))
     );
     render_ok(&ui);
+}
+
+/// A failed Compass Check names the rule it broke, keeps the measured heading,
+/// target and accuracy on the same line, and still offers Redo.
+#[test]
+fn a_dmp_check_failure_names_its_reason() {
+    assert_eq!(
+        DmpCheckState::from(CheckOutcome::Fail(CheckFailure::Accuracy { measured: 1 })),
+        DmpCheckState::Fail(DmpCheckFail::Accuracy)
+    );
+    assert_eq!(
+        DmpCheckState::from(CheckOutcome::Fail(CheckFailure::Heading {
+            measured_deg: 30.0,
+            target_deg: 0.0,
+        })),
+        DmpCheckState::Fail(DmpCheckFail::Heading)
+    );
+    assert_eq!(DmpCheckState::from(CheckOutcome::Waiting), DmpCheckState::Waiting);
+    assert_eq!(DmpCheckState::from(CheckOutcome::Unstable), DmpCheckState::Unstable);
+    assert_eq!(DmpCheckState::from(CheckOutcome::Pass), DmpCheckState::Pass);
+
+    let accuracy = DmpCalibrationSnapshot {
+        step: CompassStep::NorthCheck,
+        heading_deg: Some(5.0),
+        target_heading_deg: Some(0.0),
+        accuracy: Some(1),
+        hint: DmpHint::None,
+        check: DmpCheckState::Fail(DmpCheckFail::Accuracy),
+        redo: true,
+    };
+    assert_eq!(accuracy.status_text().as_str(), "Hdg 5 Tgt 0 Acc 1 Check Acc");
+    assert!(accuracy.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert!(accuracy.prompt_view().redo);
+
+    let heading = DmpCalibrationSnapshot {
+        step: CompassStep::EastCheck,
+        heading_deg: Some(130.0),
+        target_heading_deg: Some(90.0),
+        accuracy: Some(3),
+        hint: DmpHint::None,
+        check: DmpCheckState::Fail(DmpCheckFail::Heading),
+        redo: true,
+    };
+    assert_eq!(heading.status_text().as_str(), "Hdg 130 Tgt 90 Acc 3 Check Hdg");
+    assert!(heading.status_text().as_str().len() <= TEXT_BUF_LEN);
 }
 
 /// Test that the model's hands-on set is the firmware's Remote-availability rule

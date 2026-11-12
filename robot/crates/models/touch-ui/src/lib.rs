@@ -71,7 +71,7 @@ pub mod system_info;
 pub mod ui;
 pub mod widgets;
 
-pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckState, DmpHint};
+pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint};
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction, PromptAction};
 pub use imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MagDiagnostics, Vector3};
