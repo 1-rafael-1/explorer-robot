@@ -338,13 +338,6 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                             }
                             drop(data);
 
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                if flags.mag {
-                                    s.mag_cal_status = CalibrationStatus::Loaded;
-                                }
-                                s.imu_cal_status = CalibrationStatus::Loaded;
-                            }
                             raise_event(Events::CalibrationDataLoaded(
                                 CalibrationKind::ImuFlags,
                                 Some(CalibrationDataKind::ImuFlags(flags)),
@@ -461,13 +454,6 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     {
                         Ok(()) => {
                             info!("IMU calibration flags saved successfully");
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                if flags.mag {
-                                    s.mag_cal_status = CalibrationStatus::Loaded;
-                                }
-                                s.imu_cal_status = CalibrationStatus::Loaded;
-                            }
                             raise_event(Events::CalibrationDataLoaded(
                                 CalibrationKind::ImuFlags,
                                 Some(CalibrationDataKind::ImuFlags(flags)),

@@ -16,7 +16,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use crate::{
     system::state::{CalibrationStatus, calibration},
     task::{
-        io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
+        io::flash_storage::{self, CalibrationDataKind, CalibrationKind, ImuCalibrationFlags},
         motor_driver::{self, MotorCommand},
         procedure::{self, Claim, ClaimKind, ClaimOrigin},
         ui,
@@ -82,14 +82,11 @@ pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<
         CalibrationKind::Motor => load_motor_calibration(data).await,
         CalibrationKind::Distance => load_distance_calibration(data).await,
         CalibrationKind::ImuFlags => {
-            let mag = data.as_ref().is_some_and(|d| {
-                if let CalibrationDataKind::ImuFlags(flags) = d {
-                    flags.mag
-                } else {
-                    false
-                }
+            let flags = data.as_ref().and_then(|d| match d {
+                CalibrationDataKind::ImuFlags(flags) => Some(*flags),
+                _ => None,
             });
-            handle_imu_calibration_flags_loaded(mag).await;
+            handle_imu_calibration_flags_loaded(flags).await;
         }
     }
 
@@ -148,16 +145,25 @@ async fn load_distance_calibration(data: Option<CalibrationDataKind>) {
 }
 
 /// Handle IMU calibration flags loaded from flash.
-async fn handle_imu_calibration_flags_loaded(mag: bool) {
+///
+/// This result settles both IMU statuses, because nothing else ever queries
+/// them. The aggregate status records that the query completed: a board whose
+/// flash holds no flags yet is `NotAvailable`, not left as `NotLoaded` — a
+/// `NotLoaded` status would hold `is_initialized` false forever, keeping the
+/// boot gate shut and the panel dark.
+async fn handle_imu_calibration_flags_loaded(flags: Option<ImuCalibrationFlags>) {
     {
         let mut state = calibration::CALIBRATION_STATE.lock().await;
-        state.mag_cal_status = if mag {
+        state.mag_cal_status = if flags.is_some_and(|flags| flags.mag) {
             CalibrationStatus::Loaded
         } else {
             CalibrationStatus::NotAvailable
         };
-        // imu_status is managed by the IMU flags handler
-        // to avoid overriding the data-load result.
+        state.imu_cal_status = if flags.is_some() {
+            CalibrationStatus::Loaded
+        } else {
+            CalibrationStatus::NotAvailable
+        };
     }
 
     if ui::ui_initialized().await {
