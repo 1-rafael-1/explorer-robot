@@ -70,7 +70,7 @@ use embassy_rp::{
     adc::{Adc, Channel},
     mode::Async as AdcAsync,
 };
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::system::{event, state::power};
 
@@ -118,9 +118,9 @@ const PACK_DROP_K: f32 = 0.372;
 /// Battery monitoring task that continuously measures voltage and
 /// reports charge level as a percentage.
 ///
-/// Writes the pack and rail voltages to the power state module: the motor
-/// driver reads the rail, while the panel and Link telemetry read the pack
-/// voltage.
+/// Writes the pack and rail voltages, with the rail's sample time, to the
+/// power state module: the motor driver reads the rail, while the panel and
+/// Link telemetry read the pack voltage.
 #[embassy_executor::task]
 pub async fn battery_charge_read(mut adc: Adc<'static, AdcAsync>, mut channel: Channel<'static>) {
     // Initial delay to ensure system stabilization before first reading
@@ -132,6 +132,7 @@ pub async fn battery_charge_read(mut adc: Adc<'static, AdcAsync>, mut channel: C
         // The divider brings the rail down, so we divide by the ratio to
         // recover the actual rail voltage.
         let adc_raw = adc.read(&mut channel).await.unwrap_or(0);
+        let rail_sampled_at = Instant::now();
         let rail_voltage = f32::from(adc_raw) * REF_VOLTAGE / (ADC_RANGE * V_DIVIDER_RATIO) * VOLTAGE_CALIBRATION_SCALE;
 
         // The pack terminals sit above the rail by the cable and reverse-
@@ -173,7 +174,7 @@ pub async fn battery_charge_read(mut adc: Adc<'static, AdcAsync>, mut channel: C
 
         // Write the full measurement so the motor driver can read the rail
         // without going through the event system.
-        power::set_measurement(battery_percent, battery_voltage, rail_voltage).await;
+        power::set_measurement(battery_percent, battery_voltage, rail_voltage, rail_sampled_at).await;
 
         // Send consolidated battery measurement event
         // Battery monitoring is critical for safety - must not drop events

@@ -55,7 +55,7 @@ use embassy_rp::{
     pwm::{Pwm, SetDutyCycle},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::system::state::{motion, power};
 
@@ -256,16 +256,21 @@ const fn speed_to_direction(speed: i8) -> MotorDirection {
     }
 }
 
-/// Get the current motor-rail voltage from system state (truly non-blocking).
-/// Returns None if no reading is available yet OR if the mutex is busy.
-fn try_get_rail_voltage() -> Option<f32> {
-    power::try_get_rail_voltage()
+/// Minimum time between the motors becoming idle and a rail sample being
+/// trusted, so a sample taken while the rail is still recovering is rejected.
+const RAIL_IDLE_SETTLE: Duration = Duration::from_millis(250);
+
+/// Get the latest motor-rail sample from system state (truly non-blocking).
+/// Returns the voltage and the time it was measured, or `None` if no sample is
+/// available yet or if the mutex is busy.
+fn try_get_rail_sample() -> Option<(f32, Instant)> {
+    power::try_get_rail_sample()
 }
 
 /// Wait for the first motor-rail voltage reading from system state.
 async fn wait_for_rail_voltage() -> f32 {
     loop {
-        if let Some(voltage) = try_get_rail_voltage() {
+        if let Some((voltage, _)) = try_get_rail_sample() {
             return voltage;
         }
         Timer::after(Duration::from_millis(100)).await;
@@ -441,6 +446,10 @@ pub async fn motor_driver(
     // Ensure motion state is zeroed
     motion::set_track_speeds(0, 0).await;
 
+    // The motors start idle; this timestamp lets the loop reject rail samples
+    // taken before the last stop.
+    let mut idle_since = Instant::now();
+
     // Wait for the first motor-rail reading before allowing motor commands
     info!("Waiting for motor rail voltage reading...");
     let initial_voltage = wait_for_rail_voltage().await;
@@ -478,16 +487,24 @@ pub async fn motor_driver(
             MotorCommand::LoadCalibration(_) | MotorCommand::UpdateAllCalibration { .. } => was_motors_active,
         };
 
-        // Only update voltage compensation when motors are idle before and after
-        // Voltage sag during motor operation gives false readings that cause calibration instability
+        // Record when the motors last became idle. A rail sample older than
+        // this timestamp was taken while they were loaded.
+        if was_motors_active && !next_motors_active {
+            idle_since = Instant::now();
+        }
+
+        // Refresh the factor at a drive start or an idle-to-idle command, but
+        // only from a sample taken after the motors last became idle. Mid-drive
+        // commands and the stop transition keep the current factor: the loaded
+        // rail sags, and chasing it would increase duty and sag further.
         if !was_motors_active
-            && !next_motors_active
-            && let Some(current_voltage) = try_get_rail_voltage()
+            && let Some((current_voltage, sampled_at)) = try_get_rail_sample()
+            && sampled_at.saturating_duration_since(idle_since) >= RAIL_IDLE_SETTLE
         {
             let new_comp = calculate_voltage_compensation(current_voltage);
             if (new_comp - voltage_compensation).abs() > 0.01 {
                 info!(
-                    "Voltage compensation updated: {} -> {} (idle, {}V rail)",
+                    "Voltage compensation updated: {} -> {} (idle sample, {}V rail)",
                     voltage_compensation, new_comp, current_voltage
                 );
                 voltage_compensation = new_comp;

@@ -17,12 +17,14 @@
 //! violates this order and can deadlock.
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_time::Instant;
 
 /// Global power state — private, use accessor functions.
 static POWER_STATE: Mutex<CriticalSectionRawMutex, PowerState> = Mutex::new(PowerState {
     battery_level: None,
     battery_voltage: None,
     rail_voltage: None,
+    rail_sampled_at: None,
 });
 
 /// Power-related state shared across the system.
@@ -33,14 +35,21 @@ struct PowerState {
     battery_voltage: Option<f32>,
     /// Measured `+8V` motor rail in volts, for voltage compensation.
     rail_voltage: Option<f32>,
+    /// When `rail_voltage` was measured. The motor driver uses this to reject
+    /// samples taken before it became idle.
+    rail_sampled_at: Option<Instant>,
 }
 
 /// Write a complete battery measurement in one atomic update.
-pub async fn set_measurement(level: u8, battery_voltage: f32, rail_voltage: f32) {
+///
+/// `rail_sampled_at` is the ADC sample time; the motor driver compares it with
+/// the moment it last became idle so it can reject a loaded sample.
+pub async fn set_measurement(level: u8, battery_voltage: f32, rail_voltage: f32, rail_sampled_at: Instant) {
     let mut state = POWER_STATE.lock().await;
     state.battery_level = Some(level);
     state.battery_voltage = Some(battery_voltage);
     state.rail_voltage = Some(rail_voltage);
+    state.rail_sampled_at = Some(rail_sampled_at);
 }
 
 /// Refresh the operator-facing level and pack voltage.
@@ -78,8 +87,12 @@ pub async fn get_battery_snapshot() -> BatterySnapshot {
     }
 }
 
-/// Non-blocking rail-voltage read for the motor control loop.
-/// Returns `None` if no reading is available yet or if the mutex is busy.
-pub fn try_get_rail_voltage() -> Option<f32> {
-    POWER_STATE.try_lock().ok()?.rail_voltage
+/// Non-blocking motor-rail sample for the motor control loop.
+///
+/// Returns the measured rail voltage and when it was sampled. The motor driver
+/// compares the timestamp with the moment it last became idle, so a sample
+/// taken while the motors were loaded is never used for compensation.
+pub fn try_get_rail_sample() -> Option<(f32, Instant)> {
+    let state = POWER_STATE.try_lock().ok()?;
+    Some((state.rail_voltage?, state.rail_sampled_at?))
 }
