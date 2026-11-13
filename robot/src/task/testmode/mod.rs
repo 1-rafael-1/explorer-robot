@@ -31,6 +31,8 @@ pub mod imu_9axis;
 pub mod straight_drive;
 pub mod turns;
 
+mod imu_common;
+
 /// Command sent to the testmode controller, paired with the claim it runs under.
 #[derive(Clone, Copy)]
 pub(super) enum TestCommand {
@@ -73,7 +75,7 @@ pub async fn start(claim: Claim, procedure: Procedure) {
         Procedure::Imu6Axis => TestCommand::Imu6,
         Procedure::Imu9Axis => TestCommand::Imu,
         Procedure::MotorCalibration
-        | Procedure::MagCalibration
+        | Procedure::DmpCompassCalibration
         | Procedure::DistanceCalibration
         | Procedure::CoastAndAvoid
         | Procedure::AttemptStraight => {
@@ -82,6 +84,12 @@ pub async fn start(claim: Claim, procedure: Procedure) {
             return;
         }
     };
+
+    // A new IMU test clears the previous run's readout, so a panel- or
+    // Remote-started test never flashes stale telemetry.
+    if matches!(command, TestCommand::Imu | TestCommand::Imu6) {
+        crate::system::state::imu_test::clear().await;
+    }
 
     TESTMODE_COMMAND.send((command, claim)).await;
 }

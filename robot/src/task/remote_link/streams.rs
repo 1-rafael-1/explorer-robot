@@ -85,7 +85,7 @@ pub async fn sample_and_publish(core: &mut LinkCore, now_ms: u64) {
 /// Manual Drive is an Activity, not a Procedure, so it is absent.
 pub(super) const PROCEDURES: [Procedure; 11] = [
     Procedure::MotorCalibration,
-    Procedure::MagCalibration,
+    Procedure::DmpCompassCalibration,
     Procedure::DistanceCalibration,
     Procedure::CoastAndAvoid,
     Procedure::AttemptStraight,
@@ -105,7 +105,7 @@ pub(super) const PROCEDURES: [Procedure; 11] = [
 pub(super) const fn procedure_id(procedure: Procedure) -> ProcedureId {
     match procedure {
         Procedure::MotorCalibration => ProcedureId::MOTOR_CALIBRATION,
-        Procedure::MagCalibration => ProcedureId::MAG_CALIBRATION,
+        Procedure::DmpCompassCalibration => ProcedureId::DMP_COMPASS_CALIBRATION,
         Procedure::DistanceCalibration => ProcedureId::DISTANCE_CALIBRATION,
         Procedure::CoastAndAvoid => ProcedureId::COAST_AND_AVOID,
         Procedure::AttemptStraight => ProcedureId::ATTEMPT_STRAIGHT,
@@ -142,21 +142,21 @@ async fn sample_calibration(core: &mut LinkCore, now_ms: u64) {
 }
 
 /// Build the four calibration statuses.
+///
+/// The wire layout keeps its four one-byte fields. The retired `imu` and `mag`
+/// fields both carry the DMP calibration status now, so the payload length and
+/// field order are unchanged while the host magnetometer status is gone.
 pub(super) async fn calibration_sample() -> WireCalibration {
-    let (motor, imu, mag, distance) = {
+    let (motor, distance, dmp) = {
         let state = calibration::CALIBRATION_STATE.lock().await;
-        (
-            state.motor_cal_status,
-            state.imu_cal_status,
-            state.mag_cal_status,
-            state.distance_cal_status,
-        )
+        (state.motor_cal_status, state.distance_cal_status, state.dmp_cal_status)
     };
 
+    let dmp = wire_calibration_status(dmp);
     WireCalibration {
         motor: wire_calibration_status(motor),
-        imu: wire_calibration_status(imu),
-        mag: wire_calibration_status(mag),
+        imu: dmp,
+        mag: dmp,
         distance: wire_calibration_status(distance),
     }
 }

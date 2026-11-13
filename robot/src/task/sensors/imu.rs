@@ -29,11 +29,11 @@
 //!
 //! # Calibration
 //!
-//! Magnetometer hard/soft-iron and motor-interference correction are applied in
-//! software; the corrected result is exposed via `ImuReadings::calibrated_mag`
-//! (raw readings are in `raw_mag`). The DMP's
-//! own internal calibration engines handle gyroscope and accelerometer bias correction
-//! automatically — no host-injected bias values are needed for those axes.
+//! The DMP's own internal calibration engines handle all three axes. In nine-axis
+//! fusion its calibrated magnetometer is exposed via `ImuReadings::calibrated_mag`
+//! (the raw reading is in `raw_mag`); no host-side correction is applied. The DMP
+//! compass bias snapshot is read, applied and cleared through the bias commands so
+//! the DMP Compass Calibration can persist and restore it.
 //!
 //! # Orientation reference frame
 //!
@@ -49,12 +49,12 @@
 //!
 //! - Dedicated SPI bus for the ICM-20948 via `SpiDevice`.
 //! - `inertial_measurement_read` takes the bus `Mutex` + CS `Output` pin.
-//! - `MagCalibration` is defined locally (`flash_storage` integration TBD).
 //! - Chip initialisation retries on transient failures.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::{info, warn};
+use dmp_cal::DmpBiasSnapshot;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as SpiDev;
 use embassy_futures::select::{Either, select};
 use embassy_rp::{gpio::Output, mode::Async, spi::Spi};
@@ -62,12 +62,12 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948::{
     Icm20948Driver, SpiInterface,
-    dmp::DmpConfig,
+    dmp::{DmpConfig, DmpFifoReader, DmpSampleRate},
     sensors::{GyroConfig, GyroDlpf, GyroFullScale},
 };
 use nalgebra::Vector3;
 
-use crate::{system::state::motion, task::drive};
+use crate::task::drive;
 
 // ── Type aliases ─────────────────────────────────────────────────────────────
 
@@ -88,12 +88,13 @@ type ImuSensor<'a> = Icm20948Driver<SpiInterface<SpiDeviceType<'a>>>;
 
 // ── Timing constants ──────────────────────────────────────────────────────────
 
-/// DMP output rate in Hz. The DMP firmware emits packets at this rate.
-const DMP_SAMPLE_RATE_HZ: u16 = 100;
+/// DMP output rate. The driver only accepts its validated rates; `Hz112`
+/// produces an actual 112.5 Hz packet rate, the closest to the previous 100 Hz.
+const DMP_SAMPLE_RATE: DmpSampleRate = DmpSampleRate::Hz112;
 
-/// FIFO poll interval. Polling faster than the DMP rate ensures packets are
-/// drained promptly; `10 ms` (100 Hz) matches `DMP_SAMPLE_RATE_HZ`.
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// FIFO poll interval. At the 112.5 Hz DMP output a packet arrives every
+/// ~8.9 ms, so a 4 ms poll drains the FIFO before it can back up.
+const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
 /// Set to `true` after the first successful DMP FIFO sample, cleared when the
 /// IMU is stopped. The drive dispatch uses this to gate movement commands and
@@ -129,10 +130,82 @@ const ACCEL_SCALE_G: f32 = 1.0 / 8192.0;
 /// Exact conversion: 32768 LSB / 2000 dps = 16.384 LSB/dps.
 const GYRO_SCALE_DPS: f32 = 1.0 / 16.384;
 
-/// AK09916 magnetometer sensitivity: 0.15 µT per LSB.
+/// Raw AK09916 magnetometer sensitivity: 0.15 µT per LSB.
 const MAG_SCALE_UT: f32 = 0.15;
 
+/// DMP-calibrated magnetometer sensitivity: the 32-bit compass words are µT
+/// scaled by 2^16 (`ICM_20948_DMP.h`: "The unit is uT scaled by 2^16").
+const CALIBRATED_MAG_SCALE_UT: f32 = 1.0 / 65_536.0;
+
+/// Lower bound of the magnetometer-norm gate, in µT.
+pub const MAG_NORM_MIN_UT: f32 = 20.0;
+
+/// Upper bound of the magnetometer-norm gate, in µT.
+pub const MAG_NORM_MAX_UT: f32 = 200.0;
+
+/// Whether a magnetometer norm passes the driver's gate.
+///
+/// The driver accepts a sample only when the measured field is strictly inside
+/// the bounds; the IMU test readout reports the same verdict.
+#[must_use]
+pub const fn mag_gate_passes(norm: f32) -> bool {
+    norm > MAG_NORM_MIN_UT && norm < MAG_NORM_MAX_UT
+}
+
+// ── DMP bias words ────────────────────────────────────────────────────────────
+//
+// The nine words are the DMP's own gyroscope, accelerometer and compass bias
+// registers, each a 32-bit big-endian `i32` at a 4-byte stride. The addresses
+// match SparkFun's `ICM_20948_DMP.h` (`util/ICM_20948_DMP.h`), which the DMP
+// firmware image and the icm20948-rs driver both use.
+
+/// DMP memory address of the X gyroscope bias word (`SparkFun` `GYRO_BIAS_X`).
+const DMP_GYRO_BIAS_X: u16 = 139 * 16 + 4;
+/// DMP memory address of the Y gyroscope bias word.
+const DMP_GYRO_BIAS_Y: u16 = DMP_GYRO_BIAS_X + 4;
+/// DMP memory address of the Z gyroscope bias word.
+const DMP_GYRO_BIAS_Z: u16 = DMP_GYRO_BIAS_Y + 4;
+
+/// DMP memory address of the X accelerometer bias word (`SparkFun` `ACCEL_BIAS_X`).
+const DMP_ACCEL_BIAS_X: u16 = 110 * 16 + 4;
+/// DMP memory address of the Y accelerometer bias word.
+const DMP_ACCEL_BIAS_Y: u16 = DMP_ACCEL_BIAS_X + 4;
+/// DMP memory address of the Z accelerometer bias word.
+const DMP_ACCEL_BIAS_Z: u16 = DMP_ACCEL_BIAS_Y + 4;
+
+/// DMP memory address of the X compass bias word (`SparkFun` `CPASS_BIAS_X`).
+const DMP_CPASS_BIAS_X: u16 = 126 * 16 + 4;
+/// DMP memory address of the Y compass bias word.
+const DMP_CPASS_BIAS_Y: u16 = DMP_CPASS_BIAS_X + 4;
+/// DMP memory address of the Z compass bias word.
+const DMP_CPASS_BIAS_Z: u16 = DMP_CPASS_BIAS_Y + 4;
+
+/// How long [`read_dmp_bias`] waits for the IMU task before reporting failure.
+///
+/// Nine SPI memory reads take well under this; the margin covers a fusion-mode
+/// reconfiguration that is already in flight.
+const DMP_BIAS_READ_TIMEOUT_MS: u64 = 500;
+
+/// How long [`apply_dmp_bias`] waits for the IMU task before reporting failure.
+///
+/// This bounds a dead or marginal IMU without falsely reporting `Missing` for a
+/// healthy-but-slow bring-up. The command is queued before `dmp_init` has run,
+/// so the wait must cover the 200 ms power-up delay, the reset/settle delay,
+/// up to 60 × 50 ms initialisation retries (~3 s), and the DMP firmware load
+/// before `run_imu_command_loop` drains the queue. It remains bounded so a dead
+/// task cannot keep the boot gate dark forever.
+const DMP_BIAS_APPLY_TIMEOUT_MS: u64 = 5_000;
+
 // ── Telemetry ─────────────────────────────────────────────────────────────────
+
+/// How old a reading may be before a consumer treats it as stale, in
+/// milliseconds.
+///
+/// The DMP produces packets at roughly 112 Hz, and both the IMU test tasks and
+/// the Compass Checks poll it every 100 ms (the tests at 20 ms). Five polling
+/// periods tolerate scheduling jitter while still expiring a value within a
+/// fraction of the two-second Compass Check window when the driver stalls.
+pub const READING_STALE_MS: u64 = 500;
 
 /// Rate-limiting interval for IMU loop diagnostics when `telemetry_logs` is on.
 #[cfg(feature = "telemetry_logs")]
@@ -190,58 +263,6 @@ const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis9;
 #[cfg(not(feature = "imu_debug"))]
 const STARTUP_FUSION_MODE: DmpFusionMode = DmpFusionMode::Axis6;
 
-// ── Magnetometer calibration data (local; flash_storage integration TBD) ──────
-
-/// Host-side magnetometer calibration data (hard/soft-iron + motor interference).
-///
-/// Defined locally until flash storage integration is completed.
-#[derive(Debug, Clone, Copy)]
-pub struct MagCalibration {
-    /// Hard-iron bias correction (µT).
-    pub x_bias: f32,
-    /// Hard-iron bias correction (µT).
-    pub y_bias: f32,
-    /// Hard-iron bias correction (µT).
-    pub z_bias: f32,
-    /// Soft-iron scale correction.
-    pub x_scale: f32,
-    /// Soft-iron scale correction.
-    pub y_scale: f32,
-    /// Soft-iron scale correction.
-    pub z_scale: f32,
-    /// Motor interference at 50% speed — index [0]=both, [1]=left, [2]=right (µT).
-    pub x_interference_50: [f32; 3],
-    /// Motor interference at 50% speed (µT).
-    pub y_interference_50: [f32; 3],
-    /// Motor interference at 50% speed (µT).
-    pub z_interference_50: [f32; 3],
-    /// Motor interference at 100% speed — index [0]=both, [1]=left, [2]=right (µT).
-    pub x_interference_100: [f32; 3],
-    /// Motor interference at 100% speed (µT).
-    pub y_interference_100: [f32; 3],
-    /// Motor interference at 100% speed (µT).
-    pub z_interference_100: [f32; 3],
-}
-
-impl Default for MagCalibration {
-    fn default() -> Self {
-        Self {
-            x_bias: 0.0,
-            y_bias: 0.0,
-            z_bias: 0.0,
-            x_scale: 1.0,
-            y_scale: 1.0,
-            z_scale: 1.0,
-            x_interference_50: [0.0; 3],
-            y_interference_50: [0.0; 3],
-            z_interference_50: [0.0; 3],
-            x_interference_100: [0.0; 3],
-            y_interference_100: [0.0; 3],
-            z_interference_100: [0.0; 3],
-        }
-    }
-}
-
 // ── Internal command type ─────────────────────────────────────────────────────
 
 /// Commands delivered to the IMU task via [`IMU_CONTROL`].
@@ -250,10 +271,16 @@ enum ImuCommand {
     Start,
     /// Stop reading; enter standby.
     Stop,
-    /// Replace the active calibration data (mag hard/soft-iron + interference).
-    LoadCalibration(MagCalibration),
     /// Switch DMP fusion mode at runtime.
     SetFusionMode(DmpFusionMode),
+    /// Read the nine DMP bias words and answer through [`BIAS_REPLY`].
+    ReadBias,
+    /// Write the nine DMP bias words from a snapshot, answering through
+    /// [`BIAS_APPLY_REPLY`].
+    ApplyBias(DmpBiasSnapshot),
+    /// Zero the DMP's three compass bias words; the gyroscope and accelerometer
+    /// biases are kept.
+    ClearCompassBias,
 }
 
 // ── Shared statics ────────────────────────────────────────────────────────────
@@ -272,6 +299,19 @@ const IMU_CONTROL_QUEUE_LEN: usize = 4;
 /// wakes up. Ordered delivery guarantees each command is acted on in turn.
 static IMU_CONTROL: Channel<CriticalSectionRawMutex, ImuCommand, IMU_CONTROL_QUEUE_LEN> = Channel::new();
 
+/// Reply slot for one in-flight [`read_dmp_bias`] request.
+///
+/// The calibration is the only caller, and one Active Claim means one caller at
+/// a time. Capacity one is enough for the single answer; a stale answer is
+/// drained before the next request.
+static BIAS_REPLY: Channel<CriticalSectionRawMutex, Result<DmpBiasSnapshot, BiasReadError>, 1> = Channel::new();
+
+/// Reply slot for one in-flight [`apply_dmp_bias`] request.
+///
+/// Like [`BIAS_REPLY`], capacity one is enough for the single answer and a stale
+/// answer is drained before the next request.
+static BIAS_APPLY_REPLY: Channel<CriticalSectionRawMutex, Result<(), BiasApplyError>, 1> = Channel::new();
+
 /// `true` when `dmp_init_magnetometer` succeeded at start-up; gates `Axis9` usage.
 static MAG_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
@@ -283,28 +323,100 @@ static LATEST_READINGS: Mutex<CriticalSectionRawMutex, ImuReadings> = Mutex::new
     raw_accel: None,
     raw_gyro: None,
     raw_mag: None,
+    compass_accuracy: None,
 });
+
+/// One driver reading and the instant the driver acquired it.
+///
+/// The shared snapshot keeps the last value of each field when a packet does
+/// not carry it, so a value alone cannot tell a consumer whether the driver is
+/// still producing it. The acquisition time travels with every value so a
+/// stalled driver is visible as a stale reading rather than a live one.
+#[derive(Debug, Clone, Copy)]
+pub struct Reading<T> {
+    /// The driver's value.
+    pub value: T,
+    /// Acquisition time in milliseconds on the [`Instant`] clock.
+    pub at_ms: u64,
+}
 
 /// Snapshot of all IMU sensor data updated on every valid DMP packet.
 ///
 /// Fields are `None` before the first packet arrives. Magnetometer fields
 /// (`calibrated_mag`, `raw_mag`) are `None` before the first `Axis9` packet
-/// arrives and are cleared when switching to `Axis6` fusion mode.
+/// arrives and are cleared when switching to `Axis6` fusion mode. The DMP
+/// `compass_accuracy` is the fused compass's `0..=3` quality word and is
+/// cleared with them. Every value carries its acquisition time, so consumers
+/// can tell live readings from values the driver stopped updating.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ImuReadings {
     /// DMP-derived orientation.
-    pub orientation: Option<Orientation>,
+    pub orientation: Option<Reading<Orientation>>,
     /// DMP-calibrated gyroscope (deg/s, internal bias subtracted).
-    pub calibrated_gyro: Option<Vector3<f32>>,
-    /// Magnetometer reading (µT). Host-corrected when calibration is loaded;
-    /// otherwise the raw value.
-    pub calibrated_mag: Option<Vector3<f32>>,
+    pub calibrated_gyro: Option<Reading<Vector3<f32>>>,
+    /// DMP-calibrated magnetometer (µT, the DMP's compass bias applied).
+    pub calibrated_mag: Option<Reading<Vector3<f32>>>,
     /// Raw accelerometer (g, before DMP correction).
-    pub raw_accel: Option<Vector3<f32>>,
+    pub raw_accel: Option<Reading<Vector3<f32>>>,
     /// Raw gyroscope (deg/s, before DMP correction).
-    pub raw_gyro: Option<Vector3<f32>>,
+    pub raw_gyro: Option<Reading<Vector3<f32>>>,
     /// Raw magnetometer (µT, before any host correction).
-    pub raw_mag: Option<Vector3<f32>>,
+    pub raw_mag: Option<Reading<Vector3<f32>>>,
+    /// DMP Compass Accuracy (`0..=3`, most accurate at 3), or `None` while
+    /// nine-axis fusion has not produced one.
+    pub compass_accuracy: Option<Reading<u16>>,
+}
+
+impl ImuReadings {
+    /// The same snapshot with every field acquired more than `max_age_ms`
+    /// before now dropped.
+    ///
+    /// A consumer that displays or acts on a reading asks for the fresh
+    /// snapshot, so a value left behind by a stalled driver neither looks live
+    /// nor counts as evidence of the current run.
+    #[must_use]
+    pub fn fresh(self, max_age_ms: u64) -> Self {
+        let now_ms = Instant::now().as_millis();
+        Self {
+            orientation: fresh_reading(self.orientation, now_ms, max_age_ms),
+            calibrated_gyro: fresh_reading(self.calibrated_gyro, now_ms, max_age_ms),
+            calibrated_mag: fresh_reading(self.calibrated_mag, now_ms, max_age_ms),
+            raw_accel: fresh_reading(self.raw_accel, now_ms, max_age_ms),
+            raw_gyro: fresh_reading(self.raw_gyro, now_ms, max_age_ms),
+            raw_mag: fresh_reading(self.raw_mag, now_ms, max_age_ms),
+            compass_accuracy: fresh_reading(self.compass_accuracy, now_ms, max_age_ms),
+        }
+    }
+}
+
+/// `reading` when it was acquired no more than `max_age_ms` before `now_ms`.
+fn fresh_reading<T>(reading: Option<Reading<T>>, now_ms: u64, max_age_ms: u64) -> Option<Reading<T>> {
+    reading.filter(|r| now_ms.saturating_sub(r.at_ms) <= max_age_ms)
+}
+
+/// Why reading the DMP bias words failed.
+///
+/// The IMU task reports a failure instead of building a snapshot from whatever
+/// words happened to read, so an incomplete calibration can never be saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum BiasReadError {
+    /// A DMP memory read failed before all nine words were available.
+    ReadFailed,
+    /// The IMU command could not be enqueued, or its task did not answer in
+    /// time. The calibration reports this as a failed read rather than holding
+    /// the Active Claim indefinitely.
+    NoResponse,
+}
+
+/// Why writing a DMP Bias Snapshot to the DMP failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum BiasApplyError {
+    /// A DMP memory write failed before all nine words were written.
+    WriteFailed,
+    /// The IMU command could not be enqueued, or its task did not answer in
+    /// time. The boot flow reports this as a missing calibration rather than
+    /// keeping the panel dark forever.
+    NoResponse,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -331,16 +443,83 @@ pub fn set_dmp_fusion_mode(mode: DmpFusionMode) {
     send_command(ImuCommand::SetFusionMode(mode));
 }
 
-/// Load magnetometer calibration data (hard/soft-iron + motor-interference).
-///
-/// Applied to `ImuReadings::calibrated_mag` on every subsequent DMP packet.
-pub fn load_mag_calibration(calibration: MagCalibration) {
-    send_command(ImuCommand::LoadCalibration(calibration));
-}
-
 /// Return a snapshot of all latest IMU readings from a single lock.
 pub async fn get_latest_readings() -> ImuReadings {
     *LATEST_READINGS.lock().await
+}
+
+/// Whether the magnetometer initialised at start-up.
+///
+/// Reports the `dmp_init_magnetometer` outcome recorded when the IMU came up. It
+/// gates `Axis9` fusion, and the IMU test readout uses it to explain a nine-axis
+/// run that fell back to six-axis fusion instead of showing magnetometer values
+/// the driver will never produce.
+pub fn is_mag_available() -> bool {
+    MAG_AVAILABLE.load(Ordering::Relaxed)
+}
+
+/// Read the DMP's nine raw bias words through the owning IMU task.
+///
+/// Drains any stale answer, enqueues [`ImuCommand::ReadBias`], and waits for the
+/// task to finish the nine memory reads. A failed read is reported as
+/// [`BiasReadError`] rather than returning a partial snapshot; a command that
+/// cannot be enqueued or an unresponsive task resolves the same way, so the
+/// caller's claim is always released.
+pub async fn read_dmp_bias() -> Result<DmpBiasSnapshot, BiasReadError> {
+    while BIAS_REPLY.receiver().try_receive().is_ok() {}
+    if IMU_CONTROL.try_send(ImuCommand::ReadBias).is_err() {
+        warn!("DMP bias read request dropped — IMU command queue full");
+        return Err(BiasReadError::NoResponse);
+    }
+    match select(
+        BIAS_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_READ_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(reply) => reply,
+        Either::Second(()) => {
+            warn!("DMP bias read timed out after {}ms", DMP_BIAS_READ_TIMEOUT_MS);
+            Err(BiasReadError::NoResponse)
+        }
+    }
+}
+
+/// Write the nine DMP bias words from `snapshot` to the DMP.
+///
+/// Drains any stale answer, enqueues [`ImuCommand::ApplyBias`], and waits for
+/// the task to finish the nine memory writes. `Ok` means all nine words were
+/// written; a partial write is [`BiasApplyError::WriteFailed`]. A command that
+/// cannot be enqueued or a task that does not answer is
+/// [`BiasApplyError::NoResponse`], so an absent IMU task cannot hold the boot
+/// gate shut forever.
+pub async fn apply_dmp_bias(snapshot: DmpBiasSnapshot) -> Result<(), BiasApplyError> {
+    while BIAS_APPLY_REPLY.receiver().try_receive().is_ok() {}
+    if IMU_CONTROL.try_send(ImuCommand::ApplyBias(snapshot)).is_err() {
+        warn!("DMP bias apply request dropped — IMU command queue full");
+        return Err(BiasApplyError::NoResponse);
+    }
+    match select(
+        BIAS_APPLY_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_APPLY_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(reply) => reply,
+        Either::Second(()) => {
+            warn!("DMP bias apply timed out after {}ms", DMP_BIAS_APPLY_TIMEOUT_MS);
+            Err(BiasApplyError::NoResponse)
+        }
+    }
+}
+
+/// Ask the IMU task to zero the DMP's three compass bias words.
+///
+/// The calibration's `Redo` uses this so the DMP engine re-converges from a
+/// known compass state while the gyroscope and accelerometer biases are kept.
+/// Never blocks, and a failed clear is logged rather than fatal.
+pub fn clear_dmp_compass_bias() {
+    send_command(ImuCommand::ClearCompassBias);
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -381,79 +560,8 @@ fn is_identity_quaternion(quat: &icm20948::dmp::Quaternion) -> bool {
         && quat.z.abs() <= IMU_IDENTITY_EPSILON
 }
 
-/// Interpolate motor-interference correction for a single track.
-fn interpolate_single_track(calibration: &MagCalibration, speed: f32, is_left: bool) -> (f32, f32, f32) {
-    let idx = if is_left { 1 } else { 2 };
-
-    if speed <= 50.0 {
-        let factor = speed / 50.0;
-        (
-            calibration.x_interference_50[idx] * factor,
-            calibration.y_interference_50[idx] * factor,
-            calibration.z_interference_50[idx] * factor,
-        )
-    } else {
-        let factor = (speed - 50.0) / 50.0;
-        (
-            calibration.x_interference_50[idx]
-                + (calibration.x_interference_100[idx] - calibration.x_interference_50[idx]) * factor,
-            calibration.y_interference_50[idx]
-                + (calibration.y_interference_100[idx] - calibration.y_interference_50[idx]) * factor,
-            calibration.z_interference_50[idx]
-                + (calibration.z_interference_100[idx] - calibration.z_interference_50[idx]) * factor,
-        )
-    }
-}
-
-/// Interpolate motor-interference correction when both tracks run at equal speed.
-fn interpolate_equal_motors(calibration: &MagCalibration, speed: f32) -> (f32, f32, f32) {
-    const ALL: usize = 0;
-
-    if speed <= 50.0 {
-        let factor = speed / 50.0;
-        (
-            calibration.x_interference_50[ALL] * factor,
-            calibration.y_interference_50[ALL] * factor,
-            calibration.z_interference_50[ALL] * factor,
-        )
-    } else {
-        let factor = (speed - 50.0) / 50.0;
-        (
-            calibration.x_interference_50[ALL]
-                + (calibration.x_interference_100[ALL] - calibration.x_interference_50[ALL]) * factor,
-            calibration.y_interference_50[ALL]
-                + (calibration.y_interference_100[ALL] - calibration.y_interference_50[ALL]) * factor,
-            calibration.z_interference_50[ALL]
-                + (calibration.z_interference_100[ALL] - calibration.z_interference_50[ALL]) * factor,
-        )
-    }
-}
-
-/// Compute the total motor-interference correction vector given current track speeds.
-fn interpolate_interference(calibration: &MagCalibration, left_speed: i8, right_speed: i8) -> (f32, f32, f32) {
-    let left_abs = f32::from(left_speed.abs());
-    let right_abs = f32::from(right_speed.abs());
-
-    if left_abs == 0.0 && right_abs == 0.0 {
-        (0.0, 0.0, 0.0)
-    } else if (left_abs - right_abs).abs() < 10.0 {
-        interpolate_equal_motors(calibration, f32::midpoint(left_abs, right_abs))
-    } else {
-        let (lx, ly, lz) = interpolate_single_track(calibration, left_abs, true);
-        let (rx, ry, rz) = interpolate_single_track(calibration, right_abs, false);
-        let total = left_abs + right_abs;
-        let lw = left_abs / total;
-        let rw = right_abs / total;
-        (lx * lw + rx * rw, ly * lw + ry * rw, lz * lw + rz * rw)
-    }
-}
-
-/// Update the shared `LATEST_READINGS` and drive-task sensor channels from a DMP packet.
-async fn update_statics_from_dmp(
-    packet: &icm20948::dmp::DmpData,
-    orientation: Option<Orientation>,
-    calibration: Option<&MagCalibration>,
-) {
+/// Update the shared `LATEST_READINGS` from a DMP packet acquired at `at_ms`.
+async fn update_statics_from_dmp(packet: &icm20948::dmp::DmpData, orientation: Option<Orientation>, at_ms: u64) {
     // ── Precompute all scaled vectors outside the critical section ──────────
     let raw_accel_opt: Option<Vector3<f32>> = packet.raw_accel.map(|(ax, ay, az)| {
         Vector3::new(
@@ -481,82 +589,66 @@ async fn update_statics_from_dmp(
         )
     });
 
-    // Raw magnetometer with optional host-side calibration ------------------
-    let mag_data: Option<(Vector3<f32>, Vector3<f32>)> = packet.raw_mag.map(|(mx, my, mz)| {
-        let v = Vector3::new(
+    // Raw magnetometer: the DMP's 16-bit compass words at 0.15 µT/LSB.
+    let raw_mag_opt: Option<Vector3<f32>> = packet.dmp_compass.map(|(mx, my, mz)| {
+        Vector3::new(
             f32::from(mx) * MAG_SCALE_UT,
             f32::from(my) * MAG_SCALE_UT,
             f32::from(mz) * MAG_SCALE_UT,
-        );
-        let mut mag_cal = v;
-        if let Some(cal) = calibration {
-            let (left_speed, right_speed) = motion::get_track_speeds_atomic();
-            let (ix, iy, iz) = interpolate_interference(cal, left_speed, right_speed);
-            mag_cal.x = (v.x - ix - cal.x_bias) * cal.x_scale;
-            mag_cal.y = (v.y - iy - cal.y_bias) * cal.y_scale;
-            mag_cal.z = (v.z - iz - cal.z_bias) * cal.z_scale;
-        }
-        (v, mag_cal)
+        )
     });
 
-    // ── Commit snapshot under one lock, then release for the async send ────
+    // DMP-calibrated magnetometer: the 32-bit compass words are µT scaled by
+    // 2^16. It is read independently of the raw compass output.
+    #[allow(clippy::cast_precision_loss)]
+    // The calibrated words are i32 but the nominal field is far inside f32's
+    // exact-integer range at this scale.
+    let calibrated_mag_opt: Option<Vector3<f32>> = packet.calibrated_mag.map(|(mx, my, mz)| {
+        Vector3::new(
+            mx as f32 * CALIBRATED_MAG_SCALE_UT,
+            my as f32 * CALIBRATED_MAG_SCALE_UT,
+            mz as f32 * CALIBRATED_MAG_SCALE_UT,
+        )
+    });
+
+    // ── Commit the snapshot under one lock ────────────────────────────────
     let mut readings = LATEST_READINGS.lock().await;
 
     if let Some(o) = orientation {
-        readings.orientation = Some(o);
+        readings.orientation = Some(Reading { value: o, at_ms });
     }
     if let Some(v) = raw_accel_opt {
-        readings.raw_accel = Some(v);
+        readings.raw_accel = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = raw_gyro_opt {
-        readings.raw_gyro = Some(v);
+        readings.raw_gyro = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = calibrated_gyro_opt {
-        readings.calibrated_gyro = Some(v);
+        readings.calibrated_gyro = Some(Reading { value: v, at_ms });
     }
-    if let Some((raw, cal)) = mag_data {
-        readings.raw_mag = Some(raw);
-        readings.calibrated_mag = Some(cal);
+    if let Some(v) = raw_mag_opt {
+        readings.raw_mag = Some(Reading { value: v, at_ms });
     }
-    drop(readings);
-
-    // Forward raw mag to the drive task for the magnetometer calibration procedure.
-    if let Some((raw, _cal)) = mag_data {
-        drive::send_mag_measurement(raw).await;
+    if let Some(v) = calibrated_mag_opt {
+        readings.calibrated_mag = Some(Reading { value: v, at_ms });
     }
-}
-
-/// Delay provider for the driver's reset poll.
-///
-/// `icm20948-rs` polls `PWR_MGMT_1` every 1 ms after asserting `DEVICE_RESET`.
-/// On this board an SPI read before the reset completes can come back as
-/// `0x00`, which the driver treats as "reset done"; the wake write that follows
-/// is then lost and `init()` reports `InitializationTimeout`. The datasheet
-/// allows up to 100 ms for reset, so make the first poll wait that long.
-struct ResetDelay {
-    /// Whether the post-reset wait still has to be stretched.
-    first_poll: bool,
-}
-
-impl embedded_hal_async::delay::DelayNs for ResetDelay {
-    async fn delay_ns(&mut self, ns: u32) {
-        if self.first_poll {
-            self.first_poll = false;
-            Timer::after(Duration::from_millis(100)).await;
-        } else {
-            Timer::after(Duration::from_nanos(u64::from(ns))).await;
-        }
+    // The compass accuracy accompanies the compass sample. Keep the last one
+    // when a packet does not carry it, and clear it with the magnetometer values
+    // when the fusion mode switches to `Axis6`.
+    if let Some(accuracy) = packet.compass_accuracy {
+        readings.compass_accuracy = Some(Reading { value: accuracy, at_ms });
     }
 }
 
 /// Power-up, reset, verify, and fully initialise the ICM-20948, retrying on failure.
 ///
 /// Uses `SpiInterface` + `SpiDevice` on the dedicated SPI bus. The SPI
-/// interface owns the bus by value. The device is reset *before* its identity is
-/// verified: the RP2350 resets its GPIOs pulled low, so the IMU can power up
-/// with CS asserted, which the ICM-20948 does not support as a power-up state.
-/// Resetting first puts it in a known state, and the retry loop covers a
-/// marginal first transaction.
+/// interface owns the bus by value. `init_spi` resets the device, restores SPI
+/// mode with write-only accesses before any read, wakes it, and verifies
+/// `WHO_AM_I`. Resetting first matters because the RP2350 resets its GPIOs
+/// pulled low, so the IMU can power up with CS asserted, which the ICM-20948
+/// does not support as a power-up state; the retry loop covers a marginal first
+/// transaction.
 async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<'static> {
     info!("Waiting {}ms for IMU power-up...", IMU_BOOT_DELAY_MS);
     Timer::after(Duration::from_millis(IMU_BOOT_DELAY_MS)).await;
@@ -574,31 +666,23 @@ async fn init_imu_sensor(spi_bus: &'static SpiMutex, cs: CsOutput) -> ImuSensor<
             attempt, IMU_INIT_MAX_ATTEMPTS
         );
 
-        // Fresh provider per attempt: every attempt asserts DEVICE_RESET again.
-        let mut delay = ResetDelay { first_poll: true };
-        match imu.init(&mut delay).await {
+        // `init_spi` performs the reset, SPI-mode restore, wake, and identity
+        // check, including the datasheet's 100 ms post-reset settle delay.
+        let mut delay = Delay;
+        match imu.init_spi(&mut delay).await {
             Ok(()) => {
-                // The driver documents this as required for SPI: without it the
-                // ICM-20948 keeps its I2C slave interface enabled.
-                if let Err(e) = imu.enable_spi_mode().await {
-                    warn!("ICM-20948 enable SPI mode failed (attempt {}): {:?}", attempt, e);
-                } else {
-                    match imu.verify_who_am_i().await {
-                        Ok(()) => {
-                            info!("ICM-20948 initialized successfully via SPI");
-                            Timer::after(Duration::from_millis(100)).await;
-                            return imu;
-                        }
-                        Err(e) => warn!("ICM-20948 identity check failed (attempt {}): {:?}", attempt, e),
-                    }
-                }
+                info!("ICM-20948 initialized successfully via SPI");
+                Timer::after(Duration::from_millis(100)).await;
+                return imu;
             }
             Err(e) => {
                 warn!("ICM-20948 init failed (attempt {}): {:?}", attempt, e);
                 // A reset-first init cannot say whether the chip is present or
                 // whether the reset never completed. Probe WHO_AM_I after the
                 // failed attempt: 0xEA means the bus is alive, 0x00/0xFF means
-                // the chip is absent, unpowered, or not selected.
+                // the chip is absent, unpowered, or not selected. The probe
+                // only reads if `init_spi` restored SPI mode; otherwise it
+                // fails and the error alone is reported.
                 match imu.read_who_am_i().await {
                     Ok(id) => warn!("ICM-20948 WHO_AM_I after failed init: 0x{:02x}", id),
                     Err(probe_err) => warn!("ICM-20948 WHO_AM_I probe failed: {:?}", probe_err),
@@ -655,13 +739,15 @@ const fn build_dmp_config(mode: DmpFusionMode) -> DmpConfig {
             .with_raw_accel()
             .with_raw_gyro()
             .with_calibrated_gyro()
-            .with_sample_rate(DMP_SAMPLE_RATE_HZ),
+            .with_sample_rate(DMP_SAMPLE_RATE),
         DmpFusionMode::Axis9 => DmpConfig::nine_axis()
             .with_raw_accel()
             .with_raw_gyro()
             .with_calibrated_gyro()
-            .with_raw_mag()
-            .with_sample_rate(DMP_SAMPLE_RATE_HZ),
+            .with_dmp_compass()
+            // The 32-bit DMP-calibrated compass, shown as `M dmp`.
+            .with_calibrated_mag()
+            .with_sample_rate(DMP_SAMPLE_RATE),
     }
 }
 
@@ -684,6 +770,102 @@ async fn apply_dmp_config(sensor: &mut ImuSensor<'_>, config: &DmpConfig) -> boo
     true
 }
 
+/// Read one big-endian 32-bit DMP bias word.
+async fn read_bias_word(sensor: &mut ImuSensor<'_>, address: u16) -> Result<i32, BiasReadError> {
+    let mut bytes = [0_u8; 4];
+    sensor
+        .read_dmp_memory_async(address, &mut bytes)
+        .await
+        .map_err(|error| {
+            warn!("DMP bias read at 0x{:04x} failed: {:?}", address, error);
+            BiasReadError::ReadFailed
+        })?;
+    Ok(i32::from_be_bytes(bytes))
+}
+
+/// Read the three consecutive bias words at `addresses`.
+async fn read_bias_triplet(sensor: &mut ImuSensor<'_>, addresses: [u16; 3]) -> Result<[i32; 3], BiasReadError> {
+    let mut words = [0_i32; 3];
+    for (word, address) in words.iter_mut().zip(addresses) {
+        *word = read_bias_word(sensor, address).await?;
+    }
+    Ok(words)
+}
+
+/// Read all nine bias words into a snapshot.
+async fn read_bias_snapshot(sensor: &mut ImuSensor<'_>) -> Result<DmpBiasSnapshot, BiasReadError> {
+    let gyro = read_bias_triplet(sensor, [DMP_GYRO_BIAS_X, DMP_GYRO_BIAS_Y, DMP_GYRO_BIAS_Z]).await?;
+    let accel = read_bias_triplet(sensor, [DMP_ACCEL_BIAS_X, DMP_ACCEL_BIAS_Y, DMP_ACCEL_BIAS_Z]).await?;
+    let compass = read_bias_triplet(sensor, [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z]).await?;
+    Ok(DmpBiasSnapshot::new(gyro, accel, compass))
+}
+
+/// Write one big-endian 32-bit DMP bias word.
+async fn write_bias_word(sensor: &mut ImuSensor<'_>, address: u16, word: i32) -> Result<(), BiasApplyError> {
+    sensor
+        .write_dmp_memory_async(address, &word.to_be_bytes())
+        .await
+        .map_err(|error| {
+            warn!("DMP bias write at 0x{:04x} failed: {:?}", address, error);
+            BiasApplyError::WriteFailed
+        })
+}
+
+/// Write the three consecutive bias words at `addresses`.
+async fn write_bias_triplet(
+    sensor: &mut ImuSensor<'_>,
+    words: [i32; 3],
+    addresses: [u16; 3],
+) -> Result<(), BiasApplyError> {
+    for (word, address) in words.iter().zip(addresses) {
+        write_bias_word(sensor, address, *word).await?;
+    }
+    Ok(())
+}
+
+/// Write all nine words from `snapshot`; `Ok` only when every write landed.
+async fn apply_bias_snapshot(sensor: &mut ImuSensor<'_>, snapshot: &DmpBiasSnapshot) -> Result<(), BiasApplyError> {
+    write_bias_triplet(
+        sensor,
+        snapshot.gyro_bias(),
+        [DMP_GYRO_BIAS_X, DMP_GYRO_BIAS_Y, DMP_GYRO_BIAS_Z],
+    )
+    .await?;
+    write_bias_triplet(
+        sensor,
+        snapshot.accel_bias(),
+        [DMP_ACCEL_BIAS_X, DMP_ACCEL_BIAS_Y, DMP_ACCEL_BIAS_Z],
+    )
+    .await?;
+    write_bias_triplet(
+        sensor,
+        snapshot.compass_bias(),
+        [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Zero the DMP's three compass bias words.
+///
+/// A failed write is logged; `Redo` still restarts the movement sequence, so a
+/// clear that does not fully land cannot strand the operator.
+async fn clear_compass_bias_memory(sensor: &mut ImuSensor<'_>) {
+    let zeros = [0_u8; 4];
+    let mut failed = false;
+    for address in [DMP_CPASS_BIAS_X, DMP_CPASS_BIAS_Y, DMP_CPASS_BIAS_Z] {
+        if let Err(error) = sensor.write_dmp_memory_async(address, &zeros).await {
+            failed = true;
+            warn!("DMP compass bias clear at 0x{:04x} failed: {:?}", address, error);
+        }
+    }
+    if failed {
+        warn!("DMP compass bias clear incomplete");
+    } else {
+        info!("DMP compass bias cleared");
+    }
+}
+
 /// Resolve the effective mode: downgrade `Axis9` to `Axis6` if mag is unavailable.
 fn effective_mode(requested: DmpFusionMode) -> DmpFusionMode {
     if requested == DmpFusionMode::Axis9 && !MAG_AVAILABLE.load(Ordering::Relaxed) {
@@ -697,10 +879,9 @@ fn effective_mode(requested: DmpFusionMode) -> DmpFusionMode {
 /// Core command/sampling loop.
 ///
 /// Waits for [`ImuCommand::Start`], then polls the DMP FIFO on a fixed timer
-/// while also handling in-band commands (stop, mode switch, calibration load).
+/// while also handling in-band commands (stop, mode switch, bias access).
 #[allow(clippy::too_many_lines)]
 async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
-    let mut current_calibration: Option<MagCalibration> = None;
     let mut fusion_mode = effective_mode(STARTUP_FUSION_MODE);
 
     #[cfg(feature = "telemetry_logs")]
@@ -725,6 +906,9 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                 }
 
                 let mut fifo_failures: u32 = 0;
+                // Caller-owned reader keeps partial packets across polls. Recreated
+                // per Start so a stopped session cannot leak framing state.
+                let mut reader = DmpFifoReader::new();
 
                 loop {
                     match select(IMU_CONTROL.receive(), Timer::after(POLL_INTERVAL)).await {
@@ -746,6 +930,9 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                 let new_config = build_dmp_config(new_mode);
                                 if apply_dmp_config(sensor, &new_config).await {
                                     fusion_mode = new_mode;
+                                    // `apply_dmp_config` reset the device FIFO, so any
+                                    // partial packet the reader retained is stale.
+                                    reader.clear();
                                     info!("Switched DMP fusion mode to {:?}", fusion_mode);
                                     // Axis6 never produces magnetometer data — clear
                                     // any stale values left from a previous Axis9 session.
@@ -753,6 +940,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         let mut readings = LATEST_READINGS.lock().await;
                                         readings.raw_mag = None;
                                         readings.calibrated_mag = None;
+                                        readings.compass_accuracy = None;
                                     }
                                 } else {
                                     warn!("DMP mode switch failed — restoring previous {:?}", fusion_mode);
@@ -761,15 +949,27 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         warn!("DMP restore failed — returning to standby");
                                         continue 'command;
                                     }
+                                    reader.clear();
                                 }
                                 fifo_failures = 0;
                             }
                         }
 
-                        // ── In-band: calibration load ─────────────────────────
-                        Either::First(ImuCommand::LoadCalibration(cal)) => {
-                            current_calibration = Some(cal);
-                            info!("IMU calibration data loaded");
+                        // ── In-band: bias snapshot read ───────────────────────
+                        Either::First(ImuCommand::ReadBias) => {
+                            let snapshot = read_bias_snapshot(sensor).await;
+                            BIAS_REPLY.send(snapshot).await;
+                        }
+
+                        // ── In-band: bias snapshot apply ─────────────────────
+                        Either::First(ImuCommand::ApplyBias(snapshot)) => {
+                            let result = apply_bias_snapshot(sensor, &snapshot).await;
+                            BIAS_APPLY_REPLY.send(result).await;
+                        }
+
+                        // ── In-band: compass bias clear ───────────────────────
+                        Either::First(ImuCommand::ClearCompassBias) => {
+                            clear_compass_bias_memory(sensor).await;
                         }
 
                         // ── In-band: Start (already running — ignore) ─────────
@@ -777,7 +977,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
 
                         // ── Timer: poll FIFO ──────────────────────────────────
                         Either::Second(()) => {
-                            match sensor.dmp_read_fifo().await {
+                            match reader.read_packet_async(sensor).await {
                                 Ok(Some(packet)) => {
                                     fifo_failures = 0;
 
@@ -787,7 +987,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                     let quat_opt = quat9.or(quat6);
 
                                     if let Some(quat) = quat_opt {
-                                        let has_mag = packet.raw_mag.is_some();
+                                        let has_mag = packet.dmp_compass.is_some();
                                         let magnitude = quat.magnitude();
                                         let unit_quaternion = magnitude.is_finite()
                                             && (magnitude - 1.0).abs() <= IMU_QUATERNION_NORM_TOLERANCE;
@@ -806,20 +1006,14 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
 
                                             // The quaternion is unusable, but the raw accel,
                                             // gyro, and mag fields in the same packet are not.
-                                            // Mag calibration samples them only through this
-                                            // helper, so keep them flowing while suppressing
-                                            // the orientation feedback.
-                                            update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
+                                            // Keep them flowing while suppressing the
+                                            // orientation feedback.
+                                            update_statics_from_dmp(&packet, None, Instant::now().as_millis()).await;
                                         } else {
                                             let orientation = dmp_quat_to_orientation(quat);
                                             let timestamp_ms = Instant::now().as_millis();
 
-                                            update_statics_from_dmp(
-                                                &packet,
-                                                Some(orientation),
-                                                current_calibration.as_ref(),
-                                            )
-                                            .await;
+                                            update_statics_from_dmp(&packet, Some(orientation), timestamp_ms).await;
 
                                             let measurement = ImuMeasurement {
                                                 orientation,
@@ -844,7 +1038,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                                 );
                                                 let (ax, ay, az) = packet.raw_accel.unwrap_or((0, 0, 0));
                                                 let (gx, gy, gz) = packet.raw_gyro.unwrap_or((0, 0, 0));
-                                                let (mx, my, mz) = packet.raw_mag.unwrap_or((0, 0, 0));
+                                                let (mx, my, mz) = packet.dmp_compass.unwrap_or((0, 0, 0));
                                                 info!(
                                                     "IMU raw: accel=({},{},{}) gyro=({},{},{}) mag=({},{},{})",
                                                     ax, ay, az, gx, gy, gz, mx, my, mz
@@ -871,16 +1065,16 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                             }
 
                                             // Forward to the drive task's IMU feedback channel (capacity 16).
-                                            // The rotation control loop drains it each ~10 ms; dropping a
-                                            // 100 Hz sample when the channel is full is lossy but harmless —
-                                            // the next sample arrives in 10 ms.
+                                            // The rotation control loop drains it each ~10 ms; dropping a
+                                            // ~112 Hz sample when the channel is full is lossy but harmless —
+                                            // the next sample arrives in ~9 ms.
                                             let _ = drive::try_send_imu_measurement(measurement);
 
                                             IMU_READY.store(true, Ordering::Relaxed);
                                         }
                                     } else {
                                         // Packet present but no quaternion yet (DMP warming up).
-                                        update_statics_from_dmp(&packet, None, current_calibration.as_ref()).await;
+                                        update_statics_from_dmp(&packet, None, Instant::now().as_millis()).await;
                                     }
                                 }
 
@@ -888,12 +1082,23 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                     // FIFO not ready — normal during DMP warm-up.
                                 }
 
+                                Err(icm20948::Error::FifoOverflow) => {
+                                    // The reader already cleared its framing and reset
+                                    // the device FIFO. Overflow usually means this task
+                                    // was starved past a full FIFO, so resync and keep
+                                    // sampling rather than counting it as fatal.
+                                    fifo_failures = 0;
+                                    warn!("DMP FIFO overflow — resynchronised");
+                                }
+
                                 Err(e) => {
                                     fifo_failures += 1;
                                     warn!("DMP FIFO read error ({}/{}): {:?}", fifo_failures, MAX_FIFO_FAILURES, e);
 
-                                    // Attempt a FIFO reset to clear any overflow.
+                                    // Reset the device FIFO and discard any partial
+                                    // packet the reader retained before the error.
                                     let _ = sensor.reset_fifo().await;
+                                    reader.clear();
 
                                     if fifo_failures >= MAX_FIFO_FAILURES {
                                         warn!("Max FIFO failures reached — IMU task terminating");
@@ -911,13 +1116,20 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                 info!("IMU stop received (already in standby)");
                 IMU_READY.store(false, Ordering::Relaxed);
             }
-            ImuCommand::LoadCalibration(cal) => {
-                current_calibration = Some(cal);
-                info!("IMU calibration loaded (standby)");
-            }
             ImuCommand::SetFusionMode(mode) => {
                 fusion_mode = effective_mode(mode);
                 info!("IMU fusion mode set to {:?} (standby)", fusion_mode);
+            }
+            ImuCommand::ReadBias => {
+                let snapshot = read_bias_snapshot(sensor).await;
+                BIAS_REPLY.send(snapshot).await;
+            }
+            ImuCommand::ApplyBias(snapshot) => {
+                let result = apply_bias_snapshot(sensor, &snapshot).await;
+                BIAS_APPLY_REPLY.send(result).await;
+            }
+            ImuCommand::ClearCompassBias => {
+                clear_compass_bias_memory(sensor).await;
             }
         }
     }

@@ -21,13 +21,15 @@ use crate::{
         BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H, SCROLL_W,
         footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
         link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
-        slider_thumb_rect, slider_track_rect,
+        progress_bar_rect, prompt_instruction_rect, prompt_progress_rect, prompt_status_rect, readout_area,
+        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
+        slider_track_rect,
     },
-    hit::{HeaderAction, Hit, LinkAction},
+    hit::{HeaderAction, Hit, LinkAction, PromptAction},
+    imu::ImuReadout,
     palette::{ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT},
     radar,
-    screens::{StatusView, ValueFlow},
+    screens::{PromptView, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     ui::HeaderStatus,
@@ -236,11 +238,101 @@ where
     Ok(())
 }
 
+/// Lines the prompt draws for one text block.
+///
+/// The instruction and the status line each get a two-line block inside their
+/// existing 24-pixel row, so a long instruction wraps instead of being clipped
+/// at both ends.
+pub const PROMPT_TEXT_LINES: usize = 2;
+
+/// Split `text` into at most `lines.len()` lines of at most `max_chars`
+/// characters, breaking at spaces.
+///
+/// Returns the number of lines written into `lines`. A word longer than a whole
+/// line is hard-cut at the limit, so the split always makes progress.
+pub fn wrap_text<'a>(text: &'a str, max_chars: usize, lines: &mut [&'a str]) -> usize {
+    let limit = max_chars.max(1);
+    let mut written = 0;
+    let mut rest = text.trim();
+
+    while !rest.is_empty() && written < lines.len() {
+        let mut end = rest.len();
+        let mut last_space = None;
+        for (width, (offset, ch)) in rest.char_indices().enumerate() {
+            if width == limit {
+                end = offset;
+                break;
+            }
+            if ch == ' ' {
+                last_space = Some(offset);
+            }
+        }
+
+        // Prefer the last space inside the line; hard-cut when there is none.
+        let cut = match last_space {
+            Some(space) if end != rest.len() && space > 0 => space,
+            _ => end,
+        };
+        lines[written] = rest[..cut].trim_end();
+        rest = rest[cut..].trim_start();
+        written += 1;
+    }
+    written
+}
+
+/// Draw `text` wrapped to at most [`PROMPT_TEXT_LINES`] lines, centered inside
+/// `area`.
+///
+/// The style's first glyph gives the character width, so this assumes the
+/// monospace style the prompt uses.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+fn draw_wrapped_centered_text<D>(
+    d: &mut D,
+    area: Rectangle,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let glyph_width = style
+        .measure_string("M", Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width
+        .max(1);
+    let max_chars = (area.size.width / glyph_width) as usize;
+
+    let mut lines = [""; PROMPT_TEXT_LINES];
+    let count = wrap_text(text, max_chars, &mut lines);
+    let pitch = style.line_height() + 2;
+    let block_height = pitch * count as u32;
+    let top = area.top_left.y + (area.size.height as i32 - block_height as i32) / 2;
+
+    for (index, line) in lines[..count].iter().enumerate() {
+        let size = style
+            .measure_string(line, Point::zero(), Baseline::Top)
+            .bounding_box
+            .size;
+        let position = Point::new(
+            area.top_left.x + (area.size.width as i32 - size.width as i32) / 2,
+            top + (index as u32 * pitch) as i32,
+        );
+        Text::with_baseline(line, position, style, Baseline::Top).draw(d)?;
+    }
+    Ok(())
+}
+
 /// Draw a running/status screen: an accent-bordered panel carrying the body
 /// line.
 ///
 /// When the view reports progress the body sits above a bar across the panel's
-/// lower edge. The header carries the dynamic title and the Stop button.
+/// lower edge. When the view carries an IMU Test Readout, the rows replace both
+/// the body line and the progress bar. The header carries the dynamic title and
+/// the Stop button.
 ///
 /// # Errors
 ///
@@ -254,6 +346,10 @@ where
     panel
         .into_styled(PrimitiveStyle::with_stroke(ACCENT, PANEL_BORDER))
         .draw(d)?;
+
+    if let Some(readout) = view.readout() {
+        return draw_imu_readout(d, readout);
+    }
 
     let track = progress_bar_rect();
     // With a bar, the body sits in the space above it so the two cannot overlap.
@@ -275,6 +371,109 @@ where
                 .into_styled(PrimitiveStyle::with_fill(ACCENT))
                 .draw(d)?;
         }
+    }
+    Ok(())
+}
+
+/// Draw a guided prompt screen.
+///
+/// The status panel carries the instruction and the dynamic status line, an
+/// optional progress bar, and the available Done/Redo actions. The header
+/// carries the dynamic title and the Stop button.
+///
+/// A disabled action is not drawn, so a movement step shows only Done while the
+/// final Compass Checks show Done and Redo. Both text lines are wrapped to two
+/// lines and clipped to their own rectangles, so a long instruction stays fully
+/// readable and cannot paint over the panel border or the action row.
+///
+/// # Errors
+///
+/// Returns the draw target's error if a primitive or text fails to draw.
+pub fn draw_prompt<D>(d: &mut D, view: &PromptView, pressed: Option<Hit>) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let panel = panel_rect();
+    panel.into_styled(PrimitiveStyle::with_fill(BUTTON_BG)).draw(d)?;
+    panel
+        .into_styled(PrimitiveStyle::with_stroke(ACCENT, PANEL_BORDER))
+        .draw(d)?;
+
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    draw_wrapped_centered_text(
+        &mut d.clipped(&prompt_instruction_rect()),
+        prompt_instruction_rect(),
+        view.instruction,
+        style,
+    )?;
+    draw_wrapped_centered_text(
+        &mut d.clipped(&prompt_status_rect()),
+        prompt_status_rect(),
+        view.status_text(),
+        style,
+    )?;
+
+    if let Some(percent) = view.progress {
+        let track = prompt_progress_rect();
+        track.into_styled(PrimitiveStyle::with_fill(BUTTON_BORDER)).draw(d)?;
+        let filled = track.size.width * u32::from(percent.min(100)) / 100;
+        if filled > 0 {
+            Rectangle::new(track.top_left, Size::new(filled, track.size.height))
+                .into_styled(PrimitiveStyle::with_fill(ACCENT))
+                .draw(d)?;
+        }
+    }
+
+    for action in PromptAction::ALL {
+        let available = match action {
+            PromptAction::Done => view.done,
+            PromptAction::Redo => view.redo,
+        };
+        if available {
+            draw_button(
+                d,
+                action.rect(),
+                action.label(),
+                LABEL_FONT,
+                pressed == Some(Hit::PromptAction(action)),
+                true,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Draw the IMU Test Readout rows inside the status panel.
+///
+/// The rows come from the readout model, so labels, units, precision and
+/// placeholders stay in one place. Each line starts at its row's left edge (not
+/// inset by [`BUTTON_PAD`], which would clip the widest rows) and is vertically
+/// centred on a ten-pixel glyph. Drawing is clipped to the readout area so a
+/// hostile over-long value cannot paint over the panel border.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+pub fn draw_imu_readout<D>(d: &mut D, readout: &ImuReadout) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = readout_area();
+    let mut clipped = d.clipped(&area);
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    let row_count = readout.row_count();
+
+    for (index, row) in readout.rows().iter().take(row_count).enumerate() {
+        let rect = readout_row_rect(index, row_count);
+        let size = style
+            .measure_string(row.as_str(), Point::zero(), Baseline::Top)
+            .bounding_box
+            .size;
+        let position = Point::new(
+            rect.top_left.x,
+            rect.top_left.y + (rect.size.height as i32 - size.height as i32) / 2,
+        );
+        Text::with_baseline(row.as_str(), position, style, Baseline::Top).draw(&mut clipped)?;
     }
     Ok(())
 }

@@ -64,7 +64,7 @@ pending snapshot; a newer sample replaces it.
 | `0x0003` | `ACTIVITY` | `procedure_id u16`, `stage u8`, `percent u8` (`0xFF` none), `detail_len u8`, `detail` UTF-8 ≤32 B | on change + 1 Hz |
 | `0x0004` | `PERCEPTION` | `flags u8` — bit 0 obstacle, bit 1 floor drop | 10 Hz |
 | `0x0005` | `LIDAR_CLOUD` | `slots [u16; 360]` cm, `0xFFFF` = no return | 10 Hz |
-| `0x0006` | `CALIBRATION` | `motor u8`, `imu u8`, `mag u8`, `distance u8` — 0 unknown, 1 loaded, 2 missing | on change + 5 s |
+| `0x0006` | `CALIBRATION` | `motor u8`, `imu u8`, `mag u8`, `distance u8` — 0 unknown, 1 loaded, 2 missing; the retired `imu` and `mag` bytes both carry the DMP calibration status (ADR-0045) | on change + 5 s |
 | `0x0010` | `POSE` | reserved | 20 Hz once odometry lands |
 | `0x0011` | `POSE_TRAIL` | reserved | — |
 | `0x0012` | `MAP` | reserved | — |
@@ -87,7 +87,7 @@ and carry the firmware's operator-facing reason where one exists (UTF-8, ≤32 B
 | `0x0003` | `PROCEDURE_COMPLETED` | `procedure_id u16`, `stage u8`, `detail_len u8`, `detail` | terminal Procedure outcome |
 | `0x0004` | `DRIVE_DISTANCE_COMPLETED` | `command_seq u16`, `status u8`, `target_cm i16`, `distance_cm i32`, `duration_ms u32`, `detail_len+detail` | after `DRIVE_DISTANCE` |
 | `0x0005` | `ROTATE_COMPLETED` | `command_seq u16`, `status u8`, `target_cdeg i16`, `error_cdeg i32`, `duration_ms u32`, `detail_len+detail` | after `ROTATE_BY` |
-| `0x0006` | `CALIBRATION_LOADED` | `kind u8` (0 motor, 1 imu flags, 2 distance), `status u8` (0 loaded, 1 missing) | boot/calibration load |
+| `0x0006` | `CALIBRATION_LOADED` | `kind u8` (0 motor, 1 imu flags / DMP bias snapshot, 2 distance), `status u8` (0 loaded, 1 missing) | boot/calibration load |
 | `0x0007` | `EVENT_OVERFLOW` | `dropped u16` | event ring overflow |
 | `0x0008–0x000F` | reserved | | low battery, map/landmark updates |
 
@@ -115,10 +115,18 @@ at a time.
 | `0x0015` | `GET_CAMERA` | reserved | |
 
 Procedure ids are stable and never reused: `0x0000` idle and `0x0001` boot are Activity-only;
-`0x0002` MotorCalibration, `0x0003` MagCalibration, `0x0004` DistanceCalibration, `0x0005`
-CoastAndAvoid, `0x0006` AttemptStraight (the only one with params, `target_distance_cm u16`),
-`0x0007` BasicMotor, `0x0008` Turns, `0x0009` StraightDrive, `0x000A` ArcDrive, `0x000B`
-Imu6Axis, `0x000C` Imu9Axis.
+`0x0002` MotorCalibration, `0x0003` MagCalibration (retired; the id is never reused),
+`0x0004` DistanceCalibration, `0x0005` CoastAndAvoid, `0x0006` AttemptStraight (the only one with
+params, `target_distance_cm u16`), `0x0007` BasicMotor, `0x0008` Turns, `0x0009` StraightDrive,
+`0x000A` ArcDrive, `0x000B` Imu6Axis, `0x000C` Imu9Axis, `0x000D` Manual Drive (Activity-only),
+`0x000E` DmpCompassCalibration (hands-on, not Remote-startable).
+
+**Update 2026-11-13 (ADR-0045).** DMP Compass Calibration adds `0x000E` and retires the host
+MagCalibration Procedure, `ImuFlags` and `mag_cal_status`. The wire layout is unchanged: the
+`CALIBRATION` stream's `imu` and `mag` bytes now both carry the DMP calibration status, and
+`CALIBRATION_LOADED` kind 1 now reports the DMP Bias Snapshot's presence under the retired
+`ImuFlags` name. The Remote can render the new Activity from the Catalogue's label and flags;
+no prompt telemetry crosses the wire.
 
 Not every listed Procedure is available to start from the Remote yet: AttemptStraight models a
 value screen but the firmware does not start it, and DistanceCalibration needs the panel's

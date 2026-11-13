@@ -1,27 +1,30 @@
 //! On-demand IMU test mode task (6-axis: accel + gyro).
 //!
 //! Streams IMU telemetry until the operator stops it from the running screen.
-//! The screen reads its phase from the activity state; the sampled orientation
-//! and raw vectors go to the log.
+//! The panel is the primary view: the task publishes a typed
+//! [`touch_ui::ImuReadout`] into the IMU Test Telemetry snapshot at 10 Hz, and
+//! the touch UI formats it into the running screen's rows. The periodic log is
+//! diagnostics only, so its reports are `debug`.
 //!
-//! ICM-20948 communicates over SPI.
+//! The screen still reads its phase from the activity state. ICM-20948
+//! communicates over SPI.
 
-use defmt::{error, info};
+use defmt::{debug, error};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use touch_ui::ImuReadoutKind;
 
-use crate::task::{
-    procedure::Claim,
-    sensors::imu::{
-        DmpFusionMode, Orientation, get_latest_readings, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
+use super::imu_common::{LOG_EVERY_TICKS, PUBLISH_EVERY_TICKS, SAMPLE_INTERVAL_MS, base_readout, health};
+use crate::{
+    system::state::imu_test,
+    task::{
+        procedure::Claim,
+        sensors::imu::{
+            DmpFusionMode, Orientation, READING_STALE_MS, get_latest_readings, set_dmp_fusion_mode, start_imu_readings,
+            stop_imu_readings,
+        },
     },
 };
-
-/// Sampling period, in milliseconds.
-const SAMPLE_INTERVAL_MS: u64 = 20;
-
-/// Ticks between log reports (50 ticks ≈ 1 s).
-const LOG_EVERY_TICKS: u32 = 50;
 
 /// Spawn the IMU 6-axis test task via the controller.
 ///
@@ -44,6 +47,7 @@ pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
 /// IMU 6-axis test task: streams readings until stopped.
 #[embassy_executor::task]
 async fn imu6_test_task(claim: Claim) {
+    imu_test::clear().await;
     start_imu_readings();
     Timer::after(Duration::from_millis(30)).await;
     set_dmp_fusion_mode(DmpFusionMode::Axis6);
@@ -51,41 +55,54 @@ async fn imu6_test_task(claim: Claim) {
 
     let mut tick: u32 = 0;
     let mut missing: u32 = 0;
+    let mut received = false;
 
     while !claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
-        let r = get_latest_readings().await;
-        let orientation = r.orientation;
-        let gyro = r.calibrated_gyro;
-        let raw_accel = r.raw_accel;
-        let raw_gyro = r.raw_gyro;
+        // Drop values the driver stopped updating, so a stalled IMU reads as
+        // missing instead of replaying its last sample as live data.
+        let readings = get_latest_readings().await.fresh(READING_STALE_MS);
 
-        if orientation.is_none() && gyro.is_none() {
+        if readings.orientation.is_none() && readings.calibrated_gyro.is_none() {
             missing = missing.saturating_add(1);
         } else {
+            received = true;
             missing = 0;
         }
 
         tick = tick.wrapping_add(1);
+        if tick.is_multiple_of(PUBLISH_EVERY_TICKS) {
+            imu_test::publish(base_readout(
+                ImuReadoutKind::SixAxis,
+                health(received, missing),
+                missing,
+                readings,
+            ))
+            .await;
+        }
         if tick.is_multiple_of(LOG_EVERY_TICKS) {
-            info!(
+            debug!(
                 "imu6: ori={} gyro={} missing={=u32}",
-                orientation.is_some(),
-                gyro.is_some(),
+                readings.orientation.is_some(),
+                readings.calibrated_gyro.is_some(),
                 missing
             );
-            log_orientation(orientation);
-            log_raw(raw_accel, raw_gyro);
+            log_orientation(readings.orientation.map(|reading| reading.value));
+            log_raw(
+                readings.raw_accel.map(|reading| reading.value),
+                readings.raw_gyro.map(|reading| reading.value),
+            );
         }
     }
 
     stop_imu_readings();
+    imu_test::clear().await;
     claim.finish().await;
 }
 
 /// Log the fused orientation in Euler angles, when there is one.
 fn log_orientation(orientation: Option<Orientation>) {
     if let Some(ori) = orientation {
-        info!(
+        debug!(
             "imu6 euler: yaw={=f32} pitch={=f32} roll={=f32}",
             ori.yaw, ori.pitch, ori.roll
         );
@@ -95,11 +112,11 @@ fn log_orientation(orientation: Option<Orientation>) {
 /// Log the raw accelerometer and gyroscope vectors, or which one is missing.
 fn log_raw(accel: Option<nalgebra::Vector3<f32>>, gyro: Option<nalgebra::Vector3<f32>>) {
     if let (Some(a), Some(g)) = (accel, gyro) {
-        info!(
+        debug!(
             "imu6 raw: a=({=f32},{=f32},{=f32}) g=({=f32},{=f32},{=f32})",
             a.x, a.y, a.z, g.x, g.y, g.z
         );
     } else {
-        info!("imu6 raw: accel={} gyro={}", accel.is_some(), gyro.is_some());
+        debug!("imu6 raw: accel={} gyro={}", accel.is_some(), gyro.is_some());
     }
 }

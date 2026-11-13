@@ -415,6 +415,10 @@ impl ProcedureId {
     pub const IMU_6_AXIS: Self = Self(0x000B);
     /// Nine-axis IMU test.
     pub const IMU_9_AXIS: Self = Self(0x000C);
+    /// DMP compass calibration, hands-on and never Remote-startable.
+    ///
+    /// `0x000D` is the Activity-only Manual Drive id and is deliberately skipped.
+    pub const DMP_COMPASS_CALIBRATION: Self = Self(0x000E);
 
     /// Wraps a raw wire value, including one this version does not know.
     #[must_use]

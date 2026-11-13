@@ -59,6 +59,7 @@
 
 - **Menu Entry** — One entry of the Panel's menu tree, carrying its label, the screen it opens, and the screen the header Back returns to. An entry is a submenu, a Procedure, or a screen. Entries are named, not positioned, so reordering a menu cannot change what an entry starts.
   _Avoid_: option, row, index
+- **Running Screen** — The Panel's status screen shown while an Activity State is live: the Activity's title, a Stop action, and either a phase body or an **IMU Test Readout**. It becomes a Result Report on a successful or failed finish; an operator Stop clears the Activity and returns to the parent menu.
 
 ## Architecture
 
@@ -175,19 +176,21 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 
 ## State Modules
 
-Lock order (documented in each module): **power → calibration → perception → motion → activity**
+Lock order (documented in each module): **power → calibration → perception → motion → activity**.
+`imu_test` and `dmp_cal` are independent leaves that are never held with another state lock.
 
 - **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
-- **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), IMU calibration status, distance calibration factor. Persisted to flash.
+- **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
 - **Procedure** — A long-running, operator-started, stoppable unit of work: a test mode, a calibration, or a drive mode. Identified by the Menu Entry that starts it, and it holds the **Active Claim** while it runs.
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
 - **Active Claim** — The single exclusive right to be the robot's current Activity and to produce motion: held by the boot flow, one Procedure, one **Manual Drive**, or the Room Scan screen. A second claimant is `BUSY`; the holder is the only writer of a live Activity. Any operator may stop the holder; there is no owner, no takeover mode and no authority derived from the link lease (ADR-0034).
 - **Claim Origin** — The transient `Panel` or `Remote` tag on an **Active Claim**, cleared with it. A `Drive` claim is always Remote and a `Procedure` takes the origin of its starter. It exists only so the **Deadman** can stop the Remote's work without touching the panel's; it is not authority and never reaches the wire (ADR-0035).
-- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. A finished Procedure is presented as a Result Report.
+- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
 - **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). The old zero-distance sentinel is retired: a slot is `None` for no return.
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
+- **DMP Calibration Snapshot State** — The panel-only typed `DmpCalibrationSnapshot` a DMP Compass Calibration publishes at the panel's telemetry rate: the current Compass Step, heading, target, Compass Accuracy, hint and check outcome. It is an independent leaf and never enters Activity State or the Link Protocol.
 - **Motion State** — Track speeds (left and right, -100 to +100) with lock-free atomic mirrors for high-frequency readers.
 - **Link State** — The operator-facing snapshot of the link: **Bridge Presence**, **Peer** state, the latest **Bridge Status** and the latest **Bridge Control** outcome, with staleness. Written by the **Link Task**; read by the **Panel** and the PC app through their own adapters. It is not the wire `BRIDGE_STATUS` payload.
 
@@ -210,9 +213,27 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Motor Calibration** — Per-track speed multipliers (`left_factor`/`right_factor`, range `(0.0, 1.0]`). The faster track is always the reference at 1.0; the slower track gets a factor < 1.0. Computed by running each track at fixed PWM and measuring encoder pulses.
 - **Distance Calibration** — Single factor (range 0.5–2.0) mapping encoder pulses to real-world centimeters. Corrects for surface friction and tire wear.
-- **IMU Calibration** — Magnetometer hard/soft iron calibration and motor interference compensation (`MagCalibration`). Gyroscope and accelerometer bias are handled internally by the ICM-20948 DMP.
-- **Boot Sequence** — On `Initialize` event, the initialization module sends individual `GetData` commands to flash storage for motor, IMU, distance, and IMU flag calibration data. Each response raises a `CalibrationDataLoaded` event. When all four are received, the UI shows the main menu.
-- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and magnetometer calibration flags (`ImuCalibrationFlags`) to dedicated FLASH_STORAGE region (last 8KB of flash).
+- **DMP Compass Calibration** — A guided Procedure that walks the operator through a fixed sequence of movements, verifies the resulting magnetic heading at two known headings, and saves the ICM-20948 DMP's bias snapshot. Starting it does not start the DMP calibration engine; the engine runs continuously while nine-axis fusion is enabled, and the Procedure only guides the motion and snapshots the result.
+  _Avoid_: Mag Calibration (retains the retired host meaning), mag ceremony
+- **Compass Step** — One instructed movement in a DMP Compass Calibration, advanced by the operator's Done action.
+- **Compass Check** — The final two-heading verification of a DMP Compass Calibration: the robot's front is pointed at magnetic north and then east, and the displayed Compass Heading must agree within ±10° while the DMP reports Compass Accuracy 3 and the heading is stable. The stability window must be continuous: a gap in the IMU readings discards the evidence gathered so far.
+- **Compass Heading** — The magnetic bearing derived from DMP yaw by the fixed mounting/sign conversion; it is magnetic north, not true north, and carries no declination.
+- **Compass Accuracy** — The DMP's 0–3 confidence in its compass calibration, where 3 is most accurate; the final Compass Check requires 3.
+- **DMP Bias Snapshot** — The nine raw DMP bias words (gyroscope, accelerometer and compass) saved to flash after a successful DMP Compass Calibration and restored to the DMP at boot. It does not include the DMP's internal accuracy/covariance state.
+- **Host Mag Calibration (retired)** — The former host-side hard/soft-iron and motor-interference procedure. It is superseded by DMP Compass Calibration because the DMP cannot consume host-corrected magnetometer values.
+- **Boot Sequence** — On `Initialize`, the initialization module sends individual `GetData` commands to flash storage for motor, DMP bias snapshot, and distance calibration data. Each response raises a `CalibrationDataLoaded` event. When all three are received, the UI shows the main menu.
+- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and the DMP Bias Snapshot (nine i32 plus version/checksum) to the dedicated FLASH_STORAGE region (last 8KB of flash).
+
+## IMU Test
+
+- **IMU Test** — A Procedure that runs the IMU in isolation in six-axis or nine-axis fusion and streams its live readings to the panel and the log until the operator stops it.
+- **IMU Test Readout** — The live block inside the IMU Test's running screen: Euler angles, raw accelerometer/gyroscope/magnetometer vectors, DMP-calibrated gyroscope and magnetometer vectors, the magnetometer norm and gate, the three headings, the per-plane heading remaps, and an IMU Test Health line. It is not part of Activity State.
+- **IMU Test Telemetry** — The 10 Hz snapshot of the latest IMU readings and derived diagnostics behind an IMU Test Readout. It is panel-only and never reaches the Link Protocol.
+- **Raw Reading** — A sensor value before DMP correction: raw accelerometer in `g`, raw gyroscope in `deg/s`, raw magnetometer in `µT`.
+- **Calibrated Reading** — A sensor value after correction: the DMP bias-corrected gyroscope or magnetometer. The accelerometer has no calibrated form.
+- **DMP-Calibrated Magnetometer** — The magnetometer vector after the DMP's internal compass bias correction, shown as `M dmp`; it is distinct from the raw `M raw` vector.
+- **IMU Test Health** — Whether the IMU is producing samples during an IMU Test: `Waiting` before the first sample, `Live` while samples arrive, and **IMU Not Responding** after a sustained gap. The last state is shown in the readout rather than ending the Procedure. Every reading carries its acquisition time, so a value the driver stops updating reads as missing instead of staying `Live`.
+- **Heading Remap** — A candidate magnetometer heading from one of eight axis-sign permutations of a magnetometer plane, used to diagnose the sensor's mounting and axis mapping; the nine-axis readout shows eight per plane for XY, XZ and YZ.
 
 ## Development Practices
 

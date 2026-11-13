@@ -50,10 +50,10 @@ pub struct SystemInfo {
     pub battery_voltage: Option<f32>,
     /// Motor calibration status.
     pub motor_calibration: CalibrationStatus,
-    /// Magnetometer calibration status.
-    pub mag_calibration: CalibrationStatus,
     /// Distance calibration status.
     pub distance_calibration: CalibrationStatus,
+    /// DMP compass calibration status.
+    pub dmp_calibration: CalibrationStatus,
 }
 
 impl SystemInfo {
@@ -64,8 +64,8 @@ impl SystemInfo {
             battery_level: None,
             battery_voltage: None,
             motor_calibration: CalibrationStatus::Unknown,
-            mag_calibration: CalibrationStatus::Unknown,
             distance_calibration: CalibrationStatus::Unknown,
+            dmp_calibration: CalibrationStatus::Unknown,
         }
     }
 
@@ -76,8 +76,8 @@ impl SystemInfo {
             battery_level_line(self.battery_level),
             battery_voltage_line(self.battery_voltage),
             calibration_line("Motor", self.motor_calibration),
-            calibration_line("Mag", self.mag_calibration),
             calibration_line("Dist", self.distance_calibration),
+            calibration_line("DMP Cal", self.dmp_calibration),
         ]
     }
 }

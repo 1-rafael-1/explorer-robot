@@ -2,12 +2,14 @@
 //!
 //! This module provides a task that manages storing and retrieving calibration data
 //! to/from flash memory using the `sequential-storage` crate. It handles motor
-//! calibration, distance calibration, and IMU calibration flags.
+//! calibration, distance calibration, and the DMP Bias Snapshot.
 //!
 //! The data is stored in the `FLASH_STORAGE` section of flash memory defined in
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
 
-use defmt::{debug, error, info};
+use defmt::{debug, error, info, warn};
+use dmp_cal::{DMP_BIAS_ENCODED_LEN, DmpBiasSnapshot};
+use embassy_futures::select::{Either, select};
 use embassy_rp::{
     flash::{ERASE_SIZE, Flash},
     mode::Async,
@@ -42,19 +44,69 @@ const COMMAND_QUEUE_SIZE: usize = 3;
 /// Channel for sending flash storage commands.
 static FLASH_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FlashCommand, COMMAND_QUEUE_SIZE> = Channel::new();
 
+/// Reply slot for one in-flight DMP Bias Snapshot save.
+///
+/// Capacity one matches the single Active Claim that can start a calibration;
+/// a late answer to a timed-out request is dropped rather than wedging the task.
+static DMP_BIAS_SAVE_REPLY: Channel<CriticalSectionRawMutex, bool, 1> = Channel::new();
+
+/// How long [`save_dmp_bias`] waits for the flash task before reporting failure.
+///
+/// A save erases and rewrites up to one 4 KB sector, which is well under this;
+/// the margin covers a queue that is still draining an earlier command.
+const DMP_BIAS_SAVE_TIMEOUT_MS: u64 = 5_000;
+
 /// Internal storage for calibration data (managed by `flash_storage` task only).
 static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Option<CalibrationData>> =
     embassy_sync::mutex::Mutex::new(None);
 
-/// Return the latest cached IMU calibration flags, if available.
-pub async fn get_cached_imu_flags() -> Option<ImuCalibrationFlags> {
+/// Return the latest cached DMP Bias Snapshot, if the boot query found one.
+///
+/// `None` before the boot query runs, after a query that found no snapshot, and
+/// before any save. The DMP calibration runner uses it to restore the DMP after
+/// a Stop or failure without writing flash again.
+pub async fn get_cached_dmp_bias() -> Option<DmpBiasWords> {
     let data = CALIBRATION_DATA.lock().await;
-    data.as_ref().map(|cal| cal.imu_flags)
+    data.as_ref().and_then(|cal| cal.dmp_bias)
 }
 
 /// Send a flash storage command.
 pub async fn send_flash_command(command: FlashCommand) {
     FLASH_COMMAND_CHANNEL.send(command).await;
+}
+
+/// Save a DMP Bias Snapshot and report whether flash took it.
+///
+/// [`send_flash_command`] only enqueues the write, so a caller that returns on
+/// the enqueue reports success before persistence has happened. This waits for
+/// the task's answer: `true` once `store_item` succeeded, `false` when the
+/// write failed, the command could not be enqueued, or the task did not answer.
+/// The caller must treat `false` as "the old snapshot is still the durable
+/// one".
+pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
+    // A late answer to a timed-out request must not be mistaken for this one.
+    while DMP_BIAS_SAVE_REPLY.try_receive().is_ok() {}
+
+    if FLASH_COMMAND_CHANNEL
+        .try_send(FlashCommand::SaveData(CalibrationDataKind::DmpBias(words)))
+        .is_err()
+    {
+        warn!("DMP bias save dropped — flash command queue full");
+        return false;
+    }
+
+    match select(
+        DMP_BIAS_SAVE_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_SAVE_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(saved) => saved,
+        Either::Second(()) => {
+            warn!("DMP bias save timed out after {}ms", DMP_BIAS_SAVE_TIMEOUT_MS);
+            false
+        }
+    }
 }
 
 /// Receive a flash storage command.
@@ -69,10 +121,10 @@ async fn receive_flash_command() -> FlashCommand {
 pub enum CalibrationKind {
     /// Motor calibration data.
     Motor,
-    /// IMU calibration flags.
-    ImuFlags,
     /// Distance calibration data.
     Distance,
+    /// DMP Bias Snapshot.
+    DmpBias,
 }
 
 /// Calibration data variants.
@@ -80,10 +132,10 @@ pub enum CalibrationKind {
 pub enum CalibrationDataKind {
     /// Motor calibration data (2 track factors).
     Motor(MotorCalibration),
-    /// IMU calibration flags.
-    ImuFlags(ImuCalibrationFlags),
     /// Distance calibration factor.
     Distance(f32),
+    /// DMP Bias Snapshot (nine raw bias words).
+    DmpBias(DmpBiasWords),
 }
 
 /// Commands that can be sent to the flash storage task.
@@ -98,34 +150,56 @@ pub enum FlashCommand {
 
 // ── Persisted data structures ───────────────────────────────────────────────────
 
-/// IMU calibration completion flags persisted in flash.
-///
-/// Separate from calibration values so flags can be written independently
-/// without touching the larger IMU calibration blob.
-#[derive(Debug, Clone, Copy, defmt::Format, Default, PartialEq, Eq)]
-pub struct ImuCalibrationFlags {
-    /// Magnetometer calibration completed.
-    pub mag: bool,
-}
-
 /// Combined calibration data cached in RAM.
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct CalibrationData {
     /// Motor calibration factors (2 × f32).
     pub motor: MotorCalibration,
-    /// IMU calibration flags.
-    pub imu_flags: ImuCalibrationFlags,
     /// Distance calibration factor.
     pub distance: f32,
+    /// DMP Bias Snapshot, if flash held a valid one.
+    pub dmp_bias: Option<DmpBiasWords>,
 }
 
 impl Default for CalibrationData {
     fn default() -> Self {
         Self {
             motor: MotorCalibration::default(),
-            imu_flags: ImuCalibrationFlags::default(),
             distance: 1.0,
+            dmp_bias: None,
         }
+    }
+}
+
+/// The nine raw DMP bias words as the firmware carries them.
+///
+/// `dmp-cal` is a pure model with no `defmt` dependency, and the flash command
+/// types derive `defmt::Format`, so the payload crosses the task boundary as
+/// this small firmware-local type. Encoding and validation stay in
+/// [`DmpBiasSnapshot`].
+#[derive(Debug, Clone, Copy, defmt::Format, PartialEq, Eq)]
+pub struct DmpBiasWords {
+    /// Raw gyroscope bias words.
+    pub gyro: [i32; 3],
+    /// Raw accelerometer bias words.
+    pub accel: [i32; 3],
+    /// Raw compass bias words.
+    pub compass: [i32; 3],
+}
+
+impl From<DmpBiasSnapshot> for DmpBiasWords {
+    fn from(snapshot: DmpBiasSnapshot) -> Self {
+        Self {
+            gyro: snapshot.gyro_bias(),
+            accel: snapshot.accel_bias(),
+            compass: snapshot.compass_bias(),
+        }
+    }
+}
+
+impl From<DmpBiasWords> for DmpBiasSnapshot {
+    fn from(words: DmpBiasWords) -> Self {
+        Self::new(words.gyro, words.accel, words.compass)
     }
 }
 
@@ -137,7 +211,12 @@ impl Default for CalibrationData {
 enum StorageKey {
     MotorCalibration = 0,
     DistanceFactor = 1,
+    /// Retired host-calibration key. Never requested or written again, but kept
+    /// so the numeric key is never reused and an old flash entry stays a known,
+    /// ignored record rather than corrupting the map.
+    #[allow(dead_code)]
     ImuFlags = 2,
+    DmpBias = 3,
 }
 
 impl Key for StorageKey {
@@ -160,6 +239,7 @@ impl Key for StorageKey {
             0 => Ok((Self::MotorCalibration, 1)),
             1 => Ok((Self::DistanceFactor, 1)),
             2 => Ok((Self::ImuFlags, 1)),
+            3 => Ok((Self::DmpBias, 1)),
             _ => Err(SerializationError::InvalidFormat),
         }
     }
@@ -217,25 +297,30 @@ impl Value<'_> for DistanceFactor {
     }
 }
 
-// ── Value impl for ImuCalibrationFlags (1 byte) ─────────────────────────────────
+// ── Value impl for DmpBiasWords (DMP Bias Snapshot, 39 bytes) ───────────────────
 
-impl Value<'_> for ImuCalibrationFlags {
+/// Persists the DMP Bias Snapshot through the model's versioned, checksummed
+/// encoding. A corrupt or incompatible value is rejected on load.
+impl Value<'_> for DmpBiasWords {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.is_empty() {
+        if buffer.len() < DMP_BIAS_ENCODED_LEN {
             return Err(SerializationError::BufferTooSmall);
         }
-        buffer[0] = u8::from(self.mag);
-        Ok(1)
+        let encoded = DmpBiasSnapshot::from(*self).encode();
+        buffer[..DMP_BIAS_ENCODED_LEN].copy_from_slice(&encoded);
+        Ok(DMP_BIAS_ENCODED_LEN)
     }
 
     fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        if buffer.is_empty() {
+        if buffer.len() < DMP_BIAS_ENCODED_LEN {
             return Err(SerializationError::BufferTooSmall);
         }
-        Ok((Self { mag: buffer[0] != 0 }, 1))
+        let snapshot =
+            DmpBiasSnapshot::decode(&buffer[..DMP_BIAS_ENCODED_LEN]).map_err(|_| SerializationError::InvalidFormat)?;
+        Ok((Self::from(snapshot), DMP_BIAS_ENCODED_LEN))
     }
 }
 
@@ -266,8 +351,9 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
     let mut storage = MapStorage::<StorageKey, _, _>::new(flash, MapConfig::new(flash_range.clone()), NoCache::new());
 
     // Scratch buffer for serialization/deserialization. Motor calibration needs
-    // 8 bytes, distance factor 4 bytes, IMU flags 1 byte. 32 bytes is plenty.
-    let mut data_buffer: [u8; 32] = [0; 32];
+    // 8 bytes, distance factor 4 bytes, and the DMP Bias Snapshot 39 bytes. 64
+    // bytes leaves headroom.
+    let mut data_buffer: [u8; 64] = [0; 64];
 
     // Main command processing loop
     loop {
@@ -294,8 +380,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                             } else {
                                 *data = Some(CalibrationData {
                                     motor: motor_cal,
-                                    imu_flags: ImuCalibrationFlags::default(),
-                                    distance: 1.0,
+                                    ..CalibrationData::default()
                                 });
                             }
                             drop(data);
@@ -317,50 +402,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         }
                     }
                 }
-                CalibrationKind::ImuFlags => {
-                    info!("Loading IMU calibration flags from flash...");
-                    match storage
-                        .fetch_item::<ImuCalibrationFlags>(&mut data_buffer, &StorageKey::ImuFlags)
-                        .await
-                    {
-                        Ok(Some(flags)) => {
-                            info!("IMU calibration flags loaded: mag={}", flags.mag);
 
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.imu_flags = flags;
-                            } else {
-                                *data = Some(CalibrationData {
-                                    motor: MotorCalibration::default(),
-                                    imu_flags: flags,
-                                    distance: 1.0,
-                                });
-                            }
-                            drop(data);
-
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                if flags.mag {
-                                    s.mag_cal_status = CalibrationStatus::Loaded;
-                                }
-                                s.imu_cal_status = CalibrationStatus::Loaded;
-                            }
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::ImuFlags,
-                                Some(CalibrationDataKind::ImuFlags(flags)),
-                            ))
-                            .await;
-                        }
-                        Ok(None) => {
-                            info!("No IMU calibration flags found in flash");
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::ImuFlags, None)).await;
-                        }
-                        Err(e) => {
-                            error!("Failed to load IMU calibration flags: {}", defmt::Debug2Format(&e));
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::ImuFlags, None)).await;
-                        }
-                    }
-                }
                 CalibrationKind::Distance => {
                     info!("Loading distance calibration from flash...");
                     match storage
@@ -375,9 +417,8 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                                 cal.distance = df.0;
                             } else {
                                 *data = Some(CalibrationData {
-                                    motor: MotorCalibration::default(),
-                                    imu_flags: ImuCalibrationFlags::default(),
                                     distance: df.0,
+                                    ..CalibrationData::default()
                                 });
                             }
                             drop(data);
@@ -403,6 +444,42 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         }
                     }
                 }
+                CalibrationKind::DmpBias => {
+                    info!("Loading DMP bias snapshot from flash...");
+                    match storage
+                        .fetch_item::<DmpBiasWords>(&mut data_buffer, &StorageKey::DmpBias)
+                        .await
+                    {
+                        Ok(Some(words)) => {
+                            info!("DMP bias snapshot loaded: {}", words);
+
+                            let mut data = CALIBRATION_DATA.lock().await;
+                            if let Some(ref mut cal) = *data {
+                                cal.dmp_bias = Some(words);
+                            } else {
+                                *data = Some(CalibrationData {
+                                    dmp_bias: Some(words),
+                                    ..CalibrationData::default()
+                                });
+                            }
+                            drop(data);
+
+                            raise_event(Events::CalibrationDataLoaded(
+                                CalibrationKind::DmpBias,
+                                Some(CalibrationDataKind::DmpBias(words)),
+                            ))
+                            .await;
+                        }
+                        Ok(None) => {
+                            info!("No DMP bias snapshot found in flash");
+                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::DmpBias, None)).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to load DMP bias snapshot: {}", defmt::Debug2Format(&e));
+                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::DmpBias, None)).await;
+                        }
+                    }
+                }
             },
 
             FlashCommand::SaveData(data_kind) => match data_kind {
@@ -416,8 +493,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     } else {
                         *data = Some(CalibrationData {
                             motor: motor_cal,
-                            imu_flags: ImuCalibrationFlags::default(),
-                            distance: 1.0,
+                            ..CalibrationData::default()
                         });
                     }
                     drop(data);
@@ -440,45 +516,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         }
                     }
                 }
-                CalibrationDataKind::ImuFlags(flags) => {
-                    info!("Saving IMU calibration flags to flash...");
 
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    if let Some(ref mut cal) = *data {
-                        cal.imu_flags = flags;
-                    } else {
-                        *data = Some(CalibrationData {
-                            motor: MotorCalibration::default(),
-                            imu_flags: flags,
-                            distance: 1.0,
-                        });
-                    }
-                    drop(data);
-
-                    match storage
-                        .store_item(&mut data_buffer, &StorageKey::ImuFlags, &flags)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!("IMU calibration flags saved successfully");
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                if flags.mag {
-                                    s.mag_cal_status = CalibrationStatus::Loaded;
-                                }
-                                s.imu_cal_status = CalibrationStatus::Loaded;
-                            }
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::ImuFlags,
-                                Some(CalibrationDataKind::ImuFlags(flags)),
-                            ))
-                            .await;
-                        }
-                        Err(e) => {
-                            error!("Failed to save IMU calibration flags: {}", defmt::Debug2Format(&e));
-                        }
-                    }
-                }
                 CalibrationDataKind::Distance(factor) => {
                     info!("Saving distance calibration to flash...");
 
@@ -487,9 +525,8 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         cal.distance = factor;
                     } else {
                         *data = Some(CalibrationData {
-                            motor: MotorCalibration::default(),
-                            imu_flags: ImuCalibrationFlags::default(),
                             distance: factor,
+                            ..CalibrationData::default()
                         });
                     }
                     drop(data);
@@ -516,6 +553,43 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                         Err(e) => {
                             error!("Failed to save distance calibration: {}", defmt::Debug2Format(&e));
                         }
+                    }
+                }
+                CalibrationDataKind::DmpBias(words) => {
+                    info!("Saving DMP bias snapshot to flash...");
+
+                    let saved = match storage.store_item(&mut data_buffer, &StorageKey::DmpBias, &words).await {
+                        Ok(()) => {
+                            // Cache the snapshot only once flash holds it, so a
+                            // failed write leaves the last durable snapshot in
+                            // the cache for a Stop to restore. The save keeps the
+                            // cache and the log only. Raising
+                            // `CalibrationDataLoaded` here would re-enter the boot
+                            // path and could discard the "Calibration saved" Result
+                            // Report; only `GetData(DmpBias)` produces that event.
+                            let mut data = CALIBRATION_DATA.lock().await;
+                            if let Some(ref mut cal) = *data {
+                                cal.dmp_bias = Some(words);
+                            } else {
+                                *data = Some(CalibrationData {
+                                    dmp_bias: Some(words),
+                                    ..CalibrationData::default()
+                                });
+                            }
+                            drop(data);
+                            info!("DMP bias snapshot saved successfully");
+                            true
+                        }
+                        Err(e) => {
+                            error!("Failed to save DMP bias snapshot: {}", defmt::Debug2Format(&e));
+                            false
+                        }
+                    };
+
+                    // A late answer to a timed-out request must not wedge the
+                    // task, so a full reply slot drops this one.
+                    if DMP_BIAS_SAVE_REPLY.try_send(saved).is_err() {
+                        warn!("DMP bias save result dropped — no waiter");
                     }
                 }
             },

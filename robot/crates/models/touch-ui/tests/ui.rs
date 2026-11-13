@@ -7,6 +7,7 @@
 //! so a reordering cannot rotate the radar unnoticed; other drawing is not
 //! asserted and is validated on glass.
 
+use dmp_cal::{CheckFailure, CheckOutcome, CompassStep};
 use embedded_graphics::{
     Pixel, draw_target::DrawTarget, geometry::OriginDimensions, pixelcolor::Rgb565, prelude::*, primitives::Rectangle,
 };
@@ -15,21 +16,23 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station,
 };
 use touch_ui::{
-    HeaderStatus, Hit, Item, LinkAction, Procedure, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE,
-    TAP_MIN_DURATION_MS, Ui,
-    buffer::TextBuf,
+    DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure,
+    PromptAction, PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
         back_button_rect, cancel_button_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
         link_result_rect, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, readout_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
-        slider_touch_rect,
+        progress_bar_rect, prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect,
+        prompt_redo_rect, prompt_status_rect, readout_rect, readout_row_pitch, readout_row_rect,
+        room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_touch_rect,
     },
+    imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MAX_IMU_ROWS, MagDiagnostics, Vector3},
     palette::{SMALL_FONT, TITLE_FONT},
     radar,
     screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
-    widgets::header_title_font,
+    widgets::{header_title_font, wrap_text},
 };
 
 /// A draw target that discards every pixel, so a test can render a screen without
@@ -174,7 +177,7 @@ fn the_menu_tree_matches_the_robot() {
         Screen::Calibrate.items(),
         [
             Item::Procedure(Procedure::MotorCalibration),
-            Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
         ]
         .as_slice()
@@ -206,7 +209,7 @@ fn the_menu_tree_matches_the_robot() {
         labels(Screen::MainMenu),
         ["System Info", "Calibrate", "Drive Mode", "Test Mode", "Link"]
     );
-    assert_eq!(labels(Screen::Calibrate), ["Motor", "Mag", "Distance"]);
+    assert_eq!(labels(Screen::Calibrate), ["Motor", "DMP Mag", "Distance"]);
     assert_eq!(labels(Screen::DriveMode), ["Coast & Avoid", "Attempt Straight"]);
     assert_eq!(
         labels(Screen::TestMode),
@@ -221,9 +224,9 @@ fn the_menu_tree_matches_the_robot() {
         ]
     );
 
-    assert!(Screen::SystemInfo.items().is_empty());
-    assert!(Screen::Link.items().is_empty());
-    assert!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items().is_empty());
+    assert_eq!(Screen::SystemInfo.items(), []);
+    assert_eq!(Screen::Link.items(), []);
+    assert_eq!(Screen::ValueEntry(ValueFlow::DistanceCalibration).items(), []);
 }
 
 /// Test that every list screen's entries are distinct and each one is labelled.
@@ -259,7 +262,7 @@ fn every_menu_entry_is_a_listed_item() {
             Item::Submenu(Submenu::TestMode),
             Item::ScreenEntry(ScreenEntry::Link),
             Item::Procedure(Procedure::MotorCalibration),
-            Item::Procedure(Procedure::MagCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
             Item::Procedure(Procedure::DistanceCalibration),
             Item::Procedure(Procedure::CoastAndAvoid),
             Item::Procedure(Procedure::AttemptStraight),
@@ -351,7 +354,7 @@ fn every_entry_names_its_own_title_and_parent() {
         (Item::Submenu(Submenu::TestMode), Screen::MainMenu),
         (Item::ScreenEntry(ScreenEntry::Link), Screen::MainMenu),
         (Item::Procedure(Procedure::MotorCalibration), Screen::Calibrate),
-        (Item::Procedure(Procedure::MagCalibration), Screen::Calibrate),
+        (Item::Procedure(Procedure::DmpCompassCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::DistanceCalibration), Screen::Calibrate),
         (Item::Procedure(Procedure::CoastAndAvoid), Screen::DriveMode),
         (Item::Procedure(Procedure::AttemptStraight), Screen::DriveMode),
@@ -433,7 +436,7 @@ fn interactive_procedures_match_their_producers() {
     }
     for procedure in [
         Procedure::MotorCalibration,
-        Procedure::MagCalibration,
+        Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
         Procedure::AttemptStraight,
         Procedure::Turns,
@@ -536,7 +539,6 @@ fn a_running_screen_reports_stop() {
 fn a_procedure_supplies_its_running_views_title_and_parent() {
     for (procedure, parent) in [
         (Procedure::MotorCalibration, Screen::Calibrate),
-        (Procedure::MagCalibration, Screen::Calibrate),
         (Procedure::DistanceCalibration, Screen::Calibrate),
         (Procedure::CoastAndAvoid, Screen::DriveMode),
         (Procedure::AttemptStraight, Screen::DriveMode),
@@ -551,10 +553,10 @@ fn a_procedure_supplies_its_running_views_title_and_parent() {
         assert_eq!(view.parent, parent, "{procedure:?} states where Stop returns");
     }
 
-    // The three calibrations are the ones a calibration lifecycle belongs to.
+    // The calibrations are the ones a calibration lifecycle belongs to.
     for procedure in [
         Procedure::MotorCalibration,
-        Procedure::MagCalibration,
+        Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
     ] {
         assert!(procedure.is_calibration(), "{procedure:?} is a calibration");
@@ -923,15 +925,20 @@ fn system_info_renders_the_neutral_snapshot() {
         battery_level: Some(87),
         battery_voltage: Some(7.4),
         motor_calibration: CalibrationStatus::Loaded,
-        mag_calibration: CalibrationStatus::Unknown,
         distance_calibration: CalibrationStatus::Missing,
+        dmp_calibration: CalibrationStatus::Loaded,
     };
     let rows = info.rows();
     assert_eq!(rows[0].as_str(), "Batt  87%");
     assert_eq!(rows[1].as_str(), "Batt  7.4V");
     assert_eq!(rows[2].as_str(), "Motor: Loaded");
-    assert_eq!(rows[3].as_str(), "Mag: Unknown");
-    assert_eq!(rows[4].as_str(), "Dist: Missing");
+    assert_eq!(rows[3].as_str(), "Dist: Missing");
+    assert_eq!(rows[4].as_str(), "DMP Cal: Loaded");
+    assert_eq!(rows.len(), 5);
+
+    // The fifth row must still fit the existing System Info layout.
+    let last = info_row_rect(rows.len() - 1);
+    assert!(bottom_right(last).y < i32::try_from(FB_H).unwrap_or(i32::MAX));
 }
 
 /// Test that an unread snapshot reads as explicitly unknown, not as dummy
@@ -942,8 +949,8 @@ fn system_info_defaults_are_explicitly_unknown() {
     assert_eq!(rows[0].as_str(), "Batt --%");
     assert_eq!(rows[1].as_str(), "Batt --.-V");
     assert_eq!(rows[2].as_str(), "Motor: Unknown");
-    assert_eq!(rows[3].as_str(), "Mag: Unknown");
-    assert_eq!(rows[4].as_str(), "Dist: Unknown");
+    assert_eq!(rows[3].as_str(), "Dist: Unknown");
+    assert_eq!(rows[4].as_str(), "DMP Cal: Unknown");
 }
 
 /// Test that the UI holds the System Info snapshot the firmware supplies.
@@ -1008,7 +1015,7 @@ fn link_opens_from_the_main_menu_and_back_returns() {
     );
     assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
     assert_eq!(Screen::Link.parent(), Some(Screen::MainMenu));
-    assert!(Screen::Link.items().is_empty());
+    assert_eq!(Screen::Link.items(), []);
 
     let mut ui = Ui::new();
     drag_scroll_to_bottom(&mut ui);
@@ -1391,7 +1398,7 @@ fn room_scan_opens_from_test_mode_and_back_returns() {
     );
     assert_eq!(Item::ScreenEntry(ScreenEntry::RoomScan).label(), "Room Scan");
     assert_eq!(Screen::RoomScan.parent(), Some(Screen::TestMode));
-    assert!(Screen::RoomScan.items().is_empty());
+    assert_eq!(Screen::RoomScan.items(), []);
 
     let mut ui = open_room_scan();
     assert_eq!(ui.title(), "Room Scan");
@@ -1493,7 +1500,7 @@ fn the_sensor_states_are_distinguishable() {
         SensorState::Failed.label(),
     ];
     for (index, label) in labels.iter().enumerate() {
-        assert!(!label.is_empty());
+        assert_ne!(*label, "");
         assert!(!labels[..index].contains(label), "duplicate sensor label {label}");
     }
 
@@ -1581,4 +1588,953 @@ fn the_radar_input_has_three_hundred_and_sixty_slots() {
     assert_eq!(radar::SLOTS, 360);
     let slots: radar::Slots = [None; radar::SLOTS];
     assert_eq!(slots.len(), radar::SLOTS);
+}
+
+/// A synthetic ASCII row exactly as wide as the buffer's documented minimum:
+/// 48 characters. It is not a real rendered row, only a round-trip probe.
+const FORTY_EIGHT_CHAR_ROW: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijkl";
+
+/// Test that a 48-character readout row formats and reads back intact, so the
+/// IMU Test Readout can draw a row without truncation.
+#[test]
+fn a_forty_eight_character_readout_row_round_trips() {
+    assert_eq!(FORTY_EIGHT_CHAR_ROW.len(), 48);
+    assert_eq!(TEXT_BUF_LEN, 48);
+
+    let mut row = TextBuf::new();
+    row.fill(format_args!("{FORTY_EIGHT_CHAR_ROW}"));
+    assert_eq!(row.as_str(), FORTY_EIGHT_CHAR_ROW);
+}
+
+/// Test that a row wider than the buffer still clears rather than panicking.
+#[test]
+fn an_over_long_row_clears_the_buffer_without_panicking() {
+    let over_long = format_args!("{FORTY_EIGHT_CHAR_ROW}!");
+    let mut row = TextBuf::new();
+    row.fill(over_long);
+    assert_eq!(row.as_str(), "");
+}
+
+/// Test that the widest existing value-entry and Link rows keep their text; the
+/// System Info rows are pinned by
+/// [`system_info_renders_the_neutral_snapshot`] and
+/// [`system_info_defaults_are_explicitly_unknown`].
+#[test]
+fn the_widest_existing_value_entry_and_link_rows_are_unchanged() {
+    let mut readout = TextBuf::new();
+    readout.set(5000, "cm");
+    assert_eq!(readout.as_str(), "5000 cm");
+
+    let mut presence = TextBuf::new();
+    presence.fill(format_args!("Bridge: Waiting for board"));
+    assert_eq!(presence.as_str(), "Bridge: Waiting for board");
+
+    let mut station = TextBuf::new();
+    station.fill(format_args!("Station: Associated"));
+    assert_eq!(station.as_str(), "Station: Associated");
+}
+
+/// A fully populated six-axis readout: Euler, accelerometer and both gyros.
+const fn sample_readout() -> ImuReadout {
+    ImuReadout::waiting(ImuReadoutKind::SixAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_raw_accel(Vector3 {
+            x: 0.01,
+            y: -0.02,
+            z: 1.0,
+        })
+        .with_raw_gyro(Vector3 {
+            x: 1.2,
+            y: -3.4,
+            z: 5.6,
+        })
+        .with_calibrated_gyro(Vector3 {
+            x: -1.2,
+            y: 3.4,
+            z: -5.6,
+        })
+}
+
+/// Test that the six-axis readout renders exactly five rows, in order, with the
+/// agreed labels, precision and units.
+#[test]
+fn the_six_axis_readout_has_five_rows_in_order() {
+    let readout = sample_readout();
+    assert_eq!(readout.row_count(), 5);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=12.3 pitch=-45.6 roll=78.9",
+        "Accel x=0.01 y=-0.02 z=1.00 g",
+        "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
+        "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
+        "Live miss=0 dmpcal n/a",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that before the first sample every value shows `--` and the health row
+/// says Waiting, so zeros are never mistaken for readings.
+#[test]
+fn the_six_axis_readout_shows_placeholders_before_the_first_sample() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::SixAxis);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=-- pitch=-- roll=--",
+        "Accel x=-- y=-- z=-- g",
+        "Gyro raw x=-- y=-- z=-- dps",
+        "Gyro cal x=-- y=-- z=-- dps",
+        "Waiting miss=0 dmpcal n/a",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that the health row distinguishes Waiting, Live and a silent IMU, and
+/// that the missing count is capped at four digits.
+#[test]
+fn the_health_row_names_waiting_live_and_not_responding() {
+    for (health, missing, expected) in [
+        (ImuHealth::Waiting, 0, "Waiting miss=0 dmpcal n/a"),
+        (ImuHealth::Live, 7, "Live miss=7 dmpcal n/a"),
+        (ImuHealth::NotResponding, 100, "IMU not responding miss=100 dmpcal n/a"),
+        (
+            ImuHealth::NotResponding,
+            10_000,
+            "IMU not responding miss=9999 dmpcal n/a",
+        ),
+    ] {
+        let readout = ImuReadout::waiting(ImuReadoutKind::SixAxis).with_health(health, missing);
+        assert_eq!(readout.rows()[4].as_str(), expected);
+    }
+}
+
+/// Test that a same-value readout reports no change while a changed health or
+/// value reports one, so the 10 Hz tick flushes only on a visible change.
+#[test]
+fn a_readout_redraws_only_when_a_displayed_value_changes() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    assert!(!ui.set_status(view));
+
+    let not_responding = view.with_readout(sample_readout().with_health(ImuHealth::NotResponding, 100));
+    assert!(ui.set_status(not_responding));
+    assert!(!ui.set_status(not_responding));
+
+    let moved = view.with_readout(sample_readout().with_orientation(Euler {
+        yaw: 13.3,
+        pitch: -45.6,
+        roll: 78.9,
+    }));
+    assert!(ui.set_status(moved));
+}
+
+/// Test that a `StatusView` carrying a readout renders into the existing discard
+/// target.
+#[test]
+fn a_running_screen_with_a_readout_renders() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    render_ok(&ui);
+}
+
+/// Test that the six-axis row block fits inside the status panel, with the last
+/// row strictly inside its top and bottom edges, and that the pitch compresses
+/// for a full twelve-row readout while the five-row block is capped and centred.
+#[test]
+fn the_readout_rows_fit_inside_the_status_panel() {
+    let panel = panel_rect();
+
+    let last = readout_row_rect(4, 5);
+    assert!(last.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last).y < bottom_right(panel).y);
+
+    assert_eq!(readout_row_pitch(5), 26);
+    assert_eq!(readout_row_pitch(MAX_IMU_ROWS), 11);
+    let last_full = readout_row_rect(MAX_IMU_ROWS - 1, MAX_IMU_ROWS);
+    assert!(last_full.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last_full).y < bottom_right(panel).y);
+}
+
+/// Test that the readout kind names both IMU Procedures and leaves every other
+/// Procedure without a readout.
+#[test]
+fn the_readout_kind_maps_both_imu_procedures() {
+    assert_eq!(
+        ImuReadoutKind::for_procedure(Procedure::Imu6Axis),
+        Some(ImuReadoutKind::SixAxis)
+    );
+    assert_eq!(
+        ImuReadoutKind::for_procedure(Procedure::Imu9Axis),
+        Some(ImuReadoutKind::NineAxis)
+    );
+    assert_eq!(ImuReadoutKind::for_procedure(Procedure::BasicMotor), None);
+    assert_eq!(ImuReadoutKind::for_procedure(Procedure::MotorCalibration), None);
+}
+
+/// The XY-plane remap headings the sample readout carries, including negative
+/// and zero values and the full right-aligned width.
+const SAMPLE_REMAP_XY: [f32; 8] = [-179.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 134.0];
+
+/// The XZ-plane remap headings the sample readout carries, including negative
+/// and zero values.
+const SAMPLE_REMAP_XZ: [f32; 8] = [-180.0, -90.0, -1.0, 0.0, 1.0, 90.0, 179.0, 180.0];
+
+/// The YZ-plane remap headings the sample readout carries, including negative
+/// and zero values.
+const SAMPLE_REMAP_YZ: [f32; 8] = [0.0, 10.0, -10.0, 100.0, -100.0, 45.0, -45.0, 90.0];
+
+/// A fully populated nine-axis readout: the six-axis values plus both
+/// magnetometer vectors, a loaded DMP calibration, a passing gate and the heading
+/// and remap diagnostics.
+const fn sample_nine_axis_readout() -> ImuReadout {
+    ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_raw_accel(Vector3 {
+            x: 0.01,
+            y: -0.02,
+            z: 1.0,
+        })
+        .with_raw_gyro(Vector3 {
+            x: 1.2,
+            y: -3.4,
+            z: 5.6,
+        })
+        .with_calibrated_gyro(Vector3 {
+            x: -1.2,
+            y: 3.4,
+            z: -5.6,
+        })
+        .with_raw_mag(Vector3 {
+            x: 12.3,
+            y: -45.6,
+            z: 78.9,
+        })
+        .with_calibrated_mag(Vector3 {
+            x: -1.5,
+            y: 2.5,
+            z: -3.5,
+        })
+        .with_dmp_calibration(CalibrationStatus::Loaded)
+        .with_mag_available(true)
+        .with_mag(MagDiagnostics {
+            norm: 50.0,
+            use_mag: true,
+            raw_heading: -179.0,
+            tilt_heading: Some(45.6),
+            remap_xy: SAMPLE_REMAP_XY,
+            remap_xz: SAMPLE_REMAP_XZ,
+            remap_yz: SAMPLE_REMAP_YZ,
+        })
+}
+
+/// Test that the nine-axis readout renders exactly twelve rows, in order, with
+/// the agreed labels, precision and units, and no unused slots.
+#[test]
+fn the_nine_axis_readout_has_twelve_rows_in_order() {
+    let readout = sample_nine_axis_readout();
+    assert_eq!(readout.row_count(), 12);
+    assert_eq!(readout.row_count(), MAX_IMU_ROWS);
+
+    let rows = readout.rows();
+    let expected = [
+        "Euler yaw=12.3 pitch=-45.6 roll=78.9",
+        "Accel x=0.01 y=-0.02 z=1.00 g",
+        "Gyro raw x=1.2 y=-3.4 z=5.6 dps",
+        "Gyro cal x=-1.2 y=3.4 z=-5.6 dps",
+        "M raw x=12.3 y=-45.6 z=78.9 uT",
+        "M dmp x=-1.5 y=2.5 z=-3.5 uT",
+        "Hdg raw=-179.0 tilt=45.6 dmp=12.3",
+        "XY -179 -135  -90  -45    0   45   90  134",
+        "XZ -180  -90   -1    0    1   90  179  180",
+        "YZ    0   10  -10  100 -100   45  -45   90",
+        "Live miss=0 dmpcal loaded",
+        "|m|=50.0 uT use_mag=yes",
+    ];
+    for (row, expected) in rows.iter().zip(expected) {
+        assert_eq!(row.as_str(), expected);
+    }
+}
+
+/// Test that each plane's remap row prints all eight headings as integers,
+/// right-aligned in five-character fields, so negatives and zero line up.
+#[test]
+fn the_remap_rows_pin_eight_right_aligned_integers_per_plane() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: -179.0,
+        tilt_heading: Some(0.0),
+        remap_xy: SAMPLE_REMAP_XY,
+        remap_xz: SAMPLE_REMAP_XZ,
+        remap_yz: SAMPLE_REMAP_YZ,
+    });
+
+    let rows = readout.rows();
+    assert_eq!(rows[7].as_str(), "XY -179 -135  -90  -45    0   45   90  134");
+    assert_eq!(rows[8].as_str(), "XZ -180  -90   -1    0    1   90  179  180");
+    assert_eq!(rows[9].as_str(), "YZ    0   10  -10  100 -100   45  -45   90");
+    for row in &rows[7..10] {
+        assert_eq!(row.as_str().len(), 42);
+    }
+}
+
+/// Test that the heading row shows `dmp=--` when the magnetometer is present
+/// but the fused orientation is not.
+#[test]
+fn the_heading_row_shows_a_dmp_placeholder_without_orientation() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: -179.0,
+        tilt_heading: Some(45.6),
+        remap_xy: SAMPLE_REMAP_XY,
+        remap_xz: SAMPLE_REMAP_XZ,
+        remap_yz: SAMPLE_REMAP_YZ,
+    });
+
+    assert_eq!(readout.rows()[6].as_str(), "Hdg raw=-179.0 tilt=45.6 dmp=--");
+}
+
+/// Test that the heading row shows `tilt=--` when the magnetometer is present
+/// but there was no accelerometer sample to tilt-compensate with.
+#[test]
+fn the_heading_row_shows_a_tilt_placeholder_without_an_accelerometer() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_mag(MagDiagnostics {
+            norm: 50.0,
+            use_mag: true,
+            raw_heading: -179.0,
+            tilt_heading: None,
+            remap_xy: SAMPLE_REMAP_XY,
+            remap_xz: SAMPLE_REMAP_XZ,
+            remap_yz: SAMPLE_REMAP_YZ,
+        });
+
+    assert_eq!(readout.rows()[6].as_str(), "Hdg raw=-179.0 tilt=-- dmp=12.3");
+}
+
+/// Test that the raw and calibrated magnetometer rows use one decimal place and
+/// the ASCII `uT` unit.
+#[test]
+fn the_magnetometer_rows_use_one_decimal_and_ut() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_raw_mag(Vector3 {
+            x: 12.34,
+            y: -45.67,
+            z: 78.91,
+        })
+        .with_calibrated_mag(Vector3 {
+            x: -1.23,
+            y: 2.34,
+            z: -3.45,
+        });
+
+    let rows = readout.rows();
+    assert_eq!(rows[4].as_str(), "M raw x=12.3 y=-45.7 z=78.9 uT");
+    assert_eq!(rows[5].as_str(), "M dmp x=-1.2 y=2.3 z=-3.5 uT");
+}
+
+/// Test that the magnetometer gate row shows the norm and the driver's verdict,
+/// and a placeholder with `use_mag=no` when no verdict exists.
+#[test]
+fn the_magnetometer_gate_reports_the_use_mag_verdict() {
+    let below = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 5.0,
+        use_mag: false,
+        raw_heading: 0.0,
+        tilt_heading: Some(0.0),
+        remap_xy: [0.0; 8],
+        remap_xz: [0.0; 8],
+        remap_yz: [0.0; 8],
+    });
+    assert_eq!(below.rows()[11].as_str(), "|m|=5.0 uT use_mag=no");
+
+    let in_range = ImuReadout::waiting(ImuReadoutKind::NineAxis).with_mag(MagDiagnostics {
+        norm: 50.0,
+        use_mag: true,
+        raw_heading: 0.0,
+        tilt_heading: Some(0.0),
+        remap_xy: [0.0; 8],
+        remap_xz: [0.0; 8],
+        remap_yz: [0.0; 8],
+    });
+    assert_eq!(in_range.rows()[11].as_str(), "|m|=50.0 uT use_mag=yes");
+
+    let absent = ImuReadout::waiting(ImuReadoutKind::NineAxis);
+    assert_eq!(absent.rows()[11].as_str(), "|m|=-- uT use_mag=no");
+}
+
+/// Test that the nine-axis health row names Waiting, Live and a silent IMU, and
+/// distinguishes a loaded, missing and unknown DMP calibration.
+#[test]
+fn the_nine_axis_health_row_names_the_dmp_calibration() {
+    for (health, missing, calibration, expected) in [
+        (
+            ImuHealth::Waiting,
+            0,
+            CalibrationStatus::Unknown,
+            "Waiting miss=0 dmpcal unknown",
+        ),
+        (
+            ImuHealth::Live,
+            7,
+            CalibrationStatus::Loaded,
+            "Live miss=7 dmpcal loaded",
+        ),
+        (
+            ImuHealth::NotResponding,
+            100,
+            CalibrationStatus::Missing,
+            "IMU not responding miss=100 dmpcal missing",
+        ),
+        (
+            ImuHealth::Live,
+            10_000,
+            CalibrationStatus::Unknown,
+            "Live miss=9999 dmpcal unknown",
+        ),
+    ] {
+        let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+            .with_health(health, missing)
+            .with_dmp_calibration(calibration);
+        assert_eq!(readout.rows()[10].as_str(), expected);
+    }
+
+    // A readout that has not learned the calibration status defaults to the
+    // conservative `unknown`.
+    assert_eq!(
+        ImuReadout::waiting(ImuReadoutKind::NineAxis).rows()[10].as_str(),
+        "Waiting miss=0 dmpcal unknown"
+    );
+}
+
+/// Test that an unavailable magnetometer keeps the health line naming the state
+/// and calibration, shows the six-axis fallback and `use_mag=no` on the gate
+/// row, and renders `--` magnetometer, heading and remap values, while the Euler
+/// row keeps the fallback yaw the fused orientation still provides.
+#[test]
+fn an_unavailable_magnetometer_falls_back_to_six_axis() {
+    let readout = ImuReadout::waiting(ImuReadoutKind::NineAxis)
+        .with_health(ImuHealth::Live, 0)
+        .with_orientation(Euler {
+            yaw: 12.3,
+            pitch: -45.6,
+            roll: 78.9,
+        })
+        .with_dmp_calibration(CalibrationStatus::Loaded)
+        .with_mag_available(false);
+    assert_eq!(readout.row_count(), 12);
+
+    let rows = readout.rows();
+    assert_eq!(rows[0].as_str(), "Euler yaw=12.3 pitch=-45.6 roll=78.9");
+    assert_eq!(rows[1].as_str(), "Accel x=-- y=-- z=-- g");
+    assert_eq!(rows[2].as_str(), "Gyro raw x=-- y=-- z=-- dps");
+    assert_eq!(rows[3].as_str(), "Gyro cal x=-- y=-- z=-- dps");
+    assert_eq!(rows[4].as_str(), "M raw x=-- y=-- z=-- uT");
+    assert_eq!(rows[5].as_str(), "M dmp x=-- y=-- z=-- uT");
+    assert_eq!(rows[6].as_str(), "Hdg --");
+    assert_eq!(rows[7].as_str(), "XY --");
+    assert_eq!(rows[8].as_str(), "XZ --");
+    assert_eq!(rows[9].as_str(), "YZ --");
+    assert_eq!(rows[10].as_str(), "Live miss=0 dmpcal loaded");
+    assert_eq!(rows[11].as_str(), "mag unavailable - 6-axis fallback use_mag=no");
+}
+
+/// Test that the last of the twelve nine-axis rows fits inside the status panel
+/// at the compressed pitch, so the full page needs no paging or scrolling.
+#[test]
+fn the_nine_axis_last_row_fits_inside_the_status_panel() {
+    let panel = panel_rect();
+
+    assert_eq!(readout_row_pitch(12), 11);
+    let last = readout_row_rect(11, 12);
+    assert!(last.top_left.y > panel.top_left.y);
+    assert!(bottom_right(last).y < bottom_right(panel).y);
+}
+
+/// Every Procedure the crate models.
+const ALL_PROCEDURES: [Procedure; 11] = [
+    Procedure::MotorCalibration,
+    Procedure::DmpCompassCalibration,
+    Procedure::DistanceCalibration,
+    Procedure::CoastAndAvoid,
+    Procedure::AttemptStraight,
+    Procedure::BasicMotor,
+    Procedure::Turns,
+    Procedure::StraightDrive,
+    Procedure::ArcDrive,
+    Procedure::Imu6Axis,
+    Procedure::Imu9Axis,
+];
+
+/// Build the prompt for the DMP compass calibration: the Procedure supplies the
+/// title and the screen Stop returns to.
+const fn dmp_prompt(instruction: &'static str) -> PromptView {
+    PromptView::for_procedure(Procedure::DmpCompassCalibration, instruction)
+}
+
+/// Test the DMP compass calibration identity: its label, parent, calibration
+/// flag, destination, hands-on metadata, and that it is the Calibrate submenu's
+/// only magnetometer entry.
+#[test]
+fn the_dmp_compass_calibration_is_hands_on_and_listed_on_calibrate() {
+    let procedure = Procedure::DmpCompassCalibration;
+    assert_eq!(procedure.label(), "DMP Mag");
+    assert_eq!(procedure.parent(), Some(Screen::Calibrate));
+    assert_eq!(procedure.landing_screen(), Screen::Calibrate);
+    assert!(
+        procedure.is_calibration(),
+        "the DMP compass calibration is a calibration"
+    );
+    assert_eq!(procedure.destination(), Screen::Prompt);
+    assert!(procedure.is_hands_on(), "an operator must hold the robot while it runs");
+    assert_eq!(Item::Procedure(procedure).interactive(), procedure.interactive());
+
+    // The Prompt screen has no Menu Entry of its own; its parent and title come
+    // from the active view like the shared running screen.
+    assert_eq!(Screen::Prompt.entry(), None);
+    assert_eq!(Screen::Prompt.parent(), None);
+    assert_eq!(Screen::Prompt.items(), []);
+    assert_eq!(Screen::Prompt.title(), "Prompt");
+
+    // Calibrate lists Motor, DMP Mag and Distance; the retired host Mag entry is
+    // gone, and DMP Mag is listed nowhere else.
+    assert_eq!(
+        Screen::Calibrate.items(),
+        [
+            Item::Procedure(Procedure::MotorCalibration),
+            Item::Procedure(Procedure::DmpCompassCalibration),
+            Item::Procedure(Procedure::DistanceCalibration),
+        ]
+        .as_slice()
+    );
+    for screen in [Screen::MainMenu, Screen::DriveMode, Screen::TestMode] {
+        assert!(
+            screen.items().iter().all(|item| item.as_procedure() != Some(procedure)),
+            "{procedure:?} is not listed on {screen:?}"
+        );
+    }
+}
+
+/// A neutral DMP snapshot formats a placeholder status line and the first step's
+/// Prompt without any measured values.
+#[test]
+fn a_dmp_snapshot_starts_on_the_first_step_with_placeholders() {
+    let snapshot = DmpCalibrationSnapshot::starting();
+    assert_eq!(snapshot.step, CompassStep::FlatHold);
+    assert_eq!(snapshot.step_index(), 0);
+    assert_eq!(snapshot.step_count(), CompassStep::ALL.len());
+    assert_eq!(snapshot.instruction(), "Place flat. Hold still.");
+    assert_eq!(snapshot.status_text().as_str(), "Cal unknown Hdg -- Acc --");
+    assert_eq!(snapshot.progress(), 0);
+
+    let view = snapshot.prompt_view();
+    assert_eq!(view.title, "DMP Mag");
+    assert_eq!(view.parent, Screen::Calibrate);
+    assert_eq!(view.instruction, "Place flat. Hold still.");
+    assert_eq!(view.status_text(), "Cal unknown Hdg -- Acc --");
+    assert_eq!(view.progress, Some(0));
+    assert!(view.done);
+    assert!(!view.redo);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert_eq!(ui.title(), "DMP Mag");
+    render_ok(&ui);
+}
+
+/// Every DMP instruction fits the prompt's instruction row when wrapped to two
+/// lines, and uses only glyphs the ASCII font can draw.
+#[test]
+fn every_dmp_instruction_wraps_into_the_prompt_row() {
+    // The instruction row is 240 px wide in the 6x10 font, so 40 characters fit.
+    let max_chars = (prompt_instruction_rect().size.width / 6) as usize;
+    assert_eq!(max_chars, 40);
+
+    for step in CompassStep::ALL {
+        let instruction = step.instruction();
+        assert!(instruction.is_ascii(), "{instruction:?} needs a non-ASCII glyph");
+
+        let mut lines = [""; 2];
+        let count = wrap_text(instruction, max_chars, &mut lines);
+        assert!((1..=2).contains(&count), "{instruction:?} wrapped to {count} lines");
+        for line in &lines[..count] {
+            assert!(
+                line.chars().count() <= max_chars,
+                "{line:?} is longer than the prompt row"
+            );
+        }
+    }
+
+    // The longest instruction, the Compass Check, breaks before the final hold.
+    let mut lines = [""; 2];
+    assert_eq!(
+        wrap_text(CompassStep::NorthCheck.instruction(), max_chars, &mut lines),
+        2
+    );
+    assert_eq!(lines, ["Point front at magnetic north (0 deg).", "Hold still."]);
+}
+
+/// A movement step formats the heading, accuracy and span hint on the one status
+/// line, and its Prompt carries the step's instruction and progress.
+#[test]
+fn a_dmp_movement_snapshot_formats_heading_and_span() {
+    let snapshot = DmpCalibrationSnapshot {
+        step: CompassStep::FlatSpin,
+        heading_deg: Some(123.4),
+        target_heading_deg: None,
+        accuracy: Some(3),
+        hint: DmpHint::YawSpanDeg(45.2),
+        check: DmpCheckState::NotChecking,
+        redo: false,
+        prior_status: CalibrationStatus::Loaded,
+    };
+
+    assert_eq!(snapshot.status_text().as_str(), "Hdg 123 Acc 3 Span 45");
+    assert!(snapshot.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert_eq!(snapshot.prompt_view().instruction, CompassStep::FlatSpin.instruction());
+    assert_eq!(snapshot.prompt_view().progress, Some(12));
+    assert!(!snapshot.prompt_view().redo);
+}
+
+/// A hold step formats elapsed stillness in whole seconds, and a Compass Check
+/// formats its target and state, offering Redo as well as Done.
+#[test]
+fn a_dmp_hold_and_check_snapshot_format_their_hints() {
+    let hold = DmpCalibrationSnapshot {
+        step: CompassStep::FlatHold,
+        heading_deg: Some(12.0),
+        target_heading_deg: None,
+        accuracy: Some(3),
+        hint: DmpHint::StillMillis(2_500),
+        check: DmpCheckState::NotChecking,
+        redo: false,
+        prior_status: CalibrationStatus::Loaded,
+    };
+    assert_eq!(hold.status_text().as_str(), "Hdg 12 Acc 3 Still 2s");
+
+    let check = DmpCalibrationSnapshot {
+        step: CompassStep::NorthCheck,
+        heading_deg: Some(5.0),
+        target_heading_deg: Some(0.0),
+        accuracy: Some(3),
+        hint: DmpHint::None,
+        check: DmpCheckState::Waiting,
+        redo: true,
+        prior_status: CalibrationStatus::Loaded,
+    };
+    assert_eq!(check.status_text().as_str(), "Hdg 5 Tgt 0 Acc 3 Check Waiting");
+    assert!(check.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert!(check.prompt_view().redo);
+    assert_eq!(check.prompt_view().progress, Some(75));
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(check.prompt_view()));
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+    render_ok(&ui);
+}
+
+/// The first Prompt frame says when the starting DMP calibration is missing, so
+/// an operator without a saved snapshot is not asked to move blindly.
+#[test]
+fn a_dmp_snapshot_says_when_the_starting_calibration_is_missing() {
+    let mut snapshot = DmpCalibrationSnapshot::starting();
+    assert_eq!(snapshot.status_text().as_str(), "Cal unknown Hdg -- Acc --");
+
+    snapshot.prior_status = CalibrationStatus::Missing;
+    assert_eq!(snapshot.status_text().as_str(), "Cal missing Hdg -- Acc --");
+
+    snapshot.prior_status = CalibrationStatus::Loaded;
+    assert_eq!(snapshot.status_text().as_str(), "Hdg -- Acc --");
+    assert!(snapshot.status_text().as_str().len() <= TEXT_BUF_LEN);
+}
+
+/// A failed Compass Check names the rule it broke, keeps the measured heading,
+/// target and accuracy on the same line, and still offers Redo.
+#[test]
+fn a_dmp_check_failure_names_its_reason() {
+    assert_eq!(
+        DmpCheckState::from(CheckOutcome::Fail(CheckFailure::Accuracy { measured: 1 })),
+        DmpCheckState::Fail(DmpCheckFail::Accuracy)
+    );
+    assert_eq!(
+        DmpCheckState::from(CheckOutcome::Fail(CheckFailure::Heading {
+            measured_deg: 30.0,
+            target_deg: 0.0,
+        })),
+        DmpCheckState::Fail(DmpCheckFail::Heading)
+    );
+    assert_eq!(DmpCheckState::from(CheckOutcome::Waiting), DmpCheckState::Waiting);
+    assert_eq!(DmpCheckState::from(CheckOutcome::Unstable), DmpCheckState::Unstable);
+    assert_eq!(DmpCheckState::from(CheckOutcome::Pass), DmpCheckState::Pass);
+
+    let accuracy = DmpCalibrationSnapshot {
+        step: CompassStep::NorthCheck,
+        heading_deg: Some(5.0),
+        target_heading_deg: Some(0.0),
+        accuracy: Some(1),
+        hint: DmpHint::None,
+        check: DmpCheckState::Fail(DmpCheckFail::Accuracy),
+        redo: true,
+        prior_status: CalibrationStatus::Loaded,
+    };
+    assert_eq!(accuracy.status_text().as_str(), "Hdg 5 Tgt 0 Acc 1 Check Acc");
+    assert!(accuracy.status_text().as_str().len() <= TEXT_BUF_LEN);
+    assert!(accuracy.prompt_view().redo);
+
+    let heading = DmpCalibrationSnapshot {
+        step: CompassStep::EastCheck,
+        heading_deg: Some(130.0),
+        target_heading_deg: Some(90.0),
+        accuracy: Some(3),
+        hint: DmpHint::None,
+        check: DmpCheckState::Fail(DmpCheckFail::Heading),
+        redo: true,
+        prior_status: CalibrationStatus::Loaded,
+    };
+    assert_eq!(heading.status_text().as_str(), "Hdg 130 Tgt 90 Acc 3 Check Hdg");
+    assert!(heading.status_text().as_str().len() <= TEXT_BUF_LEN);
+}
+
+/// Test that the model's hands-on set is the firmware's Remote-availability rule
+/// and nothing else, so a future edit cannot introduce a second contradicting
+/// rule.
+#[test]
+fn the_hands_on_set_mirrors_the_firmware_availability_rule() {
+    let hands_on = [
+        Procedure::MotorCalibration,
+        Procedure::DmpCompassCalibration,
+        Procedure::DistanceCalibration,
+        Procedure::BasicMotor,
+        Procedure::AttemptStraight,
+    ];
+    for procedure in ALL_PROCEDURES {
+        assert_eq!(
+            procedure.is_hands_on(),
+            hands_on.contains(&procedure),
+            "{procedure:?} hands-on membership"
+        );
+    }
+    // The Remote-startable Procedures stay startable.
+    for procedure in [
+        Procedure::CoastAndAvoid,
+        Procedure::Turns,
+        Procedure::StraightDrive,
+        Procedure::ArcDrive,
+        Procedure::Imu6Axis,
+        Procedure::Imu9Axis,
+    ] {
+        assert!(!procedure.is_hands_on(), "{procedure:?} may be started from the Remote");
+    }
+}
+
+/// Test that a prompt carries the Procedure title, instruction, dynamic status
+/// line, action availability and parent, and that the UI shows it with its own
+/// title.
+#[test]
+fn a_prompt_carries_its_title_instruction_status_and_parent() {
+    let mut status_line = TextBuf::new();
+    status_line.fill(format_args!("Hdg 12 target 0 acc 2"));
+    let view = dmp_prompt("Place flat. Hold still.").with_status(status_line);
+
+    assert_eq!(view.title, "DMP Mag");
+    assert_eq!(view.parent, Screen::Calibrate);
+    assert_eq!(view.instruction, "Place flat. Hold still.");
+    assert_eq!(view.status_text(), "Hdg 12 target 0 acc 2");
+    assert_eq!(view.progress, None);
+    assert!(view.done, "Done is offered on every prompt");
+    assert!(!view.redo, "a movement step offers no Redo");
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert_eq!(ui.screen(), Screen::Prompt);
+    assert_eq!(ui.title(), "DMP Mag");
+    assert_eq!(ui.prompt_view(), Some(view));
+    assert_eq!(ui.status_view(), None);
+    render_ok(&ui);
+}
+
+/// Test that a prompt update reports only real changes, and is a no-op away from
+/// the prompt screen.
+#[test]
+fn a_prompt_reports_only_real_changes() {
+    let mut first = TextBuf::new();
+    first.fill(format_args!("Waiting for motion"));
+    let view = dmp_prompt("Place flat. Hold still.").with_status(first);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(view));
+    assert!(!ui.set_prompt(view), "the view is already shown");
+
+    let mut second = TextBuf::new();
+    second.fill(format_args!("Hdg 0 acc 3"));
+    let changed = view.with_status(second).with_progress(25).with_redo();
+    assert!(ui.set_prompt(changed));
+    assert_eq!(ui.prompt_view(), Some(changed));
+    assert!(!ui.set_prompt(changed));
+    assert_eq!(ui.prompt_view().map(|view| view.progress), Some(Some(25)));
+
+    let mut other = Ui::new();
+    assert!(!other.set_prompt(changed), "no prompt screen is shown");
+    assert_eq!(other.prompt_view(), None);
+}
+
+/// Test that Done is hittable only inside its drawn rectangle, and that tapping
+/// it is reported through `last_activation` without navigating.
+#[test]
+fn a_prompt_done_is_hittable_and_reported_without_navigating() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+
+    let done = prompt_done_rect().center();
+    assert_eq!(ui.hit_test(done), Some(Hit::PromptAction(PromptAction::Done)));
+    tap(&mut ui, done);
+    assert_eq!(ui.last_activation(), Some(Hit::PromptAction(PromptAction::Done)));
+    assert_eq!(ui.screen(), Screen::Prompt, "the firmware decides what Done means");
+}
+
+/// Test that Redo is drawn and hittable only when the prompt offers it, and that
+/// a disabled Redo is not hittable.
+#[test]
+fn a_prompt_redo_is_hittable_only_when_available() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Front at magnetic north.").with_redo()));
+    let redo = prompt_redo_rect().center();
+    assert_eq!(ui.hit_test(redo), Some(Hit::PromptAction(PromptAction::Redo)));
+    tap(&mut ui, redo);
+    assert_eq!(ui.last_activation(), Some(Hit::PromptAction(PromptAction::Redo)));
+    assert_eq!(ui.screen(), Screen::Prompt);
+
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Tilt nose up and down 90 deg.")));
+    assert_eq!(ui.hit_test(prompt_redo_rect().center()), None);
+    tap(&mut ui, prompt_redo_rect().center());
+    assert_eq!(ui.last_activation(), None, "a disabled Redo activates nothing");
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Done)),
+        "Done stays available"
+    );
+}
+
+/// Test that the header Stop and the prompt's Done/Redo never report each
+/// other, and that only the action rectangles are interactive.
+#[test]
+fn prompt_actions_and_header_stop_never_swap() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Front at magnetic east.").with_redo()));
+
+    assert_eq!(ui.hit_test(back_button_rect().center()), Some(Hit::Stop));
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Done))
+    );
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().center()),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+    assert_eq!(ui.hit_test(prompt_instruction_rect().center()), None);
+    assert_eq!(ui.hit_test(prompt_status_rect().center()), None);
+
+    // The regions stay disjoint.
+    assert!(!prompt_done_rect().contains(prompt_redo_rect().center()));
+    assert!(!prompt_redo_rect().contains(prompt_done_rect().center()));
+    assert!(!prompt_done_rect().contains(back_button_rect().center()));
+    assert!(!back_button_rect().contains(prompt_done_rect().center()));
+    assert_eq!(
+        ui.hit_test(prompt_done_rect().top_left),
+        Some(Hit::PromptAction(PromptAction::Done))
+    );
+    assert_eq!(
+        ui.hit_test(prompt_redo_rect().top_left),
+        Some(Hit::PromptAction(PromptAction::Redo))
+    );
+}
+
+/// Test that the prompt's actions sit inside the panel, below both text lines,
+/// and are reported by the shared geometry.
+#[test]
+fn the_prompt_actions_sit_inside_the_panel_below_the_text() {
+    let panel = panel_rect();
+    let done = prompt_done_rect();
+    let redo = prompt_redo_rect();
+
+    for rect in [done, redo] {
+        assert!(rect.top_left.x >= panel.top_left.x);
+        assert!(rect.top_left.y >= panel.top_left.y);
+        assert!(bottom_right(rect).x < bottom_right(panel).x);
+        assert!(bottom_right(rect).y < bottom_right(panel).y);
+    }
+    assert!(bottom_right(prompt_instruction_rect()).y <= prompt_status_rect().top_left.y);
+    assert!(bottom_right(prompt_status_rect()).y < done.top_left.y);
+    assert!(bottom_right(done).x < redo.top_left.x);
+    assert_eq!(prompt_action_rect(0), done);
+    assert_eq!(prompt_action_rect(1), redo);
+    assert_eq!(PromptAction::ALL, [PromptAction::Done, PromptAction::Redo]);
+    assert_eq!(PromptAction::Done.rect(), done);
+    assert_eq!(PromptAction::Redo.rect(), redo);
+}
+
+/// Test that a prompt renders with and without progress, and that the progress
+/// bar sits between the status line and the action row.
+#[test]
+fn a_prompt_with_and_without_progress_renders() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("On the table, spin 360 deg both ways.")));
+    render_ok(&ui);
+
+    let with_progress = dmp_prompt("Flip wheels up, spin 360 deg both ways.")
+        .with_progress(50)
+        .with_redo();
+    assert!(ui.set_prompt(with_progress));
+    render_ok(&ui);
+
+    let bar = prompt_progress_rect();
+    assert!(bar.top_left.y > prompt_status_rect().top_left.y);
+    assert!(bottom_right(bar).y < prompt_done_rect().top_left.y);
+    assert!(bar.top_left.x >= panel_rect().top_left.x);
+    assert!(bottom_right(bar).x < bottom_right(panel_rect()).x);
+}
+
+/// Test that Stop from a prompt returns to the prompt's parent, the Calibrate
+/// submenu for the DMP compass calibration.
+#[test]
+fn a_prompt_stops_back_to_the_calibrate_submenu() {
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+    tap(&mut ui, back_button_rect().center());
+    assert_eq!(ui.last_activation(), Some(Hit::Stop));
+    assert_eq!(ui.screen(), Screen::Calibrate);
+    assert_eq!(ui.prompt_view(), None);
+
+    // The firmware can also land the Procedure through the command-level seam.
+    let mut ui = Ui::new();
+    assert!(ui.show_prompt(dmp_prompt("Place flat. Hold still.")));
+    assert!(ui.show_screen(Procedure::DmpCompassCalibration.landing_screen()));
+    assert_eq!(ui.screen(), Screen::Calibrate);
 }

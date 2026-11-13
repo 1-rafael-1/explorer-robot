@@ -124,14 +124,15 @@ pub enum Events {
     /// - Used to coordinate next movement decision.
     ObstacleAvoidanceAttempted,
 
-    /// Battery measurement (level percentage and raw voltage).
+    /// Battery measurement (level percentage and pack voltage).
     /// - level: 0-100 percent, triggers LED color updates.
-    /// - voltage: raw voltage in volts, used for motor driver voltage compensation.
+    /// - voltage: pack-terminal voltage in volts, for the panel and Link telemetry.
+    ///   The motor driver reads the separately stored rail voltage.
     /// - Single event reduces event channel load.
     BatteryMeasured {
         /// Battery charge level (0-100%).
         level: u8,
-        /// Battery voltage in volts.
+        /// Pack-terminal voltage in volts.
         voltage: f32,
     },
 

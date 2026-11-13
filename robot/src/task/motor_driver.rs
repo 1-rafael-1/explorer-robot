@@ -21,9 +21,11 @@
 //!
 //! # Voltage Compensation
 //!
-//! Scales PWM duty to maintain 6V to motors as battery drains.
-//! At 8.4V battery: factor = 6.0/8.4 ≈ 0.714
-//! At 6.0V battery: factor = 6.0/6.0 = 1.0
+//! Scales PWM duty to maintain 6V at the motors as the measured `+8V` rail
+//! (`VM`) drains. The battery task stores this rail separately from the
+//! pack-terminal voltage it displays.
+//! At 8.4V rail: factor = 6.0/8.4 ≈ 0.714
+//! At 6.0V rail: factor = 6.0/6.0 = 1.0
 //!
 //! # Calibration
 //!
@@ -53,7 +55,7 @@ use embassy_rp::{
     pwm::{Pwm, SetDutyCycle},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::system::state::{motion, power};
 
@@ -254,39 +256,44 @@ const fn speed_to_direction(speed: i8) -> MotorDirection {
     }
 }
 
-/// Get current battery voltage from system state (truly non-blocking).
-/// Returns None if no voltage reading available yet OR if mutex is busy.
-fn try_get_battery_voltage() -> Option<f32> {
-    power::try_get_battery_voltage()
+/// Minimum time between the motors becoming idle and a rail sample being
+/// trusted, so a sample taken while the rail is still recovering is rejected.
+const RAIL_IDLE_SETTLE: Duration = Duration::from_millis(250);
+
+/// Get the latest motor-rail sample from system state (truly non-blocking).
+/// Returns the voltage and the time it was measured, or `None` if no sample is
+/// available yet or if the mutex is busy.
+fn try_get_rail_sample() -> Option<(f32, Instant)> {
+    power::try_get_rail_sample()
 }
 
-/// Wait for first battery voltage reading from system state.
-async fn wait_for_battery_voltage() -> f32 {
+/// Wait for the first motor-rail voltage reading from system state.
+async fn wait_for_rail_voltage() -> f32 {
     loop {
-        if let Some(voltage) = try_get_battery_voltage() {
+        if let Some((voltage, _)) = try_get_rail_sample() {
             return voltage;
         }
         Timer::after(Duration::from_millis(100)).await;
     }
 }
 
-/// Calculate voltage compensation factor.
+/// Calculate the voltage compensation factor from the measured motor rail.
 ///
-/// Scales duty cycle to maintain 6V output to motors as battery drains.
+/// Scales duty cycle to maintain 6V at the motors as the rail drains.
 ///
 /// Examples:
-/// - At 8.4V battery: factor = 6.0/8.4 = 0.714 (71.4% duty cycle for 100% speed)
-/// - At 7.2V battery: factor = 6.0/7.2 = 0.833 (83.3% duty cycle for 100% speed)
-/// - At 6.0V battery: factor = 6.0/6.0 = 1.000 (100% duty cycle for 100% speed)
-fn calculate_voltage_compensation(battery_voltage: f32) -> f32 {
-    if battery_voltage < TARGET_MOTOR_VOLTAGE {
+/// - At 8.4V rail: factor = 6.0/8.4 = 0.714 (71.4% duty cycle for 100% speed)
+/// - At 7.2V rail: factor = 6.0/7.2 = 0.833 (83.3% duty cycle for 100% speed)
+/// - At 6.0V rail: factor = 6.0/6.0 = 1.000 (100% duty cycle for 100% speed)
+fn calculate_voltage_compensation(rail_voltage: f32) -> f32 {
+    if rail_voltage < TARGET_MOTOR_VOLTAGE {
         warn!(
-            "Battery voltage {}V below target {}V — cannot compensate",
-            battery_voltage, TARGET_MOTOR_VOLTAGE
+            "Motor rail {}V below target {}V — cannot compensate",
+            rail_voltage, TARGET_MOTOR_VOLTAGE
         );
         1.0
     } else {
-        TARGET_MOTOR_VOLTAGE / battery_voltage
+        TARGET_MOTOR_VOLTAGE / rail_voltage
     }
 }
 
@@ -439,12 +446,16 @@ pub async fn motor_driver(
     // Ensure motion state is zeroed
     motion::set_track_speeds(0, 0).await;
 
-    // Wait for first battery voltage reading before allowing motor commands
-    info!("Waiting for battery voltage reading...");
-    let initial_voltage = wait_for_battery_voltage().await;
+    // The motors start idle; this timestamp lets the loop reject rail samples
+    // taken before the last stop.
+    let mut idle_since = Instant::now();
+
+    // Wait for the first motor-rail reading before allowing motor commands
+    info!("Waiting for motor rail voltage reading...");
+    let initial_voltage = wait_for_rail_voltage().await;
     let mut voltage_compensation = calculate_voltage_compensation(initial_voltage);
     info!(
-        "Battery: {}V, voltage compensation: {}",
+        "Motor rail: {}V, voltage compensation: {}",
         initial_voltage, voltage_compensation
     );
 
@@ -476,16 +487,24 @@ pub async fn motor_driver(
             MotorCommand::LoadCalibration(_) | MotorCommand::UpdateAllCalibration { .. } => was_motors_active,
         };
 
-        // Only update voltage compensation when motors are idle before and after
-        // Voltage sag during motor operation gives false readings that cause calibration instability
+        // Record when the motors last became idle. A rail sample older than
+        // this timestamp was taken while they were loaded.
+        if was_motors_active && !next_motors_active {
+            idle_since = Instant::now();
+        }
+
+        // Refresh the factor at a drive start or an idle-to-idle command, but
+        // only from a sample taken after the motors last became idle. Mid-drive
+        // commands and the stop transition keep the current factor: the loaded
+        // rail sags, and chasing it would increase duty and sag further.
         if !was_motors_active
-            && !next_motors_active
-            && let Some(current_voltage) = try_get_battery_voltage()
+            && let Some((current_voltage, sampled_at)) = try_get_rail_sample()
+            && sampled_at.saturating_duration_since(idle_since) >= RAIL_IDLE_SETTLE
         {
             let new_comp = calculate_voltage_compensation(current_voltage);
             if (new_comp - voltage_compensation).abs() > 0.01 {
                 info!(
-                    "Voltage compensation updated: {} -> {} (idle, {}V)",
+                    "Voltage compensation updated: {} -> {} (idle sample, {}V rail)",
                     voltage_compensation, new_comp, current_voltage
                 );
                 voltage_compensation = new_comp;

@@ -24,13 +24,6 @@ pub const TRACK_WIDTH_CM: f32 = 14.5;
 /// Effective drive sprocket circumference with track installed (cm).
 pub const SPROCKET_CIRCUMFERENCE_CM: f32 = 19.01;
 
-/// IMU calibration target selection.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ImuCalibrationKind {
-    /// Calibrate magnetometer (manual rotation).
-    Mag,
-}
-
 /// Combined motor control and sensor feedback commands
 ///
 /// The wrapper stays even with a single variant: the drive queue and the command

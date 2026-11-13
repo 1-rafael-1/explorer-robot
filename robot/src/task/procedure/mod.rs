@@ -436,7 +436,7 @@ pub async fn dispatch(procedure: Procedure, origin: ClaimOrigin) -> StartOutcome
             testmode::start(claim, procedure).await;
             true
         }
-        Procedure::MotorCalibration | Procedure::MagCalibration | Procedure::DistanceCalibration => {
+        Procedure::MotorCalibration | Procedure::DmpCompassCalibration | Procedure::DistanceCalibration => {
             drive::calibration::start(claim, procedure).await;
             true
         }
@@ -456,20 +456,14 @@ pub async fn dispatch(procedure: Procedure, origin: ClaimOrigin) -> StartOutcome
 ///
 /// Attempt Straight is a value-entry flow, not a startable Procedure, so it is
 /// refused without taking the claim. The Remote's hands-on refusals belong here,
-/// in the one availability rule, rather than in a second routing table: motor,
-/// magnetometer and distance calibration, the basic-motor test and attempt
-/// straight need an operator at the robot. The Panel's behaviour is unchanged.
+/// in the one availability rule, rather than in a second routing table: the
+/// model's [`Procedure::is_hands_on`] set is the same rule the panel model
+/// publishes, and a Procedure left out of it is Remote-startable. The Panel's
+/// behaviour is unchanged, and still refuses only the value-entry flow.
 pub const fn is_startable(procedure: Procedure, origin: ClaimOrigin) -> bool {
     match origin {
         ClaimOrigin::Panel => !matches!(procedure, Procedure::AttemptStraight),
-        ClaimOrigin::Remote => !matches!(
-            procedure,
-            Procedure::MotorCalibration
-                | Procedure::MagCalibration
-                | Procedure::DistanceCalibration
-                | Procedure::BasicMotor
-                | Procedure::AttemptStraight
-        ),
+        ClaimOrigin::Remote => !procedure.is_hands_on(),
     }
 }
 

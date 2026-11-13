@@ -1,8 +1,8 @@
 //! Calibration procedures for the drive system.
 //!
-//! Holds the motor (track balance), magnetometer and distance calibration
-//! routines. Each procedure publishes its phase, percent and result to
-//! [`crate::system::state::activity`]; nothing here formats display text.
+//! Holds the motor (track balance), DMP compass and distance calibration
+//! routines. Each procedure publishes its phase, percent and result
+//! to [`crate::system::state::activity`]; nothing here formats display text.
 //!
 //! # Ownership
 //!
@@ -29,7 +29,7 @@
 //! fixed-distance leg stops mid-motion rather than at a step boundary.
 
 pub mod distance;
-pub mod imu;
+pub mod dmp;
 pub mod motor;
 
 use defmt::{error, warn};
@@ -39,7 +39,6 @@ use touch_ui::Procedure;
 
 use self::distance::{DistanceDecision, DriveOutcome};
 use crate::task::{
-    drive::types::ImuCalibrationKind,
     procedure::Claim,
     ui::{UiEvent, send_ui_event},
 };
@@ -49,8 +48,8 @@ use crate::task::{
 pub enum CalibrationCommand {
     /// The motor (track balance) calibration.
     Motor,
-    /// The magnetometer calibration.
-    Mag,
+    /// The DMP compass calibration, which guides the operator with the Prompt.
+    DmpMag,
     /// The distance calibration, which holds its claim through the value entry.
     Distance,
 }
@@ -74,7 +73,7 @@ pub fn init(spawner: Spawner) {
 pub async fn start(claim: Claim, procedure: Procedure) {
     let command = match procedure {
         Procedure::MotorCalibration => CalibrationCommand::Motor,
-        Procedure::MagCalibration => CalibrationCommand::Mag,
+        Procedure::DmpCompassCalibration => CalibrationCommand::DmpMag,
         Procedure::DistanceCalibration => CalibrationCommand::Distance,
         _ => {
             warn!("calibration: {} is not a calibration", procedure.label());
@@ -106,9 +105,9 @@ async fn calibration_controller(spawner: Spawner) {
                     true
                 },
             ),
-            CalibrationCommand::Mag => mag_calibration_task(claim).map_or_else(
+            CalibrationCommand::DmpMag => dmp_calibration_task(claim).map_or_else(
                 |_| {
-                    error!("calibration: mag spawn failed");
+                    error!("calibration: dmp compass spawn failed");
                     false
                 },
                 |token| {
@@ -145,13 +144,13 @@ async fn motor_calibration_task(claim: Claim) {
     motor::run_motor_calibration(&claim).await;
 }
 
-/// Magnetometer calibration task.
+/// DMP compass calibration task.
 ///
 /// The body makes the claim's terminal call itself, so the task holds nothing
 /// back after it returns.
 #[embassy_executor::task]
-async fn mag_calibration_task(claim: Claim) {
-    imu::run_imu_calibration(ImuCalibrationKind::Mag, &claim).await;
+async fn dmp_calibration_task(claim: Claim) {
+    dmp::run_dmp_compass_calibration(&claim).await;
 }
 
 /// Distance calibration task: the fixed-distance drive, then the value entry.

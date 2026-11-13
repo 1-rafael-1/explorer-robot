@@ -51,6 +51,7 @@ critical-section = "1.2.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 nanorand = { version = "0.8.0", features = ["wyrand"], default-features = false }
 claim-slot = { path = "crates/models/claim-slot" }
+dmp-cal = { path = "crates/models/dmp-cal" }
 st7789-async = { path = "crates/drivers/st7789-async" }
 coin-d6 = { path = "crates/drivers/coin-d6" }
 lidar-cloud = { path = "crates/models/lidar-cloud" }
@@ -65,7 +66,7 @@ static_cell = { version = "2.1.1", features = [] }
 heapless = "0.9.2"
 micromath = "2.1.0"
 libm = "0.2"
-icm20948-rs = { version = "0.2.3", features = ["async", "defmt", "dmp"] }
+icm20948-rs = { version = "0.3.0", features = ["async", "defmt", "dmp"] }
 nalgebra = { version = "0.34", default-features = false, features = ["libm"] }
 embedded-hal-async = "1.0.0"
 embedded-io-async = "0.7.0"
