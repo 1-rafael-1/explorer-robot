@@ -198,6 +198,15 @@ const DMP_BIAS_APPLY_TIMEOUT_MS: u64 = 5_000;
 
 // ── Telemetry ─────────────────────────────────────────────────────────────────
 
+/// How old a reading may be before a consumer treats it as stale, in
+/// milliseconds.
+///
+/// The DMP produces packets at roughly 112 Hz, and both the IMU test tasks and
+/// the Compass Checks poll it every 100 ms (the tests at 20 ms). Five polling
+/// periods tolerate scheduling jitter while still expiring a value within a
+/// fraction of the two-second Compass Check window when the driver stalls.
+pub const READING_STALE_MS: u64 = 500;
+
 /// Rate-limiting interval for IMU loop diagnostics when `telemetry_logs` is on.
 #[cfg(feature = "telemetry_logs")]
 const IMU_LOOP_DIAG_LOG_INTERVAL_MS: u32 = 500;
@@ -317,30 +326,72 @@ static LATEST_READINGS: Mutex<CriticalSectionRawMutex, ImuReadings> = Mutex::new
     compass_accuracy: None,
 });
 
+/// One driver reading and the instant the driver acquired it.
+///
+/// The shared snapshot keeps the last value of each field when a packet does
+/// not carry it, so a value alone cannot tell a consumer whether the driver is
+/// still producing it. The acquisition time travels with every value so a
+/// stalled driver is visible as a stale reading rather than a live one.
+#[derive(Debug, Clone, Copy)]
+pub struct Reading<T> {
+    /// The driver's value.
+    pub value: T,
+    /// Acquisition time in milliseconds on the [`Instant`] clock.
+    pub at_ms: u64,
+}
+
 /// Snapshot of all IMU sensor data updated on every valid DMP packet.
 ///
 /// Fields are `None` before the first packet arrives. Magnetometer fields
 /// (`calibrated_mag`, `raw_mag`) are `None` before the first `Axis9` packet
 /// arrives and are cleared when switching to `Axis6` fusion mode. The DMP
 /// `compass_accuracy` is the fused compass's `0..=3` quality word and is
-/// cleared with them.
+/// cleared with them. Every value carries its acquisition time, so consumers
+/// can tell live readings from values the driver stopped updating.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ImuReadings {
     /// DMP-derived orientation.
-    pub orientation: Option<Orientation>,
+    pub orientation: Option<Reading<Orientation>>,
     /// DMP-calibrated gyroscope (deg/s, internal bias subtracted).
-    pub calibrated_gyro: Option<Vector3<f32>>,
+    pub calibrated_gyro: Option<Reading<Vector3<f32>>>,
     /// DMP-calibrated magnetometer (µT, the DMP's compass bias applied).
-    pub calibrated_mag: Option<Vector3<f32>>,
+    pub calibrated_mag: Option<Reading<Vector3<f32>>>,
     /// Raw accelerometer (g, before DMP correction).
-    pub raw_accel: Option<Vector3<f32>>,
+    pub raw_accel: Option<Reading<Vector3<f32>>>,
     /// Raw gyroscope (deg/s, before DMP correction).
-    pub raw_gyro: Option<Vector3<f32>>,
+    pub raw_gyro: Option<Reading<Vector3<f32>>>,
     /// Raw magnetometer (µT, before any host correction).
-    pub raw_mag: Option<Vector3<f32>>,
+    pub raw_mag: Option<Reading<Vector3<f32>>>,
     /// DMP Compass Accuracy (`0..=3`, most accurate at 3), or `None` while
     /// nine-axis fusion has not produced one.
-    pub compass_accuracy: Option<u16>,
+    pub compass_accuracy: Option<Reading<u16>>,
+}
+
+impl ImuReadings {
+    /// The same snapshot with every field acquired more than `max_age_ms`
+    /// before now dropped.
+    ///
+    /// A consumer that displays or acts on a reading asks for the fresh
+    /// snapshot, so a value left behind by a stalled driver neither looks live
+    /// nor counts as evidence of the current run.
+    #[must_use]
+    pub fn fresh(self, max_age_ms: u64) -> Self {
+        let now_ms = Instant::now().as_millis();
+        Self {
+            orientation: fresh_reading(self.orientation, now_ms, max_age_ms),
+            calibrated_gyro: fresh_reading(self.calibrated_gyro, now_ms, max_age_ms),
+            calibrated_mag: fresh_reading(self.calibrated_mag, now_ms, max_age_ms),
+            raw_accel: fresh_reading(self.raw_accel, now_ms, max_age_ms),
+            raw_gyro: fresh_reading(self.raw_gyro, now_ms, max_age_ms),
+            raw_mag: fresh_reading(self.raw_mag, now_ms, max_age_ms),
+            compass_accuracy: fresh_reading(self.compass_accuracy, now_ms, max_age_ms),
+        }
+    }
+}
+
+/// `reading` when it was acquired no more than `max_age_ms` before `now_ms`.
+fn fresh_reading<T>(reading: Option<Reading<T>>, now_ms: u64, max_age_ms: u64) -> Option<Reading<T>> {
+    reading.filter(|r| now_ms.saturating_sub(r.at_ms) <= max_age_ms)
 }
 
 /// Why reading the DMP bias words failed.
@@ -509,8 +560,8 @@ fn is_identity_quaternion(quat: &icm20948::dmp::Quaternion) -> bool {
         && quat.z.abs() <= IMU_IDENTITY_EPSILON
 }
 
-/// Update the shared `LATEST_READINGS` from a DMP packet.
-async fn update_statics_from_dmp(packet: &icm20948::dmp::DmpData, orientation: Option<Orientation>) {
+/// Update the shared `LATEST_READINGS` from a DMP packet acquired at `at_ms`.
+async fn update_statics_from_dmp(packet: &icm20948::dmp::DmpData, orientation: Option<Orientation>, at_ms: u64) {
     // ── Precompute all scaled vectors outside the critical section ──────────
     let raw_accel_opt: Option<Vector3<f32>> = packet.raw_accel.map(|(ax, ay, az)| {
         Vector3::new(
@@ -564,28 +615,28 @@ async fn update_statics_from_dmp(packet: &icm20948::dmp::DmpData, orientation: O
     let mut readings = LATEST_READINGS.lock().await;
 
     if let Some(o) = orientation {
-        readings.orientation = Some(o);
+        readings.orientation = Some(Reading { value: o, at_ms });
     }
     if let Some(v) = raw_accel_opt {
-        readings.raw_accel = Some(v);
+        readings.raw_accel = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = raw_gyro_opt {
-        readings.raw_gyro = Some(v);
+        readings.raw_gyro = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = calibrated_gyro_opt {
-        readings.calibrated_gyro = Some(v);
+        readings.calibrated_gyro = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = raw_mag_opt {
-        readings.raw_mag = Some(v);
+        readings.raw_mag = Some(Reading { value: v, at_ms });
     }
     if let Some(v) = calibrated_mag_opt {
-        readings.calibrated_mag = Some(v);
+        readings.calibrated_mag = Some(Reading { value: v, at_ms });
     }
     // The compass accuracy accompanies the compass sample. Keep the last one
     // when a packet does not carry it, and clear it with the magnetometer values
     // when the fusion mode switches to `Axis6`.
     if let Some(accuracy) = packet.compass_accuracy {
-        readings.compass_accuracy = Some(accuracy);
+        readings.compass_accuracy = Some(Reading { value: accuracy, at_ms });
     }
 }
 
@@ -957,12 +1008,12 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                             // gyro, and mag fields in the same packet are not.
                                             // Keep them flowing while suppressing the
                                             // orientation feedback.
-                                            update_statics_from_dmp(&packet, None).await;
+                                            update_statics_from_dmp(&packet, None, Instant::now().as_millis()).await;
                                         } else {
                                             let orientation = dmp_quat_to_orientation(quat);
                                             let timestamp_ms = Instant::now().as_millis();
 
-                                            update_statics_from_dmp(&packet, Some(orientation)).await;
+                                            update_statics_from_dmp(&packet, Some(orientation), timestamp_ms).await;
 
                                             let measurement = ImuMeasurement {
                                                 orientation,
@@ -1023,7 +1074,7 @@ async fn run_imu_command_loop(sensor: &mut ImuSensor<'_>) {
                                         }
                                     } else {
                                         // Packet present but no quaternion yet (DMP warming up).
-                                        update_statics_from_dmp(&packet, None).await;
+                                        update_statics_from_dmp(&packet, None, Instant::now().as_millis()).await;
                                     }
                                 }
 

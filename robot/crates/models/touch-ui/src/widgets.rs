@@ -238,6 +238,94 @@ where
     Ok(())
 }
 
+/// Lines the prompt draws for one text block.
+///
+/// The instruction and the status line each get a two-line block inside their
+/// existing 24-pixel row, so a long instruction wraps instead of being clipped
+/// at both ends.
+pub const PROMPT_TEXT_LINES: usize = 2;
+
+/// Split `text` into at most `lines.len()` lines of at most `max_chars`
+/// characters, breaking at spaces.
+///
+/// Returns the number of lines written into `lines`. A word longer than a whole
+/// line is hard-cut at the limit, so the split always makes progress.
+pub fn wrap_text<'a>(text: &'a str, max_chars: usize, lines: &mut [&'a str]) -> usize {
+    let limit = max_chars.max(1);
+    let mut written = 0;
+    let mut rest = text.trim();
+
+    while !rest.is_empty() && written < lines.len() {
+        let mut end = rest.len();
+        let mut last_space = None;
+        for (width, (offset, ch)) in rest.char_indices().enumerate() {
+            if width == limit {
+                end = offset;
+                break;
+            }
+            if ch == ' ' {
+                last_space = Some(offset);
+            }
+        }
+
+        // Prefer the last space inside the line; hard-cut when there is none.
+        let cut = match last_space {
+            Some(space) if end != rest.len() && space > 0 => space,
+            _ => end,
+        };
+        lines[written] = rest[..cut].trim_end();
+        rest = rest[cut..].trim_start();
+        written += 1;
+    }
+    written
+}
+
+/// Draw `text` wrapped to at most [`PROMPT_TEXT_LINES`] lines, centered inside
+/// `area`.
+///
+/// The style's first glyph gives the character width, so this assumes the
+/// monospace style the prompt uses.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+fn draw_wrapped_centered_text<D>(
+    d: &mut D,
+    area: Rectangle,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let glyph_width = style
+        .measure_string("M", Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width
+        .max(1);
+    let max_chars = (area.size.width / glyph_width) as usize;
+
+    let mut lines = [""; PROMPT_TEXT_LINES];
+    let count = wrap_text(text, max_chars, &mut lines);
+    let pitch = style.line_height() + 2;
+    let block_height = pitch * count as u32;
+    let top = area.top_left.y + (area.size.height as i32 - block_height as i32) / 2;
+
+    for (index, line) in lines[..count].iter().enumerate() {
+        let size = style
+            .measure_string(line, Point::zero(), Baseline::Top)
+            .bounding_box
+            .size;
+        let position = Point::new(
+            area.top_left.x + (area.size.width as i32 - size.width as i32) / 2,
+            top + (index as u32 * pitch) as i32,
+        );
+        Text::with_baseline(line, position, style, Baseline::Top).draw(d)?;
+    }
+    Ok(())
+}
+
 /// Draw a running/status screen: an accent-bordered panel carrying the body
 /// line.
 ///
@@ -294,9 +382,9 @@ where
 /// carries the dynamic title and the Stop button.
 ///
 /// A disabled action is not drawn, so a movement step shows only Done while the
-/// final Compass Checks show Done and Redo. Both text lines are clipped to their
-/// own rectangles, so a long instruction cannot paint over the panel border or
-/// the action row.
+/// final Compass Checks show Done and Redo. Both text lines are wrapped to two
+/// lines and clipped to their own rectangles, so a long instruction stays fully
+/// readable and cannot paint over the panel border or the action row.
 ///
 /// # Errors
 ///
@@ -312,13 +400,13 @@ where
         .draw(d)?;
 
     let style = MonoTextStyle::new(SMALL_FONT, TEXT);
-    draw_centered_text(
+    draw_wrapped_centered_text(
         &mut d.clipped(&prompt_instruction_rect()),
         prompt_instruction_rect(),
         view.instruction,
         style,
     )?;
-    draw_centered_text(
+    draw_wrapped_centered_text(
         &mut d.clipped(&prompt_status_rect()),
         prompt_status_rect(),
         view.status_text(),

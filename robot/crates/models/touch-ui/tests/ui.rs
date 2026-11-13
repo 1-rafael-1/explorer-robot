@@ -32,7 +32,7 @@ use touch_ui::{
     radar,
     screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
-    widgets::header_title_font,
+    widgets::{header_title_font, wrap_text},
 };
 
 /// A draw target that discards every pixel, so a test can render a screen without
@@ -2163,6 +2163,38 @@ fn a_dmp_snapshot_starts_on_the_first_step_with_placeholders() {
     assert!(ui.show_prompt(view));
     assert_eq!(ui.title(), "DMP Mag");
     render_ok(&ui);
+}
+
+/// Every DMP instruction fits the prompt's instruction row when wrapped to two
+/// lines, and uses only glyphs the ASCII font can draw.
+#[test]
+fn every_dmp_instruction_wraps_into_the_prompt_row() {
+    // The instruction row is 240 px wide in the 6x10 font, so 40 characters fit.
+    let max_chars = (prompt_instruction_rect().size.width / 6) as usize;
+    assert_eq!(max_chars, 40);
+
+    for step in CompassStep::ALL {
+        let instruction = step.instruction();
+        assert!(instruction.is_ascii(), "{instruction:?} needs a non-ASCII glyph");
+
+        let mut lines = [""; 2];
+        let count = wrap_text(instruction, max_chars, &mut lines);
+        assert!((1..=2).contains(&count), "{instruction:?} wrapped to {count} lines");
+        for line in &lines[..count] {
+            assert!(
+                line.chars().count() <= max_chars,
+                "{line:?} is longer than the prompt row"
+            );
+        }
+    }
+
+    // The longest instruction, the Compass Check, breaks before the final hold.
+    let mut lines = [""; 2];
+    assert_eq!(
+        wrap_text(CompassStep::NorthCheck.instruction(), max_chars, &mut lines),
+        2
+    );
+    assert_eq!(lines, ["Point front at magnetic north (0 deg).", "Hold still."]);
 }
 
 /// A movement step formats the heading, accuracy and span hint on the one status

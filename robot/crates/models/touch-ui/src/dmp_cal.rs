@@ -16,13 +16,14 @@
 
 use core::fmt::Write as _;
 
+// The leading `::` selects the `dmp-cal` crate, not this module.
+use ::dmp_cal::{CheckFailure, CheckOutcome, CompassStep, MotionHint};
+
 use crate::{
     buffer::TextBuf,
     screens::{Procedure, PromptView},
     system_info::CalibrationStatus,
 };
-// The leading `::` selects the `dmp-cal` crate, not this module.
-use ::dmp_cal::{CheckFailure, CheckOutcome, CompassStep, MotionHint};
 
 /// The neutral Compass Accuracy: the DMP's `0..=3` scale, or `None` before the
 /// first sample.
@@ -201,7 +202,8 @@ impl DmpCalibrationSnapshot {
     ///
     /// Examples: `Hdg 123 Tgt 0 Acc 3 Span 45`, `Hdg 123 Acc 3 Still 2s`,
     /// `Hdg -- Acc --`. Every value is whole so the line stays inside the
-    /// panel's 48-byte row.
+    /// panel's 48-byte row; a full check line wraps onto a second row instead of
+    /// being clipped.
     #[must_use]
     pub fn status_text(&self) -> TextBuf {
         let mut line = TextBuf::new();

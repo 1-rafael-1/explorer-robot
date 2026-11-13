@@ -23,8 +23,8 @@ use crate::{
     task::{
         procedure::Claim,
         sensors::imu::{
-            DmpFusionMode, ImuReadings, Orientation, get_latest_readings, is_mag_available, mag_gate_passes,
-            set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
+            DmpFusionMode, ImuReadings, Orientation, READING_STALE_MS, get_latest_readings, is_mag_available,
+            mag_gate_passes, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
         },
     },
 };
@@ -56,10 +56,11 @@ async fn imu_test_task(claim: Claim) {
     set_dmp_fusion_mode(DmpFusionMode::Axis9);
     claim.phase("9-axis streaming", None).await;
 
-    // Both magnetometer facts are start-up state: whether the driver initialised
-    // the magnetometer, and the stored DMP calibration. They are read once so the
-    // publish path takes no other lock.
-    let mag_available = is_mag_available();
+    // The stored DMP calibration is start-up state and is read once so the
+    // publish path takes no other lock. Magnetometer availability is refreshed
+    // every tick instead: boot can open this test before the IMU task has
+    // initialised the magnetometer, and a flag captured then would hide every
+    // later reading for the whole run.
     let dmp_calibration = dmp_calibration_status().await;
 
     let mut tick: u32 = 0;
@@ -68,7 +69,10 @@ async fn imu_test_task(claim: Claim) {
     let mut diagnostics: Option<MagDiagnostics> = None;
 
     while !claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
-        let readings = get_latest_readings().await;
+        // Drop values the driver stopped updating, so a stalled IMU reads as
+        // missing instead of replaying its last sample as live data.
+        let readings = get_latest_readings().await.fresh(READING_STALE_MS);
+        let mag_available = is_mag_available();
 
         if readings.orientation.is_none() && readings.calibrated_gyro.is_none() && readings.calibrated_mag.is_none() {
             missing = missing.saturating_add(1);
@@ -83,7 +87,9 @@ async fn imu_test_task(claim: Claim) {
             // them at the 50 Hz sample rate wasted work, and the 1 s log tick is
             // also a publish tick, so it reuses this value.
             diagnostics = if mag_available {
-                readings.raw_mag.map(|mag| mag_diagnostics(readings.raw_accel, mag))
+                readings
+                    .raw_mag
+                    .map(|mag| mag_diagnostics(readings.raw_accel.map(|accel| accel.value), mag.value))
             } else {
                 None
             };
@@ -106,11 +112,14 @@ async fn imu_test_task(claim: Claim) {
                 missing
             );
 
-            if let (Some(a), Some(g), Some(m), Some(diagnostics)) =
-                (readings.raw_accel, readings.raw_gyro, readings.raw_mag, diagnostics)
-            {
-                log_orientation(readings.orientation);
-                log_mag_diagnostics(a, g, m, diagnostics, readings.orientation);
+            if let (Some(a), Some(g), Some(m), Some(diagnostics)) = (
+                readings.raw_accel.map(|r| r.value),
+                readings.raw_gyro.map(|r| r.value),
+                readings.raw_mag.map(|r| r.value),
+                diagnostics,
+            ) {
+                log_orientation(readings.orientation.map(|reading| reading.value));
+                log_mag_diagnostics(a, g, m, diagnostics, readings.orientation.map(|reading| reading.value));
             } else {
                 debug!(
                     "imu9 raw: accel={} gyro={} mag={}",
@@ -160,10 +169,10 @@ fn build_readout(
         return readout;
     }
     if let Some(raw_mag) = readings.raw_mag {
-        readout = readout.with_raw_mag(to_vector(raw_mag));
+        readout = readout.with_raw_mag(to_vector(raw_mag.value));
     }
     if let Some(calibrated_mag) = readings.calibrated_mag {
-        readout = readout.with_calibrated_mag(to_vector(calibrated_mag));
+        readout = readout.with_calibrated_mag(to_vector(calibrated_mag.value));
     }
     if let Some(diagnostics) = diagnostics {
         readout = readout.with_mag(diagnostics);

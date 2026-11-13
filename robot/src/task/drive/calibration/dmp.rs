@@ -13,8 +13,12 @@
 //! accepts a passing result, so a bad heading is never skipped or saved. `Redo`
 //! restarts at the first movement step and clears only the DMP compass bias. The
 //! save path reads the nine raw bias words through the IMU task, writes a
-//! [`DmpBiasWords`] snapshot through the existing flash-storage command, and
-//! completes the Procedure.
+//! [`DmpBiasWords`] snapshot through flash storage, and completes the Procedure
+//! only once flash acknowledges the write.
+//!
+//! Readings carry their acquisition time, and only fresh ones are evidence: a
+//! driver that stops producing packets expires the Compass Check instead of
+//! passing it on a favourite value it left behind.
 //!
 //! On every exit path the fusion mode returns to [`DEFAULT_FUSION_MODE`], IMU
 //! readings stop, and the panel-only snapshot is cleared. A Stop or a terminal
@@ -26,16 +30,15 @@ use dmp_cal::{
     CompassCalibration, CompassCheck, CompassSample, CompassStep, MotionHint, MotionSample, compass_heading,
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::Instant;
 use touch_ui::{DmpCalibrationSnapshot, DmpCheckState, DmpHint, PromptAction};
 
 use crate::{
     system::state::{CalibrationStatus, calibration, dmp_cal as dmp_cal_state},
     task::{
-        io::flash_storage::{self, CalibrationDataKind, DmpBiasWords, FlashCommand},
+        io::flash_storage::{self, DmpBiasWords},
         procedure::Claim,
         sensors::imu::{
-            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, apply_dmp_bias, clear_dmp_compass_bias,
+            DEFAULT_FUSION_MODE, DmpFusionMode, ImuReadings, READING_STALE_MS, apply_dmp_bias, clear_dmp_compass_bias,
             get_latest_readings, is_mag_available, read_dmp_bias, set_dmp_fusion_mode, start_imu_readings,
             stop_imu_readings,
         },
@@ -51,6 +54,10 @@ const RESULT_SAVED: &str = "Calibration saved";
 /// The failure reason when the DMP bias words cannot be read, so nothing is
 /// written.
 const RESULT_READ_FAILED: &str = "DMP bias read failed";
+
+/// The failure reason when flash does not take the snapshot, so the durable
+/// calibration stays the previous one.
+const RESULT_SAVE_FAILED: &str = "Calibration save failed";
 
 /// The reason recorded when the magnetometer never initialised.
 const MAG_UNAVAILABLE: &str = "Magnetometer unavailable";
@@ -186,11 +193,16 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
             shown_step = Some(step);
         }
 
-        let readings = get_latest_readings().await;
-        let timestamp_ms = Instant::now().as_millis();
-        if let Some(orientation) = readings.orientation {
+        // Only readings the driver acquired recently are evidence: the shared
+        // snapshot keeps its last value when packets stop, so a stalled IMU
+        // must not look like a held heading or a converged compass.
+        let readings = get_latest_readings().await.fresh(READING_STALE_MS);
+        if let Some(reading) = readings.orientation {
+            let orientation = reading.value;
             calibration.observe(MotionSample {
-                timestamp_ms,
+                // The acquisition time, not the polling time: a value left
+                // behind by the driver must not extend the stability window.
+                timestamp_ms: reading.at_ms,
                 yaw_deg: orientation.yaw,
                 pitch_deg: orientation.pitch,
                 roll_deg: orientation.roll,
@@ -199,14 +211,18 @@ pub async fn run_dmp_compass_calibration(claim: &Claim) {
 
         let accuracy = readings
             .compass_accuracy
-            .and_then(|accuracy| u8::try_from(accuracy).ok());
+            .and_then(|reading| u8::try_from(reading.value).ok());
         let check_state = if is_check_step(Some(step)) {
             if let (Some(orientation), Some(accuracy)) = (readings.orientation, accuracy) {
                 check.sample(CompassSample {
-                    timestamp_ms,
-                    heading_deg: compass_heading(orientation.yaw),
+                    timestamp_ms: orientation.at_ms,
+                    heading_deg: compass_heading(orientation.value.yaw),
                     accuracy,
                 });
+            } else {
+                // No fresh compass evidence: a heading held before the gap
+                // cannot carry the check.
+                check.expire();
             }
             DmpCheckState::from(check.outcome())
         } else {
@@ -262,23 +278,37 @@ const fn is_check_step(step: Option<CompassStep>) -> bool {
     matches!(step, Some(CompassStep::NorthCheck | CompassStep::EastCheck))
 }
 
-/// Read the nine bias words and save the snapshot, then finish the claim.
+/// Read the nine bias words, save the snapshot, then finish the claim.
 ///
-/// A failed read fails the Procedure and writes nothing. A flash-save failure has
-/// no acknowledgement in the existing contract, so the flash task logs it and the
-/// result still names the save attempt; no second persistence path is invented.
+/// A Stop is honoured before the flash write and again after the read, because
+/// the nine memory reads take long enough for the operator to stop the
+/// ceremony; a stopped run restores the last saved snapshot and writes nothing.
+/// A failed read fails the Procedure and writes nothing. A flash write that is
+/// not acknowledged restores the last saved snapshot and reports the failure,
+/// so the operator never sees "Calibration saved" for a snapshot that will
+/// vanish on reboot.
 async fn save_bias_snapshot(claim: &Claim) {
+    if stopped(claim).await {
+        return;
+    }
+
     match read_dmp_bias().await {
         Ok(snapshot) => {
+            if stopped(claim).await {
+                return;
+            }
+
             info!("DMP compass calibration: saving bias snapshot");
-            flash_storage::send_flash_command(FlashCommand::SaveData(CalibrationDataKind::DmpBias(
-                DmpBiasWords::from(snapshot),
-            )))
-            .await;
-            // The DMP already holds the biases that were just read, so the
-            // status is truthful before the flash write finishes.
-            calibration::set_dmp_cal_status(CalibrationStatus::Loaded).await;
-            claim.complete(RESULT_SAVED).await;
+            if flash_storage::save_dmp_bias(DmpBiasWords::from(snapshot)).await {
+                // The DMP already holds the biases that were just read, and
+                // flash now holds them too, so the status is truthful.
+                calibration::set_dmp_cal_status(CalibrationStatus::Loaded).await;
+                claim.complete(RESULT_SAVED).await;
+            } else {
+                warn!("DMP compass calibration: flash write was not acknowledged");
+                restore_cached_dmp_bias().await;
+                claim.fail(RESULT_SAVE_FAILED).await;
+            }
         }
         Err(error) => {
             warn!("DMP compass calibration: DMP bias read failed: {:?}", error);
@@ -286,6 +316,20 @@ async fn save_bias_snapshot(claim: &Claim) {
             claim.fail(RESULT_READ_FAILED).await;
         }
     }
+}
+
+/// Restore the saved snapshot and finish the claim when the operator stopped.
+///
+/// Returns `true` when it did, so the caller returns without writing flash.
+/// `complete` and `fail` ignore the stop latch, so the check has to happen
+/// here, before either terminal call.
+async fn stopped(claim: &Claim) -> bool {
+    if !claim.is_stop_requested() {
+        return false;
+    }
+    restore_cached_dmp_bias().await;
+    claim.finish().await;
+    true
 }
 
 /// Restore the last saved DMP Bias Snapshot to the DMP after a Stop or failure.
@@ -323,11 +367,11 @@ fn build_snapshot(
 ) -> DmpCalibrationSnapshot {
     DmpCalibrationSnapshot {
         step,
-        heading_deg: readings.orientation.map(|orientation| compass_heading(orientation.yaw)),
+        heading_deg: readings.orientation.map(|reading| compass_heading(reading.value.yaw)),
         target_heading_deg: step.check_target_deg(),
         accuracy: readings
             .compass_accuracy
-            .and_then(|accuracy| u8::try_from(accuracy).ok()),
+            .and_then(|reading| u8::try_from(reading.value).ok()),
         hint: DmpHint::from(hint),
         check,
         redo: step.redo_allowed(),

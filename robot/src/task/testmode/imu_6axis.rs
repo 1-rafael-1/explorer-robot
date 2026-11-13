@@ -20,7 +20,8 @@ use crate::{
     task::{
         procedure::Claim,
         sensors::imu::{
-            DmpFusionMode, Orientation, get_latest_readings, set_dmp_fusion_mode, start_imu_readings, stop_imu_readings,
+            DmpFusionMode, Orientation, READING_STALE_MS, get_latest_readings, set_dmp_fusion_mode, start_imu_readings,
+            stop_imu_readings,
         },
     },
 };
@@ -57,7 +58,9 @@ async fn imu6_test_task(claim: Claim) {
     let mut received = false;
 
     while !claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
-        let readings = get_latest_readings().await;
+        // Drop values the driver stopped updating, so a stalled IMU reads as
+        // missing instead of replaying its last sample as live data.
+        let readings = get_latest_readings().await.fresh(READING_STALE_MS);
 
         if readings.orientation.is_none() && readings.calibrated_gyro.is_none() {
             missing = missing.saturating_add(1);
@@ -83,8 +86,11 @@ async fn imu6_test_task(claim: Claim) {
                 readings.calibrated_gyro.is_some(),
                 missing
             );
-            log_orientation(readings.orientation);
-            log_raw(readings.raw_accel, readings.raw_gyro);
+            log_orientation(readings.orientation.map(|reading| reading.value));
+            log_raw(
+                readings.raw_accel.map(|reading| reading.value),
+                readings.raw_gyro.map(|reading| reading.value),
+            );
         }
     }
 

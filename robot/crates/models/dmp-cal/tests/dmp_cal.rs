@@ -73,25 +73,25 @@ fn steps_are_in_the_agreed_order_with_their_metadata() {
         (
             CompassStep::FlatSpin,
             CompassStepKind::Spin,
-            "On the table, spin 360° both ways.",
+            "On the table, spin 360 deg both ways.",
             false,
         ),
         (
             CompassStep::NoseTilt,
             CompassStepKind::Tilt,
-            "Tilt nose up and down 90°.",
+            "Tilt nose up and down 90 deg.",
             false,
         ),
         (
             CompassStep::SideTilt,
             CompassStepKind::Tilt,
-            "Tilt left and right 90°.",
+            "Tilt left and right 90 deg.",
             false,
         ),
         (
             CompassStep::InvertedSpin,
             CompassStepKind::Spin,
-            "Flip wheels up, spin 360° both ways.",
+            "Flip wheels up, spin 360 deg both ways.",
             false,
         ),
         (
@@ -103,13 +103,13 @@ fn steps_are_in_the_agreed_order_with_their_metadata() {
         (
             CompassStep::NorthCheck,
             CompassStepKind::Check,
-            "Point front at magnetic north (0°). Hold still.",
+            "Point front at magnetic north (0 deg). Hold still.",
             true,
         ),
         (
             CompassStep::EastCheck,
             CompassStepKind::Check,
-            "Point front at magnetic east (90°). Hold still.",
+            "Point front at magnetic east (90 deg). Hold still.",
             true,
         ),
     ];
@@ -337,6 +337,85 @@ fn check_waits_for_a_full_window_before_passing() {
     assert_eq!(
         feed(&mut check, MAGNETIC_NORTH_DEG, CALIBRATED_COMPASS_ACCURACY, 2000, 1),
         CheckOutcome::Pass
+    );
+}
+
+#[test]
+fn a_window_passes_with_sample_spacing_that_does_not_divide_it() {
+    // The calibration runner polls every 100 ms plus its own work, so samples
+    // arrive slightly more than 100 ms apart. The retained window must still
+    // reach the full stability period instead of stopping one sample short.
+    let mut check = CompassCheck::new();
+    let mut outcome = check.outcome();
+    for index in 0..=25_u64 {
+        outcome = check.sample(CompassSample {
+            timestamp_ms: index * 101,
+            heading_deg: MAGNETIC_NORTH_DEG,
+            accuracy: CALIBRATED_COMPASS_ACCURACY,
+        });
+    }
+    assert_eq!(outcome, CheckOutcome::Pass);
+}
+
+#[test]
+fn expiring_clears_the_window_but_keeps_the_target() {
+    let mut check = CompassCheck::new();
+    assert_eq!(
+        feed(
+            &mut check,
+            MAGNETIC_NORTH_DEG,
+            CALIBRATED_COMPASS_ACCURACY,
+            0,
+            WINDOW_SAMPLES
+        ),
+        CheckOutcome::Pass
+    );
+
+    check.expire();
+    assert_eq!(check.outcome(), CheckOutcome::Waiting);
+    assert_eq!(check.target(), CompassTarget::MagneticNorth);
+    assert!(!check.accept());
+
+    // New evidence starts a fresh window rather than reusing the old one.
+    assert_eq!(
+        feed(&mut check, MAGNETIC_NORTH_DEG, CALIBRATED_COMPASS_ACCURACY, 3000, 1),
+        CheckOutcome::Waiting
+    );
+    assert_eq!(
+        feed(
+            &mut check,
+            MAGNETIC_NORTH_DEG,
+            CALIBRATED_COMPASS_ACCURACY,
+            3100,
+            WINDOW_SAMPLES - 1
+        ),
+        CheckOutcome::Pass
+    );
+}
+
+#[test]
+fn a_gap_longer_than_the_window_restarts_the_evidence() {
+    let mut check = CompassCheck::new();
+    assert_eq!(
+        feed(
+            &mut check,
+            MAGNETIC_NORTH_DEG,
+            CALIBRATED_COMPASS_ACCURACY,
+            0,
+            WINDOW_SAMPLES
+        ),
+        CheckOutcome::Pass
+    );
+
+    // The readings stopped for five seconds. The heading before the gap is not
+    // evidence that it is held now, so this sample starts a new window.
+    assert_eq!(
+        check.sample(CompassSample {
+            timestamp_ms: 5000,
+            heading_deg: MAGNETIC_NORTH_DEG,
+            accuracy: CALIBRATED_COMPASS_ACCURACY,
+        }),
+        CheckOutcome::Waiting
     );
 }
 

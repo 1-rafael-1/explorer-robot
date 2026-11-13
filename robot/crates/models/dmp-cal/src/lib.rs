@@ -161,17 +161,18 @@ impl CompassStep {
     /// The user-facing instruction for this step.
     ///
     /// The strings are the ones the operator sees on the Prompt screen; keep
-    /// them stable so the panel and the telemetry identity stay in step.
+    /// them stable so the panel and the telemetry identity stay in step. They
+    /// are plain ASCII because the panel's font carries no degree glyph.
     #[must_use]
     pub const fn instruction(self) -> &'static str {
         match self {
             Self::FlatHold | Self::FlatHoldBeforeCheck => "Place flat. Hold still.",
-            Self::FlatSpin => "On the table, spin 360° both ways.",
-            Self::NoseTilt => "Tilt nose up and down 90°.",
-            Self::SideTilt => "Tilt left and right 90°.",
-            Self::InvertedSpin => "Flip wheels up, spin 360° both ways.",
-            Self::NorthCheck => "Point front at magnetic north (0°). Hold still.",
-            Self::EastCheck => "Point front at magnetic east (90°). Hold still.",
+            Self::FlatSpin => "On the table, spin 360 deg both ways.",
+            Self::NoseTilt => "Tilt nose up and down 90 deg.",
+            Self::SideTilt => "Tilt left and right 90 deg.",
+            Self::InvertedSpin => "Flip wheels up, spin 360 deg both ways.",
+            Self::NorthCheck => "Point front at magnetic north (0 deg). Hold still.",
+            Self::EastCheck => "Point front at magnetic east (90 deg). Hold still.",
         }
     }
 
@@ -585,7 +586,9 @@ const CHECK_WINDOW_CAPACITY: usize = 128;
 ///   [`CHECK_STABILITY_SPAN_DEG`].
 ///
 /// The window is cleared when the check moves to east, so the two targets are
-/// independent.
+/// independent. It is also cleared when the readings stop: [`CompassCheck::expire`]
+/// discards the evidence, and a sample arriving after a gap longer than the
+/// window starts a fresh one.
 #[derive(Clone, Debug)]
 pub struct CompassCheck {
     /// The target currently being evaluated.
@@ -638,13 +641,22 @@ impl CompassCheck {
     ///
     /// Returns the new outcome, also available from [`CompassCheck::outcome`].
     /// Samples with a timestamp older than the newest retained sample are
-    /// ignored, and samples are ignored once the check is complete.
+    /// ignored, and samples are ignored once the check is complete. A sample
+    /// that arrives more than [`CHECK_STABILITY_WINDOW_MS`] after the previous
+    /// one starts a fresh window, because a gap that long leaves no continuous
+    /// evidence.
     pub fn sample(&mut self, sample: CompassSample) -> CheckOutcome {
         if self.complete {
             return self.outcome;
         }
-        if self.len > 0 && sample.timestamp_ms < self.entry(self.len - 1).timestamp_ms {
-            return self.outcome;
+        if self.len > 0 {
+            let newest = self.entry(self.len - 1);
+            if sample.timestamp_ms < newest.timestamp_ms {
+                return self.outcome;
+            }
+            if sample.timestamp_ms.saturating_sub(newest.timestamp_ms) > CHECK_STABILITY_WINDOW_MS {
+                self.expire();
+            }
         }
 
         self.prune(sample.timestamp_ms);
@@ -681,21 +693,40 @@ impl CompassCheck {
         true
     }
 
+    /// Discards the evidence gathered for the current target.
+    ///
+    /// Used when the readings stop arriving: a heading that was held before a
+    /// gap is not evidence that it is held now, so the check returns to
+    /// [`CheckOutcome::Waiting`] and starts a fresh window. The current target
+    /// and any accepted target are kept.
+    pub const fn expire(&mut self) {
+        self.head = 0;
+        self.len = 0;
+        if !self.complete {
+            self.outcome = CheckOutcome::Waiting;
+        }
+    }
+
     /// The sample at `offset` from the oldest retained sample.
     const fn entry(&self, offset: usize) -> CheckSample {
         self.entries[(self.head + offset) % CHECK_WINDOW_CAPACITY]
     }
 
-    /// Drops samples strictly older than the stability window.
+    /// Drops samples that fall outside the stability window.
+    ///
+    /// The newest sample at or before the window boundary is kept: it is the
+    /// sample that brackets the start of the window. Dropping it as well would
+    /// cap the retained span just below [`CHECK_STABILITY_WINDOW_MS`] whenever
+    /// the sample spacing does not divide the window exactly, so a correctly
+    /// held heading could never pass.
     const fn prune(&mut self, now_ms: u64) {
-        while self.len > 0 {
-            let oldest = self.entries[self.head];
-            if now_ms.saturating_sub(oldest.timestamp_ms) > CHECK_STABILITY_WINDOW_MS {
-                self.head = (self.head + 1) % CHECK_WINDOW_CAPACITY;
-                self.len -= 1;
-            } else {
+        while self.len > 1 {
+            let next = self.entries[(self.head + 1) % CHECK_WINDOW_CAPACITY];
+            if now_ms.saturating_sub(next.timestamp_ms) < CHECK_STABILITY_WINDOW_MS {
                 break;
             }
+            self.head = (self.head + 1) % CHECK_WINDOW_CAPACITY;
+            self.len -= 1;
         }
     }
 

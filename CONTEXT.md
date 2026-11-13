@@ -216,7 +216,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **DMP Compass Calibration** — A guided Procedure that walks the operator through a fixed sequence of movements, verifies the resulting magnetic heading at two known headings, and saves the ICM-20948 DMP's bias snapshot. Starting it does not start the DMP calibration engine; the engine runs continuously while nine-axis fusion is enabled, and the Procedure only guides the motion and snapshots the result.
   _Avoid_: Mag Calibration (retains the retired host meaning), mag ceremony
 - **Compass Step** — One instructed movement in a DMP Compass Calibration, advanced by the operator's Done action.
-- **Compass Check** — The final two-heading verification of a DMP Compass Calibration: the robot's front is pointed at magnetic north and then east, and the displayed Compass Heading must agree within ±10° while the DMP reports Compass Accuracy 3 and the heading is stable.
+- **Compass Check** — The final two-heading verification of a DMP Compass Calibration: the robot's front is pointed at magnetic north and then east, and the displayed Compass Heading must agree within ±10° while the DMP reports Compass Accuracy 3 and the heading is stable. The stability window must be continuous: a gap in the IMU readings discards the evidence gathered so far.
 - **Compass Heading** — The magnetic bearing derived from DMP yaw by the fixed mounting/sign conversion; it is magnetic north, not true north, and carries no declination.
 - **Compass Accuracy** — The DMP's 0–3 confidence in its compass calibration, where 3 is most accurate; the final Compass Check requires 3.
 - **DMP Bias Snapshot** — The nine raw DMP bias words (gyroscope, accelerometer and compass) saved to flash after a successful DMP Compass Calibration and restored to the DMP at boot. It does not include the DMP's internal accuracy/covariance state.
@@ -232,7 +232,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Raw Reading** — A sensor value before DMP correction: raw accelerometer in `g`, raw gyroscope in `deg/s`, raw magnetometer in `µT`.
 - **Calibrated Reading** — A sensor value after correction: the DMP bias-corrected gyroscope or magnetometer. The accelerometer has no calibrated form.
 - **DMP-Calibrated Magnetometer** — The magnetometer vector after the DMP's internal compass bias correction, shown as `M dmp`; it is distinct from the raw `M raw` vector.
-- **IMU Test Health** — Whether the IMU is producing samples during an IMU Test: `Waiting` before the first sample, `Live` while samples arrive, and **IMU Not Responding** after a sustained gap. The last state is shown in the readout rather than ending the Procedure.
+- **IMU Test Health** — Whether the IMU is producing samples during an IMU Test: `Waiting` before the first sample, `Live` while samples arrive, and **IMU Not Responding** after a sustained gap. The last state is shown in the readout rather than ending the Procedure. Every reading carries its acquisition time, so a value the driver stops updating reads as missing instead of staying `Live`.
 - **Heading Remap** — A candidate magnetometer heading from one of eight axis-sign permutations of a magnetometer plane, used to diagnose the sensor's mounting and axis mapping; the nine-axis readout shows eight per plane for XY, XZ and YZ.
 
 ## Development Practices

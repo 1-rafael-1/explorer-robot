@@ -7,8 +7,9 @@
 //! The data is stored in the `FLASH_STORAGE` section of flash memory defined in
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
 
-use defmt::{debug, error, info};
+use defmt::{debug, error, info, warn};
 use dmp_cal::{DMP_BIAS_ENCODED_LEN, DmpBiasSnapshot};
+use embassy_futures::select::{Either, select};
 use embassy_rp::{
     flash::{ERASE_SIZE, Flash},
     mode::Async,
@@ -43,6 +44,18 @@ const COMMAND_QUEUE_SIZE: usize = 3;
 /// Channel for sending flash storage commands.
 static FLASH_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FlashCommand, COMMAND_QUEUE_SIZE> = Channel::new();
 
+/// Reply slot for one in-flight DMP Bias Snapshot save.
+///
+/// Capacity one matches the single Active Claim that can start a calibration;
+/// a late answer to a timed-out request is dropped rather than wedging the task.
+static DMP_BIAS_SAVE_REPLY: Channel<CriticalSectionRawMutex, bool, 1> = Channel::new();
+
+/// How long [`save_dmp_bias`] waits for the flash task before reporting failure.
+///
+/// A save erases and rewrites up to one 4 KB sector, which is well under this;
+/// the margin covers a queue that is still draining an earlier command.
+const DMP_BIAS_SAVE_TIMEOUT_MS: u64 = 5_000;
+
 /// Internal storage for calibration data (managed by `flash_storage` task only).
 static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Option<CalibrationData>> =
     embassy_sync::mutex::Mutex::new(None);
@@ -60,6 +73,40 @@ pub async fn get_cached_dmp_bias() -> Option<DmpBiasWords> {
 /// Send a flash storage command.
 pub async fn send_flash_command(command: FlashCommand) {
     FLASH_COMMAND_CHANNEL.send(command).await;
+}
+
+/// Save a DMP Bias Snapshot and report whether flash took it.
+///
+/// [`send_flash_command`] only enqueues the write, so a caller that returns on
+/// the enqueue reports success before persistence has happened. This waits for
+/// the task's answer: `true` once `store_item` succeeded, `false` when the
+/// write failed, the command could not be enqueued, or the task did not answer.
+/// The caller must treat `false` as "the old snapshot is still the durable
+/// one".
+pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
+    // A late answer to a timed-out request must not be mistaken for this one.
+    while DMP_BIAS_SAVE_REPLY.try_receive().is_ok() {}
+
+    if FLASH_COMMAND_CHANNEL
+        .try_send(FlashCommand::SaveData(CalibrationDataKind::DmpBias(words)))
+        .is_err()
+    {
+        warn!("DMP bias save dropped — flash command queue full");
+        return false;
+    }
+
+    match select(
+        DMP_BIAS_SAVE_REPLY.receive(),
+        Timer::after(Duration::from_millis(DMP_BIAS_SAVE_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::First(saved) => saved,
+        Either::Second(()) => {
+            warn!("DMP bias save timed out after {}ms", DMP_BIAS_SAVE_TIMEOUT_MS);
+            false
+        }
+    }
 }
 
 /// Receive a flash storage command.
@@ -511,28 +558,38 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                 CalibrationDataKind::DmpBias(words) => {
                     info!("Saving DMP bias snapshot to flash...");
 
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    if let Some(ref mut cal) = *data {
-                        cal.dmp_bias = Some(words);
-                    } else {
-                        *data = Some(CalibrationData {
-                            dmp_bias: Some(words),
-                            ..CalibrationData::default()
-                        });
-                    }
-                    drop(data);
-
-                    match storage.store_item(&mut data_buffer, &StorageKey::DmpBias, &words).await {
+                    let saved = match storage.store_item(&mut data_buffer, &StorageKey::DmpBias, &words).await {
                         Ok(()) => {
-                            // The save keeps the cache and the log only. Raising
+                            // Cache the snapshot only once flash holds it, so a
+                            // failed write leaves the last durable snapshot in
+                            // the cache for a Stop to restore. The save keeps the
+                            // cache and the log only. Raising
                             // `CalibrationDataLoaded` here would re-enter the boot
                             // path and could discard the "Calibration saved" Result
                             // Report; only `GetData(DmpBias)` produces that event.
+                            let mut data = CALIBRATION_DATA.lock().await;
+                            if let Some(ref mut cal) = *data {
+                                cal.dmp_bias = Some(words);
+                            } else {
+                                *data = Some(CalibrationData {
+                                    dmp_bias: Some(words),
+                                    ..CalibrationData::default()
+                                });
+                            }
+                            drop(data);
                             info!("DMP bias snapshot saved successfully");
+                            true
                         }
                         Err(e) => {
                             error!("Failed to save DMP bias snapshot: {}", defmt::Debug2Format(&e));
+                            false
                         }
+                    };
+
+                    // A late answer to a timed-out request must not wedge the
+                    // task, so a full reply slot drops this one.
+                    if DMP_BIAS_SAVE_REPLY.try_send(saved).is_err() {
+                        warn!("DMP bias save result dropped — no waiter");
                     }
                 }
             },

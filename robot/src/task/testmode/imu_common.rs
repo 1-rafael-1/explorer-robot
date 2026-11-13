@@ -54,17 +54,17 @@ pub(super) fn to_vector(vector: nalgebra::Vector3<f32>) -> Vector3 {
 /// accelerometer, the raw gyroscope and the calibrated gyroscope.
 pub(super) fn base_readout(kind: ImuReadoutKind, health: ImuHealth, missing: u32, readings: ImuReadings) -> ImuReadout {
     let mut readout = ImuReadout::waiting(kind).with_health(health, missing);
-    if let Some(orientation) = readings.orientation {
-        readout = readout.with_orientation(to_euler(orientation));
+    if let Some(reading) = readings.orientation {
+        readout = readout.with_orientation(to_euler(reading.value));
     }
-    if let Some(accel) = readings.raw_accel {
-        readout = readout.with_raw_accel(to_vector(accel));
+    if let Some(reading) = readings.raw_accel {
+        readout = readout.with_raw_accel(to_vector(reading.value));
     }
-    if let Some(gyro) = readings.raw_gyro {
-        readout = readout.with_raw_gyro(to_vector(gyro));
+    if let Some(reading) = readings.raw_gyro {
+        readout = readout.with_raw_gyro(to_vector(reading.value));
     }
-    if let Some(gyro) = readings.calibrated_gyro {
-        readout = readout.with_calibrated_gyro(to_vector(gyro));
+    if let Some(reading) = readings.calibrated_gyro {
+        readout = readout.with_calibrated_gyro(to_vector(reading.value));
     }
     readout
 }
