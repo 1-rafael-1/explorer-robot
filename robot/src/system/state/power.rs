@@ -22,17 +22,31 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 static POWER_STATE: Mutex<CriticalSectionRawMutex, PowerState> = Mutex::new(PowerState {
     battery_level: None,
     battery_voltage: None,
+    rail_voltage: None,
 });
 
 /// Power-related state shared across the system.
 struct PowerState {
     /// Battery level percentage (0-100), if available.
     battery_level: Option<u8>,
-    /// Battery voltage in volts, if available.
+    /// Pack-terminal voltage in volts, for the panel and Link telemetry.
     battery_voltage: Option<f32>,
+    /// Measured `+8V` motor rail in volts, for voltage compensation.
+    rail_voltage: Option<f32>,
 }
 
-/// Write battery level and voltage in one atomic update.
+/// Write a complete battery measurement in one atomic update.
+pub async fn set_measurement(level: u8, battery_voltage: f32, rail_voltage: f32) {
+    let mut state = POWER_STATE.lock().await;
+    state.battery_level = Some(level);
+    state.battery_voltage = Some(battery_voltage);
+    state.rail_voltage = Some(rail_voltage);
+}
+
+/// Refresh the operator-facing level and pack voltage.
+///
+/// Leaves the measured rail voltage untouched so the motor driver keeps the
+/// voltage it compensates against.
 pub async fn set_battery(level: u8, voltage: f32) {
     let mut state = POWER_STATE.lock().await;
     state.battery_level = Some(level);
@@ -49,7 +63,7 @@ pub async fn get_battery_level() -> Option<u8> {
 pub struct BatterySnapshot {
     /// Battery level percentage (0-100), if available.
     pub level: Option<u8>,
-    /// Battery voltage in volts, if available.
+    /// Pack-terminal voltage in volts, if available.
     pub voltage: Option<f32>,
 }
 
@@ -64,8 +78,8 @@ pub async fn get_battery_snapshot() -> BatterySnapshot {
     }
 }
 
-/// Non-blocking voltage read for hot paths (e.g. motor control loop).
-/// Returns `None` if no reading available yet or if the mutex is busy.
-pub fn try_get_battery_voltage() -> Option<f32> {
-    POWER_STATE.try_lock().ok()?.battery_voltage
+/// Non-blocking rail-voltage read for the motor control loop.
+/// Returns `None` if no reading is available yet or if the mutex is busy.
+pub fn try_get_rail_voltage() -> Option<f32> {
+    POWER_STATE.try_lock().ok()?.rail_voltage
 }
