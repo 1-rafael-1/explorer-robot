@@ -1,0 +1,26 @@
+[package]
+name = "vl53l1x"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Async VL53L1X time-of-flight rangefinder driver"
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+
+[features]
+std = []
+
+[[test]]
+name = "status"
+required-features = ["std"]
+
+[[test]]
+name = "driver"
+required-features = ["std"]
