@@ -1,7 +1,7 @@
 // The World Frame radar suite: the slot convention, the camera transform, the
-// icon tap guard, the scan/pose timestamp seam, the Occlusion Shadow
-// classifier, and a live scan drawn onto a real canvas (fresh versus stale).
-// It does not mount the app's full DOM.
+// icon tap guard, the scan/pose timestamp seam, the Seen Polygon and unseen
+// complement, and a live scan drawn onto a real canvas (fresh versus stale). It
+// does not mount the app's full DOM.
 
 import {
   FOOTPRINT,
@@ -15,7 +15,7 @@ import {
   poseAt,
   scanAgeMs,
   scanPoints,
-  scanShadows,
+  scanVisibility,
   screenToWorld,
   slotAngleDeg,
   worldToScreen,
@@ -55,7 +55,7 @@ function pixelStats(canvas) {
     if (Math.abs(red - 11) > 8 || Math.abs(green - 15) > 8 || Math.abs(blue - 20) > 8) {
       nonBackground += 1;
     }
-    // #46c2ff is the live cloud/robot white; #7f96aa (stale) is below this.
+    // #46c2ff is the live cloud; #7f96aa (stale) is below this.
     if (green > 160 && blue > 200) freshCloud += 1;
   }
   return { nonBackground, freshCloud };
@@ -69,173 +69,97 @@ test('LiDAR slot 0 is ahead and the slots run clockwise', () => {
   assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 0 }, 10, 2, true, 5), -20, 1e-9);
 });
 
-test('a near protrusion casts one Occlusion Shadow on its own contour', () => {
+test('a full scan builds a Seen Polygon from the pose to every return', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
+
+  assertEqual(edges.length, 0, 'a flat wall has no significant range step');
+  assertEqual(seen.length, 362, 'the pose, 360 returns and the closing pose');
+  assertClose(seen[0].x, 0, 1e-9);
+  assertClose(seen[0].y, 0, 1e-9);
+  assertEqual(seen[1].slot, 0);
+  assertClose(seen[1].x, 300, 1e-9);
+  assertClose(seen[1].y, 0, 1e-9);
+  assertEqual(seen[360].slot, 359);
+  assertClose(seen[361].x, 0, 1e-9);
+});
+
+test('a No Return notches the Seen Polygon back to the pose', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  ranges[10] = null;
+  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
+
+  assertEqual(edges.length, 0);
+  // The initial pose, the null-sector notch and the closing pose have no slot.
+  assertEqual(seen.filter((point) => point.slot == null).length, 3);
+  assertEqual(seen.length, 362);
+});
+
+test('a significant range step becomes an Occlusion Edge', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
 
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1, 'one protrusion, one shadow');
-  const [shadow] = shadows;
-  assertEqual(shadow.capCm, 300, 'the cap is the local background');
-  assertEqual(
-    shadow.silhouette.map((point) => point.slot),
-    Array.from({ length: 21 }, (_, index) => 170 + index),
-    'the silhouette is the measured contour in slot order',
-  );
-  assertEqual(
-    shadow.silhouette.map((point) => point.range),
-    Array.from({ length: 21 }, () => 60),
-    'every contour point keeps its return',
-  );
-  assertEqual(
-    shadow.edges.map((edge) => edge.near.slot),
-    [170, 190],
-    'the two Occlusion Edges start at the contour endpoints',
-  );
-  for (const edge of shadow.edges) {
-    assertClose(Math.hypot(edge.far.x, edge.far.y), shadow.capCm, 1e-9);
-  }
-  // The world points use the slot convention: slot 0 ahead, slots clockwise.
-  const first = shadow.silhouette[0];
-  assertClose(first.x, 60 * Math.cos(-170 * RAD), 1e-9);
-  assertClose(first.y, 60 * Math.sin(-170 * RAD), 1e-9);
+  const { edges } = scanVisibility(ORIGIN, scanValue(ranges));
+  const at = (seam) => edges.find((edge) => edge.seamSlot === seam);
+  assert(at(169), 'the fall into the object is an Occlusion Edge');
+  assert(at(190), 'the rise out of the object is an Occlusion Edge');
+  assertEqual(at(169).near.range, 60);
+  assertEqual(at(169).far.range, 300);
+  assertEqual(at(190).near.range, 60);
+  assertEqual(at(190).far.range, 300);
 });
 
-test('a flat or slanted scan casts no Occlusion Shadow', () => {
-  const flat = Array.from({ length: 360 }, () => 240);
-  assertEqual(scanShadows(ORIGIN, scanValue(flat)).length, 0, 'a flat wall is not a protrusion');
-
-  const slanted = Array.from({ length: 360 }, (_, slot) => 250 + 30 * Math.cos(slot * RAD));
-  assertEqual(
-    scanShadows(ORIGIN, scanValue(slanted)).length,
-    0,
-    'a gentle range change is not an edge',
+test('the Occlusion Edge threshold is absolute and relative', () => {
+  const ranges = Array.from({ length: 360 }, () => 500);
+  ranges[10] = 450; // 50 cm at 4.5 m: below 25 % of the nearer return
+  ranges[20] = 350; // 150 cm at 3.5 m: above 25 % of the nearer return
+  const seams = new Set(
+    scanVisibility(ORIGIN, scanValue(ranges)).edges.map((edge) => edge.seamSlot),
   );
-});
+  assert(!seams.has(10), 'a 50 cm step at 4.5 m is below the relative threshold');
+  assert(seams.has(20), 'a 150 cm step at 3.5 m clears the relative threshold');
 
-test('a far recess whose complement is the near background is not a protrusion', () => {
-  const ranges = Array.from({ length: 360 }, () => 100);
-  for (let slot = 100; slot <= 200; slot += 1) ranges[slot] = 300;
-  assertEqual(
-    scanShadows(ORIGIN, scanValue(ranges)).length,
-    0,
-    'the longer complement of a wide doorway is the near background',
+  const near = Array.from({ length: 360 }, () => 30);
+  near[10] = 45; // 15 cm: below the 20 cm floor
+  near[20] = 55; // 25 cm: above the 20 cm floor
+  const nearSeams = new Set(
+    scanVisibility(ORIGIN, scanValue(near)).edges.map((edge) => edge.seamSlot),
   );
+  assert(!nearSeams.has(10), 'a 15 cm step is below the absolute floor');
+  assert(nearSeams.has(20), 'a 25 cm step clears the absolute floor');
 });
 
-test('a step under the threshold is not an Occlusion Edge', () => {
-  // A 40 cm rise on the right extends the near run; the first real rise is
-  // then more than half the scan away, so nothing is shaded.
-  const weakRise = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) weakRise[slot] = 60;
-  for (let slot = 191; slot < 360; slot += 1) weakRise[slot] = 100;
-  assertEqual(scanShadows(ORIGIN, scanValue(weakRise)).length, 0);
-
-  // A 40 cm fall cannot start a near segment at all.
-  const weakFall = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) weakFall[slot] = 260;
-  assertEqual(scanShadows(ORIGIN, scanValue(weakFall)).length, 0);
-});
-
-test('a one-slot near spike has coincident edges, so it casts no shadow', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  ranges[180] = 60;
-  assertEqual(scanShadows(ORIGIN, scanValue(ranges)).length, 0);
-});
-
-test('a No Return breaks the near segment, so no shadow is cast', () => {
-  const inner = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) inner[slot] = 60;
-  inner[180] = null;
-  assertEqual(
-    scanShadows(ORIGIN, scanValue(inner)).length,
-    0,
-    'a null inside the span disqualifies',
-  );
-
-  const flank = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) flank[slot] = 60;
-  flank[191] = null;
-  assertEqual(scanShadows(ORIGIN, scanValue(flank)).length, 0, 'a null neighbour disqualifies');
-});
-
-test('a protrusion across slot 0 is found once in cyclic slot order', () => {
+test('a protrusion across slot 0 is ordered cyclically', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   for (let slot = 355; slot < 360; slot += 1) ranges[slot] = 60;
   for (let slot = 0; slot <= 5; slot += 1) ranges[slot] = 60;
 
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1, 'the seam does not split the protrusion');
+  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
+  const seams = new Set(edges.map((edge) => edge.seamSlot));
+  assert(seams.has(354), 'the fall into the seam-crossing protrusion');
+  assert(seams.has(5), 'the rise out of it');
   assertEqual(
-    shadows[0].silhouette.map((point) => point.slot),
-    [355, 356, 357, 358, 359, 0, 1, 2, 3, 4, 5],
-    'the contour runs forward through the seam',
-  );
-  assertEqual(shadows[0].capCm, 300);
-});
-
-test('the cap is the greater of the two flanking returns', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-  ranges[191] = 500;
-
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1);
-  assertEqual(shadows[0].capCm, 500, 'the far flank wins over the near flank');
-});
-
-test('consecutive falls in one protrusion emit a single shadow', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 185; slot += 1) ranges[slot] = 200;
-  ranges[186] = 140;
-  for (let slot = 187; slot <= 190; slot += 1) ranges[slot] = 80;
-
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1, 'an inner fall does not start a second shadow');
-  assertEqual(
-    shadows[0].silhouette.map((point) => point.slot),
-    Array.from({ length: 21 }, (_, index) => 170 + index),
-    'the outer fall owns the whole near run',
+    seen.filter((point) => point.slot != null).length,
+    360,
+    'the ring keeps every return, including both sides of the seam',
   );
 });
 
-test('a curved silhouette with small internal steps still casts one shadow', () => {
+test('the Seen Polygon is measured from the pose it is given', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) {
-    ranges[slot] = 60 + Math.abs(slot - 180) * 0.5;
-  }
-
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1, 'a small internal step is not an Occlusion Edge');
-  assertEqual(
-    shadows[0].silhouette.map((point) => point.slot),
-    Array.from({ length: 21 }, (_, index) => 170 + index),
-  );
-});
-
-test('a sub-threshold step does not bound the near segment', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-  for (let slot = 191; slot <= 200; slot += 1) ranges[slot] = 100;
-
-  const shadows = scanShadows(ORIGIN, scanValue(ranges));
-  assertEqual(shadows.length, 1, 'the run continues to the next qualifying rise');
-  assertEqual(
-    shadows[0].silhouette.map((point) => point.slot),
-    Array.from({ length: 31 }, (_, index) => 170 + index),
-    'the 40 cm step inside the run is not an Occlusion Edge',
-  );
-});
-
-test('the shadow is measured from the pose it is given', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-
   const pose = { x: 100, y: -50, yaw: 20 };
-  const first = scanShadows(pose, scanValue(ranges))[0].silhouette[0];
-  const angle = (pose.yaw - 170) * RAD;
-  assertClose(first.x, pose.x + 60 * Math.cos(angle), 1e-9);
-  assertClose(first.y, pose.y + 60 * Math.sin(angle), 1e-9);
+  const { seen } = scanVisibility(pose, scanValue(ranges));
+  assertClose(seen[1].x, pose.x + 300 * Math.cos(pose.yaw * RAD), 1e-9);
+  assertClose(seen[1].y, pose.y + 300 * Math.sin(pose.yaw * RAD), 1e-9);
+});
+
+test('an empty or all-null scan has a pose-only Seen Polygon', () => {
+  assertEqual(scanVisibility(ORIGIN, scanValue([])), { seen: [], edges: [] });
+
+  const nulls = Array.from({ length: 360 }, () => null);
+  const { seen, edges } = scanVisibility(ORIGIN, scanValue(nulls));
+  assertEqual(edges.length, 0);
+  assertEqual(seen.length, 1, 'only the pose');
 });
 
 test('a null return produces no point, so the cloud draws a gap', () => {
@@ -277,8 +201,8 @@ function windowNear(canvas, radar, x, y, size) {
 }
 
 /**
- * The live Occlusion Shadow red. `green - blue < 40` keeps the amber obstacle
- * and target colour out of the match.
+ * The live unseen-fill red. `green - blue < 40` keeps the amber obstacle and
+ * target colour out of the match.
  */
 function isLiveRed(red, green, blue) {
   return red > 24 && red > green && red > blue - 12 && green - blue < 40;
@@ -317,7 +241,7 @@ function edgeRedNear(canvas, radar, x, y, size = 9) {
   return false;
 }
 
-/** Counts live soft-red pixels — the Occlusion fill and its dotted edges — canvas-wide. */
+/** Counts live soft-red pixels — the unseen fill and its dotted edges — canvas-wide. */
 function liveRedPixels(canvas) {
   const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
   let count = 0;
@@ -353,17 +277,11 @@ test('an isolated LiDAR return is drawn as a point', () => {
   const ranges = Array.from({ length: 360 }, () => null);
   ranges[10] = 123;
   ranges[30] = 187;
-  store.dispatch({
-    type: 'stream',
-    name: 'lidar',
-    seq: 1,
-    ts: 1000,
-    v: { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true },
-  });
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
   radar.render(store.state, 1100);
 
-  const first = scanPoints({ x: 0, y: 0, yaw: 0 }, store.state.streams.lidar.v)[0];
-  const second = scanPoints({ x: 0, y: 0, yaw: 0 }, store.state.streams.lidar.v)[1];
+  const first = scanPoints(ORIGIN, store.state.streams.lidar.v)[0];
+  const second = scanPoints(ORIGIN, store.state.streams.lidar.v)[1];
   assert(cloudNear(canvas, radar, first.x, first.y), 'the first isolated return is visible');
   assert(cloudNear(canvas, radar, second.x, second.y), 'the second isolated return is visible');
 });
@@ -439,13 +357,7 @@ test('a live scan renders onto the canvas and a stale scan dims', () => {
   assertEqual(age.dataset.stale, 'true');
 
   const ranges = Array.from({ length: 360 }, (_, slot) => (slot % 17 === 0 ? null : 100));
-  store.dispatch({
-    type: 'stream',
-    name: 'lidar',
-    seq: 1,
-    ts: 1000,
-    v: { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true },
-  });
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
   radar.render(store.state, 1100);
   const fresh = pixelStats(canvas);
@@ -460,100 +372,104 @@ test('a live scan renders onto the canvas and a stale scan dims', () => {
   assert(stale.freshCloud < fresh.freshCloud, 'the stale scan is dimmed');
 });
 
-test('a protrusion paints a red fan and a flat scan paints none', () => {
+test('the unseen complement is red and the seen region is clear', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});
   const store = createStore();
+  const ranges = Array.from({ length: 360 }, () => 300);
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
-  // A 60 cm protrusion across the seam, against a 300 cm background. The
-  // near range stays above the 45 cm amber-dot threshold.
+  radar.render(store.state, 1100);
+  assertEqual(redNear(canvas, radar, 150, 0), 0, 'inside the wall is measured and clear');
+  assert(redNear(canvas, radar, 350, 0) > 0, 'beyond the wall is unseen and red');
+});
+
+test('a No Return sector is part of the unseen complement', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 358; slot < 360; slot += 1) ranges[slot] = null;
+  for (let slot = 0; slot <= 2; slot += 1) ranges[slot] = null;
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+
+  radar.render(store.state, 1100);
+  assert(redNear(canvas, radar, 200, 0) > 0, 'the null sector is unknown, so it is unseen');
+});
+
+test('a near object leaves the space before it seen and behind it unseen', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
   const ranges = Array.from({ length: 360 }, () => 300);
   for (let slot = 350; slot < 360; slot += 1) ranges[slot] = 60;
   for (let slot = 0; slot <= 10; slot += 1) ranges[slot] = 60;
-  store.dispatch({
-    type: 'stream',
-    name: 'lidar',
-    seq: 1,
-    ts: 1000,
-    v: { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true },
-  });
-  radar.render(store.state, 1100);
-  assert(redNear(canvas, radar, 140, 0) > 0, 'the wedge behind the protrusion is shaded');
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
-  // A flat wall at the same range removes the inference and its fill.
-  const flat = Array.from({ length: 360 }, () => 300);
-  store.dispatch({
-    type: 'stream',
-    name: 'lidar',
-    seq: 2,
-    ts: 1000,
-    v: { ranges_cm: flat, first_deg: 0, step_deg: 1, clockwise: true },
-  });
   radar.render(store.state, 1100);
-  assertEqual(redNear(canvas, radar, 140, 0), 0, 'a flat wall paints no shadow');
+  assertEqual(redNear(canvas, radar, 30, 0), 0, 'between the robot and the object is seen');
+  assert(redNear(canvas, radar, 150, 0) > 0, 'behind the object is unseen');
 });
 
-test('a No Return neighbour paints no shadow', () => {
+test('a significant step is dotted and its solid chord is gone', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});
   const store = createStore();
-
-  // The would-be fan covers (140, 0); the null at slot 11 breaks the rise
-  // neighbour, so the classifier must reject the segment.
   const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 350; slot < 360; slot += 1) ranges[slot] = 60;
-  for (let slot = 0; slot <= 10; slot += 1) ranges[slot] = 60;
-  ranges[11] = null;
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
-  radar.render(store.state, 1100);
 
-  assertEqual(liveRedPixels(canvas), 0, 'no live red is painted');
-  assertEqual(redNear(canvas, radar, 140, 0), 0, 'the would-be wedge is not tinted');
+  radar.render(store.state, 1100);
+  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const at = (slot) => points.find((point) => point.slot === slot);
+  const start = at(169);
+  const end = at(170);
+  const hit = [0.2, 0.4, 0.6, 0.8].some((ratio) =>
+    edgeRedNear(
+      canvas,
+      radar,
+      start.x + (end.x - start.x) * ratio,
+      start.y + (end.y - start.y) * ratio,
+    ),
+  );
+  assert(hit, 'the Occlusion Edge is dotted soft red');
+  const chord = midpoint(start, end);
+  assertEqual(cloudNear(canvas, radar, chord.x, chord.y), false, 'no solid chord spans the edge');
 });
 
-test('a fresh protrusion paints live red and a stale one is muted to grey', () => {
+test('a gentle range step keeps its solid surface chord', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});
   const store = createStore();
-
-  // A 60 cm protrusion across the scan seam against a 300 cm background, wide
-  // enough that a sample well inside the fan is unambiguous. The near range
-  // stays above the 45 cm amber-dot threshold.
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 340; slot < 360; slot += 1) ranges[slot] = 60;
-  for (let slot = 0; slot <= 20; slot += 1) ranges[slot] = 60;
+  const ranges = Array.from({ length: 360 }, () => 200);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 190;
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
-  // Fresh: the live soft red fills the wedge and strokes both Occlusion Edges.
   radar.render(store.state, 1100);
-  assert(redNear(canvas, radar, 200, 0) > 0, 'the fresh wedge is shaded live red');
+  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const at = (slot) => points.find((point) => point.slot === slot);
+  const chord = midpoint(at(169), at(170));
+  assert(cloudNear(canvas, radar, chord.x, chord.y), 'a sub-threshold step stays a solid return');
+});
+
+test('a fresh scan paints live red; a stale scan mutes the unseen fill', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+  const ranges = Array.from({ length: 360 }, () => 300);
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+
+  radar.render(store.state, 1100);
+  assert(redNear(canvas, radar, 350, 0) > 0, 'the unseen complement is live red');
   assert(liveRedPixels(canvas) > 0, 'the fresh scan paints live-red pixels');
-  for (const slot of [340, 20]) {
-    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
-    const hit = [200, 230, 260, 290].some((radius) =>
-      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
-    );
-    assert(hit, `slot ${slot} strokes a live-red Occlusion Edge`);
-  }
 
-  // Past the stale gate the geometry stays; the live red does not.
   radar.render(store.state, 1000 + STALE_MS + 1);
   assertEqual(liveRedPixels(canvas), 0, 'a stale scan paints no live-red pixels');
-  const wedge = tintNear(canvas, radar, 200, 0);
-  assert(wedge.red <= wedge.green && wedge.red <= wedge.blue, 'the stale tint reads grey, not red');
-
-  // The same stale grid with no shadow is the control: the fan still tints it.
-  const flat = Array.from({ length: 360 }, () => 300);
-  store.dispatch({ type: 'stream', name: 'lidar', seq: 2, ts: 1000, v: scanValue(flat) });
-  radar.render(store.state, 1000 + STALE_MS + 1);
-  const plain = tintNear(canvas, radar, 200, 0);
-  assert(
-    wedge.blue >= plain.blue + 3,
-    `the stale wedge keeps a grey tint: ${wedge.blue} over ${plain.blue}`,
-  );
+  const stale = tintNear(canvas, radar, 350, 0);
+  assert(stale.red <= stale.green && stale.red <= stale.blue, 'the stale unseen fill reads grey');
 });
 
-test('no scan means no shadow, so no remembered shadow is drawn', () => {
+test('no scan means no unseen fill', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});
   const store = createStore();
@@ -579,70 +495,6 @@ test('center returns to the robot and keeps the zoom', () => {
   radar.center();
   radar.render(store.state, 0);
   assertClose(radar.scale, zoomed, 1e-9, 'center keeps the zoom');
-});
-
-test('each Occlusion Shadow strokes dotted soft-red edges to the cap', () => {
-  const canvas = makeCanvas();
-  const radar = createRadar(canvas, {});
-  const store = createStore();
-
-  // A 60 cm protrusion across slots 170..190 against a 300 cm background: its
-  // Occlusion Edges run outward along the slots 170 and 190 rays.
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
-  radar.render(store.state, 1100);
-
-  // The [2, 4] dash leaves gaps, so several radii along each ray must find at
-  // least one stroke sample.
-  const radii = [80, 120, 160, 200, 240];
-  for (const slot of [170, 190]) {
-    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
-    const hit = radii.some((radius) =>
-      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
-    );
-    assert(hit, `slot ${slot} has a dotted Occlusion Edge along its ray`);
-  }
-});
-
-test('the cloud does not connect across an Occlusion Edge', () => {
-  const canvas = makeCanvas();
-  const radar = createRadar(canvas, {});
-  const store = createStore();
-
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
-  radar.render(store.state, 1100);
-
-  const points = scanPoints(ORIGIN, scanValue(ranges));
-  const at = (slot) => points.find((point) => point.slot === slot);
-
-  const fall = midpoint(at(169), at(170));
-  assertEqual(cloudNear(canvas, radar, fall.x, fall.y), false, 'no chord across the fall edge');
-
-  const rise = midpoint(at(190), at(191));
-  assertEqual(cloudNear(canvas, radar, rise.x, rise.y), false, 'no chord across the rise edge');
-});
-
-test('a far recess keeps its surface chord, because it is not an Occlusion Edge', () => {
-  const canvas = makeCanvas();
-  const radar = createRadar(canvas, {});
-  const store = createStore();
-
-  // The near background is everywhere else, so the complement of this narrow
-  // far recess is the background and the classifier infers no shadow.
-  const ranges = Array.from({ length: 360 }, () => 100);
-  for (let slot = 100; slot <= 110; slot += 1) ranges[slot] = 300;
-  assertEqual(scanShadows(ORIGIN, scanValue(ranges)).length, 0, 'a far recess is not a protrusion');
-
-  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
-  radar.render(store.state, 1100);
-
-  const points = scanPoints(ORIGIN, scanValue(ranges));
-  const at = (slot) => points.find((point) => point.slot === slot);
-  const chord = midpoint(at(99), at(100));
-  assertEqual(cloudNear(canvas, radar, chord.x, chord.y), true, 'the surface chord is still drawn');
 });
 
 autorun();

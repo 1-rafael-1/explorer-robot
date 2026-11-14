@@ -9,7 +9,7 @@ Edges**. The robot, the Link Protocol and the daemon carry no such concept: it i
 inference, never a No Return, never free space, and never an input to Go or the Target
 Point (ADR-0038, ADR-0043).
 
-**Status:** accepted.
+**Status:** superseded by ADR-0047. The display-only, app-only principles below remain; the protrusion rule is replaced by the exact unseen complement.
 
 **Considered Options**
 

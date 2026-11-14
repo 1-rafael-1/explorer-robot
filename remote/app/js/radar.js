@@ -1,6 +1,6 @@
 // The World Frame radar: one canvas, a camera view transform and layered
-// drawing. ADR-0043 fixes the order; ADR-0046 inserts the occlusion shadow:
-// grid, map layer, occlusion shadow, live scan, robot/target/preview, overlay.
+// drawing. ADR-0043 fixes the order; ADR-0047 inserts the unseen fill:
+// grid, map layer, unseen fill, live scan, robot/target/preview, overlay.
 // The camera is display state only: a tap picks a world point, a drag pans, and
 // neither changes the frame or the meaning of a world point (ADR-0043).
 //
@@ -21,7 +21,7 @@ import {
   poseAt,
   scanAgeMs,
   scanPoints,
-  scanShadows,
+  scanVisibility,
   screenToWorld,
   worldToScreen,
 } from './geometry.js';
@@ -48,26 +48,6 @@ const COLOR = Object.freeze({
   occlusionFillStale: 'rgba(127, 150, 170, 0.06)',
   occlusionEdgeStale: '#7f96aa',
 });
-
-/**
- * Returns the `from` slots that straddle an Occlusion Edge (ADR-0046).
- *
- * A shadow's first edge sits between `first - 1` and `first`; its second sits
- * between `last` and `last + 1`. Recording the lower slot of each pair lets the
- * cloud break its run exactly there and nowhere else, including across the scan
- * seam. The count is the cyclic length of the scan.
- */
-function occlusionSeamStarts(shadows, count) {
-  const starts = new Set();
-  if (!(count > 0)) return starts;
-  for (const shadow of shadows) {
-    const [first, last] = shadow.edges;
-    if (!first || !last) continue;
-    starts.add((first.near.slot - 1 + count) % count);
-    starts.add(last.near.slot % count);
-  }
-  return starts;
-}
 
 /** Creates the radar over `canvas`; a missing canvas yields a no-op camera. */
 export function createRadar(canvas, { onPick = () => {} } = {}) {
@@ -272,21 +252,21 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.fillStyle = COLOR.bg;
     context.fillRect(0, 0, width, height);
 
-    // The shadow is inferred once per render so the fill, the dotted edges and
-    // the cloud's chord seams all come from the same descriptors (ADR-0046).
-    // Its liveness is the scan's own: a missing scan is stale, so the layer
-    // never outlives what it was inferred from.
+    // The scan's seen polygon and significant edges are inferred once per
+    // render, so the unseen fill, the dotted edges and the cloud's chord seams
+    // all come from the same scan (ADR-0047). Its liveness is the scan's own: a
+    // missing scan is stale, so the layer never outlives what it came from.
     const lidar = source.streams?.lidar;
     const scanPose = lidar ? poseForScan(source, lidar) : null;
-    const shadows = lidar ? scanShadows(scanPose, lidar.v) : [];
+    const visibility = lidar ? scanVisibility(scanPose, lidar.v) : null;
     const stale = isStaleScan(lidar?.ts, now);
-    const scan = lidar ? { lidar, pose: scanPose, shadows, stale } : null;
+    const scan = lidar ? { lidar, pose: scanPose, visibility, stale } : null;
 
-    // Layer order (ADR-0043; occlusion layer per ADR-0046): grid, map layer,
-    // occlusion shadow, live scan, robot/target/preview, overlay.
+    // Layer order (ADR-0043; unseen fill per ADR-0047): grid, map layer, unseen
+    // fill, live scan, robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
-    drawShadows(scan);
+    drawUnseen(scan);
     drawCloud(scan);
     drawOcclusionEdges(scan);
     drawPreview(source);
@@ -329,74 +309,67 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
   }
 
   /**
-   * Fills each inferred Occlusion Shadow under the cloud (ADR-0046). The
-   * classifier is pure geometry; this layer only fills the fan bounded by the
-   * measured contour and the two radial Occlusion Edges at the cap range. The
-   * fill follows the scan's age: the live soft red, or the muted stale grey. No
-   * shadow survives its scan, so it is recomputed on every render.
+   * Fills the unseen complement of the Seen Polygon under the cloud (ADR-0047).
+   * The polygon is the star-shaped region from the scan pose to every measured
+   * return; the fill is the whole viewport outside it, with a radial notch at
+   * every No Return. The fill follows the scan's age: live soft red, or the
+   * muted stale grey.
    */
-  function drawShadows(scan) {
-    if (!view || !scan || scan.shadows.length === 0) return;
-    const { shadows, stale } = scan;
+  function drawUnseen(scan) {
+    if (!view || !scan || !scan.visibility) return;
+    const { seen } = scan.visibility;
 
     context.save();
-    context.fillStyle = stale ? COLOR.occlusionFillStale : COLOR.occlusionFill;
-    for (const shadow of shadows) {
-      const contour = shadow.silhouette;
-      if (contour.length === 0) continue;
-
-      context.beginPath();
-      const start = worldToScreen(view, contour[0]);
+    context.fillStyle = scan.stale ? COLOR.occlusionFillStale : COLOR.occlusionFill;
+    context.beginPath();
+    context.rect(0, 0, view.width, view.height);
+    if (seen.length > 1) {
+      const start = worldToScreen(view, seen[0]);
       context.moveTo(start.x, start.y);
-      for (let index = 1; index < contour.length; index += 1) {
-        const screen = worldToScreen(view, contour[index]);
+      for (let index = 1; index < seen.length; index += 1) {
+        const screen = worldToScreen(view, seen[index]);
         context.lineTo(screen.x, screen.y);
       }
-      // The cap runs across the two edge rays at the local background depth.
-      const farLast = worldToScreen(view, shadow.edges[1].far);
-      context.lineTo(farLast.x, farLast.y);
-      const farFirst = worldToScreen(view, shadow.edges[0].far);
-      context.lineTo(farFirst.x, farFirst.y);
       context.closePath();
-      context.fill();
     }
+    // Even-odd fills the viewport outside the Seen Polygon and leaves the
+    // measured region clear.
+    context.fill('evenodd');
     context.restore();
   }
 
   /**
-   * Strokes the two Occlusion Edges above the cloud (ADR-0046). Each edge is a
-   * dotted radial line from a contour endpoint outward to the cap, replacing
-   * the surface chord the cloud no longer draws across that step. The stroke
-   * shares the scan's age with the fill and the cloud.
+   * Strokes the significant Occlusion Edges above the cloud (ADR-0047). Each
+   * edge is the chord between two adjacent returns whose range step is large
+   * enough that the chord is not a measured surface. The stroke shares the
+   * scan's age with the fill and the cloud.
    */
   function drawOcclusionEdges(scan) {
-    if (!view || !scan || scan.shadows.length === 0) return;
-    const { shadows, stale } = scan;
+    if (!view || !scan || !scan.visibility) return;
+    const { edges } = scan.visibility;
+    if (edges.length === 0) return;
 
     context.save();
-    context.strokeStyle = stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
+    context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
     context.lineWidth = 1.2;
     context.setLineDash([2, 4]);
     context.lineCap = 'round';
-    for (const shadow of shadows) {
-      for (const edge of shadow.edges) {
-        const near = worldToScreen(view, edge.near);
-        const far = worldToScreen(view, edge.far);
-        context.beginPath();
-        context.moveTo(near.x, near.y);
-        context.lineTo(far.x, far.y);
-        context.stroke();
-      }
+    for (const edge of edges) {
+      const near = worldToScreen(view, edge.near);
+      const far = worldToScreen(view, edge.far);
+      context.beginPath();
+      context.moveTo(near.x, near.y);
+      context.lineTo(far.x, far.y);
+      context.stroke();
     }
     context.restore();
   }
 
   function drawCloud(scan) {
     if (!view || !scan) return;
-    const { lidar, pose: cloudPose, shadows, stale } = scan;
+    const { lidar, pose: cloudPose, visibility, stale } = scan;
     const points = scanPoints(cloudPose, lidar.v);
-    const count = lidar.v?.ranges_cm?.length ?? 0;
-    const seamStarts = occlusionSeamStarts(shadows, count);
+    const seamStarts = new Set(visibility.edges.map((edge) => edge.seamSlot));
 
     // Group adjacent slots into runs, breaking at an Occlusion Edge so no
     // surface chord spans unseen space. A lone slot has no line to join, so it

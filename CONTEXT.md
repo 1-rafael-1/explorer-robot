@@ -42,10 +42,12 @@
 - **No Return** — A bin for which no valid range was measured. It is not an obstacle, and it must not be read as a clear angle: gap selection never treats it as navigable.
 - **Front Sector** — The angular window about dead ahead that the Coast-and-Avoid stop test sweeps: ±45° by default, with a 30 cm stop threshold.
 - **Room Scan** — The operator-initiated mode that renders live Spins as a radar on the Display, for verifying the LiDAR and surveying a room. It does not drive.
-- **Occlusion Edge** — One of the two boundaries of an Occlusion Shadow, running outward from an edge of the protrusion and separating space the scan measured from space it cannot see. A Remote App display concept inferred from the returns at render time; it is not a measurement.
-  _Avoid_: shadow line, ray, chord
-- **Occlusion Shadow** — The region behind a protrusion — a run of returns nearer than the valid returns on both sides — that the scan cannot see. A Remote App display concept, inferred and never measured: it is neither a No Return nor free space.
+- **Seen Polygon** — The region the scan measured: the star-shaped polygon from the scan pose out to every return, with a radial notch at each No Return. A Remote App display concept computed from the returns at render time.
+  _Avoid_: visibility polygon, free space
+- **Occlusion Shadow** — The region the scan cannot see: the complement of the Seen Polygon within the view. It is inferred, never measured; it is neither a No Return nor free space.
   _Avoid_: no visibility, blind spot, unseen area
+- **Occlusion Edge** — A significant range step on the Seen Polygon boundary, where the chord between two adjacent returns is not a measured surface. The Remote App draws it dotted.
+  _Avoid_: shadow line, ray, chord
 
 ### Touch
 
