@@ -20,11 +20,19 @@ debug-assertions = true
 incremental = true
 opt-level = 0
 
+# The firmware's large async state machines (notably the LiDAR task) allocate a
+# stack frame for every inlined state. At opt-level 0 that is ~178 KiB for the
+# core1 LiDAR task; at opt-level 1 it folds to ~30 KiB. Optimising just this
+# package in dev keeps `cargo run`/`probe-rs run` within the core1 stack while
+# leaving debug info and debug assertions on and the dependencies unoptimised.
+[profile.dev.package.explorer-robot]
+opt-level = 1
+
 [profile.release]
 codegen-units = 1
 debug = 2
 debug-assertions = false
-incremental = true
+incremental = false
 lto = 'fat'
 opt-level = 's'
 

@@ -1,6 +1,6 @@
 //! Real COIN-D6 `LiDAR` task — on-demand power, warm-up, and streaming.
 //!
-//! Replaces the synthetic `lidar_stub` task. A single long-lived embassy task on
+//! A single long-lived embassy task on
 //! **core1** owns a [`LidarSession`], which retains the UART0/GPIO28/GPIO29
 //! [`Peri`] handles, the `LIDAR_PWR` enable and the static buffers. The UART
 //! exists only while the switched 5 V branch is powered: [`UartResources::power_up`]
@@ -33,9 +33,10 @@
 //! # Lifecycle
 //!
 //! The sensor is off at boot and no UART exists. [`enable`] powers the branch on,
-//! probes the device-info frame, sends the vendor start command (a failure is
-//! logged and tolerated, because the device may already be streaming), and waits
-//! for the rotor to settle. The driver's only watchdogs count bytes, so the
+//! best-effort probes the device-info frame (bounded and tolerated: the frame is
+//! emitted on power-up and can be missed), sends the vendor start command (a
+//! failure is logged and tolerated, because the device may already be streaming),
+//! and waits for the rotor to settle. The driver's only watchdogs count bytes, so the
 //! warm-up wait is bounded by a wall clock here: on timeout the task powers the
 //! branch down and retries a bounded number of times before reporting
 //! [`LidarStatus::Failed`]. Every path that deasserts `LIDAR_PWR` — bring-up
@@ -111,6 +112,14 @@ const INGEST_LEN: usize = 1024;
 /// assertion or UART construction: a timeout here leaves the driver alive so the
 /// normal power-down can run.
 const WARMUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Wall-clock bound on the optional device-info probe.
+///
+/// The sensor announces itself once, on power-up. The branch and UART come up
+/// after that, so the frame can be missed entirely, and a device that is already
+/// streaming has no reason to send it again. The probe only validates and drains
+/// that frame; it must not hold back the start command. A missed frame therefore
+/// costs this bound, then start and warm-up proceed.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// Wall-clock bound on one streaming revolution.
 ///
 /// [`CoinD6::read_scan`] is bounded only by the driver's byte-count ring-start
@@ -255,6 +264,8 @@ impl UartResources {
         let mut power = control.power.take()?;
         // `embassy_rp::gpio::Output`'s inherent setter is infallible.
         power.set_high();
+        #[cfg(feature = "telemetry_logs")]
+        info!("[lidar] LIDAR_PWR asserted");
         Timer::after(BRANCH_RISE).await;
 
         let uart = BufferedUart::new(
@@ -266,6 +277,8 @@ impl UartResources {
             &mut self.rx_buf[..],
             self.uart_config,
         );
+        #[cfg(feature = "telemetry_logs")]
+        info!("[lidar] UART up, probing");
         Some(CoinD6::new(uart, power, ingest, Config::default()))
     }
 
@@ -580,12 +593,21 @@ async fn serve_enabled(
     }
 }
 
-/// One bring-up attempt: probe the device-info frame, send start (tolerated), and
+/// One bring-up attempt: best-effort device-info probe, start (tolerated), and
 /// warm up.
+///
 async fn attempt_bring_up(driver: &mut LidarDriver<'_, '_>, scratch: &mut Scan) -> bool {
-    if let Err(error) = driver.probe().await {
-        warn!("[lidar] device-info probe failed: {:?}", Debug2Format(&error));
-        return false;
+    // The device-info frame is emitted on power-up, before this UART exists, and an
+    // already-streaming device does not send it again. It is a validation/drain
+    // step, not a prerequisite: a missed or malformed frame must not prevent the
+    // start command, because the rotor warm-up is the real proof that data flows.
+    match with_timeout(PROBE_TIMEOUT, driver.probe()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(
+            "[lidar] device-info probe failed (tolerated): {:?}",
+            Debug2Format(&error)
+        ),
+        Err(_) => warn!("[lidar] device-info probe timed out (tolerated)"),
     }
     // The device may already be streaming, so a start-write failure is not fatal
     // — warm-up is the real proof that data flows.

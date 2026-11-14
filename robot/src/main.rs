@@ -91,11 +91,23 @@ pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
 
 // ── Core stacks & executors ────────────────────────────────────────────────────
 
-/// Core1 stack — 16 KiB for the real COIN-D6 `LiDAR` driver task.
+/// Core1 stack — 64 KiB for the real COIN-D6 `LiDAR` driver task.
 ///
-/// Budget: ~1.5 KiB point cloud + ~8 KiB UART/DMA buffers + ~4 KiB
-/// frame-parser state + ~2 KiB embassy async overhead.
-static mut CORE1_STACK: Stack<16384> = Stack::new();
+/// The task future lives in its static `TaskPool`, but the generated state-machine
+/// `poll` frames are far larger than the future's steady-state buffers: the compiler
+/// allocates the `Scan`, the `Cloud`/`Reduction` temporaries and the inlined
+/// bring-up/streaming states on the stack. With the firmware package built at
+/// `opt-level = 1` (see the workspace `[profile.dev.package.explorer-robot]`), the
+/// whole chain folds into one ~30 KiB frame. At `opt-level = 0` the chain is not
+/// inlined and nests to roughly 178 KiB (`lidar` 44 + `serve_enabled` 94 +
+/// `stream_scans` 24 + `publish_scan` 15), which is why the dev profile override
+/// exists. The task also shares this stack with the core1 `UART0_IRQ` handler.
+///
+/// The RP2350 runs with `MSPLIM` set to the stack bottom, so an undersized stack
+/// faults on the first store below it — before the task's first log — and takes
+/// core1 down while core0 keeps running. 64 KiB leaves headroom for the interrupt
+/// handler and for the states growing.
+static mut CORE1_STACK: Stack<65536> = Stack::new();
 
 /// Executor for core0 (orchestrator, drive, UI, sensors on I2C).
 static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
@@ -414,6 +426,26 @@ fn main() -> ! {
     let p = embassy_rp::init(config);
 
     info!("explorer-robot v3 booting...");
+
+    // Why did the previous run end? The POWMAN flags are sticky across resets, so
+    // this distinguishes a brownout/glitch from a debugger or RUN-pin reset.
+    #[cfg(feature = "telemetry_logs")]
+    {
+        let reset = embassy_rp::pac::POWMAN.chip_reset().read();
+        info!(
+            "[boot] reset: por={} bor={} glitch={} dp={} run={} wdt={} rescue={}",
+            reset.had_por(),
+            reset.had_bor(),
+            reset.had_glitch_detect(),
+            reset.had_dp_reset_req(),
+            reset.had_run_low(),
+            reset.had_watchdog_reset_powman()
+                || reset.had_watchdog_reset_powman_async()
+                || reset.had_watchdog_reset_swcore()
+                || reset.had_watchdog_reset_rsm(),
+            reset.had_rescue()
+        );
+    }
 
     // ── Board resource bundles (ADR-0022) ───────────────────────────────────
     let r = split_resources!(p);
