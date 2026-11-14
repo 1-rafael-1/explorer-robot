@@ -106,7 +106,7 @@ const STRAIGHT_IMU_CORRECTION_SCALE: f32 = 0.15;
 /// Stall timeout during distance driving (milliseconds).
 const STALL_TIMEOUT_MS: u64 = 1500;
 
-// ── Encoder delta helpers (previously in drift/math) ───────────────────────
+// ── Encoder delta helpers ─────────────────────────────────────────────────
 
 /// 16-bit counter delta with wraparound handling.
 const fn calculate_delta_u16(current: u16, previous: u16) -> u16 {

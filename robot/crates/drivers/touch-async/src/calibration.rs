@@ -52,14 +52,13 @@ impl Calibration {
     ///
     /// These numbers are transcribed verbatim from the Waveshare
     /// Pico-ResTouch-LCD-2.8 reference driver. They describe *that vendor's*
-    /// board, not the panel wired to this robot. They exist only so that the
-    /// pixel mapping can be exercised end-to-end before bring-up, and they are
-    /// what [`Default`] returns. They **must** be re-measured on our panel's four
-    /// corners during bring-up and must not be treated as correct for our
-    /// hardware; this panel's measured values live in [`MEASURED`](Self::MEASURED).
+    /// board, not the panel wired to this robot. They are the [`Default`] and
+    /// exist only so the pixel mapping can be exercised without panel-specific
+    /// values. They **must** not be treated as correct for our hardware; this
+    /// panel's measured values live in [`MEASURED`](Self::MEASURED).
     pub const REFERENCE: Self = Self::new(3880, 340, 262, 3850, 320, 240);
 
-    /// Calibration measured on this project's 2.8″ panel during bring-up.
+    /// Calibration measured on this project's 2.8″ panel.
     ///
     /// The four `touch_coexistence` corner targets were touched in turn, and the
     /// raw readings at those known framebuffer coordinates (inset 12 px from the
@@ -180,8 +179,8 @@ impl Calibration {
 }
 
 impl Default for Calibration {
-    /// The vendor [`REFERENCE`](Calibration::REFERENCE) values, for first
-    /// bring-up only; this robot's panel uses [`MEASURED`](Calibration::MEASURED).
+    /// The vendor [`REFERENCE`](Calibration::REFERENCE) values; this robot's
+    /// panel uses [`MEASURED`](Calibration::MEASURED).
     fn default() -> Self {
         Self::REFERENCE
     }

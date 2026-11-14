@@ -7,23 +7,6 @@ protocol; the app draws pixels. Nothing here is built for the robot's target.
 There is no installer or release artifact: the operator path is a clone plus
 the commands below.
 
-**Verified:** 2026-11-09 — from `remote/`: `cargo +nightly fmt --all -- --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-(every suite `ok`, 0 failed) and `cargo build --workspace` (exit 0); from the
-repository root: `.github/scripts/run_web_tests.sh` (the app boot smoke and the
-static pages: pure, state, radar, planner, fake socket, pairing, bridge and
-accessibility), `.github/scripts/run_real_chain.sh` (the real Relay + Bridge
-Stub page, including the scripted `procedure_completed` Event and the Result
-Report reconstructed from it, plus the `/` boot check) and
-`python3 .github/scripts/check_links.py` (29 Markdown files, 376 links, all
-resolve). A headless Chrome boot smoke at the
-844×390 phone-landscape viewport reported `data-boot="ok"`, and a headless
-Firefox 844×390 render smoke produced a screenshot; neither is a manual matrix
-or touch pass. The manual Firefox, LAN and real-phone steps are listed under
-**Acceptance and known limits**. Steps that need a real robot or Bridge, a
-**Pairing Token**, serial adapters or provisioning are **bench-required** and
-were not verified here.
-
 ## Prerequisites
 
 - Rust stable **1.99.1** (the repository-root pin, which this workspace inherits) with `cargo`.

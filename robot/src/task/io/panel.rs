@@ -12,8 +12,7 @@
 //! caller-side touch filter, and exposes bring-up with retry, full-frame flush,
 //! and calibrated touch sampling for the touch UI task to consume. When the
 //! display will not initialise [`Panel::bring_up`] reports failure so the UI task
-//! can keep the firmware alive in a degraded state and retry with a backoff,
-//! mirroring the previous text display's offline behaviour.
+//! can keep the firmware alive in a degraded state and retry with a backoff.
 //!
 //! Pin map (ADR-0008, ADR-0024): `SPI1` SCK/MOSI/MISO = GPIO 42/43/44;
 //! display CS/DC/RST/BLK = GPIO 41/45/46/47; touch CS/PENIRQ = GPIO 38/39;
@@ -176,7 +175,7 @@ pub struct Panel {
     /// through [`Panel::pen_up`]. It is not the sole authority, because the touch
     /// UI bounds how long a stuck-low line may hold a gesture open.
     irq: Input<'static>,
-    /// The display's reset line, pulsed once at first bring-up.
+    /// The display's reset line, pulsed once at boot.
     rst: Output<'static>,
     /// The display's backlight line, held high while the panel is powered.
     blk: Output<'static>,

@@ -1575,7 +1575,7 @@ async fn main(_spawner: Spawner) {
     // Caller-side smoothing: the driver stays raw, the example owns the filter.
     let mut x_filter = MovingMedian::<u16, MEDIAN_WINDOW>::new();
     let mut y_filter = MovingMedian::<u16, MEDIAN_WINDOW>::new();
-    // Measured on this panel during bring-up, mirrored onto this example's
+    // Measured on this panel, mirrored onto this example's
     // readable landscape orientation (see `CALIBRATION`).
     let calibration = CALIBRATION;
 

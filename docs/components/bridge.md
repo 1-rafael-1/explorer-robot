@@ -12,16 +12,6 @@ artifact. You build the image from source and write it over USB with `espflash`.
 The Wi-Fi credentials and Pairing Token are device state on the `bridge_data`
 partition, not repository files.
 
-**Verified:** 2026-11-09 on Linux x86_64 with Rust 1.99.1 and espflash 4.1.0. From `bridge/`: `cargo build` (dev profile, cached, 0.48 s);
-`cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests`
-(176 tests in 12 suites, 0 failed); `cargo clippy -- -D warnings` and
-`cargo clippy -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests -- -D warnings`
-(clean); `cargo +nightly fmt --all -- --check` (clean); and
-`espflash partition-table partitions.csv` (four partitions). From the repository
-root: `python3 .github/scripts/check_links.py` (exit 0). Flashing, the monitor,
-bench wiring, first boot, Setup Mode and the portal were **not** run — they are
-**bench-required**.
-
 ## Prerequisites
 
 All commands below start at the repository root and enter `bridge/`; run
@@ -162,8 +152,7 @@ The credential record in `bridge_data` is **outside** that set, as are `nvs` and
 the Pairing Token intact.
 
 `espflash partition-table partitions.csv` parses the table without a board
-attached. It prints the four partitions with the sizes above; this step was run
-for the `Verified:` line.
+attached. It prints the four partitions with the sizes above.
 
 ### Flash and monitor — bench-required
 
@@ -192,12 +181,12 @@ The build half runs anywhere; flashing and monitoring require the board and are
   with `Ctrl-C` before the next flash. Expect the boot banner, the
   association/scan lines, `sta: address=…` once DHCP completes, and a status line
   every ten seconds.
-- The exact boot lines and probe output for the network edge, Setup Mode and the
-  record/token are in the README's
-  [network-edge run](../../bridge/README.md#bench-acceptance-run-the-network-edge),
-  [Setup Mode run](../../bridge/README.md#bench-acceptance-run-setup-mode) and
+- The exact boot lines and probe output for the network edge and the
+  record/token are in the README's [network
+  edge](../../bridge/README.md#the-network-edge) and
   [credential-record run](../../bridge/README.md#bench-acceptance-run-the-credential-record)
-  acceptance runs. The probes live in
+  sections. Setup Mode is covered by the [browser provisioning
+  round-trip](../../bridge/README.md#browser-provisioning-round-trip). The probes live in
   [`bridge/tools/`](../../bridge/tools/): `link-probe.py`,
   `auth-probe.py`, `beacon-watch.py`, `soak.py` and the shared preamble module.
 

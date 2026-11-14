@@ -13,21 +13,19 @@
 //! [`embedded_hal_async::digital::Wait`] for the `PENIRQ` line. It is
 //! `#![no_std]`; enable the `std` feature to build the host-side tests.
 //!
-//! # Hardware status
+//! # Hardware
 //!
-//! The touch controller's IC markings have been sanded off, so the exact part
-//! number remains unconfirmed. The assumed XPT2046/TSC2046-class protocol was
-//! nevertheless confirmed empirically on the bench — raw X/Y track the finger
-//! and both Z channels respond — so the framing above is no longer only an
-//! assumption.
+//! The controller uses the XPT2046/TSC2046-class protocol, confirmed on the
+//! bench: raw X/Y track the finger and both Z channels respond. The exact part
+//! number is unconfirmed because the IC markings are sanded off.
 //!
 //! # Calibration
 //!
 //! Raw counts are mapped to pixels by a pure [`Calibration`], kept separate from
 //! the bus so it can be re-measured without touching the driver. Two constants
 //! ship for a 320 × 240 area: [`Calibration::REFERENCE`] holds uncalibrated
-//! vendor values for first bring-up, and [`Calibration::MEASURED`] holds this
-//! project's measured panel.
+//! vendor values, and [`Calibration::MEASURED`] holds this project's measured
+//! panel.
 //!
 //! To (re-)measure, render a target at a known pixel coordinate, touch it, and
 //! read the raw sample; do this at two points per axis and solve the linear

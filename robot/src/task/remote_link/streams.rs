@@ -143,9 +143,9 @@ async fn sample_calibration(core: &mut LinkCore, now_ms: u64) {
 
 /// Build the four calibration statuses.
 ///
-/// The wire layout keeps its four one-byte fields. The retired `imu` and `mag`
-/// fields both carry the DMP calibration status now, so the payload length and
-/// field order are unchanged while the host magnetometer status is gone.
+/// The wire layout keeps its four one-byte fields. The `imu` and `mag` fields
+/// both carry the DMP calibration status, so the payload length and field order
+/// are unchanged.
 pub(super) async fn calibration_sample() -> WireCalibration {
     let (motor, distance, dmp) = {
         let state = calibration::CALIBRATION_STATE.lock().await;

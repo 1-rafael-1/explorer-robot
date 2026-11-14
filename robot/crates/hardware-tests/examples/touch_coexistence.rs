@@ -257,7 +257,7 @@ async fn main(_spawner: Spawner) {
     // Caller-side smoothing: the driver stays raw, the example owns the filter.
     let mut x_filter = MovingMedian::<u16, MEDIAN_WINDOW>::new();
     let mut y_filter = MovingMedian::<u16, MEDIAN_WINDOW>::new();
-    // Measured on this panel during bring-up (see `Calibration::MEASURED`);
+    // Measured on this panel (see `Calibration::MEASURED`);
     // `Calibration::default()` would be the uncalibrated reference values.
     let calibration = Calibration::MEASURED;
 
