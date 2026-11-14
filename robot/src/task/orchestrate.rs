@@ -99,6 +99,7 @@ async fn handle_procedure_finished(procedure: Procedure, stage: Stage, detail: &
         | Procedure::BasicMotor
         | Procedure::Imu6Axis
         | Procedure::Imu9Axis
+        | Procedure::RangefinderTest
         | Procedure::Turns
         | Procedure::StraightDrive
         | Procedure::ArcDrive => {}

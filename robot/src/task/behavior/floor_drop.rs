@@ -12,15 +12,16 @@ use crate::{
 
 /// Handle floor-drop detection status changes.
 ///
-/// Updates the `FLOOR_DROP` atomic in perception state. When a floor drop
-/// is detected (e.g. top of stairs, ledge), sends an `EmergencyBrake`
-/// interrupt to the drive task — this is the same safety response as an
-/// obstacle, stopping the robot before it can drive off the edge.
-pub fn handle_floor_drop_detected(detected: bool) {
+/// The rangefinder task is the sole writer of the `FLOOR_DROP` flag, so this
+/// handler reads the live value rather than writing the event payload back. A
+/// set flag updates the indicator and sends an `EmergencyBrake` interrupt to the
+/// drive task — the same safety response as an obstacle, stopping the robot
+/// before it can drive off the edge. A floor drop brakes in every mode.
+pub fn handle_floor_drop_detected(_detected: bool) {
+    let detected = perception::is_floor_drop_detected();
     let state_label = if detected { "DETECTED" } else { "CLEAR" };
     info!("Floor drop status: {}", state_label);
 
-    perception::set_floor_drop(detected);
     update_floor_drop_indicator(detected);
 
     if detected {

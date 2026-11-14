@@ -54,11 +54,29 @@ impl DriveLoop {
 
     /// Dispatch a [`DriveAction`] to the appropriate handler.
     pub(super) async fn handle_drive_action(&mut self, action: DriveAction, completion_requested: bool) {
+        // Movement needs floor-drop protection before anything else: arm the
+        // pair, wait for both sensors and require a clear floor-drop flag. A
+        // missing, degraded or failed pair fails the action without starting the
+        // IMU or sending a motor command (ADR-0048).
+        if action_requires_motion(&action)
+            && let Err(refusal) = crate::task::sensors::rangefinder::arm_for_motion().await
+        {
+            api::send_completion(
+                completion_requested,
+                DriveCompletion {
+                    status: CompletionStatus::Failed(refusal.reason()),
+                    telemetry: types::CompletionTelemetry::None,
+                },
+            )
+            .await;
+            return;
+        }
+
         // Gate movement commands until the IMU is streaming stabilised data.
         // On first movement command: start IMU, wait for first sample, wait for
         // DMP filter stabilise (150 ms). Subsequent commands skip this.
         // Non-movement commands (Coast, Brake, Idle, Standby) pass through.
-        if action_requires_imu(&action) && !ensure_imu_ready().await {
+        if action_requires_motion(&action) && !ensure_imu_ready().await {
             api::send_completion(
                 completion_requested,
                 DriveCompletion {
@@ -213,6 +231,9 @@ impl DriveLoop {
 
     /// Handle an `Idle` command.
     async fn handle_idle(&mut self, duration_ms: u64, completion_requested: bool) {
+        // An explicit idle disarms the pair: the robot is parked, and the next
+        // movement re-arms it through the Floor-Drop Gate.
+        crate::task::sensors::rangefinder::disable().await;
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
         motion::set_track_speeds(0, 0).await;
 
@@ -238,6 +259,7 @@ impl DriveLoop {
 
     /// Handle a `Standby` command.
     async fn handle_standby(&mut self) {
+        crate::task::sensors::rangefinder::disable().await;
         lifecycle::stop_encoder_sampling().await;
 
         if !self.standby_enabled {
@@ -338,8 +360,9 @@ pub(super) async fn execute_intent_teardown(teardown: IntentTeardown) {
     }
 }
 
-/// Returns `true` if the drive action requires IMU data.
-const fn action_requires_imu(action: &DriveAction) -> bool {
+/// Returns `true` if the drive action requires motion, and so both the
+/// Floor-Drop Gate and the IMU pre-flight.
+const fn action_requires_motion(action: &DriveAction) -> bool {
     matches!(
         action,
         DriveAction::Differential { .. }

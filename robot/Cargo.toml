@@ -11,11 +11,6 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 # Gate high-frequency diagnostic logging.
 # Keep this OFF by default so release runs without a log consumer don't spend time formatting/queuing logs.
 telemetry_logs = []
-# Feed synthetic floor-drop readings from the VL53L0X stub. Off by default: with
-# no rangefinder attached the stub alternates between solid floor and floor drop,
-# which raises spurious EmergencyBrake interrupts. Enable only to exercise the
-# perception/drive pipeline without sensors.
-floor_drop_stub = []
 # Start the IMU in Axis9 and print one orientation sample per second at INFO.
 # Off by default; useful for sensor bring-up.
 imu_debug = []
@@ -55,6 +50,7 @@ dmp-cal = { path = "crates/models/dmp-cal" }
 indicator-led = { path = "crates/models/indicator-led" }
 st7789-async = { path = "crates/drivers/st7789-async" }
 coin-d6 = { path = "crates/drivers/coin-d6" }
+rangefinder = { path = "crates/drivers/rangefinder" }
 lidar-cloud = { path = "crates/models/lidar-cloud" }
 link-core = { path = "crates/link/link-core" }
 link-protocol = { path = "crates/link/link-protocol", version = "1" }
@@ -70,6 +66,7 @@ libm = "0.2"
 icm20948-rs = { version = "0.3.0", features = ["async", "defmt", "dmp"] }
 nalgebra = { version = "0.34", default-features = false, features = ["libm"] }
 embedded-hal-async = "1.0.0"
+embedded-hal = "1.0.0"
 embedded-io-async = "0.7.0"
 sequential-storage = "7.1.0"
 embedded-storage-async = "0.4.1"

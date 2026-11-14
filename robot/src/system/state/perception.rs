@@ -7,7 +7,8 @@
 //!
 //! Obstacle perception is driven by a 360° `LiDAR` point cloud. The front and
 //! rear VL53L0X rangefinders are floor-drop detectors (stairs, ledges) — they are
-//! **not** obstacle sensors.
+//! **not** obstacle sensors. The rangefinder task is the sole writer of the
+//! floor-drop flag.
 //!
 //! Lock order (when multiple state mutexes are needed):
 //! 1) power state mutex (use power module accessors)
@@ -16,6 +17,7 @@
 //! 4) `MOTION_STATE`
 //! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
 //! 6) `IMU_TEST_STATE` — independent leaf; never taken while another state mutex is held
+//! 7) `RANGEFINDER_STATE` / `RANGEFINDER_TEST_STATE` — independent leaves; never taken while another state mutex is held
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,7 +35,7 @@ use lidar_cloud::Cloud;
 
 /// `LiDAR` obstacle detection flag — written by `set_lidar_obstacle`, read lock-free.
 static LIDAR_OBSTACLE: AtomicBool = AtomicBool::new(false);
-/// Floor-drop detection flag — written by `set_floor_drop`, read lock-free.
+/// Floor-drop detection flag — written by the rangefinder task, read lock-free.
 static FLOOR_DROP: AtomicBool = AtomicBool::new(false);
 
 // ── Mutex (full picture: point cloud) ─────────────────────────────────────────
@@ -74,8 +76,13 @@ pub fn set_lidar_obstacle(detected: bool) -> ChangeDetected {
 }
 
 /// Set the floor-drop flag.
-pub fn set_floor_drop(detected: bool) {
+///
+/// Returns whether the flag changed. The rangefinder task is its sole writer;
+/// the floor-drop behaviour handler only reads the live value.
+pub fn set_floor_drop(detected: bool) -> ChangeDetected {
+    let old = FLOOR_DROP.load(Ordering::Relaxed);
     FLOOR_DROP.store(detected, Ordering::Relaxed);
+    change_detected(old, detected)
 }
 
 /// Returns `true` if the `LiDAR` sensor reports an obstacle.

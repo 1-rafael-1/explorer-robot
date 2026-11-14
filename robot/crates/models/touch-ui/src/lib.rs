@@ -27,6 +27,8 @@
 //!   onto.
 //! - [`imu`] holds the neutral IMU Test Readout the firmware maps onto and the
 //!   row formatting the panel draws.
+//! - [`rangefinder`] holds the neutral Rangefinder Test Readout the firmware
+//!   maps onto and the two-column formatting the panel draws.
 //! - [`dmp_cal`] holds the neutral DMP Compass Calibration snapshot the firmware
 //!   maps onto, its status line, and the Prompt view it builds.
 //! - [`sensor`] holds the neutral sensor lifecycle state the Room Scan caption
@@ -65,6 +67,7 @@ pub mod hit;
 pub mod imu;
 pub mod palette;
 pub mod radar;
+pub mod rangefinder;
 pub mod screens;
 pub mod sensor;
 pub mod system_info;
@@ -75,7 +78,8 @@ pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint};
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction, PromptAction};
 pub use imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MagDiagnostics, Vector3};
-pub use screens::{Item, Procedure, PromptView, Screen, ScreenEntry, StatusView, Submenu, ValueFlow};
+pub use rangefinder::{FloorState, ProtectionState, RangeStatusName, RangefinderTestReadout, SensorReadout};
+pub use screens::{Item, Procedure, PromptView, Readout, Screen, ScreenEntry, StatusView, Submenu, ValueFlow};
 pub use sensor::SensorState;
 pub use system_info::{CalibrationStatus, SystemInfo};
 pub use ui::{DRAG_RENDER_MS, HeaderStatus, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, TICK_MS, Ui};

@@ -28,6 +28,7 @@ pub mod arc_drive;
 pub mod basic_motor;
 pub mod imu_6axis;
 pub mod imu_9axis;
+pub mod rangefinder_test;
 pub mod straight_drive;
 pub mod turns;
 
@@ -48,6 +49,8 @@ pub(super) enum TestCommand {
     Imu6,
     /// Spawn the basic motor test.
     BasicMotor,
+    /// Spawn the hands-on Rangefinder Test.
+    Rangefinder,
 }
 
 /// Command channel for testmode spawn requests, each carrying its claim.
@@ -74,6 +77,7 @@ pub async fn start(claim: Claim, procedure: Procedure) {
         Procedure::ArcDrive => TestCommand::ArcDrive,
         Procedure::Imu6Axis => TestCommand::Imu6,
         Procedure::Imu9Axis => TestCommand::Imu,
+        Procedure::RangefinderTest => TestCommand::Rangefinder,
         Procedure::MotorCalibration
         | Procedure::DmpCompassCalibration
         | Procedure::DistanceCalibration
@@ -89,6 +93,9 @@ pub async fn start(claim: Claim, procedure: Procedure) {
     // Remote-started test never flashes stale telemetry.
     if matches!(command, TestCommand::Imu | TestCommand::Imu6) {
         crate::system::state::imu_test::clear().await;
+    }
+    if matches!(command, TestCommand::Rangefinder) {
+        crate::system::state::rangefinder_test::clear().await;
     }
 
     TESTMODE_COMMAND.send((command, claim)).await;
@@ -126,6 +133,7 @@ async fn testmode_controller(spawner: Spawner) {
             TestCommand::Imu => imu_9axis::spawn(spawner, claim),
             TestCommand::Imu6 => imu_6axis::spawn(spawner, claim),
             TestCommand::BasicMotor => basic_motor::spawn(spawner, claim),
+            TestCommand::Rangefinder => rangefinder_test::spawn(spawner, claim),
         };
 
         if !task_started {

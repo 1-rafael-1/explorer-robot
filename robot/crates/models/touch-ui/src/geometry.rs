@@ -13,7 +13,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 
-use crate::screens::ValueFlow;
+use crate::{rangefinder::ROWS as RANGEFINDER_ROWS, screens::ValueFlow};
 
 /// Framebuffer width in pixels (landscape after the orientation transform).
 pub const FB_W: usize = 320;
@@ -106,6 +106,17 @@ pub const READOUT_INSET: u32 = 4;
 /// A sparse readout grows its rows to fill the panel up to this pitch; a dense
 /// one compresses below it so every row still fits.
 pub const READOUT_MAX_PITCH: u32 = 26;
+
+/// Horizontal gap between the Rangefinder Test Readout's two sensor columns, in
+/// pixels.
+pub const RANGEFINDER_COLUMN_GAP: u32 = 8;
+
+/// Height of the Rangefinder Test Readout footer, in pixels.
+pub const RANGEFINDER_FOOTER_H: u32 = 20;
+
+/// Vertical gap between the Rangefinder Test Readout's sensor columns and its
+/// footer, in pixels.
+pub const RANGEFINDER_FOOTER_GAP: u32 = 4;
 
 /// Height of one System Info row, in pixels.
 pub const INFO_ROW_H: u32 = 26;
@@ -445,6 +456,41 @@ pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
             area.top_left.y + (offset as i32) + (index as u32).saturating_mul(pitch) as i32,
         ),
         Size::new(area.size.width, pitch),
+    )
+}
+
+/// The on-screen rectangle of Rangefinder Test Readout sensor column `column`
+/// (0 is front, 1 is rear) at row `row`.
+///
+/// The two columns split [`readout_area`] either side of
+/// [`RANGEFINDER_COLUMN_GAP`], and each column's five rows share the height left
+/// above [`rangefinder_footer_rect`].
+#[must_use]
+pub const fn rangefinder_column_rect(column: usize, row: usize) -> Rectangle {
+    let area = readout_area();
+    let width = (area.size.width - RANGEFINDER_COLUMN_GAP) / 2;
+    let rows_height = area.size.height - RANGEFINDER_FOOTER_H - RANGEFINDER_FOOTER_GAP;
+    let pitch = rows_height / RANGEFINDER_ROWS as u32;
+    Rectangle::new(
+        Point::new(
+            area.top_left.x + (column as u32 * (width + RANGEFINDER_COLUMN_GAP)) as i32,
+            area.top_left.y + (row as u32 * pitch) as i32,
+        ),
+        Size::new(width, pitch),
+    )
+}
+
+/// The on-screen rectangle of the Rangefinder Test Readout footer, along the
+/// bottom of [`readout_area`].
+#[must_use]
+pub const fn rangefinder_footer_rect() -> Rectangle {
+    let area = readout_area();
+    Rectangle::new(
+        Point::new(
+            area.top_left.x,
+            area.top_left.y + area.size.height as i32 - RANGEFINDER_FOOTER_H as i32,
+        ),
+        Size::new(area.size.width, RANGEFINDER_FOOTER_H),
     )
 }
 

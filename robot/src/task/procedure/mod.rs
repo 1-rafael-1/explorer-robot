@@ -170,6 +170,7 @@ impl Claim {
         if !self.is_current() {
             return;
         }
+        crate::task::sensors::rangefinder::disable().await;
         activity::complete(detail).await;
         self.release();
         if let ClaimKind::Procedure(procedure) = self.kind {
@@ -192,6 +193,7 @@ impl Claim {
         if !self.is_current() {
             return;
         }
+        crate::task::sensors::rangefinder::disable().await;
         activity::fail(reason).await;
         self.release();
         if let ClaimKind::Procedure(procedure) = self.kind {
@@ -218,6 +220,7 @@ impl Claim {
         if !self.is_current() {
             return;
         }
+        crate::task::sensors::rangefinder::disable().await;
         let outcome = STOP_OUTCOME
             .lock(|cell| cell.replace(None))
             .unwrap_or(StopOutcome::Operator);
@@ -243,6 +246,7 @@ impl Claim {
         if !self.is_current() {
             return;
         }
+        crate::task::sensors::rangefinder::disable().await;
         activity::clear().await;
         self.release();
     }
@@ -432,7 +436,8 @@ pub async fn dispatch(procedure: Procedure, origin: ClaimOrigin) -> StartOutcome
         | Procedure::StraightDrive
         | Procedure::ArcDrive
         | Procedure::Imu6Axis
-        | Procedure::Imu9Axis => {
+        | Procedure::Imu9Axis
+        | Procedure::RangefinderTest => {
             testmode::start(claim, procedure).await;
             true
         }

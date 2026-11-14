@@ -39,15 +39,15 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, PromptAction, Screen,
-    ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
+    DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, PromptAction,
+    RangefinderTestReadout, Readout, Screen, ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
     resources::PanelResources,
     system::state::{
         activity::{self, Activity, Snapshot, Stage},
-        calibration, dmp_cal, imu_test, link, perception, power,
+        calibration, dmp_cal, imu_test, link, perception, power, rangefinder_test,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
@@ -760,7 +760,7 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// the view; every other Procedure ignores it. When no snapshot has been
 /// published yet the view carries an empty Waiting readout, so the panel shows
 /// placeholders from the moment the test starts.
-fn status_view(snapshot: &Snapshot, readout: Option<ImuReadout>) -> StatusView {
+fn status_view(snapshot: &Snapshot, readout: Option<Readout>) -> StatusView {
     // A running Procedure names itself: its title and where Stop returns both come
     // from the Menu Entry that started it. The boot flow and the idle state have no
     // entry, so they fall back to their own title and the Main Menu.
@@ -776,12 +776,15 @@ fn status_view(snapshot: &Snapshot, readout: Option<ImuReadout>) -> StatusView {
         },
         |procedure| StatusView::for_procedure(procedure, body),
     );
-    let view = snapshot
-        .procedure()
-        .and_then(ImuReadoutKind::for_procedure)
-        .map_or(view, |kind| {
-            view.with_readout(readout.unwrap_or_else(|| ImuReadout::waiting(kind)))
-        });
+    let view = match snapshot.procedure() {
+        Some(Procedure::RangefinderTest) => view.with_readout(readout.unwrap_or(Readout::Rangefinder(
+            RangefinderTestReadout::waiting(rangefinder::DROP_THRESHOLD_MM),
+        ))),
+        Some(procedure) => ImuReadoutKind::for_procedure(procedure).map_or(view, |kind| {
+            view.with_readout(readout.unwrap_or_else(|| Readout::Imu(ImuReadout::waiting(kind))))
+        }),
+        None => view,
+    };
     let view = snapshot.percent.map_or(view, |percent| view.with_progress(percent));
     if matches!(snapshot.stage, Stage::Complete | Stage::Failed) {
         view.finished()
@@ -923,7 +926,10 @@ async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
     }
 
     let readout = match snapshot.procedure() {
-        Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => imu_test::snapshot().await,
+        Some(Procedure::RangefinderTest) => rangefinder_test::snapshot().await.map(Readout::Rangefinder),
+        Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => {
+            imu_test::snapshot().await.map(Readout::Imu)
+        }
         _ => None,
     };
     ui.set_status(status_view(snapshot, readout))

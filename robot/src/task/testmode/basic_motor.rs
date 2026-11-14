@@ -97,6 +97,13 @@ pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
 /// Basic motor test mode runner.
 #[embassy_executor::task]
 async fn basic_motor_test_task(claim: Claim) {
+    // This test drives the motor driver directly, so it must run the same
+    // Floor-Drop Gate the drive dispatch applies before a motor command.
+    if let Err(refusal) = crate::task::sensors::rangefinder::arm_for_motion().await {
+        claim.fail(refusal.reason()).await;
+        return;
+    }
+
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
     Timer::after(Duration::from_millis(10)).await;

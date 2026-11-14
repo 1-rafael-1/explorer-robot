@@ -6,7 +6,7 @@
 //! State is compartmentalized into domain-specific modules, each with its own
 //! synchronization. Shared enums live here; domain state lives in dedicated
 //! submodules (e.g. `power`, `motion`, `perception`, `calibration`, `activity`,
-//! `link`, `imu_test`).
+//! `link`, `imu_test`, `rangefinder`, `rangefinder_test`).
 
 use defmt::Format;
 
@@ -18,6 +18,8 @@ pub mod link;
 pub mod motion;
 pub mod perception;
 pub mod power;
+pub mod rangefinder;
+pub mod rangefinder_test;
 
 /// Calibration data status.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Format)]

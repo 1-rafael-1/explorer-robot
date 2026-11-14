@@ -83,7 +83,7 @@ pub async fn sample_and_publish(core: &mut LinkCore, now_ms: u64) {
 /// This is the one list: [`procedure_id`] is the one id table, and the command
 /// seam searches this array for the inverse rather than restating either.
 /// Manual Drive is an Activity, not a Procedure, so it is absent.
-pub(super) const PROCEDURES: [Procedure; 11] = [
+pub(super) const PROCEDURES: [Procedure; 12] = [
     Procedure::MotorCalibration,
     Procedure::DmpCompassCalibration,
     Procedure::DistanceCalibration,
@@ -95,6 +95,7 @@ pub(super) const PROCEDURES: [Procedure; 11] = [
     Procedure::ArcDrive,
     Procedure::Imu6Axis,
     Procedure::Imu9Axis,
+    Procedure::RangefinderTest,
 ];
 
 /// The wire `ProcedureId` for a firmware Procedure.
@@ -115,6 +116,7 @@ pub(super) const fn procedure_id(procedure: Procedure) -> ProcedureId {
         Procedure::ArcDrive => ProcedureId::ARC_DRIVE,
         Procedure::Imu6Axis => ProcedureId::IMU_6_AXIS,
         Procedure::Imu9Axis => ProcedureId::IMU_9_AXIS,
+        Procedure::RangefinderTest => ProcedureId::RANGFINDER_TEST,
     }
 }
 
