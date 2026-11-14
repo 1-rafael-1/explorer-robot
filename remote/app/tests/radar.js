@@ -71,9 +71,10 @@ test('LiDAR slot 0 is ahead and the slots run clockwise', () => {
 
 test('a full scan builds a Seen Polygon from the pose to every return', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
-  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
+  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(ranges));
 
   assertEqual(edges.length, 0, 'a flat wall has no significant range step');
+  assertEqual(notches.length, 0, 'a flat wall has no No Return notch');
   assertEqual(seen.length, 362, 'the pose, 360 returns and the closing pose');
   assertClose(seen[0].x, 0, 1e-9);
   assertClose(seen[0].y, 0, 1e-9);
@@ -87,12 +88,22 @@ test('a full scan builds a Seen Polygon from the pose to every return', () => {
 test('a No Return notches the Seen Polygon back to the pose', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   ranges[10] = null;
-  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
+  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(ranges));
 
   assertEqual(edges.length, 0);
   // The initial pose, the null-sector notch and the closing pose have no slot.
   assertEqual(seen.filter((point) => point.slot == null).length, 3);
   assertEqual(seen.length, 362);
+  assertEqual(notches.length, 1);
+  assertEqual(notches[0].before.slot, 9);
+  assertEqual(notches[0].after.slot, 11);
+
+  const seam = Array.from({ length: 360 }, () => 300);
+  seam[0] = null;
+  const seamNotches = scanVisibility(ORIGIN, scanValue(seam)).notches;
+  assertEqual(seamNotches.length, 1, 'a No Return at slot 0 is still one notch');
+  assertEqual(seamNotches[0].before.slot, 359);
+  assertEqual(seamNotches[0].after.slot, 1);
 });
 
 test('a significant range step becomes an Occlusion Edge', () => {
@@ -154,11 +165,12 @@ test('the Seen Polygon is measured from the pose it is given', () => {
 });
 
 test('an empty or all-null scan has a pose-only Seen Polygon', () => {
-  assertEqual(scanVisibility(ORIGIN, scanValue([])), { seen: [], edges: [] });
+  assertEqual(scanVisibility(ORIGIN, scanValue([])), { seen: [], edges: [], notches: [] });
 
   const nulls = Array.from({ length: 360 }, () => null);
-  const { seen, edges } = scanVisibility(ORIGIN, scanValue(nulls));
+  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(nulls));
   assertEqual(edges.length, 0);
+  assertEqual(notches.length, 0, 'there is no return to bound a notch');
   assertEqual(seen.length, 1, 'only the pose');
 });
 
@@ -395,6 +407,13 @@ test('a No Return sector is part of the unseen complement', () => {
 
   radar.render(store.state, 1100);
   assert(redNear(canvas, radar, 200, 0) > 0, 'the null sector is unknown, so it is unseen');
+  for (const slot of [357, 3]) {
+    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
+    const hit = [100, 150, 200, 250].some((radius) =>
+      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
+    );
+    assert(hit, `slot ${slot} has a dotted No Return boundary`);
+  }
 });
 
 test('a near object leaves the space before it seen and behind it unseen', () => {

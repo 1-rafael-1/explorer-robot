@@ -46,7 +46,7 @@
   _Avoid_: visibility polygon, free space
 - **Occlusion Shadow** — The region the scan cannot see: the complement of the Seen Polygon within the view. It is inferred, never measured; it is neither a No Return nor free space.
   _Avoid_: no visibility, blind spot, unseen area
-- **Occlusion Edge** — A significant range step on the Seen Polygon boundary, where the chord between two adjacent returns is not a measured surface. The Remote App draws it dotted.
+- **Occlusion Edge** — A boundary of the Occlusion Shadow: a significant range step between adjacent returns, or the radial edge of a No Return notch. The Remote App draws it dotted.
   _Avoid_: shadow line, ray, chord
 
 ### Touch

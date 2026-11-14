@@ -208,7 +208,8 @@ export function scanPoints(pose, value) {
  * The Seen Polygon is the star-shaped region from the scan pose out to each
  * measured return, in slot order. A No Return is not free space: it contributes
  * a radial notch to the pose, so that sector stays unseen. The Occlusion Shadow
- * is the complement of this polygon; the renderer fills it.
+ * is the complement of this polygon; the renderer fills it. Each notch's two
+ * radial boundaries are returned so the renderer can dot them too.
  *
  * An Occlusion Edge is an adjacent valid pair whose range step is at least
  * `OCCLUSION_EDGE_MIN_CM` or `OCCLUSION_EDGE_RATIO` of the nearer return. The
@@ -218,7 +219,7 @@ export function scanPoints(pose, value) {
 export function scanVisibility(pose, value) {
   const ranges = value?.ranges_cm ?? [];
   const count = ranges.length;
-  if (count === 0) return { seen: [], edges: [] };
+  if (count === 0) return { seen: [], edges: [], notches: [] };
 
   const first = value?.first_deg ?? 0;
   const step = value?.step_deg ?? 1;
@@ -256,5 +257,29 @@ export function scanVisibility(pose, value) {
     });
   }
 
-  return { seen, edges };
+  // Each No Return run has two radial boundaries: the valid returns on either
+  // side of the notch. They have no chord, so the renderer dots the ray from
+  // the pose to each instead.
+  const notches = [];
+  const firstValid = ranges.findIndex((range) => range != null);
+  if (firstValid >= 0) {
+    const firstPoint = scanPoint(pose, first, step, clockwise, firstValid, ranges[firstValid]);
+    let previous = null;
+    let inNull = false;
+    for (let offset = 0; offset < count; offset += 1) {
+      const slot = (firstValid + offset) % count;
+      const range = ranges[slot];
+      if (range != null) {
+        const point = scanPoint(pose, first, step, clockwise, slot, range);
+        if (inNull && previous) notches.push({ before: previous, after: point });
+        previous = point;
+        inNull = false;
+      } else {
+        inNull = true;
+      }
+    }
+    if (inNull && previous) notches.push({ before: previous, after: firstPoint });
+  }
+
+  return { seen, edges, notches };
 }

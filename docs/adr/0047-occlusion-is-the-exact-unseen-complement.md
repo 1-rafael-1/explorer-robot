@@ -27,9 +27,10 @@ marked as unseen.
   null sector stays unseen.
 - The **Occlusion Shadow** is the complement of the Seen Polygon. The app fills the whole viewport
   outside it with translucent red; there is no cap other than the viewport.
-- An **Occlusion Edge** is an adjacent valid pair whose range step is at least **20 cm** or
-  **25 %** of the nearer return. The cloud does not draw a solid chord across it; the app draws the
-  chord dotted soft red.
+- An **Occlusion Edge** is either an adjacent valid pair whose range step is at least **20 cm**
+  or **25 %** of the nearer return, or the radial boundary of a No Return notch. The cloud does
+  not draw a solid chord across a significant step; the app draws the chord dotted soft red. A
+  No Return notch has no chord, so the app dots its two rays from the pose instead.
 - The layer is computed from the scan's own pose on every render, painted under the cloud, and
   muted to the stale palette when the scan is stale. It never outlives its scan.
 - The Remote App only, display only. The Link Protocol, daemon, firmware and the panel's Room Scan
@@ -39,8 +40,8 @@ marked as unseen.
 
 - The pane is mostly red whenever the measured returns are the room boundary. That is the point:
   the red is the part of the world the scan has not seen.
-- A No Return paints a red radial wedge, because it is unknown, not free. A short null run may be a
-  thin red spoke at the radar scale.
+- A No Return paints a red radial wedge bounded by dotted radial edges, because it is unknown,
+  not free. A short null run may be a thin red spoke at the radar scale.
 - The red also appears behind far walls. The exact model does not distinguish an object in front
   of visible background from the boundary of the visible area.
 - Self-occlusion, such as the robot's own body, is shaded like any other unseen region. The lidar
