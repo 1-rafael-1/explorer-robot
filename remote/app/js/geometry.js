@@ -20,6 +20,15 @@ export const MIN_ICON_PX = 22;
 /** The scan age after which a scan is drawn dimmed; display only, never a gate (ADR-0043). */
 export const STALE_MS = 350;
 
+/** The minimum range step that marks an Occlusion Edge, in centimetres (ADR-0047). */
+export const OCCLUSION_EDGE_MIN_CM = 20;
+
+/** The relative range step that marks an Occlusion Edge, against the nearer return. */
+export const OCCLUSION_EDGE_RATIO = 0.25;
+
+/** Returns at or under this range are drawn as bright near-return dots. */
+export const NEAR_RETURN_CM = 45;
+
 /** The identity pose, used until odometry lands. */
 export const IDENTITY_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
 
@@ -160,27 +169,112 @@ export function poseAt(poses, ts) {
 }
 
 /**
- * Projects a `lidar` stream value into world points paired with `pose`.
+ * Projects one slot and range into the World Frame.
  *
- * A `null` range is no return and produces no point, so the caller draws an
- * honest gap rather than a guessed line.
+ * The one place the slot convention becomes a world point, shared by the scan
+ * and the Occlusion Shadow contour so the two cannot drift apart.
  */
-export function scanPoints(pose, value) {
-  const points = [];
+function scanPoint(pose, firstDeg, stepDeg, clockwise, slot, range) {
+  const angle = slotAngleDeg(pose, firstDeg, stepDeg, clockwise, slot) * RAD;
+  return {
+    slot,
+    range,
+    x: pose.x + range * Math.cos(angle),
+    y: pose.y + range * Math.sin(angle),
+  };
+}
+
+/**
+ * Builds the render model for one scan (ADR-0047): the projected returns, the
+ * Seen Polygon, the significant Occlusion Edges and the No Return notches.
+ *
+ * The Seen Polygon is the star-shaped region from the scan pose out to each
+ * measured return, in slot order. A No Return is not free space: it contributes
+ * a radial notch to the pose, so that sector stays unseen. The Occlusion Shadow
+ * is the complement of this polygon; the renderer fills it. The polygon starts
+ * at the first measured return and closes cyclically, so a fully valid seam
+ * closes return-to-return rather than leaving a false wedge through the pose.
+ * Each notch is returned as the two measured returns that flank it, so the
+ * renderer can dot the closing chord.
+ *
+ * An Occlusion Edge is an adjacent valid pair whose range step is at least the
+ * greater of `OCCLUSION_EDGE_MIN_CM` and `OCCLUSION_EDGE_RATIO` of the nearer
+ * return. The chord between those returns is not a measured surface, so the
+ * renderer dots it and never draws it as a solid return.
+ */
+export function buildScan(pose, value) {
   const ranges = value?.ranges_cm ?? [];
+  const count = ranges.length;
+  if (count === 0) return { points: [], seen: [], edges: [], notches: [] };
+
   const first = value?.first_deg ?? 0;
   const step = value?.step_deg ?? 1;
   const clockwise = value?.clockwise ?? true;
-  for (let slot = 0; slot < ranges.length; slot += 1) {
-    const range = ranges[slot];
-    if (range == null) continue;
-    const angle = slotAngleDeg(pose, first, step, clockwise, slot) * RAD;
-    points.push({
-      slot,
-      range,
-      x: pose.x + range * Math.cos(angle),
-      y: pose.y + range * Math.sin(angle),
+  const posePoint = { x: pose.x, y: pose.y };
+  const points = [];
+  const seen = [];
+  // Walk the ring from the first measured return and close it cyclically. A
+  // fully valid seam then closes return-to-return; closing through the pose
+  // would leave a false unseen wedge between the last and first returns. A
+  // genuine No Return run still notches the polygon back to the pose.
+  const firstValid = ranges.findIndex((range) => range != null);
+  if (firstValid >= 0) {
+    let previousValid = true;
+    for (let offset = 0; offset < count; offset += 1) {
+      const slot = (firstValid + offset) % count;
+      const range = ranges[slot];
+      if (range != null) {
+        const point = scanPoint(pose, first, step, clockwise, slot, range);
+        points.push(point);
+        seen.push(point);
+        previousValid = true;
+      } else if (previousValid) {
+        // A No Return run notches the Seen Polygon back to the pose, so the
+        // sector is part of the unseen complement rather than a guessed surface.
+        seen.push(posePoint);
+        previousValid = false;
+      }
+    }
+  }
+
+  const edges = [];
+  for (let slot = 0; slot < count; slot += 1) {
+    const next = (slot + 1) % count;
+    if (ranges[slot] == null || ranges[next] == null) continue;
+    const near = Math.min(ranges[slot], ranges[next]);
+    const far = Math.max(ranges[slot], ranges[next]);
+    if (far - near < Math.max(OCCLUSION_EDGE_MIN_CM, OCCLUSION_EDGE_RATIO * near)) continue;
+    const nearSlot = ranges[slot] <= ranges[next] ? slot : next;
+    const farSlot = nearSlot === slot ? next : slot;
+    edges.push({
+      seamSlot: slot,
+      nearPoint: scanPoint(pose, first, step, clockwise, nearSlot, ranges[nearSlot]),
+      farPoint: scanPoint(pose, first, step, clockwise, farSlot, ranges[farSlot]),
     });
   }
-  return points;
+
+  // A No Return run has no measured surface, so it is closed by the chord
+  // between the valid returns on either side. The pair is returned for the
+  // renderer to dot; the notch's radial sides stay part of the unseen fill.
+  const notches = [];
+  if (firstValid >= 0) {
+    const firstPoint = scanPoint(pose, first, step, clockwise, firstValid, ranges[firstValid]);
+    let previous = null;
+    let inNull = false;
+    for (let offset = 0; offset < count; offset += 1) {
+      const slot = (firstValid + offset) % count;
+      const range = ranges[slot];
+      if (range != null) {
+        const point = scanPoint(pose, first, step, clockwise, slot, range);
+        if (inNull && previous) notches.push({ before: previous, after: point });
+        previous = point;
+        inNull = false;
+      } else {
+        inNull = true;
+      }
+    }
+    if (inNull && previous) notches.push({ before: previous, after: firstPoint });
+  }
+
+  return { points, seen, edges, notches };
 }

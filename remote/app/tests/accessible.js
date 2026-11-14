@@ -134,6 +134,32 @@ test('the canvas is named, focusable and points at the numeric form', async () =
   assert(/bearing/i.test(name), 'the name mentions the bearing field');
   assert(/distance/i.test(name), 'the name mentions the distance field');
   assert(/form/i.test(name), 'the name points at the keyboard form');
+  assert(/dotted/i.test(name), 'the name mentions the dotted boundaries');
+  assert(/red/i.test(name), 'the name says the boundaries are red');
+  assert(/inferred/i.test(name), 'the name says the unseen space is inferred');
+  assert(
+    /cannot see|unseen/i.test(name),
+    'the name says the red marks unseen space',
+  );
+});
+
+test('the radar legend names the layers', async () => {
+  const doc = await realDocument();
+  const legend = doc.querySelector('.radar-legend');
+  assert(legend, 'the radar legend exists');
+  assertEqual(legend.getAttribute('role'), 'note');
+  assertEqual(legend.getAttribute('aria-label'), 'Radar legend');
+  const text = legend.textContent;
+  for (const label of [
+    'Measured return',
+    'Near return',
+    'Unseen space',
+    'Occlusion Edge',
+    'Robot',
+    'Target',
+  ]) {
+    assert(text.includes(label), `the legend mentions ${label}`);
+  }
 });
 
 test('the sheet tabs expose aria-selected and control existing panels', async () => {

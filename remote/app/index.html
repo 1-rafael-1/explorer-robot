@@ -85,7 +85,19 @@
         <main class="workspace">
           <section class="radar-pane" aria-label="Radar">
             <canvas id="radar" tabindex="0" role="img"
-                    aria-label="World-frame radar. Use the bearing and distance form in the drive bar for keyboard driving."></canvas>
+                    aria-label="World-frame radar. Red marks inferred unseen space; dotted red edges mark occlusion boundaries. Use the bearing and distance form in the drive bar for keyboard driving."></canvas>
+
+            <div class="radar-legend" role="note" aria-label="Radar legend">
+              <p class="legend-title">Legend</p>
+              <ul>
+                <li><span class="legend-swatch legend-return" aria-hidden="true"></span>Measured return</li>
+                <li><span class="legend-swatch legend-near" aria-hidden="true"></span>Near return</li>
+                <li><span class="legend-swatch legend-unseen" aria-hidden="true"></span>Unseen space</li>
+                <li><span class="legend-swatch legend-edge" aria-hidden="true"></span>Occlusion Edge</li>
+                <li><span class="legend-swatch legend-robot" aria-hidden="true"></span>Robot</li>
+                <li><span class="legend-swatch legend-target" aria-hidden="true"></span>Target</li>
+              </ul>
+            </div>
 
             <div class="camera-cluster" role="group" aria-label="Camera">
               <button id="zoom-in" type="button" class="cluster-button" aria-label="Zoom in">+</button>

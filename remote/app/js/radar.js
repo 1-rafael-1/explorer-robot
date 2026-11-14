@@ -1,8 +1,9 @@
 // The World Frame radar: one canvas, a camera view transform and layered
-// drawing. ADR-0038 fixes the order: grid, map layer, live scan,
-// robot/target/preview, overlay. The camera is display state only: a tap picks a
-// world point, a drag pans, and neither changes the frame or the meaning of a
-// world point (ADR-0043).
+// drawing. ADR-0043 fixes the order; ADR-0047 inserts the unseen fill:
+// grid, map layer, unseen fill, No Return edges, live scan, significant-step
+// edges, robot/target/preview, overlay.
+// The camera is display state only: a tap picks a world point, a drag pans, and
+// neither changes the frame or the meaning of a world point (ADR-0043).
 //
 // Each scan is paired with the pose at its own timestamp, never a newer one; the
 // robot marker uses the newest pose. v1's pose is identity, so this is the same
@@ -10,8 +11,10 @@
 
 import {
   IDENTITY_POSE,
+  NEAR_RETURN_CM,
   RAD,
   STALE_MS,
+  buildScan,
   cameraView,
   fitScale,
   iconFootprintPx,
@@ -20,7 +23,6 @@ import {
   pointInFootprint,
   poseAt,
   scanAgeMs,
-  scanPoints,
   screenToWorld,
   worldToScreen,
 } from './geometry.js';
@@ -29,7 +31,10 @@ import { byId, setData, setText } from './views/dom.js';
 
 export { STALE_MS };
 
-const COLOR = Object.freeze({
+// Mirrors the legend palette in styles.css. The canvas cannot read CSS custom
+// properties, so the two are kept in step by hand (ADR-0047). Exported so the
+// canvas tests assert against the same palette the renderer paints.
+export const COLOR = Object.freeze({
   bg: '#0b0f14',
   grid: '#16232f',
   gridStrong: '#22384c',
@@ -42,6 +47,10 @@ const COLOR = Object.freeze({
   heading: '#4ade80',
   target: '#fbbf24',
   preview: '#46c2ff',
+  occlusionEdge: '#f87171',
+  unseenFill: 'rgba(248, 113, 113, 0.12)',
+  unseenFillStale: 'rgba(127, 150, 170, 0.06)',
+  occlusionEdgeStale: '#7f96aa',
 });
 
 /** Creates the radar over `canvas`; a missing canvas yields a no-op camera. */
@@ -247,10 +256,24 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.fillStyle = COLOR.bg;
     context.fillRect(0, 0, width, height);
 
-    // Layer order (ADR-0038): grid, map layer, live scan, robot/target/preview, overlay.
+    // The scan's render model is inferred once per render, so the unseen fill,
+    // the No Return edges, the cloud and the significant-step edges all come
+    // from the same scan (ADR-0047). Its liveness is the scan's own: a missing
+    // scan is stale, so the layer never outlives what it came from.
+    const lidar = source.streams?.lidar;
+    const scanPose = lidar ? poseForScan(source, lidar) : null;
+    const stale = isStaleScan(lidar?.ts, now);
+    const scan = lidar ? { stale, ...buildScan(scanPose, lidar.v) } : null;
+
+    // Layer order (ADR-0043; unseen fill per ADR-0047): grid, map layer, unseen
+    // fill, No Return edges, live scan, significant-step edges,
+    // robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
-    drawCloud(source, now);
+    drawUnseen(scan);
+    drawNoReturnEdges(scan);
+    drawCloud(scan);
+    drawStepEdges(scan);
     drawPreview(source);
     drawRobot();
     updateOverlay(source, now);
@@ -290,20 +313,104 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     // this layer is deliberately empty.
   }
 
-  function drawCloud(state, now) {
-    const lidar = state?.streams?.lidar;
-    if (!lidar) return;
-    const cloudPose = poseForScan(state, lidar);
-    const points = scanPoints(cloudPose, lidar.v);
-    const stale = isStaleScan(lidar.ts, now);
+  /**
+   * Fills the unseen complement of the Seen Polygon under the cloud (ADR-0047).
+   * The polygon is the star-shaped region from the scan pose to every measured
+   * return; the fill is the whole viewport outside it, with a radial notch at
+   * every No Return. The fill follows the scan's age: live soft red, or the
+   * muted stale grey.
+   */
+  function drawUnseen(scan) {
+    if (!view || !scan) return;
+    const { seen } = scan;
+    // A scan with no measured return has no Seen Polygon to complement. Filling
+    // the viewport would invent unseen space from no data, so draw nothing.
+    if (seen.length < 2) return;
 
-    // Group adjacent slots into runs. A lone slot has no line to join, so it is
-    // drawn as a point rather than a `moveTo` that `stroke()` cannot show.
+    context.save();
+    context.fillStyle = scan.stale ? COLOR.unseenFillStale : COLOR.unseenFill;
+    context.beginPath();
+    context.rect(0, 0, view.width, view.height);
+    const start = worldToScreen(view, seen[0]);
+    context.moveTo(start.x, start.y);
+    for (let index = 1; index < seen.length; index += 1) {
+      const screen = worldToScreen(view, seen[index]);
+      context.lineTo(screen.x, screen.y);
+    }
+    context.closePath();
+    // Even-odd fills the viewport outside the Seen Polygon and leaves the
+    // measured region clear.
+    context.fill('evenodd');
+    context.restore();
+  }
+
+  /**
+   * Strokes dotted Occlusion Edges in the scan's own palette. The caller owns
+   * the layer order: No Return edges under the cloud, significant steps above it.
+   */
+  function drawDottedSegments(scan, segments) {
+    if (!view || !scan || segments.length === 0) return;
+
+    context.save();
+    context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
+    context.lineWidth = 1.2;
+    context.setLineDash([2, 4]);
+    context.lineCap = 'round';
+    for (const { start, end } of segments) {
+      const from = worldToScreen(view, start);
+      const to = worldToScreen(view, end);
+      context.beginPath();
+      context.moveTo(from.x, from.y);
+      context.lineTo(to.x, to.y);
+      context.stroke();
+    }
+    context.restore();
+  }
+
+  /**
+   * Strokes the No Return notch chords under the cloud (ADR-0047). A notch has
+   * no measured surface, so its Occlusion Edge is the chord between the two
+   * returns on either side. It starts and ends at measured returns and never
+   * runs to the viewport.
+   */
+  function drawNoReturnEdges(scan) {
+    if (!view || !scan) return;
+    drawDottedSegments(
+      scan,
+      scan.notches.map(({ before, after }) => ({ start: before, end: after })),
+    );
+  }
+
+  /**
+   * Strokes the significant-step Occlusion Edges above the cloud (ADR-0047).
+   * Each edge is the chord between two adjacent returns whose range step is
+   * large enough that the chord is not a measured surface. The stroke shares
+   * the scan's age with the fill and the cloud.
+   */
+  function drawStepEdges(scan) {
+    if (!view || !scan) return;
+    drawDottedSegments(
+      scan,
+      scan.edges.map(({ nearPoint, farPoint }) => ({ start: nearPoint, end: farPoint })),
+    );
+  }
+
+  function drawCloud(scan) {
+    if (!view || !scan) return;
+    const { points, edges, stale } = scan;
+    const seamStarts = new Set(edges.map((edge) => edge.seamSlot));
+
+    // Group adjacent slots into runs, breaking at an Occlusion Edge so no
+    // surface chord spans unseen space. A lone slot has no line to join, so it
+    // is drawn as a point rather than a `moveTo` that `stroke()` cannot show.
     const runs = [];
     let run = null;
     for (const point of points) {
       const screen = worldToScreen(view, point);
-      if (run && point.slot === run[run.length - 1].point.slot + 1) {
+      const previous = run?.[run.length - 1].point;
+      const joins =
+        previous && point.slot === previous.slot + 1 && !seamStarts.has(previous.slot);
+      if (joins) {
         run.push({ point, screen });
       } else {
         run = [{ point, screen }];
@@ -339,7 +446,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     // legible even when the outline is a thin wall.
     context.fillStyle = stale ? COLOR.obstacleStale : COLOR.obstacle;
     for (const point of points) {
-      if (point.range > 45) continue;
+      if (point.range > NEAR_RETURN_CM) continue;
       const screen = worldToScreen(view, point);
       context.beginPath();
       context.arc(screen.x, screen.y, 2.2, 0, Math.PI * 2);

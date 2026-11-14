@@ -26,12 +26,12 @@ future shell need no configuration.
 
 | path | what it owns |
 |---|---|
-| `index.html`, `styles.css` | the responsive shell: wide radar-first, compact status strip + radar + drive bar + tabbed sheet |
+| `index.html`, `styles.css` | the responsive shell: wide radar-first, compact status strip + radar + drive bar + tabbed sheet, and the radar legend |
 | `js/protocol.js` | message names, close codes, the Pairing Token alphabet, drive constants and labels |
 | `js/transport.js` | the one socket seam: hello/auth/pair, 1 Hz heartbeat, reconnect, close codes; the socket factory is injected |
 | `js/store.js` | the pure `apply(state, message)` reducer and selectors: snapshot merge, `(name, seq)` and `(boot_id, seq)` dedupe, Boot Id reset, Activity and Events |
 | `js/planner.js` | the Target Point and the two-leg state machine; the sender and clock are injected |
-| `js/radar.js`, `js/geometry.js` | the World Frame renderer, camera and the pure bearing/distance/footprint math |
+| `js/radar.js`, `js/geometry.js` | the World Frame renderer, camera, the pure bearing/distance/footprint math, the Seen Polygon and the significant Occlusion Edges |
 | `js/views/` | the DOM panels (connection, power, Activity, Events, Robot/Link, drive) |
 | `js/main.js` | wiring only |
 
@@ -46,14 +46,14 @@ Testing Decisions). Each page under `tests/` drives one seam:
 
 | page | seam | what it covers |
 |---|---|---|
-| `pure.html` | none | the protocol helpers, geometry and the store's core reducer cases |
+| `pure.html` | none | the protocol helpers, geometry, the scan model (Seen Polygon, Occlusion Edges, notches) and the store's core reducer cases |
 | `state.html` | none | snapshot merging, dedupe, Boot Id reset, Activities, Events and outcome-unknown |
 | `planner.html` | injected send/clock | the Target Point, the two legs, completion, busy/unknown and Stop |
-| `radar.html` | none | the World Frame camera, scan/Pose pairing and the tap guard |
+| `radar.html` | none | the World Frame camera, scan/Pose pairing, the tap guard, the stale gate, and the canvas layers: the unseen fill, the Occlusion Edges, the No Return notch chords and the fresh/stale palette |
 | `fake.html` | injected socket | the transport handshake, heartbeat, close codes and reconnect |
 | `pairing.html` | injected socket + DOM | auth/pair, 4401, protocol mismatch and the pairing screens |
 | `bridge.html` | none | the Bridge Status message, chip and Robot/Link panel |
-| `accessible.html` | real markup | focus order, targets, contrast tokens and the compact/phone layout |
+| `accessible.html` | real markup | focus order, targets, contrast tokens, the radar legend and the compact/phone layout |
 | `real.html` | the real `/ws` | the live Relay + Bridge Stub: discovery, Session, App Snapshot, Streams, Events, point-and-go ACKs, Stop, and the reload that reconstructs the Result Report from the replayed `procedure_completed` |
 
 The static suite (and the app boot smoke) is the CI `web` job:
@@ -135,7 +135,7 @@ Checked in this pass:
 - **Meaning without colour.** Connection, station, battery, Activity status,
   perception and the selected tab all carry words; the selected tab is also bold
   and underlined. The radar suite renders the scans, and the layers differ by
-  stroke, dots, dashed preview, crosshair and the robot icon as well as hue.
+  fill, stroke, dots, dashed preview, crosshair and the robot icon as well as hue.
 
 Still manual:
 
