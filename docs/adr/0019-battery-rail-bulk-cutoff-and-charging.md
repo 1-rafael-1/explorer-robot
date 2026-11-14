@@ -25,10 +25,14 @@ loaded the 5 V rail through the `AMS1117-3.3`; ADR-0027 moved it back to 5 V,
 so the 3.3 V rail is relieved by the camera current (still bounded at 400 mA).
 The 300–500 mA figure is a
 continuous target, not a peak guarantee: the four switched 5 V branches plus
-the 3.3 V LDO can sum above 1 A, so the peak budget and the
-6.0 V low-line measurement remain open. The Coin D6, Grove Vision AI V2 and
-expansion-board peak currents, and the bench measurement, remain open. An
-on-board BMS is no longer planned. Reverse-polarity protection is settled: Q1
+the 3.3 V LDO can sum above 1 A, so the full-branch peak and the 6.0 V low-line
+measurement remain open. The measured bench baseline is about 320 mA with the
+LiDAR spinning, the remote link up, and the motors, rangefinders, RGB LED and
+AI camera off; a weaker link can raise it slightly. That is a baseline, not the
+full-branch peak. The Grove Vision AI V2 and expansion-board peak currents
+remain unmeasured. A 300 mA bench limit prevents LiDAR spin-up; use at least
+500 mA. An on-board BMS is no longer planned. Reverse-polarity protection is
+settled: Q1
 is the **AO3407A** (Alpha & Omega Semicon, JLCPCB `C15155`, SOT-23, ±20 V Vgs),
 and a firmware motor-stall timeout of 250–500 ms is a precondition for the
 retained 3 A JST-XH connector.
@@ -180,14 +184,17 @@ For the 5 V rail:
   use the TPS5430 `ENA` for a branch, because that would shut down the whole 5 V
   rail and the 3.3 V LDO.
 - **Peak budget.** Budget the branches at their peaks, not their averages:
-  LiDAR unmeasured, the AI camera roughly 100–150 mA while inferring on 5 V
-  (ADR-0027; the earlier 300–450 mA figure was the module's 5 V-input estimate),
-  ESP32-C6-class expansion roughly 250–350 mA at 5 V (3.3 V Wi-Fi TX peak
-  354 mA), the ST7789 panel's module and backlight (measure it; the backlight is
-  the dominant panel load), plus the AMS1117 input, which carries the rest of
-  the 3.3 V rail (bounded at 400 mA; the camera is no longer behind it). The sum
-  can approach or exceed
-  1 A. The TPS5430 needs about 6.2 V input for 1 A at 5 V,
+  the measured baseline is about 320 mA with the LiDAR spinning and the remote
+  link up, without the AI camera, motors, rangefinders or RGB LED; the LiDAR's
+  own inrush is still not separately measured. The AI camera draws roughly
+  100–150 mA while inferring on 5 V (ADR-0027; the earlier 300–450 mA figure was
+  the module's 5 V-input estimate), ESP32-C6-class expansion roughly
+  250–350 mA at 5 V (3.3 V Wi-Fi TX peak 354 mA; the baseline includes it on a
+  good link, and a weaker link can raise it), the ST7789 panel's module and
+  backlight (measure it; the backlight is the dominant panel load), plus the
+  AMS1117 input, which carries the rest of the 3.3 V rail (bounded at 400 mA;
+  the camera is no longer behind it). The sum can approach or exceed 1 A. The
+  TPS5430 needs about 6.2 V input for 1 A at 5 V,
   so at the 6.0 V cutoff the rail may not hold 5 V at the summed peak. The
   15 µH/3 A inductor and the 3 A catch diode are no longer the current
   bottleneck; the low-line duty cycle is. Measure the branch currents and
@@ -339,9 +346,11 @@ For the 5 V rail:
   sustained stall; the battery bulk is settled at 2× 220 µF polymer and
   the `VM` bulk at 1× 220 µF, removing the 3× 100 µF and 2× 100 µF parts; decide
   (later) whether to add an on-board 2S charger.
-- Open items (5 V rail): measure the Coin D6, Grove Vision AI V2 and
-  expansion-board peak currents at 4.9 V; bench-test the TPS5430 low-line at
-  6.0 V/500 mA, 1 A and 2 A with the three branches and the 3.3 V LDO; verify
+- Open items (5 V rail): measure the Coin D6 inrush/peak and the Grove Vision
+  AI V2 and expansion-board peak currents at 4.9 V (the ~320 mA baseline is
+  measured); bench-test the TPS5430 low-line at 6.0 V/500 mA, 1 A and 2 A with
+  the three branches and the 3.3 V LDO; use a bench supply limit of at least
+  500 mA for LiDAR bring-up; verify
   the 15 µH loop with a load step over temperature; decide whether to accept
   JLC’s L2 land pattern or resize it to the Sunltech datasheet geometry
   (3.3 × 3.0 mm pads at ±2.1 mm) and sync the PCB instance (still

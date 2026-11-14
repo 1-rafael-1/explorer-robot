@@ -30,7 +30,14 @@ task; see the [robot page](../../../../docs/components/robot.md) for that side a
   `start` → `warm_up` (optional) → `read_scan`/`read_aggregated` → `stop` →
   `power_off` (or `release` to hand the peripherals back).
 
+The firmware runs a bounded best-effort `probe()` before `start()`: the
+device-info frame is emitted on power-up, before the firmware's UART exists, so
+it can be missed; a missing frame is logged and tolerated, and warm-up is the
+proof that data flows.
+
 ## Wiring
+
+The standalone example uses the breadboard pin map:
 
 | Signal | RP2350 pin |
 |--------|-----------|
@@ -40,9 +47,20 @@ task; see the [robot page](../../../../docs/components/robot.md) for that side a
 | GND | GND |
 | +5 V | 5 V rail |
 
-> These are the standalone example's pins. The robot integration uses GPIO28
-> (MCU TX), GPIO29 (MCU RX), and a TPS22917 high-side load-switch enable on
-> GPIO30; see the repository `CONTEXT.md`.
+The robot board uses the `J7` connector and the TPS22917 branch:
+
+| Signal | Board |
+|--------|-------|
+| MCU TX → sensor RX | GPIO 28 → `J7.3` |
+| MCU RX ← sensor TX | GPIO 29 ← `J7.4` |
+| TPS22917 enable (active high) | GPIO 30 |
+| Switched 5 V | `J7.1` |
+| GND | `J7.2` |
+
+A swapped RX/TX pair leaves the module powered but silent. The robot's measured
+baseline is about 320 mA with the LiDAR spinning and the remote link up; use a
+bench supply limit of at least 500 mA, because a 300 mA limit prevents the rotor
+from starting.
 
 ## Tests
 

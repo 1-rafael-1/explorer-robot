@@ -73,6 +73,13 @@ anywhere, and all the track pins were still in place.
 - **Switched 5 V branch:** the LiDAR and the reserved AI-camera branch sit behind
   TPS22917 high-side load switches. The expansion connector is 5 V-powered and
   switched on `EXP_PWR`.
+- **Bench supply:** about 320 mA is the measured baseline with the LiDAR
+  spinning and the remote link up, and the motors, rangefinders, RGB LED and AI
+  camera off. A weaker link can raise it slightly. Set the supply to at least
+  500 mA; a 300 mA limit prevents the LiDAR from starting.
+- **LiDAR harness:** `J7.1` is switched 5 V, `J7.2` GND, `J7.3` sensor RX /
+  MCU TX, and `J7.4` sensor TX / MCU RX. Check the RX/TX pair before blaming
+  the firmware; a swap leaves the branch powered but silent.
 - **Logic levels:** all logic is 3.3 V. Never present 5 V to an RP2350 or Bridge
   GPIO.
 - **No USB + J9:** never power from USB and `J9` at once. Most C3 dev boards tie

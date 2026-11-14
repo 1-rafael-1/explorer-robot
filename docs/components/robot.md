@@ -31,7 +31,7 @@ update or installer. The operator path is a clone, the pinned toolchain and
 - **Embassy master.** The robot follows embassy's own advice to use git when a
   needed change has no release: the root manifest's `[patch.crates-io]` pins
   `embassy-rp`, `embassy-embedded-hal`, `embassy-sync`, `embassy-executor`,
-  `embassy-time` and `embassy-futures` to one commit (`9b0680bd`, 2026-11-09).
+  `embassy-time` and `embassy-futures` to one commit (`9b0680bd`).
   Update every patched crate together and let the lockfile record the revision.
 - **Nightly rustfmt.** The formatting gate deliberately invokes nightly
   (`cargo +nightly fmt`), not the pinned stable toolchain; install a nightly
@@ -164,6 +164,14 @@ DEFMT_LOG=debug cargo run -p explorer-robot --release
 Because the log stream is RTT, `probe-rs` must stay attached; closing it stops
 the output. **Bench-required.**
 
+Some bring-up diagnostics are compiled only with the `telemetry_logs` feature:
+the boot reset cause, the LiDAR power/UART-up lines, and the room-scan intent.
+Use `--features telemetry_logs` when bench-testing those:
+
+```sh
+cargo run -p explorer-robot --release --features telemetry_logs
+```
+
 ### Recovery
 
 If the application is stale but the board still runs, re-running `cargo run
@@ -179,6 +187,25 @@ The erase mass-erases the RP2350 flash, including the `FLASH_STORAGE`
 calibration region at the top of flash (see [`memory.x`](../../robot/memory.x)), so
 calibration data is lost. Both steps are **bench-required**.
 
+## LiDAR power and harness
+
+The LiDAR is on switched 5 V (`LIDAR_PWR`, GPIO30) through `J7`. Set a bench
+supply to at least 500 mA: the measured baseline is about 320 mA with the LiDAR
+spinning and the remote link up, and the motors, rangefinders, RGB LED and AI
+camera off. A weaker link can raise it slightly.
+
+`J7.1` is switched 5 V, `J7.2` GND, `J7.3` the sensor RX / MCU TX, and `J7.4`
+the sensor TX / MCU RX. A swapped RX/TX pair leaves the branch powered but
+produces no scans.
+
+The device-info probe is best-effort: a missed frame is logged and tolerated,
+and warm-up is the proof that data flows. The power/probe and room-scan intent
+logs are behind `telemetry_logs` (see above).
+
+The LiDAR task's release frame is about 29 KiB, so the 64 KiB core1 stack and
+the dev package `opt-level = 1` override are load-bearing. Do not reduce either
+without re-measuring.
+
 ## Common failures
 
 | Symptom | Cause and fix |
@@ -189,35 +216,8 @@ calibration data is lost. Both steps are **bench-required**.
 | Linker cannot find `memory.x` or a memory region | `memory.x` was moved or removed from the package root; `build.rs` embeds it from there. |
 | `cargo +nightly fmt` cannot find the toolchain | Install a nightly toolchain with `rustfmt`; the pin only supplies stable 1.99.1. |
 | Host test crate cannot resolve `std` | The `--features std` flag was omitted; the feature is host-only. |
-
-## Verified
-
-**Verified:** 2026-11-09 — the commands below were run from the repository root
-on this host; the build, lint and test gates passed, and the hardware steps were
-not run and are bench-required.
-
-```sh
-rustup target list --installed           # thumbv8m.main-none-eabihf and riscv32imc-unknown-none-elf present
-rustup toolchain list                    # 1.99.1 active
-probe-rs --version                       # probe-rs 0.31.0
-cargo +nightly fmt --version             # rustfmt 1.11.0-nightly
-cargo build --workspace --release --target thumbv8m.main-none-eabihf
-cargo +nightly fmt --all -- --check
-cargo clippy --workspace --target thumbv8m.main-none-eabihf --no-deps -- -D warnings
-cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p touch-async --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p lidar-cloud --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
-cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests
-```
-
-Outcomes: the build finished successfully, the formatting check exited 0 with
-no output, clippy finished with no warnings, and every host suite ended
-`test result: ok.` with `0 failed`. Flashing, RTT/`defmt` output, sensor
-bring-up, bench wiring and the recovery erase were **not** run — all
-bench-required.
+| LiDAR never spins in Room Scan; caption may show `LiDAR failed` | Check the J7 RX/TX pair (`J7.3` = sensor RX/MCU TX, `J7.4` = sensor TX/MCU RX) and set the bench supply to at least 500 mA; a 300 mA limit prevents spin-up. Use `--features telemetry_logs` for the probe/warm-up lines. |
+| No `[lidar]` log and no power gate | Core1 may have faulted on an undersized stack; keep the 64 KiB `CORE1_STACK` and the dev package `opt-level = 1`. |
 
 ## Source material
 

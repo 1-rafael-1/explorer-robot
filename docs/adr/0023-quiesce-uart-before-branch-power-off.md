@@ -75,9 +75,12 @@ For the LiDAR, the sequence is:
 Power-up reverses it: wait out the minimum off interval, assert `LIDAR_PWR`,
 wait `BRANCH_RISE` (50 ms provisional, pending the TPS22917 `CT` value), then
 construct the `BufferedUart` from the retained `Peri` handles and static buffers,
-construct the driver, and run `probe()` → `start()` → warm-up. `probe()` is the
-public device-info read; `power_on()` remains `set_high()` + `probe()` for the
-simple case.
+construct the driver, and run a bounded best-effort `probe()`, then `start()`,
+then warm-up. The probe is optional: the device-info frame is emitted on
+power-up before the UART exists, so it can be missed, and a device that is
+already streaming does not resend it. A missing frame is logged and tolerated;
+warm-up is the real proof that data flows. `probe()` is the public device-info
+read; `power_on()` remains `set_high()` + `probe()` for the simple case.
 
 Per branch:
 
@@ -177,3 +180,13 @@ path that deasserts branch power still stops, drains and drops the UART,
 releases the pads, then deasserts power in that order. References above to `LidarSession::power_up` and
 `LidarSession::power_down` are superseded; the session keeps its name as the
 retained-resource owner.
+
+**Amendment (2026-11-14).** The device-info probe is bounded by `PROBE_TIMEOUT`
+(250 ms) and is non-fatal: the COIN-D6 emits the frame on power-up before the
+UART is constructed, and a streaming device does not send it again, so warm-up
+is the authoritative proof that data flows. The bench source must exceed the
+measured ~320 mA baseline: a 300 mA current limit prevents the LiDAR from
+spinning and reads as an unpowered or absent sensor, while 500 mA warms and
+streams. Check the harness RX/TX pair before blaming the firmware: `J7.3` is
+the sensor RX / MCU TX and `J7.4` is the sensor TX / MCU RX, so a swap leaves
+the branch powered but silent.

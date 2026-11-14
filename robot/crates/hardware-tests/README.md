@@ -46,8 +46,11 @@ examples (which do not collide):
 | Touch CS | GPIO 21 |
 | Touch IRQ (PENIRQ, active-low) | GPIO 22 |
 
-> The LiDAR power gate is **GPIO 15** here (the standalone-example pin), not the
-> robot firmware's GPIO 26 — GPIO 26 is the TFT DC pin on this wiring.
+> These are standalone breadboard pins. The production board uses GPIO 28 (MCU
+> TX), GPIO 29 (MCU RX) and GPIO 30 (TPS22917 enable) on `J7`; this example does
+> not drive the board's LiDAR branch. On the board, use the firmware's Room Scan.
+> Set the bench supply to at least 500 mA: a 300 mA limit prevents the LiDAR
+> from starting.
 
 > Panel notes (2.8″ 240×320, measured on the bench): the display is
 > **RGB-ordered** (`ColorOrder::Bgr` swaps red and blue, so the examples here
