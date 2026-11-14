@@ -109,7 +109,7 @@ fn starting_recovery_from_waiting_does_not_invent_a_drop() {
 }
 
 #[test]
-fn a_successful_attempt_returns_to_waiting_and_clears_the_drop() {
+fn a_successful_attempt_retains_a_held_drop_until_two_valid_floors() {
     let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
     lifecycle.begin_enable(0);
     lifecycle.on_reading(floor(200), 50);
@@ -119,7 +119,16 @@ fn a_successful_attempt_returns_to_waiting_and_clears_the_drop() {
     lifecycle.attempt_succeeded(100);
 
     assert_eq!(lifecycle.state(), SensorState::Waiting);
-    assert!(!lifecycle.is_drop());
+    assert!(
+        lifecycle.is_drop(),
+        "a reset must not release protection before fresh readings"
+    );
+
+    lifecycle.on_reading(floor(200), 150);
+    assert!(lifecycle.is_drop(), "one valid floor reading is not enough");
+
+    lifecycle.on_reading(floor(200), 200);
+    assert!(!lifecycle.is_drop(), "two consecutive valid floors clear the drop");
 }
 
 #[test]

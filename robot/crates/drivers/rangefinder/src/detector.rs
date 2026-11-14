@@ -134,6 +134,22 @@ impl FloorDropDetector {
         self.floor_streak = 0;
     }
 
+    /// Restart the stale watchdog after a successful init or reset without
+    /// discarding a held floor-drop decision.
+    ///
+    /// A reset must not clear protection before the sensor has produced fresh
+    /// valid floor readings; two consecutive valid floors still clear a held
+    /// drop. A fresh enable uses [`arm`](Self::arm) instead, which clears the
+    /// decision.
+    pub const fn restart(&mut self, now_ms: u64) {
+        self.invalid_since_ms = None;
+        self.floor_streak = 0;
+        self.last_sample_ms = Some(now_ms);
+        if matches!(self.decision, FloorState::Drop) {
+            self.state = FloorState::Drop;
+        }
+    }
+
     /// Whether at least [`STALE_TIMEOUT_MS`] have elapsed since the last reading.
     ///
     /// Returns `false` before the first reading and after [`arm`](Self::arm).
@@ -174,9 +190,12 @@ impl FloorDropDetector {
 
     /// Apply an invalid or no-target measurement.
     ///
-    /// Reports `Unknown` while the previous decision is held. After
-    /// [`INVALID_HOLD_MS`], the decision fails safe to `Drop`.
+    /// Reports `Unknown` while the previous decision is held. Every invalid
+    /// reading resets the clear streak, so the two valid floor readings needed
+    /// to clear a drop must be consecutive. After [`INVALID_HOLD_MS`], the
+    /// decision fails safe to `Drop`.
     const fn observe_invalid(&mut self, now_ms: u64) {
+        self.floor_streak = 0;
         let since = if let Some(since) = self.invalid_since_ms {
             since
         } else {

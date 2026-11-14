@@ -84,9 +84,10 @@ impl SensorLifecycle {
     /// Record a successful init or reset and start waiting for a valid reading.
     ///
     /// A success replenishes the attempt budget: the three attempts are for a
-    /// run of consecutive failures, not a lifetime allowance.
+    /// run of consecutive failures, not a lifetime allowance. A held floor-drop
+    /// decision survives the reset; fresh valid floor readings must clear it.
     pub const fn attempt_succeeded(&mut self, now_ms: u64) {
-        self.detector.arm(now_ms);
+        self.detector.restart(now_ms);
         self.state = SensorState::Waiting;
         self.attempts = 0;
         self.last_health = None;

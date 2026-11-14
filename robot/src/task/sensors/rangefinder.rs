@@ -361,8 +361,15 @@ where
     }
 
     // An armed sensor fails safe immediately, so a drive already in progress
-    // brakes instead of continuing blind while the reset attempts run.
+    // brakes instead of continuing blind while the reset attempts run. Publish
+    // the non-ready pair and the flag before the first await; a successful
+    // reset deliberately retains the drop until fresh valid floor readings
+    // clear it.
     runtime.lifecycle.begin_recovery();
+    set_pair_state(PairState::Degraded);
+    if runtime.lifecycle.is_drop() {
+        set_floor_drop(true).await;
+    }
 
     while let Some(attempt) = runtime.lifecycle.begin_attempt() {
         match driver.reset(delay).await {

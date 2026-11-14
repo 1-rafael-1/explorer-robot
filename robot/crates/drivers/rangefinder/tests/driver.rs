@@ -23,8 +23,7 @@ use embedded_hal_async::{
     delay::DelayNs,
     i2c::{ErrorType, I2c, Operation},
 };
-use rangefinder::Rangefinder;
-use rangefinder::{RangeStatus, RangefinderReading, Reading};
+use rangefinder::{RangeStatus, Rangefinder, RangefinderReading, Reading};
 
 /// The shared transaction log.
 type Log = Rc<RefCell<Vec<Transaction>>>;
