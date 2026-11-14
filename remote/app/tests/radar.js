@@ -409,10 +409,14 @@ test('a No Return sector is part of the unseen complement', () => {
   assert(redNear(canvas, radar, 200, 0) > 0, 'the null sector is unknown, so it is unseen');
   for (const slot of [357, 3]) {
     const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
-    const hit = [100, 150, 200, 250].some((radius) =>
+    const hit = [320, 350, 380, 410].some((radius) =>
       edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
     );
-    assert(hit, `slot ${slot} has a dotted No Return boundary`);
+    assert(hit, `slot ${slot} has a dotted No Return boundary from the seen edge outward`);
+    const beforeEdge = [80, 120, 180, 240].some((radius) =>
+      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
+    );
+    assert(!beforeEdge, `slot ${slot} does not draw the notch boundary from the robot`);
   }
 });
 

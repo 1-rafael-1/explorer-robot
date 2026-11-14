@@ -474,6 +474,83 @@ input {
   font-size: 1rem;
 }
 
+/* The radar legend: static words and swatches, inert so it never blocks a tap. */
+.radar-legend {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  max-width: 172px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(18, 26, 35, 0.9);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.radar-legend ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.radar-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.legend-title {
+  margin: 0 0 5px;
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.legend-swatch {
+  width: 18px;
+  height: 10px;
+  flex: none;
+  border-radius: 2px;
+}
+
+.legend-return {
+  height: 2px;
+  background: #46c2ff;
+}
+
+.legend-near {
+  background: radial-gradient(circle, #fbbf24 0 3px, transparent 3px);
+}
+
+.legend-unseen {
+  background: rgba(248, 113, 113, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.55);
+}
+
+.legend-edge {
+  height: 2px;
+  background: repeating-linear-gradient(90deg, #f87171 0 3px, transparent 3px 6px);
+}
+
+.legend-robot {
+  background: #e6f2ff;
+  border-top: 3px solid #4ade80;
+}
+
+.legend-target {
+  background:
+    linear-gradient(#fbbf24, #fbbf24) center / 10px 2px no-repeat,
+    linear-gradient(#fbbf24, #fbbf24) center / 2px 10px no-repeat;
+}
+
 #zoom-in {
   grid-column: 3;
   grid-row: 1;

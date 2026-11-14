@@ -267,6 +267,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     drawGrid();
     drawMapLayer();
     drawUnseen(scan);
+    drawNotchEdges(scan);
     drawCloud(scan);
     drawOcclusionEdges(scan);
     drawPreview(source);
@@ -339,16 +340,53 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
   }
 
   /**
-   * Strokes the significant Occlusion Edges and the No Return notch boundaries
-   * above the cloud (ADR-0047). A significant step is dotted along its chord;
-   * a No Return notch is dotted along its two rays from the pose, because it has
-   * no chord to draw. The stroke shares the scan's age with the fill and the
-   * cloud.
+   * Strokes the No Return notch boundaries under the cloud (ADR-0047). A notch
+   * has no chord, so each ray starts at the seen return and runs outward; the
+   * cloud stays on top, so a measured return at the notch edge is not painted
+   * over.
+   */
+  function drawNotchEdges(scan) {
+    if (!view || !scan || !scan.visibility) return;
+    const { notches } = scan.visibility;
+    if (notches.length === 0) return;
+
+    context.save();
+    context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
+    context.lineWidth = 1.2;
+    context.setLineDash([2, 4]);
+    context.lineCap = 'round';
+    const pose = worldToScreen(view, scan.pose);
+    const reach = Math.hypot(view.width, view.height);
+    for (const notch of notches) {
+      for (const point of [notch.before, notch.after]) {
+        const start = worldToScreen(view, point);
+        const dx = start.x - pose.x;
+        const dy = start.y - pose.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0)) continue;
+        const end = {
+          x: start.x + (dx / length) * reach,
+          y: start.y + (dy / length) * reach,
+        };
+        context.beginPath();
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+      }
+    }
+    context.restore();
+  }
+
+  /**
+   * Strokes the significant Occlusion Edge chords above the cloud (ADR-0047).
+   * Each edge is the chord between two adjacent returns whose range step is
+   * large enough that the chord is not a measured surface. The stroke shares
+   * the scan's age with the fill and the cloud.
    */
   function drawOcclusionEdges(scan) {
     if (!view || !scan || !scan.visibility) return;
-    const { edges, notches } = scan.visibility;
-    if (edges.length === 0 && notches.length === 0) return;
+    const { edges } = scan.visibility;
+    if (edges.length === 0) return;
 
     context.save();
     context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
@@ -362,16 +400,6 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
       context.moveTo(near.x, near.y);
       context.lineTo(far.x, far.y);
       context.stroke();
-    }
-    const pose = worldToScreen(view, scan.pose);
-    for (const notch of notches) {
-      for (const point of [notch.before, notch.after]) {
-        const end = worldToScreen(view, point);
-        context.beginPath();
-        context.moveTo(pose.x, pose.y);
-        context.lineTo(end.x, end.y);
-        context.stroke();
-      }
     }
     context.restore();
   }

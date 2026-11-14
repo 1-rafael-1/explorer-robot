@@ -26,7 +26,7 @@ future shell need no configuration.
 
 | path | what it owns |
 |---|---|
-| `index.html`, `styles.css` | the responsive shell: wide radar-first, compact status strip + radar + drive bar + tabbed sheet |
+| `index.html`, `styles.css` | the responsive shell: wide radar-first, compact status strip + radar + drive bar + tabbed sheet, and the radar legend |
 | `js/protocol.js` | message names, close codes, the Pairing Token alphabet, drive constants and labels |
 | `js/transport.js` | the one socket seam: hello/auth/pair, 1 Hz heartbeat, reconnect, close codes; the socket factory is injected |
 | `js/store.js` | the pure `apply(state, message)` reducer and selectors: snapshot merge, `(name, seq)` and `(boot_id, seq)` dedupe, Boot Id reset, Activity and Events |
@@ -49,11 +49,11 @@ Testing Decisions). Each page under `tests/` drives one seam:
 | `pure.html` | none | the protocol helpers, geometry and the store's core reducer cases |
 | `state.html` | none | snapshot merging, dedupe, Boot Id reset, Activities, Events and outcome-unknown |
 | `planner.html` | injected send/clock | the Target Point, the two legs, completion, busy/unknown and Stop |
-| `radar.html` | none | the World Frame camera, scan/Pose pairing, the tap guard, the Seen Polygon, the unseen complement and the Occlusion Edges |
+| `radar.html` | none | the World Frame camera, scan/Pose pairing, the tap guard, the Seen Polygon, the unseen complement, the Occlusion Edges and the No Return notch rays |
 | `fake.html` | injected socket | the transport handshake, heartbeat, close codes and reconnect |
 | `pairing.html` | injected socket + DOM | auth/pair, 4401, protocol mismatch and the pairing screens |
 | `bridge.html` | none | the Bridge Status message, chip and Robot/Link panel |
-| `accessible.html` | real markup | focus order, targets, contrast tokens and the compact/phone layout |
+| `accessible.html` | real markup | focus order, targets, contrast tokens, the radar legend and the compact/phone layout |
 | `real.html` | the real `/ws` | the live Relay + Bridge Stub: discovery, Session, App Snapshot, Streams, Events, point-and-go ACKs, Stop, and the reload that reconstructs the Result Report from the replayed `procedure_completed` |
 
 The static suite (and the app boot smoke) is the CI `web` job:
