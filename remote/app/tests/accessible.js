@@ -151,10 +151,10 @@ test('the radar legend names the layers', async () => {
   assertEqual(legend.getAttribute('aria-label'), 'Radar legend');
   const text = legend.textContent;
   for (const label of [
-    'LiDAR return',
+    'Measured return',
     'Near return',
     'Unseen space',
-    'Occlusion edge',
+    'Occlusion Edge',
     'Robot',
     'Target',
   ]) {

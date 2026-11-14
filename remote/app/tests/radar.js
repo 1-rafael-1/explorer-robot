@@ -1,12 +1,13 @@
-// The World Frame radar suite: the slot convention, the camera transform, the
-// icon tap guard, the scan/pose timestamp seam, the Seen Polygon and unseen
-// complement, and a live scan drawn onto a real canvas (fresh versus stale). It
-// does not mount the app's full DOM.
+// The World Frame radar canvas suite: the camera transform, the icon tap guard,
+// the scan/pose timestamp seam, the stale gate, and a live scan drawn onto a
+// real canvas (unseen fill, Occlusion Edges, notch chords, fresh versus stale).
+// Pure scan-model cases live in pure.js. It does not mount the app's full DOM.
 
 import {
   FOOTPRINT,
   MIN_ICON_PX,
   STALE_MS,
+  buildScan,
   cameraView,
   fitScale,
   iconFootprintPx,
@@ -14,18 +15,27 @@ import {
   pointInFootprint,
   poseAt,
   scanAgeMs,
-  scanPoints,
-  scanVisibility,
   screenToWorld,
   slotAngleDeg,
   worldToScreen,
 } from '../js/geometry.js';
-import { createRadar } from '../js/radar.js';
+import { COLOR, createRadar } from '../js/radar.js';
 import { createStore } from '../js/store.js';
 import { assert, assertClose, assertEqual, autorun, test } from './harness.js';
 
 const RAD = Math.PI / 180;
 const ORIGIN = { x: 0, y: 0, yaw: 0 };
+
+/** Parses a `#rrggbb` canvas colour into channel values. */
+function rgb(hex) {
+  return {
+    red: parseInt(hex.slice(1, 3), 16),
+    green: parseInt(hex.slice(3, 5), 16),
+    blue: parseInt(hex.slice(5, 7), 16),
+  };
+}
+
+const BACKGROUND = rgb(COLOR.bg);
 
 /** Builds a one-degree scan value with the v1 conventions. */
 function scanValue(ranges) {
@@ -52,7 +62,11 @@ function pixelStats(canvas) {
     const red = data[index];
     const green = data[index + 1];
     const blue = data[index + 2];
-    if (Math.abs(red - 11) > 8 || Math.abs(green - 15) > 8 || Math.abs(blue - 20) > 8) {
+    if (
+      Math.abs(red - BACKGROUND.red) > 8 ||
+      Math.abs(green - BACKGROUND.green) > 8 ||
+      Math.abs(blue - BACKGROUND.blue) > 8
+    ) {
       nonBackground += 1;
     }
     // #46c2ff is the live cloud; #7f96aa (stale) is below this.
@@ -60,147 +74,6 @@ function pixelStats(canvas) {
   }
   return { nonBackground, freshCloud };
 }
-
-test('LiDAR slot 0 is ahead and the slots run clockwise', () => {
-  assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 0 }, 0, 1, true, 90), -90, 1e-9);
-  assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 0 }, 0, 1, false, 90), 90, 1e-9);
-  assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 90 }, 0, 1, true, 0), 90, 1e-9);
-  // `first_deg` and `step_deg` are honoured, not assumed to be 0 and 1.
-  assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 0 }, 10, 2, true, 5), -20, 1e-9);
-});
-
-test('a full scan builds a Seen Polygon from the pose to every return', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(ranges));
-
-  assertEqual(edges.length, 0, 'a flat wall has no significant range step');
-  assertEqual(notches.length, 0, 'a flat wall has no No Return notch');
-  assertEqual(seen.length, 362, 'the pose, 360 returns and the closing pose');
-  assertClose(seen[0].x, 0, 1e-9);
-  assertClose(seen[0].y, 0, 1e-9);
-  assertEqual(seen[1].slot, 0);
-  assertClose(seen[1].x, 300, 1e-9);
-  assertClose(seen[1].y, 0, 1e-9);
-  assertEqual(seen[360].slot, 359);
-  assertClose(seen[361].x, 0, 1e-9);
-});
-
-test('a No Return notches the Seen Polygon back to the pose', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  ranges[10] = null;
-  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(ranges));
-
-  assertEqual(edges.length, 0);
-  // The initial pose, the null-sector notch and the closing pose have no slot.
-  assertEqual(seen.filter((point) => point.slot == null).length, 3);
-  assertEqual(seen.length, 362);
-  assertEqual(notches.length, 1);
-  assertEqual(notches[0].before.slot, 9);
-  assertEqual(notches[0].after.slot, 11);
-
-  const seam = Array.from({ length: 360 }, () => 300);
-  seam[0] = null;
-  const seamNotches = scanVisibility(ORIGIN, scanValue(seam)).notches;
-  assertEqual(seamNotches.length, 1, 'a No Return at slot 0 is still one notch');
-  assertEqual(seamNotches[0].before.slot, 359);
-  assertEqual(seamNotches[0].after.slot, 1);
-});
-
-test('a significant range step becomes an Occlusion Edge', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
-
-  const { edges } = scanVisibility(ORIGIN, scanValue(ranges));
-  const at = (seam) => edges.find((edge) => edge.seamSlot === seam);
-  assert(at(169), 'the fall into the object is an Occlusion Edge');
-  assert(at(190), 'the rise out of the object is an Occlusion Edge');
-  assertEqual(at(169).near.range, 60);
-  assertEqual(at(169).far.range, 300);
-  assertEqual(at(190).near.range, 60);
-  assertEqual(at(190).far.range, 300);
-});
-
-test('the Occlusion Edge threshold is absolute and relative', () => {
-  const ranges = Array.from({ length: 360 }, () => 500);
-  ranges[10] = 450; // 50 cm at 4.5 m: below 25 % of the nearer return
-  ranges[20] = 350; // 150 cm at 3.5 m: above 25 % of the nearer return
-  const seams = new Set(
-    scanVisibility(ORIGIN, scanValue(ranges)).edges.map((edge) => edge.seamSlot),
-  );
-  assert(!seams.has(10), 'a 50 cm step at 4.5 m is below the relative threshold');
-  assert(seams.has(20), 'a 150 cm step at 3.5 m clears the relative threshold');
-
-  const near = Array.from({ length: 360 }, () => 30);
-  near[10] = 45; // 15 cm: below the 20 cm floor
-  near[20] = 55; // 25 cm: above the 20 cm floor
-  const nearSeams = new Set(
-    scanVisibility(ORIGIN, scanValue(near)).edges.map((edge) => edge.seamSlot),
-  );
-  assert(!nearSeams.has(10), 'a 15 cm step is below the absolute floor');
-  assert(nearSeams.has(20), 'a 25 cm step clears the absolute floor');
-});
-
-test('a protrusion across slot 0 is ordered cyclically', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  for (let slot = 355; slot < 360; slot += 1) ranges[slot] = 60;
-  for (let slot = 0; slot <= 5; slot += 1) ranges[slot] = 60;
-
-  const { seen, edges } = scanVisibility(ORIGIN, scanValue(ranges));
-  const seams = new Set(edges.map((edge) => edge.seamSlot));
-  assert(seams.has(354), 'the fall into the seam-crossing protrusion');
-  assert(seams.has(5), 'the rise out of it');
-  assertEqual(
-    seen.filter((point) => point.slot != null).length,
-    360,
-    'the ring keeps every return, including both sides of the seam',
-  );
-});
-
-test('the Seen Polygon is measured from the pose it is given', () => {
-  const ranges = Array.from({ length: 360 }, () => 300);
-  const pose = { x: 100, y: -50, yaw: 20 };
-  const { seen } = scanVisibility(pose, scanValue(ranges));
-  assertClose(seen[1].x, pose.x + 300 * Math.cos(pose.yaw * RAD), 1e-9);
-  assertClose(seen[1].y, pose.y + 300 * Math.sin(pose.yaw * RAD), 1e-9);
-});
-
-test('an empty or all-null scan has a pose-only Seen Polygon', () => {
-  assertEqual(scanVisibility(ORIGIN, scanValue([])), { seen: [], edges: [], notches: [] });
-
-  const nulls = Array.from({ length: 360 }, () => null);
-  const { seen, edges, notches } = scanVisibility(ORIGIN, scanValue(nulls));
-  assertEqual(edges.length, 0);
-  assertEqual(notches.length, 0, 'there is no return to bound a notch');
-  assertEqual(seen.length, 1, 'only the pose');
-});
-
-test('a null return produces no point, so the cloud draws a gap', () => {
-  const pose = { x: 0, y: 0, yaw: 0 };
-  const points = scanPoints(pose, {
-    ranges_cm: [100, null, 200, null, 300],
-    first_deg: 0,
-    step_deg: 1,
-    clockwise: true,
-  });
-  assertEqual(
-    points.map((point) => point.slot),
-    [0, 2, 4],
-    'only slots with a return survive',
-  );
-  assertClose(points[0].x, 100, 1e-9);
-  assertClose(points[0].y, 0, 1e-9);
-  assertClose(points[1].x, 200 * Math.cos(-2 * RAD), 1e-9);
-  assertClose(points[1].y, 200 * Math.sin(-2 * RAD), 1e-9);
-
-  const only = scanPoints(pose, {
-    ranges_cm: [10],
-    first_deg: 90,
-    step_deg: 5,
-    clockwise: false,
-  });
-  assertClose(only[0].x, 0, 1e-9);
-  assertClose(only[0].y, 10, 1e-9);
-});
 
 /** Returns a square ImageData window centred on a world point. */
 function windowNear(canvas, radar, x, y, size) {
@@ -292,8 +165,8 @@ test('an isolated LiDAR return is drawn as a point', () => {
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
   radar.render(store.state, 1100);
 
-  const first = scanPoints(ORIGIN, store.state.streams.lidar.v)[0];
-  const second = scanPoints(ORIGIN, store.state.streams.lidar.v)[1];
+  const first = buildScan(ORIGIN, store.state.streams.lidar.v).points[0];
+  const second = buildScan(ORIGIN, store.state.streams.lidar.v).points[1];
   assert(cloudNear(canvas, radar, first.x, first.y), 'the first isolated return is visible');
   assert(cloudNear(canvas, radar, second.x, second.y), 'the second isolated return is visible');
 });
@@ -408,7 +281,7 @@ test('a No Return sector is part of the unseen complement', () => {
 
   radar.render(store.state, 1100);
   assert(redNear(canvas, radar, 200, 0) > 0, 'the null sector is unknown, so it is unseen');
-  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const points = buildScan(ORIGIN, scanValue(ranges)).points;
   const at = (slot) => points.find((point) => point.slot === slot);
   const start = at(357);
   const end = at(3);
@@ -451,7 +324,7 @@ test('a significant step is dotted and its solid chord is gone', () => {
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
   radar.render(store.state, 1100);
-  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const points = buildScan(ORIGIN, scanValue(ranges)).points;
   const at = (slot) => points.find((point) => point.slot === slot);
   const start = at(169);
   const end = at(170);
@@ -477,7 +350,7 @@ test('a gentle range step keeps its solid surface chord', () => {
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
   radar.render(store.state, 1100);
-  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const points = buildScan(ORIGIN, scanValue(ranges)).points;
   const at = (slot) => points.find((point) => point.slot === slot);
   const chord = midpoint(at(169), at(170));
   assert(cloudNear(canvas, radar, chord.x, chord.y), 'a sub-threshold step stays a solid return');
@@ -496,8 +369,20 @@ test('a fresh scan paints live red; a stale scan mutes the unseen fill', () => {
 
   radar.render(store.state, 1000 + STALE_MS + 1);
   assertEqual(liveRedPixels(canvas), 0, 'a stale scan paints no live-red pixels');
-  const stale = tintNear(canvas, radar, 350, 0);
+  const stale = tintNear(canvas, radar, 340, 12);
+  assert(stale.blue > BACKGROUND.blue + 4, 'the stale unseen fill is painted, not just absent');
   assert(stale.red <= stale.green && stale.red <= stale.blue, 'the stale unseen fill reads grey');
+});
+
+test('a scan with no measured return paints no unseen fill', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+  const ranges = Array.from({ length: 360 }, () => null);
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+
+  radar.render(store.state, 1100);
+  assertEqual(liveRedPixels(canvas), 0, 'no measured return means no unseen inference');
 });
 
 test('no scan means no unseen fill', () => {

@@ -21,6 +21,12 @@
   --warn: #fbbf24;
   --bad: #f87171;
   --info: #93a7bb;
+  /* Mirrors radar.js's COLOR. The canvas cannot read custom properties, so the
+     two palettes are kept in step by hand; the legend swatch is deliberately
+     stronger than the 0.12 canvas fill so it stays legible. */
+  --robot: #e6f2ff;
+  --unseen-swatch: color-mix(in srgb, var(--bad) 20%, transparent);
+  --unseen-edge: color-mix(in srgb, var(--bad) 55%, transparent);
   --radius: 12px;
   --target: 34px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -523,32 +529,32 @@ input {
 
 .legend-return {
   height: 2px;
-  background: #46c2ff;
+  background: var(--accent);
 }
 
 .legend-near {
-  background: radial-gradient(circle, #fbbf24 0 3px, transparent 3px);
+  background: radial-gradient(circle, var(--warn) 0 3px, transparent 3px);
 }
 
 .legend-unseen {
-  background: rgba(248, 113, 113, 0.2);
-  border: 1px solid rgba(248, 113, 113, 0.55);
+  background: var(--unseen-swatch);
+  border: 1px solid var(--unseen-edge);
 }
 
 .legend-edge {
   height: 2px;
-  background: repeating-linear-gradient(90deg, #f87171 0 3px, transparent 3px 6px);
+  background: repeating-linear-gradient(90deg, var(--bad) 0 2px, transparent 2px 4px);
 }
 
 .legend-robot {
-  background: #e6f2ff;
-  border-top: 3px solid #4ade80;
+  background: var(--robot);
+  border-top: 3px solid var(--good);
 }
 
 .legend-target {
   background:
-    linear-gradient(#fbbf24, #fbbf24) center / 10px 2px no-repeat,
-    linear-gradient(#fbbf24, #fbbf24) center / 2px 10px no-repeat;
+    linear-gradient(var(--warn), var(--warn)) center / 10px 2px no-repeat,
+    linear-gradient(var(--warn), var(--warn)) center / 2px 10px no-repeat;
 }
 
 #zoom-in {
@@ -1013,6 +1019,24 @@ progress {
 
   .radar-pane {
     min-height: 240px;
+  }
+
+  /* A single column of six rows would cover half the compact pane, so the
+     legend becomes a horizontal strip that wraps above the radar. */
+  .radar-legend {
+    left: 10px;
+    max-width: none;
+    padding: 6px 8px;
+  }
+
+  .radar-legend ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
+  .legend-title {
+    display: none;
   }
 
   .side {

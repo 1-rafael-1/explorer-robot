@@ -27,13 +27,15 @@ marked as unseen.
   null sector stays unseen.
 - The **Occlusion Shadow** is the complement of the Seen Polygon. The app fills the whole viewport
   outside it with translucent red; there is no cap other than the viewport.
-- An **Occlusion Edge** is either an adjacent valid pair whose range step is at least **20 cm**
-  or **25 %** of the nearer return, or the radial boundary of a No Return notch. The cloud does
-  not draw a solid chord across a significant step; the app draws the chord dotted soft red. A
-  No Return notch has no measured surface, so the app dots the chord between the two returns on
-  either side; it starts and ends at measured returns and never runs to the viewport.
-- The layer is computed from the scan's own pose on every render, painted under the cloud, and
-  muted to the stale palette when the scan is stale. It never outlives its scan.
+- An **Occlusion Edge** is either an adjacent valid pair whose range step is at least both
+  **20 cm** and **25 %** of the nearer return (the greater of the two), or the chord between the
+  two returns that flank a No Return notch. The cloud does not draw a solid chord across a
+  significant step; the app draws the chord dotted soft red. A No Return notch has no measured
+  surface, so that chord starts and ends at measured returns and never runs to the viewport.
+- The fill and the No Return notch chords are computed from the scan's own pose on every render
+  and painted under the cloud. The significant-step edges are painted above the cloud, so a thin
+  wall outline cannot hide them. The layer is muted to the stale palette when the scan is stale
+  and never outlives its scan.
 - The radar carries a compact legend in the top-right naming the measured return, the near return,
   the unseen fill, the Occlusion Edge, the robot and the Target. It is inert, so it never blocks a
   radar tap.

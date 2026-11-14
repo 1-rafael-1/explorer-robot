@@ -1,6 +1,7 @@
 // The World Frame radar: one canvas, a camera view transform and layered
 // drawing. ADR-0043 fixes the order; ADR-0047 inserts the unseen fill:
-// grid, map layer, unseen fill, live scan, robot/target/preview, overlay.
+// grid, map layer, unseen fill, No Return edges, live scan, significant-step
+// edges, robot/target/preview, overlay.
 // The camera is display state only: a tap picks a world point, a drag pans, and
 // neither changes the frame or the meaning of a world point (ADR-0043).
 //
@@ -10,8 +11,10 @@
 
 import {
   IDENTITY_POSE,
+  NEAR_RETURN_CM,
   RAD,
   STALE_MS,
+  buildScan,
   cameraView,
   fitScale,
   iconFootprintPx,
@@ -20,8 +23,6 @@ import {
   pointInFootprint,
   poseAt,
   scanAgeMs,
-  scanPoints,
-  scanVisibility,
   screenToWorld,
   worldToScreen,
 } from './geometry.js';
@@ -30,7 +31,10 @@ import { byId, setData, setText } from './views/dom.js';
 
 export { STALE_MS };
 
-const COLOR = Object.freeze({
+// Mirrors the legend palette in styles.css. The canvas cannot read CSS custom
+// properties, so the two are kept in step by hand (ADR-0047). Exported so the
+// canvas tests assert against the same palette the renderer paints.
+export const COLOR = Object.freeze({
   bg: '#0b0f14',
   grid: '#16232f',
   gridStrong: '#22384c',
@@ -43,9 +47,9 @@ const COLOR = Object.freeze({
   heading: '#4ade80',
   target: '#fbbf24',
   preview: '#46c2ff',
-  occlusionFill: 'rgba(248, 113, 113, 0.12)',
   occlusionEdge: '#f87171',
-  occlusionFillStale: 'rgba(127, 150, 170, 0.06)',
+  unseenFill: 'rgba(248, 113, 113, 0.12)',
+  unseenFillStale: 'rgba(127, 150, 170, 0.06)',
   occlusionEdgeStale: '#7f96aa',
 });
 
@@ -252,24 +256,24 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.fillStyle = COLOR.bg;
     context.fillRect(0, 0, width, height);
 
-    // The scan's seen polygon and significant edges are inferred once per
-    // render, so the unseen fill, the dotted edges and the cloud's chord seams
-    // all come from the same scan (ADR-0047). Its liveness is the scan's own: a
-    // missing scan is stale, so the layer never outlives what it came from.
+    // The scan's render model is inferred once per render, so the unseen fill,
+    // the No Return edges, the cloud and the significant-step edges all come
+    // from the same scan (ADR-0047). Its liveness is the scan's own: a missing
+    // scan is stale, so the layer never outlives what it came from.
     const lidar = source.streams?.lidar;
     const scanPose = lidar ? poseForScan(source, lidar) : null;
-    const visibility = lidar ? scanVisibility(scanPose, lidar.v) : null;
     const stale = isStaleScan(lidar?.ts, now);
-    const scan = lidar ? { lidar, pose: scanPose, visibility, stale } : null;
+    const scan = lidar ? { stale, ...buildScan(scanPose, lidar.v) } : null;
 
     // Layer order (ADR-0043; unseen fill per ADR-0047): grid, map layer, unseen
-    // fill, live scan, robot/target/preview, overlay.
+    // fill, No Return edges, live scan, significant-step edges,
+    // robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
     drawUnseen(scan);
-    drawNotchEdges(scan);
+    drawNoReturnEdges(scan);
     drawCloud(scan);
-    drawOcclusionEdges(scan);
+    drawStepEdges(scan);
     drawPreview(source);
     drawRobot();
     updateOverlay(source, now);
@@ -317,22 +321,23 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
    * muted stale grey.
    */
   function drawUnseen(scan) {
-    if (!view || !scan || !scan.visibility) return;
-    const { seen } = scan.visibility;
+    if (!view || !scan) return;
+    const { seen } = scan;
+    // A scan with no measured return has no Seen Polygon to complement. Filling
+    // the viewport would invent unseen space from no data, so draw nothing.
+    if (seen.length < 3) return;
 
     context.save();
-    context.fillStyle = scan.stale ? COLOR.occlusionFillStale : COLOR.occlusionFill;
+    context.fillStyle = scan.stale ? COLOR.unseenFillStale : COLOR.unseenFill;
     context.beginPath();
     context.rect(0, 0, view.width, view.height);
-    if (seen.length > 1) {
-      const start = worldToScreen(view, seen[0]);
-      context.moveTo(start.x, start.y);
-      for (let index = 1; index < seen.length; index += 1) {
-        const screen = worldToScreen(view, seen[index]);
-        context.lineTo(screen.x, screen.y);
-      }
-      context.closePath();
+    const start = worldToScreen(view, seen[0]);
+    context.moveTo(start.x, start.y);
+    for (let index = 1; index < seen.length; index += 1) {
+      const screen = worldToScreen(view, seen[index]);
+      context.lineTo(screen.x, screen.y);
     }
+    context.closePath();
     // Even-odd fills the viewport outside the Seen Polygon and leaves the
     // measured region clear.
     context.fill('evenodd');
@@ -340,64 +345,60 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
   }
 
   /**
-   * Strokes the No Return notch boundaries under the cloud (ADR-0047). A notch
-   * has no measured surface, so its edge is the chord between the two returns
-   * on either side. It starts and ends at measured returns and never runs to
-   * the viewport.
+   * Strokes dotted Occlusion Edges in the scan's own palette. The caller owns
+   * the layer order: No Return edges under the cloud, significant steps above it.
    */
-  function drawNotchEdges(scan) {
-    if (!view || !scan || !scan.visibility) return;
-    const { notches } = scan.visibility;
-    if (notches.length === 0) return;
+  function drawDottedSegments(scan, segments) {
+    if (!view || !scan || segments.length === 0) return;
 
     context.save();
     context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
     context.lineWidth = 1.2;
     context.setLineDash([2, 4]);
     context.lineCap = 'round';
-    for (const notch of notches) {
-      const start = worldToScreen(view, notch.before);
-      const end = worldToScreen(view, notch.after);
+    for (const { start, end } of segments) {
+      const from = worldToScreen(view, start);
+      const to = worldToScreen(view, end);
       context.beginPath();
-      context.moveTo(start.x, start.y);
-      context.lineTo(end.x, end.y);
+      context.moveTo(from.x, from.y);
+      context.lineTo(to.x, to.y);
       context.stroke();
     }
     context.restore();
   }
 
   /**
-   * Strokes the significant Occlusion Edge chords above the cloud (ADR-0047).
+   * Strokes the No Return notch chords under the cloud (ADR-0047). A notch has
+   * no measured surface, so its Occlusion Edge is the chord between the two
+   * returns on either side. It starts and ends at measured returns and never
+   * runs to the viewport.
+   */
+  function drawNoReturnEdges(scan) {
+    if (!view || !scan) return;
+    drawDottedSegments(
+      scan,
+      scan.notches.map(({ before, after }) => ({ start: before, end: after })),
+    );
+  }
+
+  /**
+   * Strokes the significant-step Occlusion Edges above the cloud (ADR-0047).
    * Each edge is the chord between two adjacent returns whose range step is
    * large enough that the chord is not a measured surface. The stroke shares
    * the scan's age with the fill and the cloud.
    */
-  function drawOcclusionEdges(scan) {
-    if (!view || !scan || !scan.visibility) return;
-    const { edges } = scan.visibility;
-    if (edges.length === 0) return;
-
-    context.save();
-    context.strokeStyle = scan.stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
-    context.lineWidth = 1.2;
-    context.setLineDash([2, 4]);
-    context.lineCap = 'round';
-    for (const edge of edges) {
-      const near = worldToScreen(view, edge.near);
-      const far = worldToScreen(view, edge.far);
-      context.beginPath();
-      context.moveTo(near.x, near.y);
-      context.lineTo(far.x, far.y);
-      context.stroke();
-    }
-    context.restore();
+  function drawStepEdges(scan) {
+    if (!view || !scan) return;
+    drawDottedSegments(
+      scan,
+      scan.edges.map(({ nearPoint, farPoint }) => ({ start: nearPoint, end: farPoint })),
+    );
   }
 
   function drawCloud(scan) {
     if (!view || !scan) return;
-    const { lidar, pose: cloudPose, visibility, stale } = scan;
-    const points = scanPoints(cloudPose, lidar.v);
-    const seamStarts = new Set(visibility.edges.map((edge) => edge.seamSlot));
+    const { points, edges, stale } = scan;
+    const seamStarts = new Set(edges.map((edge) => edge.seamSlot));
 
     // Group adjacent slots into runs, breaking at an Occlusion Edge so no
     // surface chord spans unseen space. A lone slot has no line to join, so it
@@ -445,7 +446,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     // legible even when the outline is a thin wall.
     context.fillStyle = stale ? COLOR.obstacleStale : COLOR.obstacle;
     for (const point of points) {
-      if (point.range > 45) continue;
+      if (point.range > NEAR_RETURN_CM) continue;
       const screen = worldToScreen(view, point);
       context.beginPath();
       context.arc(screen.x, screen.y, 2.2, 0, Math.PI * 2);

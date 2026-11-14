@@ -44,8 +44,8 @@
 - **Room Scan** — The operator-initiated mode that renders live Spins as a radar on the Display, for verifying the LiDAR and surveying a room. It does not drive.
 - **Seen Polygon** — The region the scan measured: the star-shaped polygon from the scan pose out to every return, with a radial notch at each No Return. A Remote App display concept computed from the returns at render time.
   _Avoid_: visibility polygon, free space
-- **Occlusion Shadow** — The region the scan cannot see: the complement of the Seen Polygon within the view. It is inferred, never measured; it is neither a No Return nor free space.
-  _Avoid_: no visibility, blind spot, unseen area
+- **Occlusion Shadow** — The region the scan cannot see: the complement of the Seen Polygon within the view. It is inferred, never measured; it is neither a No Return nor free space. The Remote App labels this layer _Unseen space_ in its legend and fills it with translucent red.
+  _Avoid_: blind spot, no-visibility layer
 - **Occlusion Edge** — A boundary of the Occlusion Shadow: a significant range step between adjacent returns, or the chord between the two returns that flank a No Return notch. The Remote App draws it dotted.
   _Avoid_: shadow line, ray, chord
 

@@ -33,22 +33,18 @@ Point (ADR-0038, ADR-0043).
 
 - An Occlusion Shadow is a **near segment**: a run of valid returns bounded in slot order
   by a fall and the next rise, where each step is at least **50 cm** and both returns at
-  the step are valid. A smaller increase does not end the near segment; the next rise of
-  at least 50 cm does. A No Return neighbour disqualifies the segment; a null is unknown,
+  the step are valid. A No Return neighbour disqualifies the segment; a null is unknown,
   not far. The segment must hold at least **two** adjacent returns, and a candidate must
   be shorter than half the scan: its longer complement is the near background around a
-  far recess (a wide doorway or a far corner), not a protrusion. A run of consecutive
-  falls is one Occlusion Edge: only the outermost fall emits, so one protrusion cannot
-  cast nested shadows.
+  far recess (a wide doorway or a far corner), not a protrusion.
 - The shadow's inner edge is the segment's measured contour, its sides are the two
   Occlusion Edge rays from the contour's endpoint returns, and its cap is a straight line
   at the greater of the two flanking far returns. All distances are measured from the
   scan's own pose.
 - The polyline no longer draws a chord across either Occlusion Edge; the dotted edge
   replaces it. Every other range step keeps its surface chord.
-- The fill is painted under the live cloud; the dotted Occlusion Edges are painted above
-  it. The layer is recomputed on every render and muted to the stale palette when the scan
-  is stale. It does not outlive its scan.
+- The layer is painted under the live cloud, recomputed on every render, and muted to the
+  stale palette when the scan is stale. It does not outlive its scan.
 - The Remote App only. The Link Protocol, daemon, firmware and the panel's Room Scan radar
   are unchanged. The 50 cm threshold is a display constant to confirm on the bench.
 
@@ -62,5 +58,3 @@ Point (ADR-0038, ADR-0043).
 - Overlapping shadows are drawn independently and darken slightly where they meet; that is
   acceptable for a display layer.
 - The overlay is an inference, so the glossary and the radar's accessible label say so.
-  A future reader must not "fix" it by treating No Return as shadow or by feeding it into
-  motion or free-space decisions.
