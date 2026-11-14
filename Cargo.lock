@@ -740,6 +740,7 @@ dependencies = [
  "embedded-storage-async",
  "heapless 0.9.3",
  "icm20948-rs",
+ "indicator-led",
  "libm",
  "lidar-cloud",
  "link-core",
@@ -1066,6 +1067,13 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "indicator-led"
+version = "0.1.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

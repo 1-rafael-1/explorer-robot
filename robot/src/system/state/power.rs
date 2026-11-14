@@ -62,11 +62,6 @@ pub async fn set_battery(level: u8, voltage: f32) {
     state.battery_voltage = Some(voltage);
 }
 
-/// Read battery level (0-100). Returns `None` before first measurement.
-pub async fn get_battery_level() -> Option<u8> {
-    POWER_STATE.lock().await.battery_level
-}
-
 /// A consistent snapshot of battery state, read under a single lock.
 #[derive(Clone, Copy, Debug)]
 pub struct BatterySnapshot {
