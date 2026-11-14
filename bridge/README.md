@@ -129,8 +129,8 @@ console from `by-id`; on the current bench it is `/dev/ttyACM1`. If `espflash` r
 before testing, or the 10-minute window will already be running.
 
 The end-to-end sequences, with the exact boot lines and probe output to expect, are
-[Bench acceptance run: the network edge](#bench-acceptance-run-the-network-edge),
-[Bench acceptance run: Setup Mode](#bench-acceptance-run-setup-mode) and
+[The network edge](#the-network-edge),
+[Browser provisioning round-trip](#browser-provisioning-round-trip) and
 [Bench acceptance run: the credential record](#bench-acceptance-run-the-credential-record).
 `Ctrl-C` ends the monitor and frees `/dev/ttyACM0`.
 
