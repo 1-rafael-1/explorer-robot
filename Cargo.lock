@@ -428,6 +428,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "edrv-vl53l0x"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b05d93fbbd9ad3637246279c2611770a7ced7dc2f827f6e24cadbb1cac9254fa"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -735,6 +745,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-graphics",
+ "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
  "embedded-storage-async",
@@ -751,6 +762,7 @@ dependencies = [
  "nalgebra",
  "nanorand",
  "panic-probe",
+ "rangefinder",
  "sequential-storage",
  "st7789-async",
  "static_cell",
@@ -1546,6 +1558,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rangefinder"
+version = "0.1.0"
+dependencies = [
+ "edrv-vl53l0x",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+]
 
 [[package]]
 name = "redox_syscall"
