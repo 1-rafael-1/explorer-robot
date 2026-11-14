@@ -44,6 +44,7 @@ const COLOR = Object.freeze({
   target: '#fbbf24',
   preview: '#46c2ff',
   occlusionFill: 'rgba(248, 113, 113, 0.12)',
+  occlusionEdge: '#f87171',
 });
 
 /** Returns `point` pushed outward to `rangeCm` on the ray from `pose`. */
@@ -53,6 +54,29 @@ function extendToRange(pose, point, rangeCm) {
   const length = Math.hypot(dx, dy);
   if (!(length > 0)) return { x: pose.x, y: pose.y };
   return { x: pose.x + (dx / length) * rangeCm, y: pose.y + (dy / length) * rangeCm };
+}
+
+/**
+ * Returns the `from` slots that straddle an Occlusion Edge (ADR-0046).
+ *
+ * A shadow's contour begins at the fall's near return and ends at the rise's
+ * near return, so its two edges sit between `first - 1` and `first`, and
+ * between `last` and `last + 1`. Keying each seam by its lower slot lets the
+ * cloud break its run exactly there and nowhere else, including across the
+ * scan seam. The count is the cyclic length of the scan.
+ */
+function occlusionSeams(shadows, count) {
+  const seams = new Set();
+  if (!(count > 0)) return seams;
+  for (const shadow of shadows) {
+    const contour = shadow.silhouette;
+    if (contour.length === 0) continue;
+    const first = contour[0];
+    const last = contour[contour.length - 1];
+    seams.add((first.slot - 1 + count) % count);
+    seams.add(last.slot % count);
+  }
+  return seams;
 }
 
 /** Creates the radar over `canvas`; a missing canvas yields a no-op camera. */
@@ -258,12 +282,19 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.fillStyle = COLOR.bg;
     context.fillRect(0, 0, width, height);
 
+    // The shadow is inferred once per render so the fill, the dotted edges and
+    // the cloud's chord seams all come from the same descriptors (ADR-0046).
+    const lidar = source.streams?.lidar;
+    const scanPose = lidar ? poseForScan(source, lidar) : null;
+    const shadows = lidar ? scanShadows(scanPose, lidar.v) : [];
+
     // Layer order (ADR-0038): grid, map layer, occlusion shadow, live scan,
     // robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
-    drawShadows(source);
-    drawCloud(source, now);
+    drawShadows(scanPose, shadows);
+    drawCloud(source, now, shadows);
+    drawOcclusionEdges(scanPose, shadows);
     drawPreview(source);
     drawRobot();
     updateOverlay(source, now);
@@ -309,12 +340,8 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
    * measured contour and the two radial Occlusion Edges at the cap range. No
    * shadow survives its scan, so it is recomputed on every render.
    */
-  function drawShadows(state) {
-    const lidar = state?.streams?.lidar;
-    if (!lidar || !view) return;
-    const scanPose = poseForScan(state, lidar);
-    const shadows = scanShadows(scanPose, lidar.v);
-    if (shadows.length === 0) return;
+  function drawShadows(scanPose, shadows) {
+    if (!view || shadows.length === 0) return;
 
     context.save();
     context.fillStyle = COLOR.occlusionFill;
@@ -342,20 +369,54 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.restore();
   }
 
-  function drawCloud(state, now) {
+  /**
+   * Strokes the two Occlusion Edges above the cloud (ADR-0046). Each edge is a
+   * dotted radial line from a contour endpoint outward to the cap, replacing
+   * the surface chord the cloud no longer draws across that step.
+   */
+  function drawOcclusionEdges(scanPose, shadows) {
+    if (!view || shadows.length === 0) return;
+
+    context.save();
+    context.strokeStyle = COLOR.occlusionEdge;
+    context.lineWidth = 1.2;
+    context.setLineDash([2, 4]);
+    context.lineCap = 'round';
+    for (const shadow of shadows) {
+      const contour = shadow.silhouette;
+      if (contour.length === 0) continue;
+      for (const endpoint of [contour[0], contour[contour.length - 1]]) {
+        const near = worldToScreen(view, endpoint);
+        const far = worldToScreen(view, extendToRange(scanPose, endpoint, shadow.capCm));
+        context.beginPath();
+        context.moveTo(near.x, near.y);
+        context.lineTo(far.x, far.y);
+        context.stroke();
+      }
+    }
+    context.restore();
+  }
+
+  function drawCloud(state, now, shadows) {
     const lidar = state?.streams?.lidar;
     if (!lidar) return;
     const cloudPose = poseForScan(state, lidar);
     const points = scanPoints(cloudPose, lidar.v);
     const stale = isStaleScan(lidar.ts, now);
+    const count = lidar.v?.ranges_cm?.length ?? 0;
+    const seams = occlusionSeams(shadows, count);
 
-    // Group adjacent slots into runs. A lone slot has no line to join, so it is
-    // drawn as a point rather than a `moveTo` that `stroke()` cannot show.
+    // Group adjacent slots into runs, breaking at an Occlusion Edge so no
+    // surface chord spans unseen space. A lone slot has no line to join, so it
+    // is drawn as a point rather than a `moveTo` that `stroke()` cannot show.
     const runs = [];
     let run = null;
     for (const point of points) {
       const screen = worldToScreen(view, point);
-      if (run && point.slot === run[run.length - 1].point.slot + 1) {
+      const previous = run?.[run.length - 1].point;
+      const joins =
+        previous && point.slot === previous.slot + 1 && !seams.has(previous.slot);
+      if (joins) {
         run.push({ point, screen });
       } else {
         run = [{ point, screen }];

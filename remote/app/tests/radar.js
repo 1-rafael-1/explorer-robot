@@ -267,6 +267,32 @@ function cloudNear(canvas, radar, x, y) {
   return false;
 }
 
+/** Returns whether the bright soft-red Occlusion Edge stroke is near a world point. */
+function edgeRedNear(canvas, radar, x, y, size = 9) {
+  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+  const scale = radar.scale;
+  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
+  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
+  const half = (size - 1) / 2;
+  const { data } = canvas
+    .getContext('2d')
+    .getImageData(px - half, py - half, size, size);
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    // #f87171 is opaque; the 0.12 fill over the dark grid stays near (39,27,31),
+    // so a bright red can only be the dotted stroke.
+    if (red > 120 && red - green > 50 && red - blue > 50) return true;
+  }
+  return false;
+}
+
+/** Returns the world midpoint between two returns. */
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
 test('an isolated LiDAR return is drawn as a point', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});
@@ -432,6 +458,70 @@ test('center returns to the robot and keeps the zoom', () => {
   radar.center();
   radar.render(store.state, 0);
   assertClose(radar.scale, zoomed, 1e-9, 'center keeps the zoom');
+});
+
+test('each Occlusion Shadow strokes dotted soft-red edges to the cap', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  // A 60 cm protrusion across slots 170..190 against a 300 cm background: its
+  // Occlusion Edges run outward along the slots 170 and 190 rays.
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+  radar.render(store.state, 1100);
+
+  // The [2, 4] dash leaves gaps, so several radii along each ray must find at
+  // least one stroke sample.
+  const radii = [80, 120, 160, 200, 240];
+  for (const slot of [170, 190]) {
+    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
+    const hit = radii.some((radius) =>
+      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
+    );
+    assert(hit, `slot ${slot} has a dotted Occlusion Edge along its ray`);
+  }
+});
+
+test('the cloud does not connect across an Occlusion Edge', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+  radar.render(store.state, 1100);
+
+  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const at = (slot) => points.find((point) => point.slot === slot);
+
+  const fall = midpoint(at(169), at(170));
+  assertEqual(cloudNear(canvas, radar, fall.x, fall.y), false, 'no chord across the fall edge');
+
+  const rise = midpoint(at(190), at(191));
+  assertEqual(cloudNear(canvas, radar, rise.x, rise.y), false, 'no chord across the rise edge');
+});
+
+test('a far recess keeps its surface chord, because it is not an Occlusion Edge', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  // The near background is everywhere else, so the complement of this narrow
+  // far recess is the background and the classifier infers no shadow.
+  const ranges = Array.from({ length: 360 }, () => 100);
+  for (let slot = 100; slot <= 110; slot += 1) ranges[slot] = 300;
+  assertEqual(scanShadows(ORIGIN, scanValue(ranges)).length, 0, 'a far recess is not a protrusion');
+
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+  radar.render(store.state, 1100);
+
+  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const at = (slot) => points.find((point) => point.slot === slot);
+  const chord = midpoint(at(99), at(100));
+  assertEqual(cloudNear(canvas, radar, chord.x, chord.y), true, 'the surface chord is still drawn');
 });
 
 autorun();
