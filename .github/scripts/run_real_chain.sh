@@ -30,6 +30,7 @@ work="$(mktemp -d)"
 config="$work/bench.toml"
 stub_log="$work/bridge-stub.log"
 daemon_log="$work/remote-daemon.log"
+chrome_log="$work/chrome.log"
 stub_pid=""
 daemon_pid=""
 
@@ -56,6 +57,9 @@ on_error() {
   fi
   if [[ -f "$stub_log" ]]; then
     tail -20 "$stub_log" 2>/dev/null | sed 's/^/::error::stub: /' >&2 || true
+  fi
+  if [[ -f "$chrome_log" ]]; then
+    tail -20 "$chrome_log" 2>/dev/null | sed 's/^/::error::chrome: /' >&2 || true
   fi
   exit "$status"
 }
@@ -112,19 +116,19 @@ for _ in $(seq 1 200); do
     break
   fi
   if ! kill -0 "$daemon_pid" 2>/dev/null; then
-    echo "error: remote-daemon exited before printing its URL" >&2
+    echo "::error::remote-daemon exited before printing its URL" >&2
     cat "$daemon_log" >&2 || true
     exit 1
   fi
   if ! kill -0 "$stub_pid" 2>/dev/null; then
-    echo "error: bridge-stub exited before the daemon was ready" >&2
+    echo "::error::bridge-stub exited before the daemon was ready" >&2
     cat "$stub_log" >&2 || true
     exit 1
   fi
   sleep 0.05
 done
 if [[ -z "$url" ]]; then
-  echo "error: remote-daemon did not print its URL" >&2
+  echo "::error::remote-daemon did not print its URL" >&2
   cat "$daemon_log" >&2 || true
   exit 1
 fi
@@ -141,7 +145,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 if [[ "$ready" -ne 1 ]]; then
-  echo "error: $url did not answer GET / with the CSP header" >&2
+  echo "::error::$url did not answer GET / with the CSP header" >&2
   cat "$daemon_log" >&2 || true
   exit 1
 fi
@@ -156,7 +160,7 @@ python3 "$root/.github/scripts/chrome_wait.py" \
   --attribute data-result \
   --expect pass \
   --timeout 90 \
-  --label "real-chain page"
+  --label "real-chain page" 2>&1 | tee -a "$chrome_log"
 
 # The same daemon serves the real app at `/`. This is the boot assertion the
 # ADR-0039 `frame-ancestors 'none'` CSP forbids the page from making in an iframe.
@@ -167,4 +171,4 @@ python3 "$root/.github/scripts/chrome_wait.py" \
   --attribute data-boot \
   --expect ok \
   --timeout 30 \
-  --label "app boot at /"
+  --label "app boot at /" 2>&1 | tee -a "$chrome_log"

@@ -185,7 +185,13 @@ def main() -> int:
             )["sessionId"]
             transport.call("Runtime.enable", {}, session_id)
 
-            expression = f"document.documentElement.dataset[{json.dumps(key)}] ?? null"
+            # `Target.createTarget` may still be swapping the initial empty
+            # document for the requested one, so `documentElement` can be null
+            # for the first poll. Optional chaining reads that as "not settled"
+            # instead of a page exception, which would fail the run outright.
+            expression = (
+                f"document.documentElement?.dataset?.[{json.dumps(key)}] ?? null"
+            )
             deadline = time.monotonic() + args.timeout
             value = None
             while time.monotonic() < deadline:
