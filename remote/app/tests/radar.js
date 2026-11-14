@@ -269,6 +269,25 @@ test('the unseen complement is red and the seen region is clear', () => {
   assert(redNear(canvas, radar, 350, 0) > 0, 'beyond the wall is unseen and red');
 });
 
+test('a fully valid seam does not leave a false unseen wedge', () => {
+  const canvas = makeCanvas(1200, 1200);
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+  const ranges = Array.from({ length: 360 }, () => 300);
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+
+  radar.render(store.state, 1100);
+  // Slot 0 is 0° and slot 359 is +1° clockwise; the old pose-closed polygon
+  // painted the half-degree between them as unseen even though both measured.
+  // A larger canvas makes the one-degree wedge wide enough to sample.
+  const seam = 0.5 * RAD;
+  assertEqual(
+    redNear(canvas, radar, 280 * Math.cos(seam), 280 * Math.sin(seam), 11),
+    0,
+    'the seam between slots 359 and 0 stays measured',
+  );
+});
+
 test('a No Return sector is part of the unseen complement', () => {
   const canvas = makeCanvas();
   const radar = createRadar(canvas, {});

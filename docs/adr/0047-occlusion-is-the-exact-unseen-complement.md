@@ -23,8 +23,10 @@ marked as unseen.
 **Decision**
 
 - The Remote App builds the **Seen Polygon**: the star-shaped region from the scan pose out to
-  every measured return, in slot order. A No Return contributes a radial notch to the pose, so the
-  null sector stays unseen.
+  every measured return, in slot order. The polygon closes through the returns when the seam is
+  valid, so the last and first returns do not leave a false wedge; a No Return contributes a
+  radial notch to the pose, so the null sector stays unseen. A No Return run that crosses the
+  seam closes through the pose.
 - The **Occlusion Shadow** is the complement of the Seen Polygon. The app fills the whole viewport
   outside it with translucent red; there is no cap other than the viewport.
 - An **Occlusion Edge** is either an adjacent valid pair whose range step is at least both

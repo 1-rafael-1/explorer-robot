@@ -191,9 +191,11 @@ function scanPoint(pose, firstDeg, stepDeg, clockwise, slot, range) {
  * The Seen Polygon is the star-shaped region from the scan pose out to each
  * measured return, in slot order. A No Return is not free space: it contributes
  * a radial notch to the pose, so that sector stays unseen. The Occlusion Shadow
- * is the complement of this polygon; the renderer fills it. Each notch is
- * returned as the two measured returns that flank it, so the renderer can dot
- * the closing chord.
+ * is the complement of this polygon; the renderer fills it. The polygon starts
+ * at the first measured return and closes cyclically, so a fully valid seam
+ * closes return-to-return rather than leaving a false wedge through the pose.
+ * Each notch is returned as the two measured returns that flank it, so the
+ * renderer can dot the closing chord.
  *
  * An Occlusion Edge is an adjacent valid pair whose range step is at least the
  * greater of `OCCLUSION_EDGE_MIN_CM` and `OCCLUSION_EDGE_RATIO` of the nearer
@@ -210,23 +212,30 @@ export function buildScan(pose, value) {
   const clockwise = value?.clockwise ?? true;
   const posePoint = { x: pose.x, y: pose.y };
   const points = [];
-  const seen = [posePoint];
-  let previousValid = false;
-  for (let slot = 0; slot < count; slot += 1) {
-    const range = ranges[slot];
-    if (range != null) {
-      const point = scanPoint(pose, first, step, clockwise, slot, range);
-      points.push(point);
-      seen.push(point);
-      previousValid = true;
-    } else if (previousValid) {
-      // A No Return run notches the Seen Polygon back to the pose, so the
-      // sector is part of the unseen complement rather than a guessed surface.
-      seen.push(posePoint);
-      previousValid = false;
+  const seen = [];
+  // Walk the ring from the first measured return and close it cyclically. A
+  // fully valid seam then closes return-to-return; closing through the pose
+  // would leave a false unseen wedge between the last and first returns. A
+  // genuine No Return run still notches the polygon back to the pose.
+  const firstValid = ranges.findIndex((range) => range != null);
+  if (firstValid >= 0) {
+    let previousValid = true;
+    for (let offset = 0; offset < count; offset += 1) {
+      const slot = (firstValid + offset) % count;
+      const range = ranges[slot];
+      if (range != null) {
+        const point = scanPoint(pose, first, step, clockwise, slot, range);
+        points.push(point);
+        seen.push(point);
+        previousValid = true;
+      } else if (previousValid) {
+        // A No Return run notches the Seen Polygon back to the pose, so the
+        // sector is part of the unseen complement rather than a guessed surface.
+        seen.push(posePoint);
+        previousValid = false;
+      }
     }
   }
-  if (previousValid) seen.push(posePoint);
 
   const edges = [];
   for (let slot = 0; slot < count; slot += 1) {
@@ -248,7 +257,6 @@ export function buildScan(pose, value) {
   // between the valid returns on either side. The pair is returned for the
   // renderer to dot; the notch's radial sides stay part of the unseen fill.
   const notches = [];
-  const firstValid = ranges.findIndex((range) => range != null);
   if (firstValid >= 0) {
     const firstPoint = scanPoint(pose, first, step, clockwise, firstValid, ranges[firstValid]);
     let previous = null;

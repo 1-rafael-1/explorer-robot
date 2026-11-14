@@ -230,21 +230,19 @@ test('the store notifies subscribers and ignores unknown messages', () => {
   off();
 });
 
-test('a full scan builds a Seen Polygon from the pose to every return', () => {
+test('a full scan closes the Seen Polygon through the returns', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   const { points, seen, edges, notches } = buildScan(ORIGIN, scanValue(ranges));
 
   assertEqual(edges.length, 0, 'a flat wall has no significant range step');
   assertEqual(notches.length, 0, 'a flat wall has no No Return notch');
   assertEqual(points.length, 360, 'every slot projects one return');
-  assertEqual(seen.length, 362, 'the pose, 360 returns and the closing pose');
-  assertClose(seen[0].x, 0, 1e-9);
+  assertEqual(seen.length, 360, 'the ring closes return-to-return');
+  assertEqual(seen.filter((point) => point.slot == null).length, 0, 'no false pose notch at the seam');
+  assertEqual(seen[0].slot, 0);
+  assertClose(seen[0].x, 300, 1e-9);
   assertClose(seen[0].y, 0, 1e-9);
-  assertEqual(seen[1].slot, 0);
-  assertClose(seen[1].x, 300, 1e-9);
-  assertClose(seen[1].y, 0, 1e-9);
-  assertEqual(seen[360].slot, 359);
-  assertClose(seen[361].x, 0, 1e-9);
+  assertEqual(seen[359].slot, 359);
 });
 
 test('a No Return notches the Seen Polygon back to the pose', () => {
@@ -253,19 +251,25 @@ test('a No Return notches the Seen Polygon back to the pose', () => {
   const { seen, edges, notches } = buildScan(ORIGIN, scanValue(ranges));
 
   assertEqual(edges.length, 0);
-  // The initial pose, the null-sector notch and the closing pose have no slot.
-  assertEqual(seen.filter((point) => point.slot == null).length, 3);
-  assertEqual(seen.length, 362);
+  // One notch vertex at the pose; the returns still close the rest of the ring.
+  assertEqual(seen.filter((point) => point.slot == null).length, 1);
+  assertEqual(seen.length, 360, '359 returns plus the single pose notch vertex');
   assertEqual(notches.length, 1);
   assertEqual(notches[0].before.slot, 9);
   assertEqual(notches[0].after.slot, 11);
 
   const seam = Array.from({ length: 360 }, () => 300);
   seam[0] = null;
-  const seamNotches = buildScan(ORIGIN, scanValue(seam)).notches;
-  assertEqual(seamNotches.length, 1, 'a No Return at slot 0 is still one notch');
-  assertEqual(seamNotches[0].before.slot, 359);
-  assertEqual(seamNotches[0].after.slot, 1);
+  const seamScan = buildScan(ORIGIN, scanValue(seam));
+  assertEqual(seamScan.notches.length, 1, 'a No Return at slot 0 is still one notch');
+  assertEqual(seamScan.notches[0].before.slot, 359);
+  assertEqual(seamScan.notches[0].after.slot, 1);
+  assertEqual(seamScan.seen[0].slot, 1, 'the ring starts after the seam notch');
+  assertEqual(
+    seamScan.seen[seamScan.seen.length - 1],
+    { x: 0, y: 0 },
+    'and closes through the pose',
+  );
 });
 
 test('a significant range step becomes an Occlusion Edge', () => {
@@ -333,18 +337,18 @@ test('the Seen Polygon is measured from the pose it is given', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   const pose = { x: 100, y: -50, yaw: 20 };
   const { seen } = buildScan(pose, scanValue(ranges));
-  assertClose(seen[1].x, pose.x + 300 * Math.cos(pose.yaw * RAD), 1e-9);
-  assertClose(seen[1].y, pose.y + 300 * Math.sin(pose.yaw * RAD), 1e-9);
+  assertClose(seen[0].x, pose.x + 300 * Math.cos(pose.yaw * RAD), 1e-9);
+  assertClose(seen[0].y, pose.y + 300 * Math.sin(pose.yaw * RAD), 1e-9);
 });
 
-test('an empty or all-null scan has a pose-only Seen Polygon', () => {
+test('an empty or all-null scan has no Seen Polygon', () => {
   assertEqual(buildScan(ORIGIN, scanValue([])), { points: [], seen: [], edges: [], notches: [] });
 
   const nulls = Array.from({ length: 360 }, () => null);
   const { seen, edges, notches } = buildScan(ORIGIN, scanValue(nulls));
   assertEqual(edges.length, 0);
   assertEqual(notches.length, 0, 'there is no return to bound a notch');
-  assertEqual(seen.length, 1, 'only the pose');
+  assertEqual(seen.length, 0, 'no measured return means no polygon');
 });
 
 test('a null return produces no point, so the cloud draws a gap', () => {

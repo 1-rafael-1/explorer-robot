@@ -325,7 +325,7 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     const { seen } = scan;
     // A scan with no measured return has no Seen Polygon to complement. Filling
     // the viewport would invent unseen space from no data, so draw nothing.
-    if (seen.length < 3) return;
+    if (seen.length < 2) return;
 
     context.save();
     context.fillStyle = scan.stale ? COLOR.unseenFillStale : COLOR.unseenFill;
