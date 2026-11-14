@@ -41,7 +41,9 @@ the signal/ambient/SPAD diagnostics the test readout needs.
 - **Identification and boot.** `init` pulses `XSHUT` low then high, reads the
   model ID at `0x010F`, and requires `0xEACC`; any other value returns
   `InvalidDevice(raw)`. It then soft-resets and polls the firmware status for up
-  to 500 ms, treating NACKs as "still booting" rather than as a hard bus error.
+  to 500 ms. A generic async-I2C error type cannot distinguish a NACK from
+  another bus error, so every error during this poll is treated as "still
+  booting"; a device that never answers ends as `Timeout`.
 - **Interrupt wiring.** `GPIO_HV_MUX__CTRL` is written to `0x11` (range/error
   interrupts, active low) and `SYSTEM__INTERRUPT_CONFIG_GPIO` to `0x20` (new
   sample ready). The poll-only reference omits both; without them `GPIO1` may
@@ -79,13 +81,16 @@ the signal/ambient/SPAD diagnostics the test readout needs.
 - ADR-0048's driver choice is superseded. Its on-demand lifecycle, floor-drop
   detector, pair state machine, gate, policy constants and test-mode decisions
   remain valid and unchanged.
-- The driver lands with no firmware caller: this step adds the crate, its host
-  tests, the CI job and this record. The firmware, telemetry and panel continue
-  to use the existing path until the integration tickets land.
+- The driver crate, its host tests and CI job land in ticket 01; tickets 02 and
+  03 then switch the panel model, telemetry and firmware task to it. There is no
+  second driver path left after that switch.
 - Short distance mode is the delivered profile. Long and medium modes remain one
   constant away for the bench if the floor return proves weak.
-- The gain correction is applied once, and the diagnostics carry the raw 8.7
+- The gain correction is applied once, and the diagnostics carry the raw 7.7
   fixed-point signal and ambient rates plus the effective SPAD count, so no
   cause is hidden from telemetry or the test readout.
-- The driver still needs the manual bench pass (ticket 05) before the floor-drop
+- A zero oscillator calibration falls back to the reference's 256 instead of
+  producing a zero inter-measurement period; a zero measured frequency fails
+  bring-up with `Timeout` instead of dividing by zero.
+- The driver still needs the manual bench pass (ticket 04) before the floor-drop
   threshold and profile are trusted on the real modules.

@@ -3,6 +3,9 @@
 //! A scripted async I2C mock records every transaction and maintains a
 //! byte-addressable 16-bit register file. Pin, interrupt and delay mocks record
 //! the levels, waits and delays the driver requests.
+//!
+//! The expected register sequences are derived from `vl53l1x-simple` 0.2.0
+//! (MIT OR Apache-2.0); see `THIRD_PARTY_LICENSES.md`.
 
 // The embedded-hal traits require `async fn`, but every mock resolves on its
 // first poll and therefore has nothing to await.
@@ -401,7 +404,7 @@ fn init_pulses_xshut_and_configures_the_sensor() {
 
     assert_eq!(last_write(log, 0x002E), Some(vec![0x01]), "2.8 V pads");
     assert_eq!(last_write(log, 0x0030), Some(vec![0x11]), "GPIO mux");
-    assert_eq!(last_write(log, 0x0046), Some(vec![0x20]), "new-sample-ready interrupt");
+    assert_eq!(last_write(log, 0x0046), Some(vec![0x20]), "new-reading-ready interrupt");
 
     assert_eq!(last_write(log, 0x0060), Some(vec![0x07]), "short VCSEL A");
     assert_eq!(last_write(log, 0x0063), Some(vec![0x05]), "short VCSEL B");
@@ -478,6 +481,44 @@ fn init_times_out_when_boot_never_completes() {
     let result = block_on(rangefinder.init(&mut delay));
 
     assert!(matches!(result, Err(Error::Timeout)));
+}
+
+#[test]
+fn init_rejects_a_zero_oscillator_frequency() {
+    let mut registers = healthy_registers();
+    registers.insert(0x0006, 0x00);
+    registers.insert(0x0007, 0x00);
+    let log = Log::default();
+    let i2c = MockI2c::new(registers, &log);
+    let mut delay = MockDelay::default();
+    let mut rangefinder = Rangefinder::new(i2c, MockXshut::default(), MockInt::default());
+
+    let result = block_on(rangefinder.init(&mut delay));
+
+    assert!(
+        matches!(result, Err(Error::Timeout)),
+        "a zero frequency must fail closed instead of dividing by zero"
+    );
+}
+
+#[test]
+fn init_falls_back_to_256_when_the_oscillator_calibration_is_zero() {
+    let mut registers = healthy_registers();
+    registers.insert(0x00DE, 0x00);
+    registers.insert(0x00DF, 0x00);
+    let log = Log::default();
+    let i2c = MockI2c::new(registers, &log);
+    let mut delay = MockDelay::default();
+    let mut rangefinder = Rangefinder::new(i2c, MockXshut::default(), MockInt::default());
+
+    let result = block_on(rangefinder.init(&mut delay));
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        last_write(log.borrow().as_slice(), 0x006C),
+        Some(vec![0x00, 0x00, 0x32, 0x00]),
+        "50 ms * the 256 fallback, never a zero period"
+    );
 }
 
 #[test]

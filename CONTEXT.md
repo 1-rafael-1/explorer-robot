@@ -56,7 +56,7 @@
   front or rear sensor, derived from valid readings beyond the threshold and
   the fail-safe hold. It is not an obstacle; it raises its own
   `FloorDropDetected` edge. _Avoid_: ledge detection, cliff.
-- **Rangefinder Reading** — One decoded sample from one VL53L1X: the
+- **Rangefinder Reading** — One decoded reading from one VL53L1X: the
   classified reading, the decoded **Range Status**, the raw 8-bit code and the
   signal/ambient/SPAD diagnostics. There is no `8190` sentinel. _Avoid_: sample,
   measurement (ambiguous with the LiDAR **Snapshot**).

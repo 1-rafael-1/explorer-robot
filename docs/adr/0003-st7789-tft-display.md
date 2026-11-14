@@ -13,7 +13,7 @@ the firmware moved to the RP2350B variant for GPIO headroom.
 - Move the main crate to the RP2350B variant (`rp235xb`) for GPIO headroom;
   `hardware-tests` and the `st7789-async` examples stay on `rp235xa`.
 - Drive the TFT over a dedicated, write-only **SPI1** (`Spi::new_txonly`,
-  64 MHz), leaving the IMU untouched on SPI0 and I2C0 free for the VL53L0X only.
+  64 MHz), leaving the IMU untouched on SPI0 and I2C0 free for the VL53L1X only.
 - The display module has **no CS pin**, so there is no `ExclusiveDevice` and no
   `embedded-hal-bus` dependency: the bare `Spi` is wrapped in an
   `embassy_sync::Mutex` (the IMU's pattern) to satisfy `SpiDevice`.

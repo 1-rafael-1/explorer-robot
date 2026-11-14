@@ -70,6 +70,10 @@ const fn to_readout(snapshot: rangefinder_state::RangefinderTelemetry) -> Rangef
 
 /// Map one sensor's telemetry onto the panel's neutral per-sensor readout.
 const fn sensor_readout(sensor: rangefinder_state::SensorTelemetry) -> SensorReadout {
+    let (signal_rate, ambient_rate) = match sensor.diagnostics {
+        Some(diagnostics) => (Some(diagnostics.signal_rate), Some(diagnostics.ambient_rate)),
+        None => (None, None),
+    };
     SensorReadout {
         state: Some(sensor_state(sensor.state)),
         range_mm: sensor.range_mm,
@@ -78,8 +82,8 @@ const fn sensor_readout(sensor: rangefinder_state::SensorTelemetry) -> SensorRea
             None => None,
         },
         raw_status: sensor.raw_status,
-        signal_rate: sensor.signal_rate,
-        ambient_rate: sensor.ambient_rate,
+        signal_rate,
+        ambient_rate,
         floor: Some(floor_state(sensor.floor)),
         age_ms: sensor.age_ms,
     }

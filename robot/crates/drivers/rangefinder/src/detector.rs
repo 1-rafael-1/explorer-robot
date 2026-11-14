@@ -5,9 +5,9 @@
 //!
 //! A valid reading above the threshold sets [`FloorState::Drop`] immediately.
 //! Recovering to [`FloorState::Floor`] needs two consecutive valid floor
-//! readings. Invalid and no-target samples report [`FloorState::Unknown`] for
+//! readings. Invalid and no-target readings report [`FloorState::Unknown`] for
 //! [`INVALID_HOLD_MS`] while the last safety decision is held, and then fail
-//! safe to `Drop`. They never produce a new floor decision, so a bad measurement
+//! safe to `Drop`. They never produce a new floor decision, so a bad reading
 //! can only ever make the detector more cautious.
 
 use vl53l1x::{RangefinderReading, Reading};
@@ -116,7 +116,7 @@ impl FloorDropDetector {
 
     /// Whether the held safety decision is `Drop`.
     ///
-    /// This stays true across an invalid streak, so a bad measurement cannot
+    /// This stays true across an invalid streak, so a bad reading cannot
     /// clear a drop while the detector reports `Unknown`.
     #[must_use]
     pub const fn is_drop(&self) -> bool {
@@ -160,7 +160,7 @@ impl FloorDropDetector {
         }
     }
 
-    /// Apply a valid measurement.
+    /// Apply a valid reading.
     const fn observe_valid(&mut self, range_mm: u16) {
         if range_mm > self.threshold_mm {
             self.decision = FloorState::Drop;
@@ -187,7 +187,7 @@ impl FloorDropDetector {
         }
     }
 
-    /// Apply an invalid or no-target measurement.
+    /// Apply an invalid or no-target reading.
     ///
     /// Reports `Unknown` while the previous decision is held. Every invalid
     /// reading resets the clear streak, so the two valid floor readings needed

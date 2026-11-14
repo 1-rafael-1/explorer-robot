@@ -5,7 +5,7 @@
 //! range itself is only trusted for a valid status. Unlike the VL53L0X there is
 //! no out-of-range sentinel: **No Target** is a status classification.
 
-/// The sensor's classification of a measurement.
+/// The sensor's classification of a reading.
 ///
 /// This is the decoded 8-bit device code, not ST's folded PAL range status.
 /// See [`from_raw`](Self::from_raw) for the mapping.
@@ -19,7 +19,8 @@ pub enum RangeStatus {
     NoWrapCheck,
     /// The signal rate is below the internal threshold.
     SignalFail,
-    /// The phase is out of bounds, so nothing was detected in range.
+    /// The phase is out of bounds, so nothing was detected in range. The panel
+    /// shortens this to `Phase`.
     OutOfBounds,
     /// The target is below the minimum detection threshold.
     MinRangeFail,
@@ -78,10 +79,10 @@ impl RangeStatus {
     }
 }
 
-/// A decoded measurement.
+/// A decoded reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reading {
-    /// A completed measurement of this many millimetres.
+    /// A completed reading of this many millimetres.
     Valid(u16),
     /// No target was detected or the target is out of range.
     NoTarget,
@@ -94,8 +95,8 @@ impl Reading {
     ///
     /// Raw `9` with a zero stream count decodes to [`RangeStatus::NoWrapCheck`]
     /// and is deliberately [`NoTarget`](Self::NoTarget), not
-    /// [`Valid`](Self::Valid): it is one sample of caution against a wrapped
-    /// far target, and the next sample is one inter-measurement period away.
+    /// [`Valid`](Self::Valid): it is one reading of caution against a wrapped
+    /// far target, and the next reading is one inter-measurement period away.
     #[must_use]
     pub const fn from_status(status: RangeStatus, range_mm: u16) -> Self {
         match status {
@@ -109,18 +110,18 @@ impl Reading {
     }
 }
 
-/// The raw fixed-point rates and effective SPAD count of one measurement.
+/// The raw fixed-point rates and effective SPAD count of one reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RangeDiagnostics {
-    /// The peak signal count rate in 8.7 fixed point.
+    /// The peak signal count rate in 7.7 fixed point.
     pub signal_rate: u16,
-    /// The ambient count rate in 8.7 fixed point.
+    /// The ambient count rate in 7.7 fixed point.
     pub ambient_rate: u16,
     /// The actual effective SPAD count.
     pub effective_spads: u16,
 }
 
-/// One Rangefinder Reading: the classified measurement, the decoded status, the
+/// One Rangefinder Reading: the classified reading, the decoded status, the
 /// raw 8-bit status code and the diagnostics that produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RangefinderReading {

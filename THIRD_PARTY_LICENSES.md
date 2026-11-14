@@ -74,6 +74,8 @@ Applies to:
 - `robot/crates/drivers/vl53l1x/src/driver.rs` — VL53L1X initialisation and read
   sequences
 - `robot/crates/drivers/vl53l1x/src/registers.rs` — VL53L1X register map
+- `robot/crates/drivers/vl53l1x/tests/driver.rs` — expected register sequences
+  used by the host tests
 
 The initialisation and read sequences were ported from `vl53l1x-simple` 0.2.0
 and adapted (async I2C, 16-bit register addressing, explicit `GPIO1` interrupt

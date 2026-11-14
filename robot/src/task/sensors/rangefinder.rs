@@ -479,12 +479,8 @@ struct SensorRuntime {
     status: Option<rangefinder::RangeStatus>,
     /// The last raw 8-bit Range Status code.
     raw_status: Option<u8>,
-    /// The last signal rate in 8.7 fixed point.
-    signal_rate: Option<u16>,
-    /// The last ambient rate in 8.7 fixed point.
-    ambient_rate: Option<u16>,
-    /// The last effective SPAD count.
-    effective_spads: Option<u16>,
+    /// The raw signal/ambient rates and effective SPAD count of the last reading.
+    diagnostics: Option<rangefinder::RangeDiagnostics>,
 }
 
 impl SensorRuntime {
@@ -496,48 +492,35 @@ impl SensorRuntime {
             range_mm: None,
             status: None,
             raw_status: None,
-            signal_rate: None,
-            ambient_rate: None,
-            effective_spads: None,
+            diagnostics: None,
         }
+    }
+
+    /// Drop the last reading so the readout keeps its placeholders.
+    const fn clear_reading(&mut self) {
+        self.last_reading_ms = None;
+        self.range_mm = None;
+        self.status = None;
+        self.raw_status = None;
+        self.diagnostics = None;
     }
 
     /// Reset the runtime for a fresh enable.
     const fn reset_for_enable(&mut self, now_ms: u64) {
         self.lifecycle.begin_enable(now_ms);
-        // No reading has arrived yet, so the readout keeps its placeholders.
-        self.last_reading_ms = None;
-        self.range_mm = None;
-        self.status = None;
-        self.raw_status = None;
-        self.signal_rate = None;
-        self.ambient_rate = None;
-        self.effective_spads = None;
+        self.clear_reading();
     }
 
     /// Mark the sensor ready for a first valid reading after init or recovery.
     const fn on_sensor_ready(&mut self, now_ms: u64) {
         self.lifecycle.attempt_succeeded(now_ms);
-        // No reading has arrived yet, so the readout keeps its placeholders.
-        self.last_reading_ms = None;
-        self.range_mm = None;
-        self.status = None;
-        self.raw_status = None;
-        self.signal_rate = None;
-        self.ambient_rate = None;
-        self.effective_spads = None;
+        self.clear_reading();
     }
 
     /// Reset the runtime after an explicit disable.
     const fn reset(&mut self) {
         self.lifecycle.begin_disable();
-        self.last_reading_ms = None;
-        self.range_mm = None;
-        self.status = None;
-        self.raw_status = None;
-        self.signal_rate = None;
-        self.ambient_rate = None;
-        self.effective_spads = None;
+        self.clear_reading();
     }
 
     /// Apply one reading to the detector and the sensor's telemetry.
@@ -545,9 +528,7 @@ impl SensorRuntime {
         self.last_reading_ms = Some(now_ms);
         self.status = Some(reading.status);
         self.raw_status = Some(reading.raw_status);
-        self.signal_rate = Some(reading.diagnostics.signal_rate);
-        self.ambient_rate = Some(reading.diagnostics.ambient_rate);
-        self.effective_spads = Some(reading.diagnostics.effective_spads);
+        self.diagnostics = Some(reading.diagnostics);
         self.range_mm = match reading.reading {
             rangefinder::Reading::Valid(range_mm) => Some(range_mm),
             rangefinder::Reading::NoTarget | rangefinder::Reading::Invalid(_) => None,
@@ -563,9 +544,7 @@ impl SensorRuntime {
             range_mm: self.range_mm,
             status: self.status,
             raw_status: self.raw_status,
-            signal_rate: self.signal_rate,
-            ambient_rate: self.ambient_rate,
-            effective_spads: self.effective_spads,
+            diagnostics: self.diagnostics,
             floor: self.lifecycle.floor(),
             age_ms: self
                 .last_reading_ms

@@ -3,7 +3,7 @@
 //! The firmware task owns the async I2C transactions; this module owns the
 //! state machine around them. It decides when a sensor is waiting, armed,
 //! recovering or failed, how many attempts remain, and when a reading is a
-//! stale or faulty sample. The task supplies readings, init/reset outcomes and
+//! stale or faulty reading. The task supplies readings, init/reset outcomes and
 //! `now_ms`, so every transition is host-testable without a sensor.
 //!
 //! The detector is owned here as well: a sensor's floor decision and its
@@ -14,11 +14,11 @@
 //! last decision and fail safe after the invalid hold, but they never reset a
 //! healthy sensor.
 
-use vl53l1x::{RangefinderReading, Reading};
+use vl53l1x::RangefinderReading;
 
 use crate::{
     constants::RESET_ATTEMPTS,
-    detector::{FloorDropDetector, FloorState},
+    detector::{FloorDropDetector, FloorState, ReadingHealth},
     pair::SensorState,
 };
 
@@ -121,10 +121,9 @@ impl SensorLifecycle {
     /// Apply one Rangefinder Reading to the detector and the lifecycle.
     pub const fn on_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
         let fault = reading.status.is_fault();
-        let valid = matches!(reading.reading, Reading::Valid(_));
-        self.detector.update(reading, now_ms);
+        let health = self.detector.update(reading, now_ms);
         self.last_fault = fault;
-        if matches!(self.state, SensorState::Waiting) && valid {
+        if matches!(self.state, SensorState::Waiting) && matches!(health, ReadingHealth::Valid) {
             self.state = SensorState::Armed;
         }
     }

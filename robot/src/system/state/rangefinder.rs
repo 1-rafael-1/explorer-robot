@@ -1,7 +1,7 @@
 //! Rangefinder telemetry snapshot.
 //!
 //! The pair task publishes the latest per-sensor reading, decoded status, raw
-//! code, diagnostics, floor state, age and pair state after every sample. The
+//! code, diagnostics, floor state, age and pair state after every reading. The
 //! snapshot is panel-only: it is not part of Activity State and never enters the
 //! `ACTIVITY` stream or the Link Protocol.
 //!
@@ -14,32 +14,27 @@
 //! state mutex is held.
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use rangefinder::{FloorState, PairState, RangeStatus, SensorState};
+use rangefinder::{FloorState, PairState, RangeDiagnostics, RangeStatus, SensorState};
 
 /// One sensor's telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SensorTelemetry {
     /// The sensor's state within the pair.
     pub state: SensorState,
-    /// The last valid range in millimetres, or `None` when the last sample was
+    /// The last valid range in millimetres, or `None` when the last reading was
     /// invalid or the sensor has not produced one yet.
     pub range_mm: Option<u16>,
-    /// The last decoded Range Status, or `None` before the first sample.
+    /// The last decoded Range Status, or `None` before the first reading.
     pub status: Option<RangeStatus>,
-    /// The last raw 8-bit Range Status code, or `None` before the first sample.
+    /// The last raw 8-bit Range Status code, or `None` before the first reading.
     pub raw_status: Option<u8>,
-    /// The last signal rate in 8.7 fixed point, or `None` before the first
-    /// sample.
-    pub signal_rate: Option<u16>,
-    /// The last ambient rate in 8.7 fixed point, or `None` before the first
-    /// sample.
-    pub ambient_rate: Option<u16>,
-    /// The last effective SPAD count, or `None` before the first sample.
-    pub effective_spads: Option<u16>,
+    /// The raw signal and ambient rates and the effective SPAD count of the last
+    /// reading, or `None` before the first reading.
+    pub diagnostics: Option<RangeDiagnostics>,
     /// The detector's floor state.
     pub floor: FloorState,
-    /// Age of the last sample in milliseconds, or `None` before the first
-    /// sample.
+    /// Age of the last reading in milliseconds, or `None` before the first
+    /// reading.
     pub age_ms: Option<u32>,
 }
 

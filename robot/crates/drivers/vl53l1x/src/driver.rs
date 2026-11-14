@@ -43,6 +43,10 @@ pub const SHORT_TIMING_BUDGET_US: u32 = 33_000;
 /// The commanded inter-measurement period, in milliseconds.
 pub const INTERMEASUREMENT_PERIOD_MS: u32 = 50;
 
+/// The oscillator calibration value the reference uses when the sensor reports
+/// zero, which would otherwise produce a zero inter-measurement period.
+const DEFAULT_OSC_CALIBRATE_VAL: u16 = 256;
+
 /// Length of the result block at `RESULT_RANGE_STATUS`, in bytes.
 const RESULT_BLOCK_LEN: usize = 17;
 
@@ -62,7 +66,8 @@ pub enum Error<E> {
     Bus(E),
     /// The device did not identify as a VL53L1X; carries the raw model ID.
     InvalidDevice(u16),
-    /// The driver's boot polling limit elapsed.
+    /// The boot poll or the oscillator calibration did not produce a usable
+    /// value before the driver's limit elapsed.
     Timeout,
     /// The sensor rejected the requested measurement timing budget.
     TimingBudget,
@@ -70,7 +75,7 @@ pub enum Error<E> {
     Shutdown,
     /// The `INT` line could not be awaited.
     Interrupt,
-    /// The sensor had no new sample ready for this read.
+    /// The sensor had no new reading ready for this read.
     NotReady,
 }
 
@@ -138,7 +143,7 @@ where
     /// Pulses `XSHUT` low then high, requires the `0xEACC` model ID, soft-resets
     /// and polls the firmware status for up to 500 ms while treating NACKs as
     /// "still booting". Then it configures the 2.8 V pads, the active-low
-    /// range/error `GPIO1` interrupt and the new-sample-ready interrupt, applies
+    /// range/error `GPIO1` interrupt and the new-reading-ready interrupt, applies
     /// the static configuration subset and short distance mode at a 33 ms
     /// timing budget, sets the part-to-part offset and the 50 ms
     /// inter-measurement period, clears the interrupt and starts timed ranging.
@@ -173,6 +178,11 @@ where
         self.write_u8(reg::PAD_I2C_HV_EXTSUP_CONFIG, pad_config | 0x01).await?;
 
         self.fast_osc_frequency = self.read_u16(reg::OSC_MEASURED_FAST_OSC_FREQUENCY).await?;
+        // A zero frequency would divide by zero in the timing maths below; the
+        // sensor has not produced a usable calibration, so fail closed.
+        if self.fast_osc_frequency == 0 {
+            return Err(Error::Timeout);
+        }
         self.osc_calibrate_val = self.read_u16(reg::RESULT_OSC_CALIBRATE_VAL).await?;
 
         self.configure_static().await?;
@@ -197,9 +207,9 @@ where
         Ok(())
     }
 
-    /// Read the latest sample.
+    /// Read the latest Rangefinder Reading.
     ///
-    /// Checks `GPIO__TIO_HV_STATUS` first. If no sample is ready it clears the
+    /// Checks `GPIO__TIO_HV_STATUS` first. If no reading is ready it clears the
     /// interrupt so the task cannot spin, and returns [`Error::NotReady`]
     /// without consuming a stale block. Otherwise it reads the 17-byte result
     /// block, runs the one-time calibration on the first result, updates the DSS
@@ -297,7 +307,9 @@ where
     /// Poll the firmware status until boot completes or the limit elapses.
     ///
     /// A NACK during boot is expected and treated as "still booting" rather than
-    /// as a hard bus error.
+    /// as a hard bus error. The generic `I2C::Error` cannot distinguish a NACK
+    /// from another bus error, so every error during this poll is tolerated; a
+    /// device that never answers ends as [`Error::Timeout`].
     async fn wait_for_boot<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), Error<I2C::Error>> {
         let mut elapsed_ms = 0;
         loop {
@@ -429,7 +441,12 @@ where
 
     /// Set the inter-measurement period, clear the interrupt and start ranging.
     async fn start_ranging(&mut self) -> Result<(), Error<I2C::Error>> {
-        let period_ms = INTERMEASUREMENT_PERIOD_MS * u32::from(self.osc_calibrate_val);
+        let osc_calibrate_val = if self.osc_calibrate_val == 0 {
+            DEFAULT_OSC_CALIBRATE_VAL
+        } else {
+            self.osc_calibrate_val
+        };
+        let period_ms = INTERMEASUREMENT_PERIOD_MS * u32::from(osc_calibrate_val);
         self.write_u32(reg::SYSTEM_INTERMEASUREMENT_PERIOD, period_ms).await?;
         self.clear_interrupt().await?;
         self.write_u8(reg::SYSTEM_MODE_START, 0x40).await?;
@@ -528,11 +545,11 @@ struct ResultBlock {
     stream_count: u8,
     /// The actual effective SPAD count.
     effective_spads: u16,
-    /// The ambient count rate in 8.7 fixed point.
+    /// The ambient count rate in 7.7 fixed point.
     ambient_rate: u16,
     /// The crosstalk-corrected range, in millimetres.
     range_mm: u16,
-    /// The crosstalk-corrected peak signal count rate in 8.7 fixed point.
+    /// The crosstalk-corrected peak signal count rate in 7.7 fixed point.
     signal_rate: u16,
 }
 

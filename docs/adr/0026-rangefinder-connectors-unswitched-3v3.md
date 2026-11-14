@@ -1,7 +1,7 @@
 # Two rangefinders on unswitched 3.3 V with XSHUT and INT
 
-The robot carries two VL53L0X time-of-flight modules on the enclosure: one
-front-down/forward and one rear-down/backward. They are external parts on cables,
+The robot carries two VL53L1X (TOF0400C) time-of-flight modules on the enclosure:
+one front-down/forward and one rear-down/backward. They are external parts on cables,
 one per I²C bus, so the board only needs a connector, decoupling, pull-ups and
 series resistors for each. The modules expose six signals: `VCC`, `GND`, `SCL`,
 `SDA`, `INT` and `SHUT`.
@@ -12,7 +12,9 @@ and the rear unit on I2C1 (GPIO 26/27). Both keep the default `0x29` address, so
 and standby control, and the spare GPIOs are available.
 
 **Status:** accepted. The topology, connector pin order and GPIO allocation are
-settled. The 0603 33 Ω part selection remains provisional.
+settled. The 0603 33 Ω part selection remains provisional. The fitted part is
+now the VL53L1X/TOF0400C (ADR-0049); the connector, power and GPIO decisions
+here are unchanged.
 
 **Considered Options**
 
