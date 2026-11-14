@@ -24,8 +24,9 @@
 - **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. Its 5 V branch is switched by a TPS22917 high-side load switch enabled by `PANEL_PWR` (GPIO0, ADR-0024). The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
-- **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) and obstacle alerts (flashing red).
+- **RGB LED** — Common-cathode RGB LED. Indicates battery state (green → yellow → red) from pack voltage and obstacle alerts (flashing red).
 - **Battery** — 2S LiPo (twin 18650, 8.4V max). Placed at the front to counterbalance the rear-mounted motors (~400g combined). Voltage read via ADC. Motors compensated to 6V target.
+- **Pack Voltage** — The estimated pack-terminal voltage: the ADC divider directly measures the protected `+8V` rail, and the measurement adds the idle-load cable and reverse-polarity FET drop (`PACK_DROP_K / rail`, ADR-0019). Motor current adds further drop, so this is an estimate, not an independent terminal measurement. Drives the RGB LED's battery indication and the panel/Link telemetry.
 - **Standby Pin** — Direct GPIO that enables/disables the TB6612FNG motor driver. Active high.
 - **Pin Group** — The RP2350B GPIO assignment keeps each peripheral on a contiguous run of pins (motor 4–12, RGB 13–15, I2C0 16–17, IMU 18–22, camera 23–25, I2C1 26–27, LiDAR 28–30, expansion 32–37, touch 38–39, battery 40, display 41–47) so its harness leaves the package as one bundle; the panel power switch is the point-to-point exception on GPIO0 (ADR-0024), and the rangefinder `XSHUT`/`INT` lines are point-to-point on GPIO1–3 and GPIO31 (ADR-0026). No spare GPIOs remain. See ADR-0022.
 
@@ -185,7 +186,7 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 Lock order (documented in each module): **power → calibration → perception → motion → activity**.
 `imu_test` and `dmp_cal` are independent leaves that are never held with another state lock.
 
-- **Power State** — Battery level (0–100%) and voltage. Accessed via `power::try_get_battery_voltage()` for hot-path readers.
+- **Power State** — Battery level (0–100%), pack voltage and motor rail voltage. Accessed via `power::get_battery_snapshot()` for level and pack voltage, and `power::try_get_rail_sample()` for the non-blocking hot-path rail sample.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
 - **Procedure** — A long-running, operator-started, stoppable unit of work: a test mode, a calibration, or a drive mode. Identified by the Menu Entry that starts it, and it holds the **Active Claim** while it runs.
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)

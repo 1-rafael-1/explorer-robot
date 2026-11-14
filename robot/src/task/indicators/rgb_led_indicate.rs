@@ -3,10 +3,13 @@
 //! Provides visual feedback about system state through an RGB LED:
 //!
 //! # Battery Indication
-//! - Solid color indicating battery level
-//!   - Green: Full battery (100%)
-//!   - Red: Low battery (0%)
-//!   - Smooth transition between colors as battery drains
+//! - Solid color indicating pack voltage
+//!   - Green at or above 7.7 V, yellow at 6.7 V, red at or below 6.2 V
+//!   - Green holds above the green anchor, then shifts continuously; the blend
+//!     has no step at either end
+//!   - A normalized mix bias compensates for green being perceptually brighter
+//!   - The curve lives in the `indicator-led` crate so its anchors are
+//!     host-tested
 //!
 //! # State Change Indication
 //! - Quick alternating red/green blink sequence (5 blinks)
@@ -21,7 +24,7 @@
 //! # PWM Control
 //! - 100Hz PWM frequency for flicker-free operation
 //! - Independent control of red, green, and blue channels via PIO PWM
-//! - Duty cycle proportional to battery level
+//! - Duty cycle derived from pack voltage, with a perceptual red/green mix
 //! - Smooth transitions between states
 
 use core::time::Duration as CoreDuration;
@@ -29,6 +32,7 @@ use core::time::Duration as CoreDuration;
 use embassy_rp::{peripherals::PIO1, pio_programs::pwm::PioPwm};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_time::{Duration, Timer};
+use indicator_led::battery_color;
 
 use crate::system::state::power;
 
@@ -197,32 +201,17 @@ pub async fn rgb_led_indicate(
             set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, 0, 0, 0);
         }
 
-        // Get current system state
-        let battery_level = power::get_battery_level().await;
-        // Calculate PWM duty cycles based on battery level
-        if battery_level.is_none() {
-            // No battery level info: solid blue
+        // Get the current pack voltage. Level and voltage are published
+        // together, so a missing or non-finite voltage means no usable battery
+        // info; show the same blue as the pre-measurement state.
+        let battery = power::get_battery_snapshot().await;
+        let Some(voltage) = battery.voltage.filter(|voltage| voltage.is_finite()) else {
+            // No usable battery info: solid blue
             set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, 0, 0, 100);
             continue;
-        }
-
-        let batt_lvl = battery_level.unwrap_or_default();
-
-        let (green_pwm, red_pwm) = if batt_lvl >= 50 {
-            // Upper half: Green fades to yellow
-            let blend_factor = (batt_lvl - 50) * 2; // Scale 50-100 to 0-100
-            let green = 100;
-            let red = 100 - blend_factor;
-            (green, red)
-        } else {
-            // Lower half: Yellow fades to red
-            let blend_factor = batt_lvl * 2; // Scale 0-50 to 0-100
-            let green = blend_factor; // Green fades out
-            let red = 100; // Keep red at full
-            (green, red)
         };
 
-        // Solid color indicating battery level
-        set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, red_pwm, green_pwm, 0);
+        let color = battery_color(voltage);
+        set_rgb(&mut pwm_red, &mut pwm_green, &mut pwm_blue, color.red, color.green, 0);
     }
 }
