@@ -134,6 +134,12 @@ test('the canvas is named, focusable and points at the numeric form', async () =
   assert(/bearing/i.test(name), 'the name mentions the bearing field');
   assert(/distance/i.test(name), 'the name mentions the distance field');
   assert(/form/i.test(name), 'the name points at the keyboard form');
+  assert(/dotted/i.test(name), 'the name mentions the dotted fans');
+  assert(/red/i.test(name), 'the name says the fans are red');
+  assert(
+    /cannot see|unseen/i.test(name),
+    'the name says the fans mark space the scan cannot see',
+  );
 });
 
 test('the sheet tabs expose aria-selected and control existing panels', async () => {

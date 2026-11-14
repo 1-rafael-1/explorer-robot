@@ -45,6 +45,8 @@ const COLOR = Object.freeze({
   preview: '#46c2ff',
   occlusionFill: 'rgba(248, 113, 113, 0.12)',
   occlusionEdge: '#f87171',
+  occlusionFillStale: 'rgba(127, 150, 170, 0.06)',
+  occlusionEdgeStale: '#7f96aa',
 });
 
 /** Returns `point` pushed outward to `rangeCm` on the ray from `pose`. */
@@ -284,17 +286,20 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
 
     // The shadow is inferred once per render so the fill, the dotted edges and
     // the cloud's chord seams all come from the same descriptors (ADR-0046).
+    // Its liveness is the scan's own: a missing scan is stale, so the layer
+    // never outlives what it was inferred from.
     const lidar = source.streams?.lidar;
     const scanPose = lidar ? poseForScan(source, lidar) : null;
     const shadows = lidar ? scanShadows(scanPose, lidar.v) : [];
+    const stale = isStaleScan(lidar?.ts, now);
 
-    // Layer order (ADR-0038): grid, map layer, occlusion shadow, live scan,
-    // robot/target/preview, overlay.
+    // Layer order (ADR-0038, ADR-0046): grid, map layer, occlusion shadow,
+    // live scan, robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
-    drawShadows(scanPose, shadows);
-    drawCloud(source, now, shadows);
-    drawOcclusionEdges(scanPose, shadows);
+    drawShadows(scanPose, shadows, stale);
+    drawCloud(lidar, scanPose, shadows, stale);
+    drawOcclusionEdges(scanPose, shadows, stale);
     drawPreview(source);
     drawRobot();
     updateOverlay(source, now);
@@ -335,16 +340,17 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
   }
 
   /**
-   * Fills each inferred Occlusion Shadow under the live cloud (ADR-0046). The
+   * Fills each inferred Occlusion Shadow under the cloud (ADR-0046). The
    * classifier is pure geometry; this layer only fills the fan bounded by the
-   * measured contour and the two radial Occlusion Edges at the cap range. No
+   * measured contour and the two radial Occlusion Edges at the cap range. The
+   * fill follows the scan's age: the live soft red, or the muted stale grey. No
    * shadow survives its scan, so it is recomputed on every render.
    */
-  function drawShadows(scanPose, shadows) {
+  function drawShadows(scanPose, shadows, stale) {
     if (!view || shadows.length === 0) return;
 
     context.save();
-    context.fillStyle = COLOR.occlusionFill;
+    context.fillStyle = stale ? COLOR.occlusionFillStale : COLOR.occlusionFill;
     for (const shadow of shadows) {
       const contour = shadow.silhouette;
       if (contour.length === 0) continue;
@@ -372,13 +378,14 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
   /**
    * Strokes the two Occlusion Edges above the cloud (ADR-0046). Each edge is a
    * dotted radial line from a contour endpoint outward to the cap, replacing
-   * the surface chord the cloud no longer draws across that step.
+   * the surface chord the cloud no longer draws across that step. The stroke
+   * shares the scan's age with the fill and the cloud.
    */
-  function drawOcclusionEdges(scanPose, shadows) {
+  function drawOcclusionEdges(scanPose, shadows, stale) {
     if (!view || shadows.length === 0) return;
 
     context.save();
-    context.strokeStyle = COLOR.occlusionEdge;
+    context.strokeStyle = stale ? COLOR.occlusionEdgeStale : COLOR.occlusionEdge;
     context.lineWidth = 1.2;
     context.setLineDash([2, 4]);
     context.lineCap = 'round';
@@ -397,12 +404,9 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.restore();
   }
 
-  function drawCloud(state, now, shadows) {
-    const lidar = state?.streams?.lidar;
+  function drawCloud(lidar, cloudPose, shadows, stale) {
     if (!lidar) return;
-    const cloudPose = poseForScan(state, lidar);
     const points = scanPoints(cloudPose, lidar.v);
-    const stale = isStaleScan(lidar.ts, now);
     const count = lidar.v?.ranges_cm?.length ?? 0;
     const seams = occlusionSeams(shadows, count);
 

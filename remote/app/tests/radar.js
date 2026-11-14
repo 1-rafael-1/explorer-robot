@@ -288,6 +288,41 @@ function edgeRedNear(canvas, radar, x, y, size = 9) {
   return false;
 }
 
+/** Counts live soft-red pixels — the Occlusion fill and its dotted edges — canvas-wide. */
+function liveRedPixels(canvas) {
+  const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+  let count = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    // The same test as `redNear`: the 0.12 fill and the #f87171 dash both pass;
+    // the dark background, the blue cloud and the grey stale palette do not.
+    if (red > 24 && red > green && red > blue - 12) count += 1;
+  }
+  return count;
+}
+
+/** Returns the mean colour of a square sample window centred on a world point. */
+function tintNear(canvas, radar, x, y, size = 9) {
+  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+  const scale = radar.scale;
+  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
+  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
+  const half = (size - 1) / 2;
+  const { data } = canvas
+    .getContext('2d')
+    .getImageData(px - half, py - half, size, size);
+  const total = { red: 0, green: 0, blue: 0 };
+  for (let index = 0; index < data.length; index += 4) {
+    total.red += data[index];
+    total.green += data[index + 1];
+    total.blue += data[index + 2];
+  }
+  const pixels = data.length / 4;
+  return { red: total.red / pixels, green: total.green / pixels, blue: total.blue / pixels };
+}
+
 /** Returns the world midpoint between two returns. */
 function midpoint(a, b) {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -439,6 +474,57 @@ test('a protrusion paints a red fan and a flat scan paints none', () => {
   });
   radar.render(store.state, 1100);
   assertEqual(redNear(canvas, radar, 140, 0), 0, 'a flat wall paints no shadow');
+});
+
+test('a fresh protrusion paints live red and a stale one is muted to grey', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  // A 60 cm protrusion across the scan seam against a 300 cm background, wide
+  // enough that a sample well inside the fan is unambiguous. The near range
+  // stays above the 45 cm amber-dot threshold.
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 340; slot < 360; slot += 1) ranges[slot] = 60;
+  for (let slot = 0; slot <= 20; slot += 1) ranges[slot] = 60;
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+
+  // Fresh: the live soft red fills the wedge and strokes both Occlusion Edges.
+  radar.render(store.state, 1100);
+  assert(redNear(canvas, radar, 200, 0) > 0, 'the fresh wedge is shaded live red');
+  assert(liveRedPixels(canvas) > 0, 'the fresh scan paints live-red pixels');
+  for (const slot of [340, 20]) {
+    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
+    const hit = [200, 230, 260, 290].some((radius) =>
+      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
+    );
+    assert(hit, `slot ${slot} strokes a live-red Occlusion Edge`);
+  }
+
+  // Past the stale gate the geometry stays; the live red does not.
+  radar.render(store.state, 1000 + STALE_MS + 1);
+  assertEqual(liveRedPixels(canvas), 0, 'a stale scan paints no live-red pixels');
+  const wedge = tintNear(canvas, radar, 200, 0);
+  assert(wedge.red <= wedge.green && wedge.red <= wedge.blue, 'the stale tint reads grey, not red');
+
+  // The same stale grid with no shadow is the control: the fan still tints it.
+  const flat = Array.from({ length: 360 }, () => 300);
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 2, ts: 1000, v: scanValue(flat) });
+  radar.render(store.state, 1000 + STALE_MS + 1);
+  const plain = tintNear(canvas, radar, 200, 0);
+  assert(
+    wedge.blue >= plain.blue + 3,
+    `the stale wedge keeps a grey tint: ${wedge.blue} over ${plain.blue}`,
+  );
+});
+
+test('no scan means no shadow, so no remembered shadow is drawn', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  radar.render(store.state, 1100);
+  assertEqual(liveRedPixels(canvas), 0, 'a radar with no lidar stream paints no red');
 });
 
 test('center returns to the robot and keeps the zoom', () => {
