@@ -20,6 +20,9 @@ export const MIN_ICON_PX = 22;
 /** The scan age after which a scan is drawn dimmed; display only, never a gate (ADR-0043). */
 export const STALE_MS = 350;
 
+/** The range step that marks an Occlusion Edge, in centimetres (ADR-0046). */
+export const OCCLUSION_STEP_CM = 50;
+
 /** The identity pose, used until odometry lands. */
 export const IDENTITY_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
 
@@ -183,4 +186,94 @@ export function scanPoints(pose, value) {
     });
   }
   return points;
+}
+
+/**
+ * Classifies a `lidar` stream value into Occlusion Shadows (ADR-0046).
+ *
+ * A shadow is a near segment: a run of valid returns bounded in slot order by
+ * a fall and the next rise, where each step is at least `OCCLUSION_STEP_CM`,
+ * the run holds at least two adjacent returns, and the run is shorter than
+ * half the scan. A `null` range is a No Return and disqualifies a candidate:
+ * it is unknown, not far. The scan is walked cyclically, so a protrusion
+ * across slot 0 is found and kept in slot order.
+ *
+ * Each shadow carries the segment's measured contour in world centimetres and
+ * the cap range: the greater of the two flanking far returns. This is display
+ * geometry only; the caller recomputes it on every render.
+ */
+export function scanShadows(pose, value) {
+  const ranges = value?.ranges_cm ?? [];
+  const count = ranges.length;
+  if (count === 0) return [];
+
+  const first = value?.first_deg ?? 0;
+  const step = value?.step_deg ?? 1;
+  const clockwise = value?.clockwise ?? true;
+  const valid = (slot) => ranges[slot] != null;
+
+  // The slot distance forward from `from` to `to` around the closed scan.
+  const advance = (from, to) => (to - from + count) % count;
+
+  // Walks forward from `start` to the first rise, bounded by the fall that
+  // started the segment. A No Return on the way breaks the candidate instead
+  // of being skipped, and the rise needs a valid far return after it.
+  const firstRise = (start) => {
+    let slot = start;
+    for (let edge = 0; edge < count - 1; edge += 1) {
+      if (!valid(slot)) return null;
+      const next = (slot + 1) % count;
+      if (!valid(next)) return null;
+      if (ranges[next] - ranges[slot] >= OCCLUSION_STEP_CM) return slot;
+      slot = next;
+    }
+    return null;
+  };
+
+  const candidates = [];
+  for (let slot = 0; slot < count; slot += 1) {
+    const next = (slot + 1) % count;
+    if (!valid(slot) || !valid(next)) continue;
+    if (ranges[slot] - ranges[next] < OCCLUSION_STEP_CM) continue;
+    const rise = firstRise(next);
+    if (rise == null) continue;
+    const span = advance(slot, rise);
+    // A one-slot segment has coincident Occlusion Edges; a segment at least
+    // half the scan leaves the far recess as the near background, not a
+    // protrusion.
+    if (span < 2 || span * 2 >= count) continue;
+    candidates.push({ fall: slot, rise, span });
+  }
+
+  // A fall inside another candidate's near segment is the same protrusion, so
+  // only the outermost fall of each run emits a shadow.
+  const outer = candidates.filter(
+    (candidate) =>
+      !candidates.some(
+        (other) => other !== candidate && advance(other.fall, candidate.fall) <= other.span,
+      ),
+  );
+
+  const worldPoint = (slot) => {
+    const angle = slotAngleDeg(pose, first, step, clockwise, slot) * RAD;
+    const range = ranges[slot];
+    return {
+      slot,
+      range,
+      x: pose.x + range * Math.cos(angle),
+      y: pose.y + range * Math.sin(angle),
+    };
+  };
+
+  return outer.map((candidate) => {
+    const silhouette = [];
+    for (let offset = 1; offset <= candidate.span; offset += 1) {
+      silhouette.push(worldPoint((candidate.fall + offset) % count));
+    }
+    const farRight = ranges[(candidate.rise + 1) % count];
+    return {
+      silhouette,
+      capCm: Math.max(ranges[candidate.fall], farRight),
+    };
+  });
 }

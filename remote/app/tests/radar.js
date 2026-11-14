@@ -1,6 +1,7 @@
 // The World Frame radar suite: the slot convention, the camera transform, the
-// icon tap guard, the scan/pose timestamp seam, and a live scan drawn onto a
-// real canvas (fresh versus stale). It does not mount the app's full DOM.
+// icon tap guard, the scan/pose timestamp seam, the Occlusion Shadow
+// classifier, and a live scan drawn onto a real canvas (fresh versus stale).
+// It does not mount the app's full DOM.
 
 import {
   FOOTPRINT,
@@ -14,6 +15,7 @@ import {
   poseAt,
   scanAgeMs,
   scanPoints,
+  scanShadows,
   screenToWorld,
   slotAngleDeg,
   worldToScreen,
@@ -23,6 +25,12 @@ import { createStore } from '../js/store.js';
 import { assert, assertClose, assertEqual, autorun, test } from './harness.js';
 
 const RAD = Math.PI / 180;
+const ORIGIN = { x: 0, y: 0, yaw: 0 };
+
+/** Builds a one-degree scan value with the v1 conventions. */
+function scanValue(ranges) {
+  return { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true };
+}
 
 /** Creates a laid-out canvas so `clientWidth`/`clientHeight` are real. */
 function makeCanvas(width = 320, height = 240) {
@@ -61,6 +69,139 @@ test('LiDAR slot 0 is ahead and the slots run clockwise', () => {
   assertClose(slotAngleDeg({ x: 0, y: 0, yaw: 0 }, 10, 2, true, 5), -20, 1e-9);
 });
 
+test('a near protrusion casts one Occlusion Shadow on its own contour', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1, 'one protrusion, one shadow');
+  const [shadow] = shadows;
+  assertEqual(shadow.capCm, 300, 'the cap is the local background');
+  assertEqual(
+    shadow.silhouette.map((point) => point.slot),
+    Array.from({ length: 21 }, (_, index) => 170 + index),
+    'the silhouette is the measured contour in slot order',
+  );
+  assertEqual(
+    shadow.silhouette.map((point) => point.range),
+    Array.from({ length: 21 }, () => 60),
+    'every contour point keeps its return',
+  );
+  // The world points use the slot convention: slot 0 ahead, slots clockwise.
+  const first = shadow.silhouette[0];
+  assertClose(first.x, 60 * Math.cos(-170 * RAD), 1e-9);
+  assertClose(first.y, 60 * Math.sin(-170 * RAD), 1e-9);
+});
+
+test('a flat or slanted scan casts no Occlusion Shadow', () => {
+  const flat = Array.from({ length: 360 }, () => 240);
+  assertEqual(scanShadows(ORIGIN, scanValue(flat)).length, 0, 'a flat wall is not a protrusion');
+
+  const slanted = Array.from({ length: 360 }, (_, slot) => 250 + 30 * Math.cos(slot * RAD));
+  assertEqual(
+    scanShadows(ORIGIN, scanValue(slanted)).length,
+    0,
+    'a gentle range change is not an edge',
+  );
+});
+
+test('a far recess whose complement is the near background is not a protrusion', () => {
+  const ranges = Array.from({ length: 360 }, () => 100);
+  for (let slot = 100; slot <= 200; slot += 1) ranges[slot] = 300;
+  assertEqual(
+    scanShadows(ORIGIN, scanValue(ranges)).length,
+    0,
+    'the longer complement of a wide doorway is the near background',
+  );
+});
+
+test('a step under the threshold is not an Occlusion Edge', () => {
+  // A 40 cm rise on the right extends the near run; the first real rise is
+  // then more than half the scan away, so nothing is shaded.
+  const weakRise = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) weakRise[slot] = 60;
+  for (let slot = 191; slot < 360; slot += 1) weakRise[slot] = 100;
+  assertEqual(scanShadows(ORIGIN, scanValue(weakRise)).length, 0);
+
+  // A 40 cm fall cannot start a near segment at all.
+  const weakFall = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) weakFall[slot] = 260;
+  assertEqual(scanShadows(ORIGIN, scanValue(weakFall)).length, 0);
+});
+
+test('a one-slot near spike has coincident edges, so it casts no shadow', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  ranges[180] = 60;
+  assertEqual(scanShadows(ORIGIN, scanValue(ranges)).length, 0);
+});
+
+test('a No Return breaks the near segment, so no shadow is cast', () => {
+  const inner = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) inner[slot] = 60;
+  inner[180] = null;
+  assertEqual(
+    scanShadows(ORIGIN, scanValue(inner)).length,
+    0,
+    'a null inside the span disqualifies',
+  );
+
+  const flank = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) flank[slot] = 60;
+  flank[191] = null;
+  assertEqual(scanShadows(ORIGIN, scanValue(flank)).length, 0, 'a null neighbour disqualifies');
+});
+
+test('a protrusion across slot 0 is found once in cyclic slot order', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 355; slot < 360; slot += 1) ranges[slot] = 60;
+  for (let slot = 0; slot <= 5; slot += 1) ranges[slot] = 60;
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1, 'the seam does not split the protrusion');
+  assertEqual(
+    shadows[0].silhouette.map((point) => point.slot),
+    [355, 356, 357, 358, 359, 0, 1, 2, 3, 4, 5],
+    'the contour runs forward through the seam',
+  );
+  assertEqual(shadows[0].capCm, 300);
+});
+
+test('the cap is the greater of the two flanking returns', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+  ranges[191] = 500;
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1);
+  assertEqual(shadows[0].capCm, 500, 'the far flank wins over the near flank');
+});
+
+test('consecutive falls in one protrusion emit a single shadow', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 185; slot += 1) ranges[slot] = 200;
+  ranges[186] = 140;
+  for (let slot = 187; slot <= 190; slot += 1) ranges[slot] = 80;
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1, 'an inner fall does not start a second shadow');
+  assertEqual(
+    shadows[0].silhouette.map((point) => point.slot),
+    Array.from({ length: 21 }, (_, index) => 170 + index),
+    'the outer fall owns the whole near run',
+  );
+});
+
+test('the shadow is measured from the pose it is given', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+
+  const pose = { x: 100, y: -50, yaw: 20 };
+  const first = scanShadows(pose, scanValue(ranges))[0].silhouette[0];
+  const angle = (pose.yaw - 170) * RAD;
+  assertClose(first.x, pose.x + 60 * Math.cos(angle), 1e-9);
+  assertClose(first.y, pose.y + 60 * Math.sin(angle), 1e-9);
+});
+
 test('a null return produces no point, so the cloud draws a gap', () => {
   const pose = { x: 0, y: 0, yaw: 0 };
   const points = scanPoints(pose, {
@@ -88,6 +229,27 @@ test('a null return produces no point, so the cloud draws a gap', () => {
   assertClose(only[0].x, 0, 1e-9);
   assertClose(only[0].y, 10, 1e-9);
 });
+
+/** Counts translucent soft-red fill pixels near a world point. */
+function redNear(canvas, radar, x, y, size = 7) {
+  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
+  const scale = radar.scale;
+  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
+  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
+  const { data } = canvas
+    .getContext('2d')
+    .getImageData(px - (size - 1) / 2, py - (size - 1) / 2, size, size);
+  let count = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    // rgba(248,113,113,0.12) over the dark grid keeps red ahead of green and
+    // close to blue; the blue cloud, white robot and grid never do.
+    if (red > 24 && red > green && red > blue - 12) count += 1;
+  }
+  return count;
+}
 
 /** Returns whether the fresh-cloud colour is present near a world point. */
 function cloudNear(canvas, radar, x, y) {
@@ -218,6 +380,39 @@ test('a live scan renders onto the canvas and a stale scan dims', () => {
   assertEqual(age.dataset.stale, 'true');
   assert(stale.nonBackground > empty.nonBackground, 'the stale scan still draws');
   assert(stale.freshCloud < fresh.freshCloud, 'the stale scan is dimmed');
+});
+
+test('a protrusion paints a red fan and a flat scan paints none', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  // A 60 cm protrusion across the seam, against a 300 cm background. The
+  // near range stays above the 45 cm amber-dot threshold.
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 350; slot < 360; slot += 1) ranges[slot] = 60;
+  for (let slot = 0; slot <= 10; slot += 1) ranges[slot] = 60;
+  store.dispatch({
+    type: 'stream',
+    name: 'lidar',
+    seq: 1,
+    ts: 1000,
+    v: { ranges_cm: ranges, first_deg: 0, step_deg: 1, clockwise: true },
+  });
+  radar.render(store.state, 1100);
+  assert(redNear(canvas, radar, 140, 0) > 0, 'the wedge behind the protrusion is shaded');
+
+  // A flat wall at the same range removes the inference and its fill.
+  const flat = Array.from({ length: 360 }, () => 300);
+  store.dispatch({
+    type: 'stream',
+    name: 'lidar',
+    seq: 2,
+    ts: 1000,
+    v: { ranges_cm: flat, first_deg: 0, step_deg: 1, clockwise: true },
+  });
+  radar.render(store.state, 1100);
+  assertEqual(redNear(canvas, radar, 140, 0), 0, 'a flat wall paints no shadow');
 });
 
 test('center returns to the robot and keeps the zoom', () => {

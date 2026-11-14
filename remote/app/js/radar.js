@@ -1,8 +1,8 @@
 // The World Frame radar: one canvas, a camera view transform and layered
-// drawing. ADR-0038 fixes the order: grid, map layer, live scan,
-// robot/target/preview, overlay. The camera is display state only: a tap picks a
-// world point, a drag pans, and neither changes the frame or the meaning of a
-// world point (ADR-0043).
+// drawing. ADR-0038 fixes the order: grid, map layer, occlusion shadow, live
+// scan, robot/target/preview, overlay. The camera is display state only: a tap
+// picks a world point, a drag pans, and neither changes the frame or the
+// meaning of a world point (ADR-0043).
 //
 // Each scan is paired with the pose at its own timestamp, never a newer one; the
 // robot marker uses the newest pose. v1's pose is identity, so this is the same
@@ -21,6 +21,7 @@ import {
   poseAt,
   scanAgeMs,
   scanPoints,
+  scanShadows,
   screenToWorld,
   worldToScreen,
 } from './geometry.js';
@@ -42,7 +43,17 @@ const COLOR = Object.freeze({
   heading: '#4ade80',
   target: '#fbbf24',
   preview: '#46c2ff',
+  occlusionFill: 'rgba(248, 113, 113, 0.12)',
 });
+
+/** Returns `point` pushed outward to `rangeCm` on the ray from `pose`. */
+function extendToRange(pose, point, rangeCm) {
+  const dx = point.x - pose.x;
+  const dy = point.y - pose.y;
+  const length = Math.hypot(dx, dy);
+  if (!(length > 0)) return { x: pose.x, y: pose.y };
+  return { x: pose.x + (dx / length) * rangeCm, y: pose.y + (dy / length) * rangeCm };
+}
 
 /** Creates the radar over `canvas`; a missing canvas yields a no-op camera. */
 export function createRadar(canvas, { onPick = () => {} } = {}) {
@@ -247,9 +258,11 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.fillStyle = COLOR.bg;
     context.fillRect(0, 0, width, height);
 
-    // Layer order (ADR-0038): grid, map layer, live scan, robot/target/preview, overlay.
+    // Layer order (ADR-0038): grid, map layer, occlusion shadow, live scan,
+    // robot/target/preview, overlay.
     drawGrid();
     drawMapLayer();
+    drawShadows(source);
     drawCloud(source, now);
     drawPreview(source);
     drawRobot();
@@ -288,6 +301,45 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     // The future `pose` and `map` streams (the robot's Odometry Grid) render
     // here, sharing the camera. There is no app-side map in v1 (ADR-0038), so
     // this layer is deliberately empty.
+  }
+
+  /**
+   * Fills each inferred Occlusion Shadow under the live cloud (ADR-0046). The
+   * classifier is pure geometry; this layer only fills the fan bounded by the
+   * measured contour and the two radial Occlusion Edges at the cap range. No
+   * shadow survives its scan, so it is recomputed on every render.
+   */
+  function drawShadows(state) {
+    const lidar = state?.streams?.lidar;
+    if (!lidar || !view) return;
+    const scanPose = poseForScan(state, lidar);
+    const shadows = scanShadows(scanPose, lidar.v);
+    if (shadows.length === 0) return;
+
+    context.save();
+    context.fillStyle = COLOR.occlusionFill;
+    for (const shadow of shadows) {
+      const contour = shadow.silhouette;
+      if (contour.length === 0) continue;
+      const first = contour[0];
+      const last = contour[contour.length - 1];
+
+      context.beginPath();
+      const start = worldToScreen(view, first);
+      context.moveTo(start.x, start.y);
+      for (let index = 1; index < contour.length; index += 1) {
+        const screen = worldToScreen(view, contour[index]);
+        context.lineTo(screen.x, screen.y);
+      }
+      // The cap runs across the two edge rays at the local background depth.
+      const farLast = worldToScreen(view, extendToRange(scanPose, last, shadow.capCm));
+      context.lineTo(farLast.x, farLast.y);
+      const farFirst = worldToScreen(view, extendToRange(scanPose, first, shadow.capCm));
+      context.lineTo(farFirst.x, farFirst.y);
+      context.closePath();
+      context.fill();
+    }
+    context.restore();
   }
 
   function drawCloud(state, now) {
