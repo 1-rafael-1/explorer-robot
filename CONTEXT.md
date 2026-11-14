@@ -20,7 +20,7 @@
 - **Branch Off-state** — The state of a switched branch after its protocol is stopped, its UART is quiesced and deinitialized, its MCU-side lines are tri-stated, and its `*_PWR` enable is low. No MCU pin may source current into the branch in this state.
 - **Front Rangefinder** — VL53L0X time-of-flight module at the front of the enclosure, angled down and forward, on dedicated I2C0 (GPIO16/17). Its `XSHUT` is GPIO1 and its `INT` is GPIO2; it runs from the unswitched `+3.3V` rail through a 6-pin JST-PH connector (ADR-0026). Detects floor drops and near-field obstacles ahead.
 - **Rear Rangefinder** — VL53L0X time-of-flight module at the rear of the enclosure, angled down and backward, on dedicated I2C1 (GPIO26/27). Its `XSHUT` is GPIO3 and its `INT` is GPIO31; it has the same power and connector treatment as the front unit (ADR-0026). Detects floor drops and near-field obstacles behind when reversing.
-- **Rangefinder Pair** — The front and rear VL53L0X modules together. Their buses are electrically separate, so both keep the default `0x29` address without XSHUT sequencing. The pair is currently a floor-drop/near-field sensor; feeding it into obstacle avoidance is deferred (ADR-0026).
+- **Rangefinder Pair** — The front and rear VL53L0X modules together. Their buses are electrically separate, so both keep the default `0x29` address without XSHUT sequencing. The pair is a floor-drop/near-field sensor; feeding it into obstacle avoidance is deferred (ADR-0026). It is armed on demand, and both sensors must be **Armed** for motion (ADR-0048).
 - **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. Its 5 V branch is switched by a TPS22917 high-side load switch enabled by `PANEL_PWR` (GPIO0, ADR-0024). The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
@@ -50,6 +50,40 @@
 - **Occlusion Edge** — A boundary of the Occlusion Shadow: a significant range step between adjacent returns, or the chord between the two returns that flank a No Return notch. The Remote App draws it dotted.
   _Avoid_: shadow line, ray, chord
 
+### Rangefinder
+
+- **Floor Drop** — The condition that the floor has dropped away beneath the
+  front or rear sensor, derived from valid readings beyond the threshold and
+  the fail-safe hold. It is not an obstacle; it raises its own
+  `FloorDropDetected` edge. _Avoid_: ledge detection, cliff.
+- **Rangefinder Reading** — One decoded sample from one VL53L0X: the range in
+  millimetres, the raw **Range Status** and whether it is valid. _Avoid_:
+  sample, measurement (ambiguous with the LiDAR **Snapshot**).
+- **Range Status** — The VL53L0X's 4-bit device completion code in register
+  `0x14` bits 6:3; raw `11` is range complete and the other codes name the
+  failure. It is not the PAL 0–5 status. _Avoid_: quality, confidence.
+- **Valid Reading** — A Rangefinder Reading with Range Status `11` and a range
+  below `8190`. Only valid readings set or clear a floor decision; an invalid or
+  no-target streak holds the last decision, then fails safe to **Drop** after the
+  invalid hold.
+- **No Target** — A reading with no usable range (`8190`, or a status ST treats
+  as no range). It is neither floor nor a valid far reading.
+- **Invalid Reading** — A Rangefinder Reading whose Range Status is not `11`;
+  its range is not trusted.
+- **Floor-Drop Protection** — The pair's armed state: `Off`, `Arming`,
+  `Armed`, `Degraded` or `Failed`. It is distinct from **Floor Drop**; motion
+  requires `Armed`. _Avoid_: rangefinder state.
+- **Floor-Drop Gate** — The drive pre-flight that arms the pair and requires
+  `Armed` plus a clear `FLOOR_DROP` before the first motor command.
+- **Rangefinder Test** — The panel-only Procedure that streams both sensors'
+  state, range, status, floor state and age, plus the pair state and threshold.
+  Its readout never enters Activity State or the Link Protocol; the Procedure
+  itself is an ordinary Activity with an identity and a running screen.
+- **Rangefinder Test Readout** — The live two-column block inside the Rangefinder
+  Test's running screen: per sensor, the protection state, range, raw Range
+  Status, floor state and age, plus the pair state, aggregate and threshold. It
+  is not part of Activity State.
+
 ### Touch
 
 - **Touch Panel** — The 2.8″ 240×320 SPI panel's resistive touch layer, and the robot's sole operator input. Its controller IC is unmarked; the XPT2046/TSC2046-class protocol is an assumption confirmed on the bench.
@@ -66,18 +100,18 @@
 
 - **Menu Entry** — One entry of the Panel's menu tree, carrying its label, the screen it opens, and the screen the header Back returns to. An entry is a submenu, a Procedure, or a screen. Entries are named, not positioned, so reordering a menu cannot change what an entry starts.
   _Avoid_: option, row, index
-- **Running Screen** — The Panel's status screen shown while an Activity State is live: the Activity's title, a Stop action, and either a phase body or an **IMU Test Readout**. It becomes a Result Report on a successful or failed finish; an operator Stop clears the Activity and returns to the parent menu.
+- **Running Screen** — The Panel's status screen shown while an Activity State is live: the Activity's title, a Stop action, and either a phase body or a typed readout (**IMU Test Readout** or **Rangefinder Test Readout**). It becomes a Result Report on a successful or failed finish; an operator Stop clears the Activity and returns to the parent menu.
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), the two I2C buses (front and rear VL53L0X rangefinders), flash storage, and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), the two I2C buses (front and rear VL53L0X rangefinders) and their shared task, flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task: the `coin-d6` driver, its on-demand high-side power lifecycle (including UART quiesce, TX/RX tri-state and UART deinit), and the spin-to-point-cloud mapping.
-- **Local Operation** — The robot's behaviour with no Link Port power, no Bridge and no Wi-Fi: boot, every Procedure, every panel screen and every safety edge work; the Link Port is additive. A future Remote-only feature must not make a local safety or motion path depend on it.
+- **Local Operation** — The robot's behaviour with no Link Port power, no Bridge and no Wi-Fi: boot, every Procedure, every panel screen and every safety edge work; the Link Port is additive. A future Remote-only feature must not make a local safety or motion path depend on it. Floor-drop protection is local; if the pair cannot arm, motion is refused rather than run unprotected (ADR-0048).
   _Avoid_: offline mode, standalone mode
 - **Orchestrator** — Central event loop. Waits for events from the system event channel and dispatches them: calibration events → initialization module, obstacle/battery events → behavior handlers, lifecycle events → UI subsystem, sensor events → logged or forwarded. Pure routing — no domain logic.
 - **Event System** — Typed, multi-producer single-consumer event channel (capacity 64). Sensor tasks and input tasks raise events; the orchestrator consumes them. The seam between producers and consumers.
 - **Behavior Handler** — A module under `task/behavior/` that reacts to specific event types. Domain logic lives here — obstacle fusion (perception atomics + EmergencyBrake interrupt), battery state updates, obstacle avoidance completion. Called by the orchestrator.
-- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → motor_driver → encoders → drive_queue_executor → drive → panel → vl53l0x_stub (only with the `floor_drop_stub` feature) → imu → flash_storage → testing → autonomous_mode → startup. Core1 runs only the LiDAR task.
+- **Task Spawn Order** (core0) — Tasks are spawned in dependency order: orchestrator → battery → rgb_led → motor_driver → encoders → drive_queue_executor → drive → panel → rangefinder → imu → flash_storage → testing → autonomous_mode → startup. Core1 runs only the LiDAR task.
 
 ### Message Passing
 
@@ -85,7 +119,7 @@ Three data flow patterns coexist, chosen by latency requirements:
 
 - **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
 - **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
-- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the floor-drop stub writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex. With the stub disabled (the default) and no real rangefinder driver yet, `FLOOR_DROP` stays clear.
+- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the rangefinder task writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex. `FLOOR_DROP` is the OR of the pair's per-sensor states.
 
 ### Remote Link
 
@@ -152,9 +186,9 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 - **Drive Task** — The main control loop (`drive()`). Polls active intents, steps idle when no intent is active, and handles interrupts. Selects over the command queue and the interrupt signal.
 - **Intent** — A state machine that owns a specific motion behavior — rotation, distance drive, brake/coast settle, or idle. Each intent is an `ActiveIntent` variant carrying its controller state and completion flag. Commands that complete instantly (e.g., `Differential`) are not intents; they are fire-and-forget.
 - **Dispatch** — The thin seam between the drive command queue and the control modules. Routes incoming `DriveCommand` envelopes, handles standby wake-up, and executes `IntentTeardown` descriptors on completion or interrupt. Owns no per-intent knowledge.
-- **IntentTeardown** — An enum declaring what sensor streams must be stopped when an intent completes or is interrupted. Each `ActiveIntent` returns its teardown descriptor; the dispatch executes it. Keeps the dispatch thin — it knows to stop sensors but not which specific sensors each intent required.
+- **IntentTeardown** — An enum declaring what sensor streams must be stopped when an intent completes or is interrupted. Each `ActiveIntent` returns its teardown descriptor; the dispatch executes it. Keeps the dispatch thin — it knows to stop sensors but not which specific sensors each intent required. The floor-drop pair is not an `IntentTeardown`: it is armed by the **Floor-Drop Gate** and disarmed on an explicit `Idle`/`Standby` or the Activity's end (ADR-0048).
 - **InterruptKind** — An enum (`EmergencyBrake`, `Stop`, `CancelCurrent`) that specifies how the drive subsystem preempts the active intent. Sent via `send_drive_interrupt`.
-- **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when the `LiDAR` reports an obstacle or a floor drop is detected, and by the **Deadman** on link loss. Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on either the obstacle edge or the floor-drop edge, and conditionally for the Deadman (only a Remote-originated claim is in scope, because the drive queue is shared).
+- **EmergencyBrake** — An `InterruptKind::EmergencyBrake` sent when the `LiDAR` reports an obstacle or a floor drop is detected, and by the **Deadman** on link loss. Causes immediate active motor braking, cancels the active intent, bumps the command epoch, and drains queued commands. Mode-agnostic — dispatched unconditionally on either the obstacle edge or the floor-drop edge, and conditionally for the Deadman (only a Remote-originated claim is in scope, because the drive queue is shared). The floor-drop gate refuses motion until the pair is armed and `FLOOR_DROP` is clear (ADR-0048).
 - **Epoch** — A monotonic counter incremented on each interrupt. Queued commands stamped with an old epoch are discarded when dequeued, preventing stale commands from executing after an interrupt.
 
 ## Odometry
@@ -184,7 +218,7 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 ## State Modules
 
 Lock order (documented in each module): **power → calibration → perception → motion → activity**.
-`imu_test` and `dmp_cal` are independent leaves that are never held with another state lock.
+`imu_test`, `dmp_cal`, `rangefinder` and `rangefinder_test` are independent leaves that are never held with another state lock.
 
 - **Power State** — Battery level (0–100%), pack voltage and motor rail voltage. Accessed via `power::get_battery_snapshot()` for level and pack voltage, and `power::try_get_rail_sample()` for the non-blocking hot-path rail sample.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
@@ -192,9 +226,9 @@ Lock order (documented in each module): **power → calibration → perception �
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
 - **Active Claim** — The single exclusive right to be the robot's current Activity and to produce motion: held by the boot flow, one Procedure, one **Manual Drive**, or the Room Scan screen. A second claimant is `BUSY`; the holder is the only writer of a live Activity. Any operator may stop the holder; there is no owner, no takeover mode and no authority derived from the link lease (ADR-0034).
 - **Claim Origin** — The transient `Panel` or `Remote` tag on an **Active Claim**, cleared with it. A `Drive` claim is always Remote and a `Procedure` takes the origin of its starter. It exists only so the **Deadman** can stop the Remote's work without touching the panel's; it is not authority and never reaches the wire (ADR-0035).
-- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
+- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout** or **Rangefinder Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
 - **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). A slot is `None` for no return.
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). A slot is `None` for no return. The `LiDAR` task is the sole writer of the obstacle flag; the rangefinder task is the sole writer of the floor-drop flag (ADR-0015, ADR-0048).
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **DMP Calibration Snapshot State** — The panel-only typed `DmpCalibrationSnapshot` a DMP Compass Calibration publishes at the panel's telemetry rate: the current Compass Step, heading, target, Compass Accuracy, hint and check outcome. It is an independent leaf and never enters Activity State or the Link Protocol.
@@ -246,4 +280,4 @@ Lock order (documented in each module): **power → calibration → perception �
 - **No HIL (Hardware-in-the-Loop) rig** — The project has no automated hardware test rig. All tests that require physical hardware (sensors, motors) must be done manually on the target RP2350 board. `cargo check` and `cargo clippy` are the automated compile-time gates; the `coin-d6` crate additionally has host-side decoder/aggregation/warm-up tests run with `cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests` (the explicit host target is required because the default build target is `thumbv8m.main-none-eabihf`). Do not write `#[cfg(test)]` unit tests — they cannot exercise the real hardware and offer no value over compile-time checks. The `testmode` embassy tasks under `task/testmode/` serve as manual HIL verification procedures.
 - **Hardware-tests crate** — `hardware-tests` is a workspace member for standalone, breadboard-scale HIL checks that exercise one or two sensors in isolation (e.g. the LiDAR→TFT radar), running as their own embassy binaries under `examples/`. Distinct from the in-firmware `testmode` tasks: these run outside the robot firmware, on a breadboard, rather than inside the running robot.
 - **Testable logic in workspace crates** — Calculations that are hardware-independent (decoders, state machines, controllers, estimators) belong in `#![no_std]`, HAL-agnostic workspace crates that can be host-tested behind a `std` feature, as `coin-d6` does. This is the desired pattern. Older firmware code still performs such calculations inline, where they can only be verified by driving the robot, and extracting them is a standing refactoring opportunity.
-- **Three workspaces** — The root is a virtual workspace manifest: `robot/` (package `explorer-robot`) plus the buckets `robot/crates/link/` (`link-protocol`, `link-core`), `robot/crates/drivers/` (`coin-d6`, `st7789-async`, `touch-async`), `robot/crates/models/` (`claim-slot`, `lidar-cloud`, `link-state`, `touch-ui`) and `robot/crates/hardware-tests/`; `bridge/` is a separate RISC-V workspace (package `bridge-firmware` and `bridge-core`); `remote/` is a separate host workspace for `remote-daemon`, `bridge-net`, `robot-stub`, `bridge-stub` and the static `remote/app/`, and its name stays `remote/` because the glossary owns **Remote** for the PC-side client. Cargo reads `.cargo/config.toml` from the current directory upward, so host-workspace commands run from `remote/` — from the repo root, even with `--manifest-path`, the robot's `thumbv8m.main-none-eabihf` default applies. Shared crates are path dependencies only, and `link-protocol`'s version mirrors the wire version (ADR-0040).
+- **Three workspaces** — The root is a virtual workspace manifest: `robot/` (package `explorer-robot`) plus the buckets `robot/crates/link/` (`link-protocol`, `link-core`), `robot/crates/drivers/` (`coin-d6`, `rangefinder`, `st7789-async`, `touch-async`), `robot/crates/models/` (`claim-slot`, `lidar-cloud`, `link-state`, `touch-ui`) and `robot/crates/hardware-tests/`; `bridge/` is a separate RISC-V workspace (package `bridge-firmware` and `bridge-core`); `remote/` is a separate host workspace for `remote-daemon`, `bridge-net`, `robot-stub`, `bridge-stub` and the static `remote/app/`, and its name stays `remote/` because the glossary owns **Remote** for the PC-side client. Cargo reads `.cargo/config.toml` from the current directory upward, so host-workspace commands run from `remote/` — from the repo root, even with `--manifest-path`, the robot's `thumbv8m.main-none-eabihf` default applies. Shared crates are path dependencies only, and `link-protocol`'s version mirrors the wire version (ADR-0040).

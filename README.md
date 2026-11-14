@@ -62,10 +62,13 @@ README](robot/README.md) for the bucket map.
 ## Status
 
 The robot firmware implements the drive subsystem, the COIN-D6 LiDAR perception
-path, the panel UI and touch input, calibration, and the Link Task that owns
-UART1 and the Link Port power. The LiDAR powers, warms and streams in Room
-Scan; its baseline draw with the remote link up is about 320 mA. See the [robot
-page](docs/components/robot.md#lidar-power-and-harness) for the power and
+path, the VL53L0X rangefinder pair with its on-demand floor-drop gate, the panel
+UI and touch input, calibration, and the Link Task that owns UART1 and the Link
+Port power. The LiDAR powers, warms and streams in Room Scan; its baseline draw
+with the remote link up is about 320 mA. The rangefinder pair is armed on demand
+by the drive gate and has a panel-only Rangefinder Test; see
+[ADR-0048](docs/adr/0048-vl53l0x-rangefinder-driver-and-lifecycle.md). See the
+[robot page](docs/components/robot.md#lidar-power-and-harness) for the power and
 harness notes. The Bridge implements the network edge: the
 Discovery Beacon, the HMAC preamble, the single-client gate, the credential
 record and Pairing Token, Setup Mode with its portal, Bridge Presence and the
@@ -79,10 +82,8 @@ Relay + Bridge Stub chain, including reload reconstruction and the Result Report
 [Remote page](docs/components/remote.md) and the
 [app README](remote/app/README.md).
 
-Still open: an async VL53L0X driver for the rangefinder pair (the firmware
-ships an opt-in synthetic stub behind the `floor_drop_stub` feature), a Grove
-Vision AI V2 driver (the PIO UART and switched 5 V branch are reserved), and
-the manual real-phone pinch pass for the app.
+Still open: a Grove Vision AI V2 driver (the PIO UART and switched 5 V branch
+are reserved), and the manual real-phone pinch pass for the app.
 
 ## Read next
 
