@@ -46,6 +46,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Surface the daemon and stub logs as annotations when the run fails; the job
+# log itself is not readable without admin rights.
+on_error() {
+  local status=$?
+  echo "::error::real-chain run failed (exit $status)"
+  if [[ -f "$daemon_log" ]]; then
+    tail -20 "$daemon_log" 2>/dev/null | sed 's/^/::error::daemon: /' >&2 || true
+  fi
+  if [[ -f "$stub_log" ]]; then
+    tail -20 "$stub_log" 2>/dev/null | sed 's/^/::error::stub: /' >&2 || true
+  fi
+  exit "$status"
+}
+trap on_error ERR
+
 echo "building remote-daemon and bridge-stub"
 (
   cd "$remote"
