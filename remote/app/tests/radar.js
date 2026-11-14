@@ -87,6 +87,14 @@ test('a near protrusion casts one Occlusion Shadow on its own contour', () => {
     Array.from({ length: 21 }, () => 60),
     'every contour point keeps its return',
   );
+  assertEqual(
+    shadow.edges.map((edge) => edge.near.slot),
+    [170, 190],
+    'the two Occlusion Edges start at the contour endpoints',
+  );
+  for (const edge of shadow.edges) {
+    assertClose(Math.hypot(edge.far.x, edge.far.y), shadow.capCm, 1e-9);
+  }
   // The world points use the slot convention: slot 0 ahead, slots clockwise.
   const first = shadow.silhouette[0];
   assertClose(first.x, 60 * Math.cos(-170 * RAD), 1e-9);
@@ -191,6 +199,34 @@ test('consecutive falls in one protrusion emit a single shadow', () => {
   );
 });
 
+test('a curved silhouette with small internal steps still casts one shadow', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) {
+    ranges[slot] = 60 + Math.abs(slot - 180) * 0.5;
+  }
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1, 'a small internal step is not an Occlusion Edge');
+  assertEqual(
+    shadows[0].silhouette.map((point) => point.slot),
+    Array.from({ length: 21 }, (_, index) => 170 + index),
+  );
+});
+
+test('a sub-threshold step does not bound the near segment', () => {
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
+  for (let slot = 191; slot <= 200; slot += 1) ranges[slot] = 100;
+
+  const shadows = scanShadows(ORIGIN, scanValue(ranges));
+  assertEqual(shadows.length, 1, 'the run continues to the next qualifying rise');
+  assertEqual(
+    shadows[0].silhouette.map((point) => point.slot),
+    Array.from({ length: 31 }, (_, index) => 170 + index),
+    'the 40 cm step inside the run is not an Occlusion Edge',
+  );
+});
+
 test('the shadow is measured from the pose it is given', () => {
   const ranges = Array.from({ length: 360 }, () => 300);
   for (let slot = 170; slot <= 190; slot += 1) ranges[slot] = 60;
@@ -230,37 +266,37 @@ test('a null return produces no point, so the cloud draws a gap', () => {
   assertClose(only[0].y, 10, 1e-9);
 });
 
-/** Counts translucent soft-red fill pixels near a world point. */
-function redNear(canvas, radar, x, y, size = 7) {
+/** Returns a square ImageData window centred on a world point. */
+function windowNear(canvas, radar, x, y, size) {
   const dpr = canvas.width / Math.max(1, canvas.clientWidth);
   const scale = radar.scale;
   const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
   const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
-  const { data } = canvas
-    .getContext('2d')
-    .getImageData(px - (size - 1) / 2, py - (size - 1) / 2, size, size);
+  const half = (size - 1) / 2;
+  return canvas.getContext('2d').getImageData(px - half, py - half, size, size);
+}
+
+/**
+ * The live Occlusion Shadow red. `green - blue < 40` keeps the amber obstacle
+ * and target colour out of the match.
+ */
+function isLiveRed(red, green, blue) {
+  return red > 24 && red > green && red > blue - 12 && green - blue < 40;
+}
+
+/** Counts translucent soft-red fill pixels near a world point. */
+function redNear(canvas, radar, x, y, size = 7) {
+  const { data } = windowNear(canvas, radar, x, y, size);
   let count = 0;
   for (let index = 0; index < data.length; index += 4) {
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    // rgba(248,113,113,0.12) over the dark grid keeps red ahead of green and
-    // close to blue; the blue cloud, white robot and grid never do.
-    if (red > 24 && red > green && red > blue - 12) count += 1;
+    if (isLiveRed(data[index], data[index + 1], data[index + 2])) count += 1;
   }
   return count;
 }
 
 /** Returns whether the fresh-cloud colour is present near a world point. */
 function cloudNear(canvas, radar, x, y) {
-  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-  const scale = radar.scale;
-  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
-  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
-  const size = 7;
-  const { data } = canvas
-    .getContext('2d')
-    .getImageData(px - (size - 1) / 2, py - (size - 1) / 2, size, size);
+  const { data } = windowNear(canvas, radar, x, y, 7);
   for (let index = 0; index < data.length; index += 4) {
     if (data[index + 1] > 160 && data[index + 2] > 200) return true;
   }
@@ -269,21 +305,14 @@ function cloudNear(canvas, radar, x, y) {
 
 /** Returns whether the bright soft-red Occlusion Edge stroke is near a world point. */
 function edgeRedNear(canvas, radar, x, y, size = 9) {
-  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-  const scale = radar.scale;
-  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
-  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
-  const half = (size - 1) / 2;
-  const { data } = canvas
-    .getContext('2d')
-    .getImageData(px - half, py - half, size, size);
+  const { data } = windowNear(canvas, radar, x, y, size);
   for (let index = 0; index < data.length; index += 4) {
     const red = data[index];
     const green = data[index + 1];
     const blue = data[index + 2];
-    // #f87171 is opaque; the 0.12 fill over the dark grid stays near (39,27,31),
-    // so a bright red can only be the dotted stroke.
-    if (red > 120 && red - green > 50 && red - blue > 50) return true;
+    // #f87171 is opaque; the 0.12 fill over the dark grid stays near (39,27,31).
+    // `green < 150` keeps the amber near-obstacle dots out.
+    if (red > 120 && red - green > 50 && red - blue > 50 && green < 150) return true;
   }
   return false;
 }
@@ -293,26 +322,14 @@ function liveRedPixels(canvas) {
   const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
   let count = 0;
   for (let index = 0; index < data.length; index += 4) {
-    const red = data[index];
-    const green = data[index + 1];
-    const blue = data[index + 2];
-    // The same test as `redNear`: the 0.12 fill and the #f87171 dash both pass;
-    // the dark background, the blue cloud and the grey stale palette do not.
-    if (red > 24 && red > green && red > blue - 12) count += 1;
+    if (isLiveRed(data[index], data[index + 1], data[index + 2])) count += 1;
   }
   return count;
 }
 
 /** Returns the mean colour of a square sample window centred on a world point. */
 function tintNear(canvas, radar, x, y, size = 9) {
-  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
-  const scale = radar.scale;
-  const px = Math.round((canvas.clientWidth / 2 + x * scale) * dpr);
-  const py = Math.round((canvas.clientHeight / 2 - y * scale) * dpr);
-  const half = (size - 1) / 2;
-  const { data } = canvas
-    .getContext('2d')
-    .getImageData(px - half, py - half, size, size);
+  const { data } = windowNear(canvas, radar, x, y, size);
   const total = { red: 0, green: 0, blue: 0 };
   for (let index = 0; index < data.length; index += 4) {
     total.red += data[index];
@@ -474,6 +491,24 @@ test('a protrusion paints a red fan and a flat scan paints none', () => {
   });
   radar.render(store.state, 1100);
   assertEqual(redNear(canvas, radar, 140, 0), 0, 'a flat wall paints no shadow');
+});
+
+test('a No Return neighbour paints no shadow', () => {
+  const canvas = makeCanvas();
+  const radar = createRadar(canvas, {});
+  const store = createStore();
+
+  // The would-be fan covers (140, 0); the null at slot 11 breaks the rise
+  // neighbour, so the classifier must reject the segment.
+  const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 350; slot < 360; slot += 1) ranges[slot] = 60;
+  for (let slot = 0; slot <= 10; slot += 1) ranges[slot] = 60;
+  ranges[11] = null;
+  store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
+  radar.render(store.state, 1100);
+
+  assertEqual(liveRedPixels(canvas), 0, 'no live red is painted');
+  assertEqual(redNear(canvas, radar, 140, 0), 0, 'the would-be wedge is not tinted');
 });
 
 test('a fresh protrusion paints live red and a stale one is muted to grey', () => {

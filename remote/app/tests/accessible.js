@@ -136,6 +136,7 @@ test('the canvas is named, focusable and points at the numeric form', async () =
   assert(/form/i.test(name), 'the name points at the keyboard form');
   assert(/dotted/i.test(name), 'the name mentions the dotted fans');
   assert(/red/i.test(name), 'the name says the fans are red');
+  assert(/inferred/i.test(name), 'the name says the fans are inferred, not measured');
   assert(
     /cannot see|unseen/i.test(name),
     'the name says the fans mark space the scan cannot see',

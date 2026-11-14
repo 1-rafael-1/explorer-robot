@@ -163,6 +163,22 @@ export function poseAt(poses, ts) {
 }
 
 /**
+ * Projects one slot and range into the World Frame.
+ *
+ * The one place the slot convention becomes a world point, shared by the scan
+ * and the Occlusion Shadow contour so the two cannot drift apart.
+ */
+function scanPoint(pose, firstDeg, stepDeg, clockwise, slot, range) {
+  const angle = slotAngleDeg(pose, firstDeg, stepDeg, clockwise, slot) * RAD;
+  return {
+    slot,
+    range,
+    x: pose.x + range * Math.cos(angle),
+    y: pose.y + range * Math.sin(angle),
+  };
+}
+
+/**
  * Projects a `lidar` stream value into world points paired with `pose`.
  *
  * A `null` range is no return and produces no point, so the caller draws an
@@ -177,13 +193,7 @@ export function scanPoints(pose, value) {
   for (let slot = 0; slot < ranges.length; slot += 1) {
     const range = ranges[slot];
     if (range == null) continue;
-    const angle = slotAngleDeg(pose, first, step, clockwise, slot) * RAD;
-    points.push({
-      slot,
-      range,
-      x: pose.x + range * Math.cos(angle),
-      y: pose.y + range * Math.sin(angle),
-    });
+    points.push(scanPoint(pose, first, step, clockwise, slot, range));
   }
   return points;
 }
@@ -198,9 +208,10 @@ export function scanPoints(pose, value) {
  * it is unknown, not far. The scan is walked cyclically, so a protrusion
  * across slot 0 is found and kept in slot order.
  *
- * Each shadow carries the segment's measured contour in world centimetres and
- * the cap range: the greater of the two flanking far returns. This is display
- * geometry only; the caller recomputes it on every render.
+ * Each shadow carries the segment's measured contour in world centimetres, its
+ * two Occlusion Edge rays, and the cap range: the greater of the two flanking
+ * far returns. The edge rays run from the contour endpoints outward to the cap.
+ * This is display geometry only; the caller recomputes it on every render.
  */
 export function scanShadows(pose, value) {
   const ranges = value?.ranges_cm ?? [];
@@ -245,8 +256,8 @@ export function scanShadows(pose, value) {
     candidates.push({ fall: slot, rise, span });
   }
 
-  // A fall inside another candidate's near segment is the same protrusion, so
-  // only the outermost fall of each run emits a shadow.
+  // A run of consecutive falls is one Occlusion Edge: only the outermost fall
+  // of a near run emits, so one protrusion cannot cast nested shadows.
   const outer = candidates.filter(
     (candidate) =>
       !candidates.some(
@@ -254,16 +265,7 @@ export function scanShadows(pose, value) {
       ),
   );
 
-  const worldPoint = (slot) => {
-    const angle = slotAngleDeg(pose, first, step, clockwise, slot) * RAD;
-    const range = ranges[slot];
-    return {
-      slot,
-      range,
-      x: pose.x + range * Math.cos(angle),
-      y: pose.y + range * Math.sin(angle),
-    };
-  };
+  const worldPoint = (slot) => scanPoint(pose, first, step, clockwise, slot, ranges[slot]);
 
   return outer.map((candidate) => {
     const silhouette = [];
@@ -271,9 +273,21 @@ export function scanShadows(pose, value) {
       silhouette.push(worldPoint((candidate.fall + offset) % count));
     }
     const farRight = ranges[(candidate.rise + 1) % count];
+    const capCm = Math.max(ranges[candidate.fall], farRight);
+    const edge = (point) => {
+      const dx = point.x - pose.x;
+      const dy = point.y - pose.y;
+      const length = Math.hypot(dx, dy);
+      const far =
+        length > 0
+          ? { x: pose.x + (dx / length) * capCm, y: pose.y + (dy / length) * capCm }
+          : { x: pose.x, y: pose.y };
+      return { near: point, far };
+    };
     return {
       silhouette,
-      capCm: Math.max(ranges[candidate.fall], farRight),
+      capCm,
+      edges: [edge(silhouette[0]), edge(silhouette[silhouette.length - 1])],
     };
   });
 }
