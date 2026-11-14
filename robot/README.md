@@ -13,7 +13,7 @@ build targets ([ADR-0040](../docs/adr/0040-repo-and-build-layout.md)).
 - [ADR-0040 — the three workspaces and the layout](../docs/adr/0040-repo-and-build-layout.md)
 
 The crate buckets are `link/` (`link-protocol`, `link-core`), `drivers/`
-(`coin-d6`, `rangefinder`, `st7789-async`, `touch-async`), `models/`
+(`coin-d6`, `rangefinder`, `vl53l1x`, `st7789-async`, `touch-async`), `models/`
 (`claim-slot`, `lidar-cloud`, `touch-ui`) and `hardware-tests/`.
 
 Run the robot commands from the repository root; see the operator page.

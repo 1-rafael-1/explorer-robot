@@ -38,10 +38,10 @@ const TARGET_RATE: u16 = 0x0A00;
 const TIMING_GUARD_US: u32 = 4528;
 
 /// Short distance mode measurement timing budget, in microseconds.
-const SHORT_TIMING_BUDGET_US: u32 = 33_000;
+pub const SHORT_TIMING_BUDGET_US: u32 = 33_000;
 
 /// The commanded inter-measurement period, in milliseconds.
-const INTERMEASUREMENT_PERIOD_MS: u32 = 50;
+pub const INTERMEASUREMENT_PERIOD_MS: u32 = 50;
 
 /// Length of the result block at `RESULT_RANGE_STATUS`, in bytes.
 const RESULT_BLOCK_LEN: usize = 17;

@@ -1,24 +1,44 @@
 //! Host-side tests for the per-sensor lifecycle and recovery budget.
 
 use rangefinder::{
-    DROP_THRESHOLD_MM, FloorState, RangefinderReading, Reading, ReadingHealth, RecoveryCause, SensorLifecycle,
-    SensorState,
+    DROP_THRESHOLD_MM, FloorState, RangeDiagnostics, RangeStatus, RangefinderReading, Reading, RecoveryCause,
+    SensorLifecycle, SensorState,
 };
+
+/// Build a reading from its decoded parts.
+const fn reading(reading: Reading, status: RangeStatus, raw_status: u8) -> RangefinderReading {
+    RangefinderReading {
+        reading,
+        status,
+        raw_status,
+        diagnostics: RangeDiagnostics {
+            signal_rate: 0,
+            ambient_rate: 0,
+            effective_spads: 0,
+        },
+    }
+}
 
 /// A valid floor-level reading.
 const fn floor(mm: u16) -> RangefinderReading {
-    RangefinderReading {
-        reading: Reading::Valid(mm),
-        raw_status: 11,
-    }
+    reading(Reading::Valid(mm), RangeStatus::Valid, 9)
 }
 
 /// A reading whose status reports a hardware failure.
 const fn hardware_fail() -> RangefinderReading {
-    RangefinderReading {
-        reading: Reading::Invalid(rangefinder::RangeStatus::HardwareFail),
-        raw_status: 1,
-    }
+    reading(
+        Reading::Invalid(RangeStatus::HardwareFail),
+        RangeStatus::HardwareFail,
+        1,
+    )
+}
+
+/// Arm a lifecycle with one valid floor reading at 50 ms.
+fn armed_lifecycle() -> SensorLifecycle {
+    let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
+    lifecycle.begin_enable(0);
+    lifecycle.on_reading(floor(200), 50);
+    lifecycle
 }
 
 #[test]
@@ -161,6 +181,100 @@ fn a_sustained_invalid_status_is_a_recovery_cause_once_armed() {
 
     lifecycle.on_reading(hardware_fail(), 300);
     assert_eq!(lifecycle.recovery_cause(300), Some(RecoveryCause::InvalidStreak));
+}
+
+#[test]
+fn a_sustained_no_wrap_check_holds_and_fails_safe_without_recovery() {
+    let mut lifecycle = armed_lifecycle();
+
+    lifecycle.on_reading(reading(Reading::NoTarget, RangeStatus::NoWrapCheck, 9), 100);
+    assert_eq!(lifecycle.recovery_cause(150), None, "the invalid hold is still running");
+    assert_eq!(lifecycle.floor(), FloorState::Unknown);
+
+    lifecycle.on_reading(reading(Reading::NoTarget, RangeStatus::NoWrapCheck, 9), 300);
+    assert_eq!(lifecycle.floor(), FloorState::Drop, "the streak fails safe");
+    assert_eq!(
+        lifecycle.recovery_cause(300),
+        None,
+        "a no-wrap-check reading must not reset a healthy sensor"
+    );
+}
+
+#[test]
+fn a_sustained_synchronization_holds_and_fails_safe_without_recovery() {
+    let mut lifecycle = armed_lifecycle();
+
+    lifecycle.on_reading(
+        reading(
+            Reading::Invalid(RangeStatus::Synchronization),
+            RangeStatus::Synchronization,
+            18,
+        ),
+        100,
+    );
+    assert_eq!(lifecycle.recovery_cause(150), None, "the invalid hold is still running");
+    assert_eq!(lifecycle.floor(), FloorState::Unknown);
+
+    lifecycle.on_reading(
+        reading(
+            Reading::Invalid(RangeStatus::Synchronization),
+            RangeStatus::Synchronization,
+            18,
+        ),
+        300,
+    );
+    assert_eq!(lifecycle.floor(), FloorState::Drop, "the streak fails safe");
+    assert_eq!(
+        lifecycle.recovery_cause(300),
+        None,
+        "a synchronization reading must not reset a healthy sensor"
+    );
+}
+
+#[test]
+fn a_sustained_no_target_status_never_starts_recovery() {
+    for (status, raw_status) in [
+        (RangeStatus::SignalFail, 4),
+        (RangeStatus::OutOfBounds, 5),
+        (RangeStatus::MinRangeFail, 13),
+    ] {
+        let mut lifecycle = armed_lifecycle();
+
+        lifecycle.on_reading(reading(Reading::NoTarget, status, raw_status), 100);
+        lifecycle.on_reading(reading(Reading::NoTarget, status, raw_status), 300);
+
+        assert_eq!(lifecycle.floor(), FloorState::Drop, "{status:?} fails safe");
+        assert_eq!(
+            lifecycle.recovery_cause(300),
+            None,
+            "{status:?} must not reset a healthy sensor"
+        );
+    }
+}
+
+#[test]
+fn a_sustained_fault_status_starts_recovery() {
+    for (status, raw_status) in [
+        (RangeStatus::HardwareFail, 1),
+        (RangeStatus::SigmaFail, 6),
+        (RangeStatus::WrapFail, 7),
+        (RangeStatus::XtalkFail, 12),
+        (RangeStatus::NoUpdate, 255),
+    ] {
+        assert!(status.is_fault(), "{status:?} is a Rangefinder Fault");
+
+        let mut lifecycle = armed_lifecycle();
+
+        lifecycle.on_reading(reading(Reading::Invalid(status), status, raw_status), 100);
+        assert_eq!(lifecycle.recovery_cause(150), None, "the invalid hold is still running");
+
+        lifecycle.on_reading(reading(Reading::Invalid(status), status, raw_status), 300);
+        assert_eq!(
+            lifecycle.recovery_cause(300),
+            Some(RecoveryCause::InvalidStreak),
+            "{status:?} must drive recovery"
+        );
+    }
 }
 
 #[test]

@@ -18,9 +18,9 @@
 - **Quiesce** — To stop a branch's protocol, drain the UART's software buffer, and wait for the hardware transmitter to go idle before removing the UART from its pins. Quiescing is not the same as dropping the UART object.
 - **Tri-state** — To release an MCU pin to high impedance with no pull, so it cannot source current into an unpowered branch. A branch's UART lines are tri-stated rather than driven low; a driven low is a break condition.
 - **Branch Off-state** — The state of a switched branch after its protocol is stopped, its UART is quiesced and deinitialized, its MCU-side lines are tri-stated, and its `*_PWR` enable is low. No MCU pin may source current into the branch in this state.
-- **Front Rangefinder** — VL53L0X time-of-flight module at the front of the enclosure, angled down and forward, on dedicated I2C0 (GPIO16/17). Its `XSHUT` is GPIO1 and its `INT` is GPIO2; it runs from the unswitched `+3.3V` rail through a 6-pin JST-PH connector (ADR-0026). Detects floor drops and near-field obstacles ahead.
-- **Rear Rangefinder** — VL53L0X time-of-flight module at the rear of the enclosure, angled down and backward, on dedicated I2C1 (GPIO26/27). Its `XSHUT` is GPIO3 and its `INT` is GPIO31; it has the same power and connector treatment as the front unit (ADR-0026). Detects floor drops and near-field obstacles behind when reversing.
-- **Rangefinder Pair** — The front and rear VL53L0X modules together. Their buses are electrically separate, so both keep the default `0x29` address without XSHUT sequencing. The pair is a floor-drop/near-field sensor; feeding it into obstacle avoidance is deferred (ADR-0026). It is armed on demand, and both sensors must be **Armed** for motion (ADR-0048).
+- **Front Rangefinder** — VL53L1X (TOF0400C) time-of-flight module at the front of the enclosure, angled down and forward, on dedicated I2C0 (GPIO16/17). Its `XSHUT` is GPIO1 and its `INT` is GPIO2; it runs from the unswitched `+3.3V` rail through a 6-pin JST-PH connector (ADR-0026). Detects floor drops and near-field obstacles ahead.
+- **Rear Rangefinder** — VL53L1X (TOF0400C) time-of-flight module at the rear of the enclosure, angled down and backward, on dedicated I2C1 (GPIO26/27). Its `XSHUT` is GPIO3 and its `INT` is GPIO31; it has the same power and connector treatment as the front unit (ADR-0026). Detects floor drops and near-field obstacles behind when reversing.
+- **Rangefinder Pair** — The front and rear VL53L1X modules together. Their buses are electrically separate, so both keep the default `0x29` address without XSHUT sequencing. The pair is a floor-drop/near-field sensor; feeding it into obstacle avoidance is deferred (ADR-0026). It is armed on demand, and both sensors must be **Armed** for motion (ADR-0048).
 - **Panel** — The 2.8″ 240×320 (320×240 landscape) ST7789 TFT display module and its resistive touch layer, sharing a full-duplex SPI1 bus. Its 5 V branch is switched by a TPS22917 high-side load switch enabled by `PANEL_PWR` (GPIO0, ADR-0024). The robot's only input and output surface: the Display draws, the Touch Panel senses.
 - **Display** — The Panel's drawing surface: a 320×240 landscape RGB565 framebuffer rendered by the ST7789 controller.
   _Avoid_: OLED, screen
@@ -56,33 +56,43 @@
   front or rear sensor, derived from valid readings beyond the threshold and
   the fail-safe hold. It is not an obstacle; it raises its own
   `FloorDropDetected` edge. _Avoid_: ledge detection, cliff.
-- **Rangefinder Reading** — One decoded sample from one VL53L0X: the range in
-  millimetres, the raw **Range Status** and whether it is valid. _Avoid_:
-  sample, measurement (ambiguous with the LiDAR **Snapshot**).
-- **Range Status** — The VL53L0X's 4-bit device completion code in register
-  `0x14` bits 6:3; raw `11` is range complete and the other codes name the
-  failure. It is not the PAL 0–5 status. _Avoid_: quality, confidence.
-- **Valid Reading** — A Rangefinder Reading with Range Status `11` and a range
-  below `8190`. Only valid readings set or clear a floor decision; an invalid or
+- **Rangefinder Reading** — One decoded sample from one VL53L1X: the
+  classified reading, the decoded **Range Status**, the raw 8-bit code and the
+  signal/ambient/SPAD diagnostics. There is no `8190` sentinel. _Avoid_: sample,
+  measurement (ambiguous with the LiDAR **Snapshot**).
+- **Range Status** — The VL53L1X's 8-bit completion code at the first byte of the
+  `0x0089` result block; `9` with a non-zero stream count and `8` (min-range
+  clipped) complete, and the other codes name conditions. It is not the ST PAL
+  0–5 status. _Avoid_: quality, confidence.
+- **Valid Reading** — A Rangefinder Reading with Range Status `9` and a non-zero
+  stream count, or `8` (min-range clipped). There is no magic out-of-range
+  distance. Only valid readings set or clear a floor decision; an invalid or
   no-target streak holds the last decision, then fails safe to **Drop** after the
   invalid hold.
-- **No Target** — A reading with no usable range (`8190`, or a status ST treats
-  as no range). It is neither floor nor a valid far reading.
-- **Invalid Reading** — A Rangefinder Reading whose Range Status is not `11`;
-  its range is not trusted.
+- **No Target** — A status classification (`4`, `5`, `13`, and raw `9` with a
+  zero stream count), not a magic distance. It is neither floor nor a valid far
+  reading.
+- **Invalid Reading** — A Rangefinder Reading whose Range Status is
+  synchronization (`18`), no-update (`255`) or a fault code; its range is not
+  trusted.
+- **Rangefinder Fault** — A status that may drive recovery: hardware, sigma,
+  wrap, crosstalk, no-update and unknown. No-target, min-range, min-clip,
+  no-wrap-check and synchronization hold the decision and fail safe but never
+  reset a healthy sensor.
 - **Floor-Drop Protection** — The pair's armed state: `Off`, `Arming`,
   `Armed`, `Degraded` or `Failed`. It is distinct from **Floor Drop**; motion
   requires `Armed`. _Avoid_: rangefinder state.
 - **Floor-Drop Gate** — The drive pre-flight that arms the pair and requires
   `Armed` plus a clear `FLOOR_DROP` before the first motor command.
 - **Rangefinder Test** — The panel-only Procedure that streams both sensors'
-  state, range, status, floor state and age, plus the pair state and threshold.
+  seven-row readout, plus the pair state, aggregate floor state and threshold.
   Its readout never enters Activity State or the Link Protocol; the Procedure
   itself is an ordinary Activity with an identity and a running screen.
 - **Rangefinder Test Readout** — The live two-column block inside the Rangefinder
-  Test's running screen: per sensor, the protection state, range, raw Range
-  Status, floor state and age, plus the pair state, aggregate and threshold. It
-  is not part of Activity State.
+  Test's running screen: per sensor, seven rows (protection state, range, status,
+  signal, ambient, floor state and age) plus the pair/floor/threshold footer. The
+  status row shows the decoded name and raw code; `Sig`/`Amb` show tenths of
+  Mcps. It is not part of Activity State.
 
 ### Touch
 
@@ -104,7 +114,7 @@
 
 ## Architecture
 
-- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), the two I2C buses (front and rear VL53L0X rangefinders) and their shared task, flash storage, and the main event loop.
+- **Core0** — Runs the orchestrator, drive subsystem, encoder reader, UI (Display, Touch Panel, RGB LED), IMU (SPI0), the two I2C buses (front and rear VL53L1X rangefinders) and their shared task, flash storage, and the main event loop.
 - **Core1** — Runs the LiDAR task: the `coin-d6` driver, its on-demand high-side power lifecycle (including UART quiesce, TX/RX tri-state and UART deinit), and the spin-to-point-cloud mapping.
 - **Local Operation** — The robot's behaviour with no Link Port power, no Bridge and no Wi-Fi: boot, every Procedure, every panel screen and every safety edge work; the Link Port is additive. A future Remote-only feature must not make a local safety or motion path depend on it. Floor-drop protection is local; if the pair cannot arm, motion is refused rather than run unprotected (ADR-0048).
   _Avoid_: offline mode, standalone mode

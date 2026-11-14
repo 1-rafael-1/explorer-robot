@@ -3,17 +3,23 @@
 //! The firmware task owns the async I2C transactions; this module owns the
 //! state machine around them. It decides when a sensor is waiting, armed,
 //! recovering or failed, how many attempts remain, and when a reading is a
-//! stale or invalid fault. The task supplies readings, init/reset outcomes and
+//! stale or faulty sample. The task supplies readings, init/reset outcomes and
 //! `now_ms`, so every transition is host-testable without a sensor.
 //!
 //! The detector is owned here as well: a sensor's floor decision and its
 //! lifecycle state advance together.
+//!
+//! Only a **Rangefinder Fault** status drives invalid-streak recovery. No-target,
+//! min-range, min-clip, no-wrap-check and synchronization readings still hold the
+//! last decision and fail safe after the invalid hold, but they never reset a
+//! healthy sensor.
+
+use vl53l1x::{RangefinderReading, Reading};
 
 use crate::{
     constants::RESET_ATTEMPTS,
-    detector::{FloorDropDetector, FloorState, ReadingHealth},
+    detector::{FloorDropDetector, FloorState},
     pair::SensorState,
-    types::{RangefinderReading, Reading},
 };
 
 /// Why an armed sensor should be reset.
@@ -21,7 +27,7 @@ use crate::{
 pub enum RecoveryCause {
     /// No reading arrived within the stale watchdog.
     Stale,
-    /// The sensor kept reporting an invalid status long enough to fail safe.
+    /// The sensor kept reporting a fault status long enough to fail safe.
     InvalidStreak,
 }
 
@@ -36,8 +42,9 @@ pub struct SensorLifecycle {
     state: SensorState,
     /// Reset attempts used in this enabled period.
     attempts: u8,
-    /// The health of the last reading, used to spot a sustained fault.
-    last_health: Option<ReadingHealth>,
+    /// Whether the last reading's status is a **Rangefinder Fault**, the only
+    /// invalid class that may drive recovery.
+    last_fault: bool,
 }
 
 impl SensorLifecycle {
@@ -49,7 +56,7 @@ impl SensorLifecycle {
             detector: FloorDropDetector::new(threshold_mm),
             state: SensorState::Waiting,
             attempts: 0,
-            last_health: None,
+            last_fault: false,
         }
     }
 
@@ -59,7 +66,7 @@ impl SensorLifecycle {
         self.detector.arm(now_ms);
         self.state = SensorState::Waiting;
         self.attempts = 0;
-        self.last_health = None;
+        self.last_fault = false;
     }
 
     /// Reset after an explicit disable, without starting the stale watchdog.
@@ -67,7 +74,7 @@ impl SensorLifecycle {
         self.detector = FloorDropDetector::new(self.threshold_mm);
         self.state = SensorState::Waiting;
         self.attempts = 0;
-        self.last_health = None;
+        self.last_fault = false;
     }
 
     /// Take the next init/reset attempt, or `None` when the budget is spent.
@@ -90,12 +97,13 @@ impl SensorLifecycle {
         self.detector.restart(now_ms);
         self.state = SensorState::Waiting;
         self.attempts = 0;
-        self.last_health = None;
+        self.last_fault = false;
     }
 
     /// Latch the sensor failed for this enabled period.
     pub const fn mark_failed(&mut self) {
         self.state = SensorState::Failed;
+        self.last_fault = false;
     }
 
     /// Begin recovering a sensor.
@@ -112,9 +120,11 @@ impl SensorLifecycle {
 
     /// Apply one Rangefinder Reading to the detector and the lifecycle.
     pub const fn on_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
-        let health = self.detector.update(reading, now_ms);
-        self.last_health = Some(health);
-        if matches!(self.state, SensorState::Waiting) && matches!(reading.reading, Reading::Valid(_)) {
+        let fault = reading.status.is_fault();
+        let valid = matches!(reading.reading, Reading::Valid(_));
+        self.detector.update(reading, now_ms);
+        self.last_fault = fault;
+        if matches!(self.state, SensorState::Waiting) && valid {
             self.state = SensorState::Armed;
         }
     }
@@ -141,7 +151,10 @@ impl SensorLifecycle {
     ///
     /// A failed sensor needs no further recovery: its attempts are spent and it
     /// waits for a fresh enable. A stale sensor is recovered at any live state;
-    /// a sustained invalid status only matters once the sensor has armed.
+    /// a sustained **Rangefinder Fault** only matters once the sensor has armed
+    /// and the detector has failed safe. No-target, min-range, min-clip,
+    /// no-wrap-check and synchronization readings hold the decision and fail
+    /// safe without starting recovery.
     #[must_use]
     pub const fn recovery_cause(&self, now_ms: u64) -> Option<RecoveryCause> {
         if matches!(self.state, SensorState::Failed) {
@@ -151,7 +164,7 @@ impl SensorLifecycle {
             return Some(RecoveryCause::Stale);
         }
         if matches!(self.state, SensorState::Armed)
-            && matches!(self.last_health, Some(ReadingHealth::Invalid))
+            && self.last_fault
             && matches!(self.detector.state(), FloorState::Drop)
         {
             return Some(RecoveryCause::InvalidStreak);

@@ -1,5 +1,10 @@
 # VL53L0X rangefinder pair: async edrv driver, raw range status and on-demand lifecycle
 
+> **Superseded in part by [ADR-0049](0049-vl53l1x-async-driver.md).** The
+> lifecycle, floor-drop detector, gate and test-mode decisions below remain
+> valid. The driver choice (`edrv-vl53l0x`) and the 4-bit range-status
+> assumptions are superseded by the in-repo VL53L1X driver and its 8-bit status.
+
 The robot carries two VL53L0X time-of-flight modules, one per dedicated I2C
 bus, as a floor-drop safety sensor (ADR-0026). The firmware had only a
 synthetic stub behind `floor_drop_stub`; the pair was not wired into the drive

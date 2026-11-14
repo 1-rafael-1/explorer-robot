@@ -1,7 +1,7 @@
 //! explorer-robot v3 firmware entry point
 //!
 //! Core0 hosts orchestrator, motor driver, encoders, battery monitor,
-//! RGB LED, panel (TFT + touch), the VL53L0X rangefinder pair, flash storage,
+//! RGB LED, panel (TFT + touch), the VL53L1X rangefinder pair, flash storage,
 //! UI, testmode and startup.
 //!
 //! Core1 hosts the real COIN-D6 `LiDAR` driver task, powered on demand.
@@ -56,12 +56,12 @@ mod task;
 
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
-/// Reserved for the front VL53L0X rangefinder on core0.
+/// Reserved for the front VL53L1X rangefinder on core0.
 pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
 
 /// Shared I2C1 bus protected by a critical-section mutex.
 ///
-/// Reserved for the rear VL53L0X rangefinder on core0. Keeping the two
+/// Reserved for the rear VL53L1X rangefinder on core0. Keeping the two
 /// sensors on separate buses avoids an address clash when both use the default
 /// `0x29` address.
 pub type I2c1BusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
@@ -117,7 +117,7 @@ static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
 
-/// Initialise the shared I2C0 bus for the front VL53L0X rangefinder.
+/// Initialise the shared I2C0 bus for the front VL53L1X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
@@ -135,7 +135,7 @@ fn init_i2c_bus(
     I2C_BUS.init(Mutex::new(i2c))
 }
 
-/// Initialise the shared I2C1 bus for the rear VL53L0X rangefinder.
+/// Initialise the shared I2C1 bus for the rear VL53L1X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new` enables `I2C1_IRQ` on
 /// core0's NVIC. The two sensors may share the same 7-bit address because they
@@ -263,7 +263,7 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverResources) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Build the VL53L0X pair session and spawn its task on core0.
+/// Build the VL53L1X pair session and spawn its task on core0.
 ///
 /// Both modules start held off through `XSHUT`; the task releases and
 /// initialises them on demand. The buses are initialised here so `I2C0_IRQ` and
@@ -487,7 +487,7 @@ fn main() -> ! {
     // ── Core0: all other tasks ──────────────────────────────────────────────
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
-        // I2C0 and I2C1 are reserved one per VL53L0X, so both sensors keep the
+        // I2C0 and I2C1 are reserved one per VL53L1X, so both sensors keep the
         // default 0x29 address.
 
         // SPI bus for ICM20948 IMU

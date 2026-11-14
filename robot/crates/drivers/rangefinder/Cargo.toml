@@ -4,27 +4,17 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Rafael Koch <rafael.koch@gmx.net>"]
-description = "Async VL53L0X rangefinder driver with floor-drop detection"
+description = "VL53L1X floor-drop policy facade: pair lifecycle, detector and gate"
 repository = "https://github.com/1-rafael-1/explorer-robot"
 
 [lints]
 workspace = true
 
 [dependencies]
-edrv-vl53l0x = "=0.1.1"
-embedded-hal = "1.0.0"
-embedded-hal-async = "1.0.0"
+vl53l1x = { path = "../vl53l1x" }
 
 [features]
 std = []
-
-[[test]]
-name = "status"
-required-features = ["std"]
-
-[[test]]
-name = "driver"
-required-features = ["std"]
 
 [[test]]
 name = "detector"

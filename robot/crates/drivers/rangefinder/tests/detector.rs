@@ -4,31 +4,41 @@
 //! millisecond boundary.
 
 use rangefinder::{
-    DROP_THRESHOLD_MM, FloorDropDetector, FloorState, RangeStatus, RangefinderReading, Reading, ReadingHealth,
+    DROP_THRESHOLD_MM, FloorDropDetector, FloorState, RangeDiagnostics, RangeStatus, RangefinderReading, Reading,
+    ReadingHealth,
 };
+
+/// Build a reading from its decoded parts.
+const fn reading(reading: Reading, status: RangeStatus, raw_status: u8) -> RangefinderReading {
+    RangefinderReading {
+        reading,
+        status,
+        raw_status,
+        diagnostics: RangeDiagnostics {
+            signal_rate: 0,
+            ambient_rate: 0,
+            effective_spads: 0,
+        },
+    }
+}
 
 /// A valid floor-level reading.
 const fn floor(mm: u16) -> RangefinderReading {
-    RangefinderReading {
-        reading: Reading::Valid(mm),
-        raw_status: 11,
-    }
+    reading(Reading::Valid(mm), RangeStatus::Valid, 9)
 }
 
 /// A reading with no target.
 const fn no_target() -> RangefinderReading {
-    RangefinderReading {
-        reading: Reading::NoTarget,
-        raw_status: 0,
-    }
+    reading(Reading::NoTarget, RangeStatus::OutOfBounds, 5)
 }
 
 /// A reading whose status reports a hardware failure.
 const fn hardware_fail() -> RangefinderReading {
-    RangefinderReading {
-        reading: Reading::Invalid(RangeStatus::HardwareFail),
-        raw_status: 1,
-    }
+    reading(
+        Reading::Invalid(RangeStatus::HardwareFail),
+        RangeStatus::HardwareFail,
+        1,
+    )
 }
 
 #[test]

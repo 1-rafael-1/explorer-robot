@@ -1,4 +1,4 @@
-//! On-demand VL53L0X rangefinder pair task and floor-drop detection.
+//! On-demand VL53L1X rangefinder pair task and floor-drop detection.
 //!
 //! One task owns both sensors, the command channel and a 50 ms ticker. It arms
 //! the pair on demand, reads both sensors through their `INT` lines, recovers a
@@ -41,7 +41,7 @@ use crate::{
     },
 };
 
-/// One VL53L0X on its dedicated I2C bus, with open-drain `XSHUT` and `INT`.
+/// One VL53L1X on its dedicated I2C bus, with open-drain `XSHUT` and `INT`.
 type SensorDriver = Rangefinder<
     I2cDevice<'static, CriticalSectionRawMutex, I2c<'static, Async>>,
     OutputOpenDrain<'static>,
@@ -165,7 +165,7 @@ enum EnabledEnd {
     Failed,
 }
 
-/// VL53L0X pair task.
+/// VL53L1X pair task.
 ///
 /// Idles with both modules held off until an enable asks for the pair, then
 /// serves one enabled period until a disable or a terminal failure.
@@ -290,6 +290,7 @@ async fn handle_read<I2C, X, I>(
 
     match driver.read().await {
         Ok(reading) => runtime.apply_reading(reading, now_ms()),
+        Err(rangefinder::Error::NotReady) => {}
         Err(error) => {
             warn!("[rangefinder] read failed: {:?}", Debug2Format(&error));
             recover_sensor(driver, runtime, delay).await;
@@ -474,8 +475,16 @@ struct SensorRuntime {
     last_reading_ms: Option<u64>,
     /// The last valid range in millimetres.
     range_mm: Option<u16>,
-    /// The last raw four-bit Range Status code.
+    /// The last decoded Range Status.
+    status: Option<rangefinder::RangeStatus>,
+    /// The last raw 8-bit Range Status code.
     raw_status: Option<u8>,
+    /// The last signal rate in 8.7 fixed point.
+    signal_rate: Option<u16>,
+    /// The last ambient rate in 8.7 fixed point.
+    ambient_rate: Option<u16>,
+    /// The last effective SPAD count.
+    effective_spads: Option<u16>,
 }
 
 impl SensorRuntime {
@@ -485,7 +494,11 @@ impl SensorRuntime {
             lifecycle: SensorLifecycle::new(DROP_THRESHOLD_MM),
             last_reading_ms: None,
             range_mm: None,
+            status: None,
             raw_status: None,
+            signal_rate: None,
+            ambient_rate: None,
+            effective_spads: None,
         }
     }
 
@@ -495,7 +508,11 @@ impl SensorRuntime {
         // No reading has arrived yet, so the readout keeps its placeholders.
         self.last_reading_ms = None;
         self.range_mm = None;
+        self.status = None;
         self.raw_status = None;
+        self.signal_rate = None;
+        self.ambient_rate = None;
+        self.effective_spads = None;
     }
 
     /// Mark the sensor ready for a first valid reading after init or recovery.
@@ -504,7 +521,11 @@ impl SensorRuntime {
         // No reading has arrived yet, so the readout keeps its placeholders.
         self.last_reading_ms = None;
         self.range_mm = None;
+        self.status = None;
         self.raw_status = None;
+        self.signal_rate = None;
+        self.ambient_rate = None;
+        self.effective_spads = None;
     }
 
     /// Reset the runtime after an explicit disable.
@@ -512,13 +533,21 @@ impl SensorRuntime {
         self.lifecycle.begin_disable();
         self.last_reading_ms = None;
         self.range_mm = None;
+        self.status = None;
         self.raw_status = None;
+        self.signal_rate = None;
+        self.ambient_rate = None;
+        self.effective_spads = None;
     }
 
     /// Apply one reading to the detector and the sensor's telemetry.
     const fn apply_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
         self.last_reading_ms = Some(now_ms);
+        self.status = Some(reading.status);
         self.raw_status = Some(reading.raw_status);
+        self.signal_rate = Some(reading.diagnostics.signal_rate);
+        self.ambient_rate = Some(reading.diagnostics.ambient_rate);
+        self.effective_spads = Some(reading.diagnostics.effective_spads);
         self.range_mm = match reading.reading {
             rangefinder::Reading::Valid(range_mm) => Some(range_mm),
             rangefinder::Reading::NoTarget | rangefinder::Reading::Invalid(_) => None,
@@ -532,7 +561,11 @@ impl SensorRuntime {
         SensorTelemetry {
             state: self.lifecycle.state(),
             range_mm: self.range_mm,
+            status: self.status,
             raw_status: self.raw_status,
+            signal_rate: self.signal_rate,
+            ambient_rate: self.ambient_rate,
+            effective_spads: self.effective_spads,
             floor: self.lifecycle.floor(),
             age_ms: self
                 .last_reading_ms

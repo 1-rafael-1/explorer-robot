@@ -428,16 +428,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "edrv-vl53l0x"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b05d93fbbd9ad3637246279c2611770a7ced7dc2f827f6e24cadbb1cac9254fa"
-dependencies = [
- "embedded-hal 1.0.0",
- "embedded-hal-async",
-]
-
-[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1563,9 +1553,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 name = "rangefinder"
 version = "0.1.0"
 dependencies = [
- "edrv-vl53l0x",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
+ "vl53l1x",
 ]
 
 [[package]]

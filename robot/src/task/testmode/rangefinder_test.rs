@@ -7,7 +7,7 @@
 
 use defmt::error;
 use embassy_executor::Spawner;
-use touch_ui::{FloorState as UiFloorState, ProtectionState, RangefinderTestReadout, SensorReadout};
+use touch_ui::{FloorState as UiFloorState, ProtectionState, RangeStatusName, RangefinderTestReadout, SensorReadout};
 
 use crate::{
     system::state::{rangefinder as rangefinder_state, rangefinder_test},
@@ -73,10 +73,13 @@ const fn sensor_readout(sensor: rangefinder_state::SensorTelemetry) -> SensorRea
     SensorReadout {
         state: Some(sensor_state(sensor.state)),
         range_mm: sensor.range_mm,
-        status: None,
+        status: match sensor.status {
+            Some(status) => Some(status_name(status)),
+            None => None,
+        },
         raw_status: sensor.raw_status,
-        signal_rate: None,
-        ambient_rate: None,
+        signal_rate: sensor.signal_rate,
+        ambient_rate: sensor.ambient_rate,
         floor: Some(floor_state(sensor.floor)),
         age_ms: sensor.age_ms,
     }
@@ -100,6 +103,25 @@ const fn sensor_state(state: rangefinder::SensorState) -> ProtectionState {
         rangefinder::SensorState::Armed => ProtectionState::Armed,
         rangefinder::SensorState::Recovering => ProtectionState::Degraded,
         rangefinder::SensorState::Failed => ProtectionState::Failed,
+    }
+}
+
+/// Map the driver's Range Status onto the panel's neutral status name.
+const fn status_name(status: rangefinder::RangeStatus) -> RangeStatusName {
+    match status {
+        rangefinder::RangeStatus::Valid => RangeStatusName::Valid,
+        rangefinder::RangeStatus::MinRangeClipped => RangeStatusName::MinRangeClipped,
+        rangefinder::RangeStatus::NoWrapCheck => RangeStatusName::NoWrapCheck,
+        rangefinder::RangeStatus::SignalFail => RangeStatusName::SignalFail,
+        rangefinder::RangeStatus::OutOfBounds => RangeStatusName::OutOfBounds,
+        rangefinder::RangeStatus::MinRangeFail => RangeStatusName::MinRangeFail,
+        rangefinder::RangeStatus::SigmaFail => RangeStatusName::SigmaFail,
+        rangefinder::RangeStatus::WrapFail => RangeStatusName::WrapFail,
+        rangefinder::RangeStatus::XtalkFail => RangeStatusName::XtalkFail,
+        rangefinder::RangeStatus::HardwareFail => RangeStatusName::HardwareFail,
+        rangefinder::RangeStatus::Synchronization => RangeStatusName::Synchronization,
+        rangefinder::RangeStatus::NoUpdate => RangeStatusName::NoUpdate,
+        rangefinder::RangeStatus::Unknown(_) => RangeStatusName::Unknown,
     }
 }
 

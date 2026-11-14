@@ -45,5 +45,5 @@ pub mod driver;
 pub mod registers;
 pub mod types;
 
-pub use driver::{Error, Rangefinder};
+pub use driver::{Error, INTERMEASUREMENT_PERIOD_MS, Rangefinder, SHORT_TIMING_BUDGET_US};
 pub use types::{RangeDiagnostics, RangeStatus, RangefinderReading, Reading};

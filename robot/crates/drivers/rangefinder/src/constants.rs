@@ -1,16 +1,23 @@
 //! Timing, threshold and lifecycle constants for the rangefinder pair.
 //!
 //! These are the single source of truth for the numbers the firmware and the
-//! floor-drop detector share. They mirror the values recorded in ADR-0048.
+//! floor-drop detector share. They mirror the values recorded in ADR-0048 and
+//! ADR-0049. The sensor's measurement profile aliases the driver constants, so
+//! the inter-measurement period and the task ticker cannot drift apart.
 
 /// A valid reading strictly above this distance means the floor is gone.
 pub const DROP_THRESHOLD_MM: u16 = 400;
 
 /// Inter-measurement period for continuous timed ranging.
-pub const RANGING_PERIOD_MS: u32 = 50;
+///
+/// Aliases the driver's commanded period so the pair task ticker and the sensor
+/// agree.
+pub const RANGING_PERIOD_MS: u32 = vl53l1x::INTERMEASUREMENT_PERIOD_MS;
 
 /// Measurement timing budget handed to the sensor after initialisation.
-pub const TIMING_BUDGET_US: u32 = 33_000;
+///
+/// Aliases the driver's short-distance-mode budget.
+pub const TIMING_BUDGET_US: u32 = vl53l1x::SHORT_TIMING_BUDGET_US;
 
 /// How long an invalid or no-target streak may hold the last state before the
 /// detector fails safe to [`Drop`](crate::FloorState::Drop).
@@ -30,6 +37,3 @@ pub const GATE_TIMEOUT_MS: u64 = 1_000;
 
 /// Publishing rate of the panel test-mode readout.
 pub const TEST_PUBLISH_HZ: u8 = 10;
-
-/// The sensor's sentinel range, meaning no target was detected.
-pub const OUT_OF_RANGE_MILLIMETERS: u16 = 8190;

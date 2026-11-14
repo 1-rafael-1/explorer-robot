@@ -6,7 +6,7 @@
 //! - `battery_charge_read` — ADC battery voltage monitoring
 //! - `indicators` — RGB LED status indication
 //! - `io` — graphics panel (TFT + touch), flash storage
-//! - `sensors` — encoder reader, IMU, `LiDAR` driver, VL53L0X rangefinder pair
+//! - `sensors` — encoder reader, IMU, `LiDAR` driver, VL53L1X rangefinder pair
 //! - `ui` — touch-driven menu controller (panel owner)
 //! - `autonomous_mode` — coast-and-avoid, attempt-straight-line behaviors
 //! - `behavior` — event-driven behavior handlers (battery, obstacle, floor drop)
@@ -31,7 +31,7 @@ pub mod orchestrate;
 pub mod procedure;
 /// The Link Port task: UART1, EXP power, presence and the link core.
 pub mod remote_link;
-/// Sensor tasks (`IMU`, encoders, `LiDAR` driver, VL53L0X rangefinder pair).
+/// Sensor tasks (`IMU`, encoders, `LiDAR` driver, VL53L1X rangefinder pair).
 pub mod sensors;
 pub mod startup;
 pub mod testmode;

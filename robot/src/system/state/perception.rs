@@ -6,7 +6,7 @@
 //! the only writer of the obstacle flag.
 //!
 //! Obstacle perception is driven by a 360° `LiDAR` point cloud. The front and
-//! rear VL53L0X rangefinders are floor-drop detectors (stairs, ledges) — they are
+//! rear VL53L1X rangefinders are floor-drop detectors (stairs, ledges) — they are
 //! **not** obstacle sensors. The rangefinder task is the sole writer of the
 //! floor-drop flag.
 //!
