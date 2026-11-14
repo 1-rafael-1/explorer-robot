@@ -479,7 +479,7 @@ where
 ///
 /// The cells come from the readout model, so labels, units, raw-status names and
 /// placeholders stay in one place. The front column is drawn on the left and the
-/// rear on the right, each with its five rows, and the footer carries the pair
+/// rear on the right, each with its seven rows, and the footer carries the pair
 /// state, the aggregate floor state and the threshold. Drawing is clipped to the
 /// readout area so a hostile over-long value cannot paint over the panel border.
 ///

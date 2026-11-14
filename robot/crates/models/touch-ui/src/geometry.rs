@@ -442,8 +442,8 @@ pub const fn readout_row_pitch(rows: usize) -> u32 {
 /// The on-screen rectangle of readout row `index` of `rows`.
 ///
 /// Each row is one pitch tall and the whole block is vertically centred in
-/// [`readout_area`], so five rows sit in the middle of the panel and twelve
-/// fill it without touching the border.
+/// [`readout_area`], so a short block sits in the middle of the panel and
+/// twelve rows fill it without touching the border.
 #[must_use]
 pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
     let area = readout_area();
@@ -463,8 +463,8 @@ pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
 /// (0 is front, 1 is rear) at row `row`.
 ///
 /// The two columns split [`readout_area`] either side of
-/// [`RANGEFINDER_COLUMN_GAP`], and each column's five rows share the height left
-/// above [`rangefinder_footer_rect`].
+/// [`RANGEFINDER_COLUMN_GAP`], and each column's seven rows share the height
+/// left above [`rangefinder_footer_rect`].
 #[must_use]
 pub const fn rangefinder_column_rect(column: usize, row: usize) -> Rectangle {
     let area = readout_area();

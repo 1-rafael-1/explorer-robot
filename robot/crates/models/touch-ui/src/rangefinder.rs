@@ -8,11 +8,16 @@
 //!
 //! # Rows
 //!
-//! Each of the two sensor columns draws five rows, in order: the Floor-Drop
-//! Protection state (`St`), the range in millimetres (`Rng`), the decoded raw
-//! Range Status and its four-bit code (`Sts`), the floor state (`Flr`) and the
-//! sample age in milliseconds (`Age`). A footer carries the pair state, the
-//! aggregate floor state and the floor-drop threshold.
+//! Each of the two sensor columns draws seven rows, in order: the Floor-Drop
+//! Protection state (`St`), the range in millimetres (`Rng`), the decoded
+//! VL53L1X Range Status name and its raw 8-bit code (`Sts`), the signal rate
+//! (`Sig`), the ambient rate (`Amb`), the floor state (`Flr`) and the sample age
+//! in milliseconds (`Age`). A footer carries the pair state, the aggregate floor
+//! state and the floor-drop threshold.
+//!
+//! The signal and ambient rows convert the driver's raw 7.7 fixed-point count
+//! rates to tenths of Mcps, so the model needs no floating point. The status name
+//! is decoded by the firmware adapter, not by this model.
 //!
 //! Every missing value renders as `--`, so a stale reading is never shown as a
 //! zero and a row is never omitted for a transient absence.
@@ -20,7 +25,7 @@
 use crate::buffer::TextBuf;
 
 /// The number of rows each sensor column draws.
-pub const ROWS: usize = 5;
+pub const ROWS: usize = 7;
 
 /// The Floor-Drop Protection state of the pair, or one sensor's contribution to
 /// it.
@@ -76,56 +81,58 @@ impl FloorState {
     }
 }
 
-/// The name a four-bit VL53L0X Range Status code decodes to.
+/// The VL53L1X Range Status name supplied by the firmware adapter.
 ///
-/// The raw code is the device's `0x14` bits 6:3, not the full register byte.
-/// `11` is range complete; the other codes name the failure.
+/// The model never decodes the device's raw 8-bit code itself: the adapter
+/// turns the code into one of these names and passes both across the boundary.
+/// The names and short labels follow the VL53L1X vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RangeStatusName {
     /// Range complete.
     Valid,
-    /// The device reports no range.
-    NoRange,
-    /// A hardware failure (`1`–`3`).
-    HardwareFail,
-    /// A signal failure (`4`).
+    /// The target is below the minimum range, so the range is clipped.
+    MinRangeClipped,
+    /// Range is valid but the wrap check was not performed.
+    NoWrapCheck,
+    /// Too little signal to range.
     SignalFail,
-    /// A phase failure (`6` or `9`).
-    PhaseFail,
-    /// A minimum-range failure (`8` or `10`).
+    /// The measured phase is out of bounds.
+    OutOfBounds,
+    /// The target is closer than the minimum range.
     MinRangeFail,
-    /// A code with no known meaning.
+    /// The signal-to-noise ratio is too low.
+    SigmaFail,
+    /// The returned range wrapped around and could not be trusted.
+    WrapFail,
+    /// Crosstalk between the SPADs corrupted the range.
+    XtalkFail,
+    /// A hardware failure.
+    HardwareFail,
+    /// The measurement could not be synchronized.
+    Synchronization,
+    /// The measurement was not updated.
+    NoUpdate,
+    /// A status the adapter could not name.
     Unknown,
 }
 
 impl RangeStatusName {
-    /// Decode a four-bit Range Status code.
-    ///
-    /// Any code outside the driver's vocabulary decodes to
-    /// [`RangeStatusName::Unknown`] rather than being guessed.
-    #[must_use]
-    pub const fn from_raw(raw: u8) -> Self {
-        match raw {
-            11 => Self::Valid,
-            0 => Self::NoRange,
-            1..=3 => Self::HardwareFail,
-            4 => Self::SignalFail,
-            6 | 9 => Self::PhaseFail,
-            8 | 10 => Self::MinRangeFail,
-            _ => Self::Unknown,
-        }
-    }
-
     /// The short label the status row draws.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Valid => "Valid",
-            Self::NoRange => "No range",
-            Self::HardwareFail => "HW",
+            Self::MinRangeClipped => "MinClip",
+            Self::NoWrapCheck => "NoWrap",
             Self::SignalFail => "Signal",
-            Self::PhaseFail => "Phase",
-            Self::MinRangeFail => "Min",
+            Self::OutOfBounds => "Phase",
+            Self::MinRangeFail => "MinRange",
+            Self::SigmaFail => "Sigma",
+            Self::WrapFail => "Wrap",
+            Self::XtalkFail => "Xtalk",
+            Self::HardwareFail => "HW",
+            Self::Synchronization => "Sync",
+            Self::NoUpdate => "NoUpd",
             Self::Unknown => "Unknown",
         }
     }
@@ -142,8 +149,14 @@ pub struct SensorReadout {
     pub state: Option<ProtectionState>,
     /// The last range in millimetres, or `None` before the first sample.
     pub range_mm: Option<u16>,
-    /// The last four-bit Range Status code, or `None` before the first sample.
+    /// The decoded Range Status name, or `None` before the first sample.
+    pub status: Option<RangeStatusName>,
+    /// The last raw 8-bit Range Status code, or `None` before the first sample.
     pub raw_status: Option<u8>,
+    /// The raw 7.7 fixed-point signal rate, or `None` before the first sample.
+    pub signal_rate: Option<u16>,
+    /// The raw 7.7 fixed-point ambient rate, or `None` before the first sample.
+    pub ambient_rate: Option<u16>,
     /// The derived floor state, or `None` before the first sample.
     pub floor: Option<FloorState>,
     /// The age of the last sample in milliseconds, or `None` before the first
@@ -158,7 +171,10 @@ impl SensorReadout {
         Self {
             state: None,
             range_mm: None,
+            status: None,
             raw_status: None,
+            signal_rate: None,
+            ambient_rate: None,
             floor: None,
             age_ms: None,
         }
@@ -200,7 +216,7 @@ impl RangefinderTestReadout {
     }
 
     /// The formatted cells, `[front, rear]`, each in row order: state, range,
-    /// status, floor and age.
+    /// status, signal, ambient, floor and age.
     #[must_use]
     pub fn cells(&self) -> [[TextBuf; ROWS]; 2] {
         [sensor_cells(&self.front), sensor_cells(&self.rear)]
@@ -222,14 +238,16 @@ impl RangefinderTestReadout {
     }
 }
 
-/// Format one sensor's five cells, in display order.
+/// Format one sensor's seven cells, in display order.
 fn sensor_cells(sensor: &SensorReadout) -> [TextBuf; ROWS] {
     let mut cells = [TextBuf::new(); ROWS];
     cells[0] = state_cell(sensor.state);
     cells[1] = range_cell(sensor.range_mm);
-    cells[2] = status_cell(sensor.raw_status);
-    cells[3] = floor_cell(sensor.floor);
-    cells[4] = age_cell(sensor.age_ms);
+    cells[2] = status_cell(sensor.status, sensor.raw_status);
+    cells[3] = rate_cell("Sig", sensor.signal_rate);
+    cells[4] = rate_cell("Amb", sensor.ambient_rate);
+    cells[5] = floor_cell(sensor.floor);
+    cells[6] = age_cell(sensor.age_ms);
     cells
 }
 
@@ -253,15 +271,36 @@ fn range_cell(range_mm: Option<u16>) -> TextBuf {
     cell
 }
 
-/// Format the status row as the decoded name and its raw four-bit code, with
-/// `--` when there is no reading.
-fn status_cell(raw_status: Option<u8>) -> TextBuf {
+/// Format the status row as the adapter-decoded name and its raw 8-bit code,
+/// with `--` when either part is missing.
+fn status_cell(status: Option<RangeStatusName>, raw_status: Option<u8>) -> TextBuf {
     let mut cell = TextBuf::new();
-    match raw_status {
-        Some(raw) => cell.fill(format_args!("Sts {} ({raw})", RangeStatusName::from_raw(raw).label())),
-        None => cell.fill(format_args!("Sts --")),
+    match (status, raw_status) {
+        (Some(status), Some(raw)) => cell.fill(format_args!("Sts {} ({raw})", status.label())),
+        _ => cell.fill(format_args!("Sts --")),
     }
     cell
+}
+
+/// Format a raw 7.7 fixed-point count rate as tenths of Mcps, e.g. `Sig 12.3`.
+///
+/// Integer rounding keeps the model free of floating point: a raw count of
+/// `1574` renders as `12.3` and `51` as `0.4`.
+fn rate_cell(label: &str, raw_rate: Option<u16>) -> TextBuf {
+    let mut cell = TextBuf::new();
+    match raw_rate {
+        Some(raw) => {
+            let tenths = rate_tenths(raw);
+            cell.fill(format_args!("{label} {}.{}", tenths / 10, tenths % 10));
+        }
+        None => cell.fill(format_args!("{label} --")),
+    }
+    cell
+}
+
+/// Convert a raw 7.7 fixed-point rate to tenths of Mcps.
+fn rate_tenths(raw: u16) -> u32 {
+    (u32::from(raw) * 5 + 32) / 64
 }
 
 /// Format the floor row, with `--` when the floor state is not known.

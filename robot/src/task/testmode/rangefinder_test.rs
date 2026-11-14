@@ -73,7 +73,10 @@ const fn sensor_readout(sensor: rangefinder_state::SensorTelemetry) -> SensorRea
     SensorReadout {
         state: Some(sensor_state(sensor.state)),
         range_mm: sensor.range_mm,
+        status: None,
         raw_status: sensor.raw_status,
+        signal_rate: None,
+        ambient_rate: None,
         floor: Some(floor_state(sensor.floor)),
         age_ms: sensor.age_ms,
     }

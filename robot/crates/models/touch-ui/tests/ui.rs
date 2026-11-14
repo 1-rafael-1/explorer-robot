@@ -1781,14 +1781,20 @@ const fn sample_rangefinder() -> RangefinderTestReadout {
         front: SensorReadout {
             state: Some(ProtectionState::Armed),
             range_mm: Some(123),
+            status: Some(RangeStatusName::Valid),
             raw_status: Some(11),
+            signal_rate: Some(1574),
+            ambient_rate: Some(51),
             floor: Some(FloorState::Floor),
             age_ms: Some(10),
         },
         rear: SensorReadout {
             state: Some(ProtectionState::Degraded),
             range_mm: Some(812),
+            status: Some(RangeStatusName::SignalFail),
             raw_status: Some(4),
+            signal_rate: Some(1000),
+            ambient_rate: Some(200),
             floor: Some(FloorState::Drop),
             age_ms: Some(20),
         },
@@ -1799,13 +1805,29 @@ const fn sample_rangefinder() -> RangefinderTestReadout {
 }
 
 /// Test that the Rangefinder Test Readout renders both sensor columns with the
-/// five row labels and values, and the pair/floor/threshold footer.
+/// seven row labels and values, and the pair/floor/threshold footer.
 #[test]
 fn the_rangefinder_readout_renders_both_sensor_columns_and_the_footer() {
     let cells = sample_rangefinder().cells();
 
-    let front = ["St Armed", "Rng 123mm", "Sts Valid (11)", "Flr Floor", "Age 10ms"];
-    let rear = ["St Degr", "Rng 812mm", "Sts Signal (4)", "Flr Drop", "Age 20ms"];
+    let front = [
+        "St Armed",
+        "Rng 123mm",
+        "Sts Valid (11)",
+        "Sig 12.3",
+        "Amb 0.4",
+        "Flr Floor",
+        "Age 10ms",
+    ];
+    let rear = [
+        "St Degr",
+        "Rng 812mm",
+        "Sts Signal (4)",
+        "Sig 7.8",
+        "Amb 1.6",
+        "Flr Drop",
+        "Age 20ms",
+    ];
 
     for (cell, expected) in cells[0].iter().zip(front) {
         assert_eq!(cell.as_str(), expected);
@@ -1817,12 +1839,12 @@ fn the_rangefinder_readout_renders_both_sensor_columns_and_the_footer() {
     assert_eq!(sample_rangefinder().footer().as_str(), "Pair Degr  Flr DROP  TH 400mm");
 }
 
-/// Test that a missing state, range, status, floor or age renders a clear `--`
-/// placeholder rather than a stale or zero value.
+/// Test that a missing state, range, status, signal, ambient, floor or age
+/// renders a clear `--` placeholder rather than a stale or zero value.
 #[test]
 fn a_missing_rangefinder_value_renders_a_placeholder() {
     let waiting = RangefinderTestReadout::waiting(400);
-    let placeholders = ["St --", "Rng --", "Sts --", "Flr --", "Age --"];
+    let placeholders = ["St --", "Rng --", "Sts --", "Sig --", "Amb --", "Flr --", "Age --"];
 
     let cells = waiting.cells();
     for (cell, expected) in cells[0].iter().zip(placeholders) {
@@ -1836,6 +1858,7 @@ fn a_missing_rangefinder_value_renders_a_placeholder() {
     let partial = RangefinderTestReadout {
         front: SensorReadout {
             range_mm: Some(300),
+            raw_status: Some(4),
             ..SensorReadout::empty()
         },
         ..RangefinderTestReadout::waiting(400)
@@ -1843,36 +1866,49 @@ fn a_missing_rangefinder_value_renders_a_placeholder() {
     assert_eq!(partial.cells()[0][0].as_str(), "St --");
     assert_eq!(partial.cells()[0][1].as_str(), "Rng 300mm");
     assert_eq!(partial.cells()[0][2].as_str(), "Sts --");
+
+    // A decoded name without its raw code also renders the placeholder.
+    let no_raw = RangefinderTestReadout {
+        front: SensorReadout {
+            status: Some(RangeStatusName::NoWrapCheck),
+            ..SensorReadout::empty()
+        },
+        ..RangefinderTestReadout::waiting(400)
+    };
+    assert_eq!(no_raw.cells()[0][2].as_str(), "Sts --");
 }
 
-/// Test that the raw status names and codes match the driver's decoded
-/// vocabulary, including the intermediate hardware, phase and minimum-range
-/// codes.
+/// Test that every Range Status name uses the VL53L1X vocabulary label the
+/// adapter supplies, and that the status row pairs it with the raw code.
 #[test]
-fn the_range_status_names_match_the_driver_vocabulary() {
-    for (raw, name, expected_cell) in [
-        (11, RangeStatusName::Valid, "Sts Valid (11)"),
-        (0, RangeStatusName::NoRange, "Sts No range (0)"),
-        (1, RangeStatusName::HardwareFail, "Sts HW (1)"),
-        (2, RangeStatusName::HardwareFail, "Sts HW (2)"),
-        (3, RangeStatusName::HardwareFail, "Sts HW (3)"),
-        (4, RangeStatusName::SignalFail, "Sts Signal (4)"),
-        (6, RangeStatusName::PhaseFail, "Sts Phase (6)"),
-        (8, RangeStatusName::MinRangeFail, "Sts Min (8)"),
-        (9, RangeStatusName::PhaseFail, "Sts Phase (9)"),
-        (10, RangeStatusName::MinRangeFail, "Sts Min (10)"),
-        (5, RangeStatusName::Unknown, "Sts Unknown (5)"),
+fn the_range_status_names_match_the_vl53l1x_vocabulary() {
+    for (name, label) in [
+        (RangeStatusName::Valid, "Valid"),
+        (RangeStatusName::MinRangeClipped, "MinClip"),
+        (RangeStatusName::NoWrapCheck, "NoWrap"),
+        (RangeStatusName::SignalFail, "Signal"),
+        (RangeStatusName::OutOfBounds, "Phase"),
+        (RangeStatusName::MinRangeFail, "MinRange"),
+        (RangeStatusName::SigmaFail, "Sigma"),
+        (RangeStatusName::WrapFail, "Wrap"),
+        (RangeStatusName::XtalkFail, "Xtalk"),
+        (RangeStatusName::HardwareFail, "HW"),
+        (RangeStatusName::Synchronization, "Sync"),
+        (RangeStatusName::NoUpdate, "NoUpd"),
+        (RangeStatusName::Unknown, "Unknown"),
     ] {
-        assert_eq!(RangeStatusName::from_raw(raw), name);
-        let readout = RangefinderTestReadout {
-            front: SensorReadout {
-                raw_status: Some(raw),
-                ..SensorReadout::empty()
-            },
-            ..RangefinderTestReadout::waiting(400)
-        };
-        assert_eq!(readout.cells()[0][2].as_str(), expected_cell);
+        assert_eq!(name.label(), label);
     }
+
+    let readout = RangefinderTestReadout {
+        front: SensorReadout {
+            status: Some(RangeStatusName::SigmaFail),
+            raw_status: Some(7),
+            ..SensorReadout::empty()
+        },
+        ..RangefinderTestReadout::waiting(400)
+    };
+    assert_eq!(readout.cells()[0][2].as_str(), "Sts Sigma (7)");
 }
 
 /// Test that a `StatusView` carrying a Rangefinder readout renders into the
@@ -1899,7 +1935,7 @@ fn a_rangefinder_readout_redraws_only_when_a_displayed_value_changes() {
     let sample = sample_rangefinder();
     let changed = RangefinderTestReadout {
         rear: SensorReadout {
-            range_mm: Some(900),
+            signal_rate: Some(2000),
             ..sample.rear
         },
         ..sample
@@ -1917,7 +1953,7 @@ fn the_rangefinder_columns_and_footer_fit_inside_the_status_panel() {
     let area = readout_area();
 
     for column in 0..2 {
-        for row in 0..5 {
+        for row in 0..7 {
             let rect = rangefinder_column_rect(column, row);
             assert!(rect.top_left.x >= area.top_left.x);
             assert!(rect.top_left.y >= area.top_left.y);
@@ -1927,7 +1963,7 @@ fn the_rangefinder_columns_and_footer_fit_inside_the_status_panel() {
     }
 
     let footer = rangefinder_footer_rect();
-    assert!(footer.top_left.y > rangefinder_column_rect(0, 4).top_left.y);
+    assert!(footer.top_left.y > rangefinder_column_rect(0, 6).top_left.y);
     assert!(bottom_right(footer).y < bottom_right(panel).y);
 }
 
