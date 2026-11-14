@@ -49,7 +49,7 @@ Testing Decisions). Each page under `tests/` drives one seam:
 | `pure.html` | none | the protocol helpers, geometry and the store's core reducer cases |
 | `state.html` | none | snapshot merging, dedupe, Boot Id reset, Activities, Events and outcome-unknown |
 | `planner.html` | injected send/clock | the Target Point, the two legs, completion, busy/unknown and Stop |
-| `radar.html` | none | the World Frame camera, scan/Pose pairing, the tap guard, the Seen Polygon, the unseen complement, the Occlusion Edges and the No Return notch rays |
+| `radar.html` | none | the World Frame camera, scan/Pose pairing, the tap guard, the Seen Polygon, the unseen complement, the Occlusion Edges and the No Return notch chords |
 | `fake.html` | injected socket | the transport handshake, heartbeat, close codes and reconnect |
 | `pairing.html` | injected socket + DOM | auth/pair, 4401, protocol mismatch and the pairing screens |
 | `bridge.html` | none | the Bridge Status message, chip and Robot/Link panel |

@@ -401,23 +401,31 @@ test('a No Return sector is part of the unseen complement', () => {
   const radar = createRadar(canvas, {});
   const store = createStore();
   const ranges = Array.from({ length: 360 }, () => 300);
+  for (let slot = 350; slot <= 357; slot += 1) ranges[slot] = 100;
   for (let slot = 358; slot < 360; slot += 1) ranges[slot] = null;
   for (let slot = 0; slot <= 2; slot += 1) ranges[slot] = null;
   store.dispatch({ type: 'stream', name: 'lidar', seq: 1, ts: 1000, v: scanValue(ranges) });
 
   radar.render(store.state, 1100);
   assert(redNear(canvas, radar, 200, 0) > 0, 'the null sector is unknown, so it is unseen');
-  for (const slot of [357, 3]) {
-    const angle = slotAngleDeg(ORIGIN, 0, 1, true, slot) * RAD;
-    const hit = [320, 350, 380, 410].some((radius) =>
-      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
-    );
-    assert(hit, `slot ${slot} has a dotted No Return boundary from the seen edge outward`);
-    const beforeEdge = [80, 120, 180, 240].some((radius) =>
-      edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
-    );
-    assert(!beforeEdge, `slot ${slot} does not draw the notch boundary from the robot`);
-  }
+  const points = scanPoints(ORIGIN, scanValue(ranges));
+  const at = (slot) => points.find((point) => point.slot === slot);
+  const start = at(357);
+  const end = at(3);
+  const hit = [0.25, 0.5, 0.75].some((ratio) =>
+    edgeRedNear(
+      canvas,
+      radar,
+      start.x + (end.x - start.x) * ratio,
+      start.y + (end.y - start.y) * ratio,
+    ),
+  );
+  assert(hit, 'the No Return edge is the chord between the two returns');
+  const angle = slotAngleDeg(ORIGIN, 0, 1, true, 357) * RAD;
+  const beyond = [350, 400].some((radius) =>
+    edgeRedNear(canvas, radar, radius * Math.cos(angle), radius * Math.sin(angle)),
+  );
+  assert(!beyond, 'the No Return edge stops at the returns');
 });
 
 test('a near object leaves the space before it seen and behind it unseen', () => {

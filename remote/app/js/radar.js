@@ -341,9 +341,9 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
 
   /**
    * Strokes the No Return notch boundaries under the cloud (ADR-0047). A notch
-   * has no chord, so each ray starts at the seen return and runs outward; the
-   * cloud stays on top, so a measured return at the notch edge is not painted
-   * over.
+   * has no measured surface, so its edge is the chord between the two returns
+   * on either side. It starts and ends at measured returns and never runs to
+   * the viewport.
    */
   function drawNotchEdges(scan) {
     if (!view || !scan || !scan.visibility) return;
@@ -355,24 +355,13 @@ export function createRadar(canvas, { onPick = () => {} } = {}) {
     context.lineWidth = 1.2;
     context.setLineDash([2, 4]);
     context.lineCap = 'round';
-    const pose = worldToScreen(view, scan.pose);
-    const reach = Math.hypot(view.width, view.height);
     for (const notch of notches) {
-      for (const point of [notch.before, notch.after]) {
-        const start = worldToScreen(view, point);
-        const dx = start.x - pose.x;
-        const dy = start.y - pose.y;
-        const length = Math.hypot(dx, dy);
-        if (!(length > 0)) continue;
-        const end = {
-          x: start.x + (dx / length) * reach,
-          y: start.y + (dy / length) * reach,
-        };
-        context.beginPath();
-        context.moveTo(start.x, start.y);
-        context.lineTo(end.x, end.y);
-        context.stroke();
-      }
+      const start = worldToScreen(view, notch.before);
+      const end = worldToScreen(view, notch.after);
+      context.beginPath();
+      context.moveTo(start.x, start.y);
+      context.lineTo(end.x, end.y);
+      context.stroke();
     }
     context.restore();
   }
