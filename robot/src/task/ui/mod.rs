@@ -28,7 +28,7 @@
 //! # Rendering
 //!
 //! The UI is the only thing that draws: producers publish state (the activity
-//! state module), and the retired text display contract no longer exists.
+//! state module).
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -290,7 +290,10 @@ async fn coast_avoid_task(spawner: Spawner) {
 async fn room_scan_task() {
     loop {
         ROOM_SCAN_SIGNAL.wait().await;
-        if ROOM_SCAN_WANTED.load(Ordering::Acquire) {
+        let wanted = ROOM_SCAN_WANTED.load(Ordering::Acquire);
+        #[cfg(feature = "telemetry_logs")]
+        info!("[ui] room scan intent: enable={}", wanted);
+        if wanted {
             lidar::enable().await;
         } else {
             lidar::disable().await;

@@ -378,8 +378,8 @@ const MAIN_MENU_ITEMS: [Item; 5] = [
 
 /// The Calibrate submenu's entries, in display order.
 ///
-/// `DMP Mag` is the only magnetometer calibration: the retired host `Mag` entry
-/// is gone. `Distance` keeps its place at the end.
+/// `DMP Mag` is the only magnetometer calibration. `Distance` keeps its place
+/// at the end.
 const CALIBRATE_ITEMS: [Item; 3] = [
     Item::Procedure(Procedure::MotorCalibration),
     Item::Procedure(Procedure::DmpCompassCalibration),

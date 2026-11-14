@@ -147,7 +147,7 @@ fn starts_on_the_main_menu() {
     assert_eq!(ui.title(), "Main Menu");
     assert_eq!(ui.value(), 0);
     assert_eq!(ui.scroll(), 0);
-    // Five entries no longer fit the list view, so the Main Menu scrolls from
+    // Five entries do not fit the list view, so the Main Menu scrolls from
     // the top rather than assuming it all fits.
     assert_eq!(ui.max_scroll(), max_scroll_for(Screen::MainMenu.items().len()));
     assert!(ui.max_scroll() > 0, "five Main Menu entries overflow the list view");
@@ -2119,8 +2119,7 @@ fn the_dmp_compass_calibration_is_hands_on_and_listed_on_calibrate() {
     assert_eq!(Screen::Prompt.items(), []);
     assert_eq!(Screen::Prompt.title(), "Prompt");
 
-    // Calibrate lists Motor, DMP Mag and Distance; the retired host Mag entry is
-    // gone, and DMP Mag is listed nowhere else.
+    // Calibrate lists Motor, DMP Mag and Distance; DMP Mag is listed nowhere else.
     assert_eq!(
         Screen::Calibrate.items(),
         [

@@ -1,28 +1,9 @@
 # Bench
 
-The bench is where the Bridge and the Remote meet hardware: a C3 SuperMini
-running the Bridge image, the robot's Link Port or a 3.3 V USB-TTL adapter on
-UART1, and the host tools that replace the robot or the Bridge. Every wiring,
-serial-port and radio step here is **bench-required**: the bench has no
-hardware-in-the-loop rig, so CI cannot run it.
+Manual procedures for the Bridge, the Remote tools and the robot's Link Port,
+with the harness and power rules they need. These steps are not CI-covered.
 
-**Not packaged.** The bench is not an installable artifact. It is the host tools
-and scripts in this repository plus your own hardware, USB-TTL adapters, radio
-and Wi-Fi network; nothing here is a release artifact.
-
-**Verified:** 2026-11-08 — `python3 bridge/tools/link-probe.py --help`,
-`python3 bridge/tools/auth-probe.py --help`,
-`python3 bridge/tools/beacon-watch.py --help` and
-`python3 bridge/tools/soak.py --help` (all printed usage, exit 0);
-`cd remote && cargo run -q -p bridge-stub -- --help` and
-`cd remote && cargo run -q -p remote-daemon -- --help` (usage, exit 0);
-`cd remote && cargo run -q -p robot-stub -- --help` (no help flag; the parser
-rejected it with `robot-stub: --help needs a value`, exit 1); and
-`python3 .github/scripts/check_links.py` (26 Markdown files, 165 relative links,
-all resolve, exit 0). No serial port was opened, nothing was flashed, and no
-board or Wi-Fi link was touched.
-
-## What the bench is
+## Bench pieces
 
 | Bench piece | Replaces | What runs there |
 |---|---|---|
@@ -62,9 +43,7 @@ connect the C3's `3V3` pin to the robot: each side regulates its own 3.3 V.
 
 Both directions run **921600 8N1** (ADR-0033). For the `bridge` image, jumper
 **GPIO3 to GPIO4** on the C3 for a loopback; the `stack-soak` image keeps the
-C3's default pins, so jumper **GPIO6 to GPIO7** for that one. The earlier
-transcripts in the Bridge README predate the remap and show the old GPIO6/7
-pins; use the table above for the current image.
+C3's default pins, so jumper **GPIO6 to GPIO7** for that one.
 
 ### Power and the no-USB+J9 rule
 
@@ -120,9 +99,8 @@ workspace's target and build settings (ADR-0040).
 
 ## Bench scripts
 
-The `--help` forms in this section are safe and were run for the `Verified:`
-line. Every invocation that opens a socket, a serial port or a radio is
-**bench-required**.
+The `--help` forms in this section are safe: they open no socket, serial port
+or radio. Every invocation that does is **bench-required**.
 
 ### `link-probe.py`
 
@@ -309,8 +287,8 @@ WPA2-PSK `explorer-setup`, on `192.168.4.1/24`. The portal is the only service;
 the Link Protocol listener is never on the AP interface. The successful
 provisioning submit needs the owner's home SSID and passphrase and is not part
 of this page: follow the
-[Setup Mode run](../../bridge/README.md#bench-acceptance-run-setup-mode)
-or the current [credential-record run](../../bridge/README.md#bench-acceptance-run-the-credential-record).
+[current credential-record run](../../bridge/README.md#bench-acceptance-run-the-credential-record)
+or the [browser provisioning round-trip](../../bridge/README.md#browser-provisioning-round-trip).
 
 ## Bench acceptance runs and further detail
 
@@ -318,13 +296,10 @@ These are **bench-required** and are the source material for the sequences above
 
 - [Bench wiring](../../bridge/README.md#bench-wiring) — the current pin
   table, levels and loopback jumpers.
-- [Bench acceptance run: the network edge](../../bridge/README.md#bench-acceptance-run-the-network-edge)
-  — the network edge and the gate matrix (historical build inputs; the measured
-  output is still the reference).
-- [Bench acceptance run: Setup Mode](../../bridge/README.md#bench-acceptance-run-setup-mode)
-  — Setup Mode and the portal.
 - [Bench acceptance run: the credential record](../../bridge/README.md#bench-acceptance-run-the-credential-record)
   — the credential record, the Pairing Token and the `BRIDGE_CONTROL` actions.
+- [Browser provisioning round-trip](../../bridge/README.md#browser-provisioning-round-trip)
+  — Setup Mode and the portal.
 - [Browser provisioning round-trip](../../bridge/README.md#browser-provisioning-round-trip)
   — the full portal and rejoin sequence.
 - [Bridge Presence and the watchdog](../../bridge/README.md#bridge-presence-and-the-watchdog)

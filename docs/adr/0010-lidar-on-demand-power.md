@@ -31,9 +31,11 @@ right.
   disables it when it is done; the task owns power, warm-up, retries and streaming (ADR-0028).
   At most one mode needs perception at a time, so the enabled sensor serves every reader.
 - `enable()` asserts the `LIDAR_PWR` enable, waits for the TPS22917 rise time, then
-  constructs the `BufferedUart` from the retained `Peri` handles and runs
-  `probe()` → `start()` → `warm_up()` → streaming. A `start()` failure is
-  tolerated; warm-up is the real proof that data flows.
+  constructs the `BufferedUart` from the retained `Peri` handles and runs a
+  bounded best-effort `probe()`, then `start()` (also tolerated), then
+  `warm_up()` → streaming. The device-info frame is emitted on power-up before
+  the UART exists, so it can be missed; a missing frame is logged and does not
+  fail bring-up, because warm-up is the real proof that data flows.
 - Warm-up is bounded by a wall-clock timeout at the call site, because the driver has only
   byte-count watchdogs. On timeout the task power-cycles and retries a bounded number of
   times before reporting `Failed`.
@@ -71,5 +73,10 @@ right.
   constructed per powered period from retained `Peri` handles, `UARTCR.EN` is
   cleared on power-down, and both TX and RX are tri-stated while the branch is off
   (ADR-0023).
-- The LiDAR's 5 V peak is unmeasured and shares the rail with the AI camera and
-  expansion branches; the 5 V budget is revisited in ADR-0019.
+- The measured bench baseline is about 320 mA with the LiDAR spinning, the
+  remote link up, and the motors, rangefinders, RGB LED and AI camera off; a
+  weaker link can raise it slightly. This is a baseline, not the branch's
+  inrush/peak, which is still unmeasured. The LiDAR shares the 5 V rail with the
+  AI camera and expansion branches; the 5 V budget is revisited in ADR-0019.
+- A 300 mA bench supply limit prevents the LiDAR from starting; use at least
+  500 mA. The same setup warms and streams at 500 mA.

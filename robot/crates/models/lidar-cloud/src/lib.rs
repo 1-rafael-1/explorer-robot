@@ -222,10 +222,9 @@ fn normalise_angle(angle_deg: f32) -> f32 {
 /// Whether a slot's distance is a clear angle at `threshold_cm`.
 ///
 /// A return farther than the threshold is clear; a return at or below it is an
-/// obstacle; a missing return (`None`) is **not** clear. This deliberately
-/// inverts the old zero-sentinel reading, which treated a dropout as drivable:
-/// the `LiDAR` returns no reading for a black or specular surface as readily as
-/// for open space, so "clear" must mean "we actually measured past it".
+/// obstacle; a missing return (`None`) is **not** clear. The `LiDAR` returns no
+/// reading for a black or specular surface as readily as for open space, so
+/// "clear" must mean "we actually measured past it".
 #[must_use]
 pub fn is_clear(distance_cm: Option<f32>, threshold_cm: f32) -> bool {
     matches!(distance_cm, Some(distance) if distance > threshold_cm)

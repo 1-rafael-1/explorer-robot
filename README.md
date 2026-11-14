@@ -63,7 +63,10 @@ README](robot/README.md) for the bucket map.
 
 The robot firmware implements the drive subsystem, the COIN-D6 LiDAR perception
 path, the panel UI and touch input, calibration, and the Link Task that owns
-UART1 and the Link Port power. The Bridge implements the network edge: the
+UART1 and the Link Port power. The LiDAR powers, warms and streams in Room
+Scan; its baseline draw with the remote link up is about 320 mA. See the [robot
+page](docs/components/robot.md#lidar-power-and-harness) for the power and
+harness notes. The Bridge implements the network edge: the
 Discovery Beacon, the HMAC preamble, the single-client gate, the credential
 record and Pairing Token, Setup Mode with its portal, Bridge Presence and the
 task watchdog. The Remote daemon implements discovery, the preamble, the Relay

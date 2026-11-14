@@ -276,9 +276,9 @@ const fn completion_stage(stage: Stage) -> ActivityStage {
 
 /// The wire calibration kind for a firmware calibration kind.
 ///
-/// The DMP Bias Snapshot has no wire kind of its own: the Link Protocol layout is
-/// unchanged, so it is reported under the retired `ImuFlags` kind, which now
-/// carries the DMP snapshot's presence instead of the host magnetometer flag.
+/// The DMP Bias Snapshot has no wire kind of its own: the Link Protocol layout
+/// is unchanged, so it is reported under the `ImuFlags` kind, which carries the
+/// DMP snapshot's presence.
 #[must_use]
 const fn wire_calibration_kind(kind: FlashCalibrationKind) -> WireCalibrationKind {
     match kind {
