@@ -10,7 +10,12 @@ use embedded_hal_async::{delay::DelayNs, digital::Wait, i2c::I2c};
 
 use crate::{
     registers as reg,
-    types::{RangeDiagnostics, RangeStatus, RangefinderReading, Reading},
+    results::{RESULT_BLOCK_LEN, ResultBlock, TARGET_RATE},
+    timing::{
+        TIMING_GUARD_US, calc_macro_period, decode_timeout, encode_timeout, timeout_mclks_to_microseconds,
+        timeout_microseconds_to_mclks,
+    },
+    types::RangefinderReading,
 };
 
 /// The model ID a VL53L1X reports at `IDENTIFICATION__MODEL_ID`.
@@ -31,12 +36,6 @@ const BOOT_TIMEOUT_MS: u32 = 500;
 /// Delay between boot-completion polls, in milliseconds.
 const BOOT_POLL_DELAY_MS: u32 = 1;
 
-/// The low-power auto-mode target total rate, in Mcps fixed point.
-const TARGET_RATE: u16 = 0x0A00;
-
-/// Timing budget guard, in microseconds.
-const TIMING_GUARD_US: u32 = 4528;
-
 /// Short distance mode measurement timing budget, in microseconds.
 pub const SHORT_TIMING_BUDGET_US: u32 = 33_000;
 
@@ -46,18 +45,6 @@ pub const INTERMEASUREMENT_PERIOD_MS: u32 = 50;
 /// The oscillator calibration value the reference uses when the sensor reports
 /// zero, which would otherwise produce a zero inter-measurement period.
 const DEFAULT_OSC_CALIBRATE_VAL: u16 = 256;
-
-/// Length of the result block at `RESULT_RANGE_STATUS`, in bytes.
-const RESULT_BLOCK_LEN: usize = 17;
-
-/// The gain factor from ST's tuning defaults.
-const GAIN_FACTOR: u32 = 2011;
-
-/// The gain correction's rounding constant, 1024 in 8.11 fixed point.
-const GAIN_ROUNDING: u32 = 0x0400;
-
-/// The gain correction's divisor, 2048 in 8.11 fixed point.
-const GAIN_DIVISOR: u32 = 0x0800;
 
 /// Errors returned by [`Rangefinder`].
 #[derive(Debug, Clone, Copy)]
@@ -241,22 +228,11 @@ where
 
         self.update_dss(&block).await?;
 
-        let status = RangeStatus::from_raw(block.status, block.stream_count);
-        let diagnostics = RangeDiagnostics {
-            signal_rate: block.signal_rate,
-            ambient_rate: block.ambient_rate,
-            effective_spads: block.effective_spads,
-        };
-        let sample = RangefinderReading {
-            reading: Reading::from_status(status, block.gain_corrected_range()),
-            status,
-            raw_status: block.status,
-            diagnostics,
-        };
+        let reading = block.reading();
 
         self.clear_interrupt().await?;
 
-        Ok(sample)
+        Ok(reading)
     }
 
     /// Wait for the sensor's interrupt to go low.
@@ -475,7 +451,7 @@ where
     async fn update_dss(&mut self, block: &ResultBlock) -> Result<(), Error<I2C::Error>> {
         // A rate or SPAD count that would divide by zero falls back to the
         // mid-point target instead of failing the read.
-        let required_spads = required_spads(block).unwrap_or(0x8000);
+        let required_spads = block.required_spads().unwrap_or(0x8000);
         self.write_u16(reg::DSS_CONFIG_MANUAL_EFFECTIVE_SPADS_SELECT, required_spads)
             .await?;
         Ok(())
@@ -526,105 +502,4 @@ where
             .write(self.address, &[high, low, byte_3, byte_2, byte_1, byte_0])
             .await
     }
-}
-
-/// Calculate the DSS effective-SPAD target, or `None` when it would divide by
-/// zero.
-fn required_spads(block: &ResultBlock) -> Option<u16> {
-    let total_rate = u32::from(block.signal_rate) + u32::from(block.ambient_rate);
-    let total_rate_per_spad = (total_rate.min(0xFFFF) << 16).checked_div(u32::from(block.effective_spads))?;
-    let required_spads = (u32::from(TARGET_RATE) << 16).checked_div(total_rate_per_spad)?;
-    Some(u16::try_from(required_spads.min(0xFFFF)).unwrap_or(u16::MAX))
-}
-
-/// The raw 17-byte result block read from `RESULT__RANGE_STATUS`.
-struct ResultBlock {
-    /// The raw 8-bit range status.
-    status: u8,
-    /// The number of completed stream samples.
-    stream_count: u8,
-    /// The actual effective SPAD count.
-    effective_spads: u16,
-    /// The ambient count rate in 7.7 fixed point.
-    ambient_rate: u16,
-    /// The crosstalk-corrected range, in millimetres.
-    range_mm: u16,
-    /// The crosstalk-corrected peak signal count rate in 7.7 fixed point.
-    signal_rate: u16,
-}
-
-impl ResultBlock {
-    /// Decode the 17-byte block.
-    const fn parse(block: &[u8; RESULT_BLOCK_LEN]) -> Self {
-        Self {
-            status: block[0],
-            stream_count: block[2],
-            effective_spads: u16::from_be_bytes([block[3], block[4]]),
-            ambient_rate: u16::from_be_bytes([block[7], block[8]]),
-            range_mm: u16::from_be_bytes([block[13], block[14]]),
-            signal_rate: u16::from_be_bytes([block[15], block[16]]),
-        }
-    }
-
-    /// Apply the ST gain correction once, saturating at the `u16` limit.
-    const fn gain_corrected_range(&self) -> u16 {
-        #[allow(clippy::cast_lossless)]
-        let corrected = (self.range_mm as u32 * GAIN_FACTOR + GAIN_ROUNDING) / GAIN_DIVISOR;
-        #[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
-        if corrected > u16::MAX as u32 {
-            u16::MAX
-        } else {
-            corrected as u16
-        }
-    }
-}
-
-/// Calculate the macro period in microseconds (12.12 format).
-#[allow(clippy::cast_lossless)]
-const fn calc_macro_period(fast_osc_frequency: u16, vcsel_period: u8) -> u32 {
-    // Fast oscillator frequency is 4.12 format; the PLL period is 0.24 format.
-    let pll_period_us = (0x01 << 30) / (fast_osc_frequency as u32);
-
-    let vcsel_period_pclks = (vcsel_period + 1) << 1;
-
-    let mut macro_period_us = 2304_u32 * pll_period_us;
-    macro_period_us >>= 6;
-    macro_period_us *= vcsel_period_pclks as u32;
-    macro_period_us >>= 6;
-
-    macro_period_us
-}
-
-/// Convert a timeout in macro periods to microseconds (12.12 format).
-#[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
-const fn timeout_mclks_to_microseconds(timeout_mclks: u32, macro_period_us: u32) -> u32 {
-    ((timeout_mclks as u64 * macro_period_us as u64 + 0x800) >> 12) as u32
-}
-
-/// Convert a timeout in microseconds to macro periods.
-const fn timeout_microseconds_to_mclks(timeout_us: u32, macro_period_us: u32) -> u32 {
-    ((timeout_us << 12) + (macro_period_us >> 1)) / macro_period_us
-}
-
-/// Decode the `(LSByte * 2^MSByte) + 1` timeout register format.
-#[allow(clippy::cast_lossless)]
-const fn decode_timeout(register: u16) -> u32 {
-    (((register & 0xFF) as u32) << (register >> 8)) + 1
-}
-
-/// Encode a macro-period count in the `(LSByte * 2^MSByte) + 1` format.
-#[allow(clippy::cast_possible_truncation)]
-const fn encode_timeout(timeout_mclks: u32) -> u16 {
-    if timeout_mclks == 0 {
-        return 0;
-    }
-
-    let mut ls_byte = timeout_mclks - 1;
-    let mut ms_byte = 0_u16;
-    while (ls_byte & 0xFFFF_FF00) > 0 {
-        ls_byte >>= 1;
-        ms_byte += 1;
-    }
-
-    (ms_byte << 8) | ((ls_byte & 0xFF) as u16)
 }

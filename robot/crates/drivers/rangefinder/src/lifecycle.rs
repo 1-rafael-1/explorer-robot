@@ -14,9 +14,8 @@
 //! last decision and fail safe after the invalid hold, but they never reset a
 //! healthy sensor.
 
-use vl53l1x::RangefinderReading;
-
 use crate::{
+    RangefinderReading,
     constants::RESET_ATTEMPTS,
     detector::{FloorDropDetector, FloorState, ReadingHealth},
     pair::SensorState,

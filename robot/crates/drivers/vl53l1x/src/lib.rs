@@ -43,6 +43,8 @@
 
 pub mod driver;
 pub mod registers;
+mod results;
+mod timing;
 pub mod types;
 
 pub use driver::{Error, INTERMEASUREMENT_PERIOD_MS, Rangefinder, SHORT_TIMING_BUDGET_US};

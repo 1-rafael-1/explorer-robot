@@ -473,14 +473,8 @@ struct SensorRuntime {
     lifecycle: SensorLifecycle,
     /// Timestamp of the last reading read from the device.
     last_reading_ms: Option<u64>,
-    /// The last valid range in millimetres.
-    range_mm: Option<u16>,
-    /// The last decoded Range Status.
-    status: Option<rangefinder::RangeStatus>,
-    /// The last raw 8-bit Range Status code.
-    raw_status: Option<u8>,
-    /// The raw signal/ambient rates and effective SPAD count of the last reading.
-    diagnostics: Option<rangefinder::RangeDiagnostics>,
+    /// The last Rangefinder Reading, kept whole so its fields cannot drift.
+    last_reading: Option<RangefinderReading>,
 }
 
 impl SensorRuntime {
@@ -489,20 +483,14 @@ impl SensorRuntime {
         Self {
             lifecycle: SensorLifecycle::new(DROP_THRESHOLD_MM),
             last_reading_ms: None,
-            range_mm: None,
-            status: None,
-            raw_status: None,
-            diagnostics: None,
+            last_reading: None,
         }
     }
 
     /// Drop the last reading so the readout keeps its placeholders.
     const fn clear_reading(&mut self) {
         self.last_reading_ms = None;
-        self.range_mm = None;
-        self.status = None;
-        self.raw_status = None;
-        self.diagnostics = None;
+        self.last_reading = None;
     }
 
     /// Reset the runtime for a fresh enable.
@@ -525,26 +513,23 @@ impl SensorRuntime {
 
     /// Apply one reading to the detector and the sensor's telemetry.
     const fn apply_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
+        self.last_reading = Some(reading);
         self.last_reading_ms = Some(now_ms);
-        self.status = Some(reading.status);
-        self.raw_status = Some(reading.raw_status);
-        self.diagnostics = Some(reading.diagnostics);
-        self.range_mm = match reading.reading {
-            rangefinder::Reading::Valid(range_mm) => Some(range_mm),
-            rangefinder::Reading::NoTarget | rangefinder::Reading::Invalid(_) => None,
-        };
-
         self.lifecycle.on_reading(reading, now_ms);
     }
 
     /// Build this sensor's telemetry.
     fn telemetry(&self, now_ms: u64) -> SensorTelemetry {
+        let range_mm = self.last_reading.and_then(|reading| match reading.reading {
+            rangefinder::Reading::Valid(range_mm) => Some(range_mm),
+            rangefinder::Reading::NoTarget | rangefinder::Reading::Invalid(_) => None,
+        });
         SensorTelemetry {
             state: self.lifecycle.state(),
-            range_mm: self.range_mm,
-            status: self.status,
-            raw_status: self.raw_status,
-            diagnostics: self.diagnostics,
+            range_mm,
+            status: self.last_reading.map(|reading| reading.status),
+            raw_status: self.last_reading.map(|reading| reading.raw_status),
+            diagnostics: self.last_reading.map(|reading| reading.diagnostics),
             floor: self.lifecycle.floor(),
             age_ms: self
                 .last_reading_ms

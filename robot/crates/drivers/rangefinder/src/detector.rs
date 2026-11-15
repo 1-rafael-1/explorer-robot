@@ -10,9 +10,10 @@
 //! safe to `Drop`. They never produce a new floor decision, so a bad reading
 //! can only ever make the detector more cautious.
 
-use vl53l1x::{RangefinderReading, Reading};
-
-use crate::constants::{CLEAR_SAMPLES, INVALID_HOLD_MS, STALE_TIMEOUT_MS};
+use crate::{
+    RangefinderReading, Reading,
+    constants::{CLEAR_SAMPLES, INVALID_HOLD_MS, STALE_TIMEOUT_MS},
+};
 
 /// The detector's current view of the ground.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
