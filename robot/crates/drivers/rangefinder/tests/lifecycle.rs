@@ -80,18 +80,38 @@ fn the_attempt_budget_is_three_per_enable() {
 }
 
 #[test]
-fn a_successful_attempt_replenishes_the_budget() {
+fn a_successful_attempt_does_not_replenish_the_budget() {
+    let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
+    lifecycle.begin_enable(0);
+
+    assert_eq!(lifecycle.begin_attempt(), Some(1));
+    lifecycle.attempt_succeeded(100);
+
+    assert_eq!(
+        lifecycle.begin_attempt(),
+        Some(2),
+        "an init that never produces a valid reading must still exhaust the budget"
+    );
+    assert_eq!(lifecycle.begin_attempt(), Some(3));
+    assert_eq!(lifecycle.begin_attempt(), None);
+}
+
+#[test]
+fn a_valid_reading_replenishes_the_budget() {
     let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
     lifecycle.begin_enable(0);
 
     assert_eq!(lifecycle.begin_attempt(), Some(1));
     assert_eq!(lifecycle.begin_attempt(), Some(2));
     lifecycle.attempt_succeeded(100);
+    assert_eq!(lifecycle.begin_attempt(), Some(3));
+
+    lifecycle.on_reading(floor(200), 150);
 
     assert_eq!(
         lifecycle.begin_attempt(),
         Some(1),
-        "a success starts a fresh run of consecutive failures"
+        "a valid reading proves recovery and starts a fresh run of attempts"
     );
 }
 

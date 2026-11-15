@@ -89,13 +89,14 @@ impl SensorLifecycle {
 
     /// Record a successful init or reset and start waiting for a valid reading.
     ///
-    /// A success replenishes the attempt budget: the three attempts are for a
-    /// run of consecutive failures, not a lifetime allowance. A held floor-drop
-    /// decision survives the reset; fresh valid floor readings must clear it.
+    /// The attempt budget is **not** replenished here. A sensor that initialises
+    /// but never produces a usable reading must still latch `Failed` after its
+    /// attempts; only a valid reading proves the sensor recovered. A held
+    /// floor-drop decision survives the reset; fresh valid floor readings must
+    /// clear it.
     pub const fn attempt_succeeded(&mut self, now_ms: u64) {
         self.detector.restart(now_ms);
         self.state = SensorState::Waiting;
-        self.attempts = 0;
         self.last_fault = false;
     }
 
@@ -118,12 +119,18 @@ impl SensorLifecycle {
     }
 
     /// Apply one Rangefinder Reading to the detector and the lifecycle.
+    ///
+    /// A valid reading replenishes the retry budget: the sensor has proved it can
+    /// produce usable data, so a later fault gets a fresh run of attempts.
     pub const fn on_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
         let fault = reading.status.is_fault();
         let health = self.detector.update(reading, now_ms);
         self.last_fault = fault;
-        if matches!(self.state, SensorState::Waiting) && matches!(health, ReadingHealth::Valid) {
-            self.state = SensorState::Armed;
+        if matches!(health, ReadingHealth::Valid) {
+            self.attempts = 0;
+            if matches!(self.state, SensorState::Waiting) {
+                self.state = SensorState::Armed;
+            }
         }
     }
 
