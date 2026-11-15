@@ -170,12 +170,22 @@ fn sample_perception(core: &mut LinkCore, now_ms: u64) {
 }
 
 /// Build the lock-free perception flags.
+///
+/// The aggregate `FLOOR_DROP` bit stays set whenever either sensor sees a drop;
+/// the front/rear bits let the Remote app name the sensor that tripped it.
 pub(super) fn perception_sample() -> Perception {
     let mut flags = Perception::default();
     if perception::is_obstacle_detected() {
         flags |= Perception::OBSTACLE;
     }
-    if perception::is_floor_drop_detected() {
+    let drops = perception::floor_drops();
+    if drops.front {
+        flags |= Perception::FLOOR_DROP_FRONT;
+    }
+    if drops.rear {
+        flags |= Perception::FLOOR_DROP_REAR;
+    }
+    if drops.any() {
         flags |= Perception::FLOOR_DROP;
     }
     flags

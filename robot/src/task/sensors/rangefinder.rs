@@ -233,6 +233,16 @@ enum SensorSide {
     Rear,
 }
 
+impl SensorSide {
+    /// The label used in logs and `standby` errors.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Front => "front",
+            Self::Rear => "rear",
+        }
+    }
+}
+
 /// VL53L1X pair task.
 ///
 /// Idles with both modules held off until an enable asks for the pair, then
@@ -289,10 +299,10 @@ async fn serve_enabled(
     // Hold a sensor that could not come up off, so a floating INT line cannot
     // spin the task while the healthy sensor keeps streaming.
     if !front_ok {
-        power_down_one(front, "front").await;
+        power_down_one(front, SensorSide::Front.label()).await;
     }
     if !rear_ok {
-        power_down_one(rear, "rear").await;
+        power_down_one(rear, SensorSide::Rear.label()).await;
     }
 
     if !front_ok && !rear_ok {
@@ -303,9 +313,12 @@ async fn serve_enabled(
     }
 
     let initial = pair_state(true, front_runtime.lifecycle.state(), rear_runtime.lifecycle.state());
-    let initial_drop = front_runtime.lifecycle.is_drop() || rear_runtime.lifecycle.is_drop();
+    let initial_drops =
+        perception::FloorDrops::new(front_runtime.lifecycle.is_drop(), rear_runtime.lifecycle.is_drop());
+    let initial_drop = initial_drops.any();
     set_pair_state(initial);
     publish(front_runtime, rear_runtime, initial, initial_drop).await;
+    apply_floor_drops(initial_drops).await;
 
     let mut ticker = Ticker::every(Duration::from_millis(u64::from(RANGING_PERIOD_MS)));
 
@@ -360,10 +373,10 @@ async fn serve_enabled(
         }
 
         let pair = pair_state(true, front_runtime.lifecycle.state(), rear_runtime.lifecycle.state());
-        let floor_drop = front_runtime.lifecycle.is_drop() || rear_runtime.lifecycle.is_drop();
+        let drops = perception::FloorDrops::new(front_runtime.lifecycle.is_drop(), rear_runtime.lifecycle.is_drop());
         set_pair_state(pair);
-        publish(front_runtime, rear_runtime, pair, floor_drop).await;
-        set_floor_drop(floor_drop).await;
+        publish(front_runtime, rear_runtime, pair, drops.any()).await;
+        apply_floor_drops(drops).await;
     }
 }
 
@@ -415,13 +428,30 @@ async fn maintain(
 ) -> Maintenance {
     if runtime.needs_recovery {
         runtime.needs_recovery = false;
-        warn!("[rangefinder] read or interrupt failure");
+        warn!("[rangefinder] {} read or interrupt failure", side.label());
         return recovery_maintenance(
             recover_sensor(side, driver, runtime, other_driver, other_runtime, delay, ticker).await,
         );
     }
     if let Some(cause) = runtime.lifecycle.recovery_cause(now_ms) {
-        warn!("[rangefinder] sensor unhealthy: {:?}", Debug2Format(&cause));
+        if let Some(reading) = runtime.last_reading {
+            warn!(
+                "[rangefinder] {} sensor unhealthy: {:?} (status {:?}, raw {}, sig {}, amb {}, spads {})",
+                side.label(),
+                Debug2Format(&cause),
+                Debug2Format(&reading.status),
+                reading.raw_status,
+                reading.diagnostics.signal_rate,
+                reading.diagnostics.ambient_rate,
+                reading.diagnostics.effective_spads,
+            );
+        } else {
+            warn!(
+                "[rangefinder] {} sensor unhealthy: {:?}",
+                side.label(),
+                Debug2Format(&cause),
+            );
+        }
         return recovery_maintenance(
             recover_sensor(side, driver, runtime, other_driver, other_runtime, delay, ticker).await,
         );
@@ -499,9 +529,9 @@ async fn recover_sensor(
     runtime.lifecycle.begin_recovery();
     set_pair_state(PairState::Degraded);
     let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
-    let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
-    publish_for(side, runtime, other_runtime, pair, floor_drop).await;
-    set_floor_drop(floor_drop).await;
+    let drops = side_drops(side, runtime, other_runtime);
+    publish_for(side, runtime, other_runtime, pair, drops.any()).await;
+    apply_floor_drops(drops).await;
 
     while let Some(attempt) = runtime.lifecycle.begin_attempt() {
         let outcome = {
@@ -519,7 +549,8 @@ async fn recover_sensor(
                         Ok(()) => break AttemptOutcome::Recovered,
                         Err(error) => {
                             warn!(
-                                "[rangefinder] reset attempt {} failed: {:?}",
+                                "[rangefinder] {} reset attempt {} failed: {:?}",
+                                side.label(),
                                 attempt,
                                 Debug2Format(&error)
                             );
@@ -539,17 +570,20 @@ async fn recover_sensor(
                 }
 
                 let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
-                let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
+                let drops = side_drops(side, runtime, other_runtime);
                 set_pair_state(pair);
-                publish_for(side, runtime, other_runtime, pair, floor_drop).await;
-                set_floor_drop(floor_drop).await;
+                publish_for(side, runtime, other_runtime, pair, drops.any()).await;
+                apply_floor_drops(drops).await;
             }
         };
 
         match outcome {
             AttemptOutcome::Recovered => {
                 runtime.on_sensor_ready(now_ms());
-                info!("[rangefinder] sensor recovered");
+                info!(
+                    "[rangefinder] {} reset succeeded; waiting for a valid reading",
+                    side.label()
+                );
                 return RecoveryEnd::Recovered;
             }
             AttemptOutcome::Disabled => return RecoveryEnd::Disabled,
@@ -558,16 +592,16 @@ async fn recover_sensor(
     }
 
     runtime.lifecycle.mark_failed();
-    warn!("[rangefinder] sensor failed after its reset attempts");
-    power_down_one(driver, "sensor").await;
+    warn!("[rangefinder] {} failed after its reset attempts", side.label());
+    power_down_one(driver, side.label()).await;
     RecoveryEnd::Failed
 }
 
 /// Power both sensors down, ignoring a wedged sensor's stop error.
 #[allow(clippy::large_futures)]
 async fn power_down(front: &mut SensorDriver, rear: &mut SensorDriver) {
-    power_down_one(front, "front").await;
-    power_down_one(rear, "rear").await;
+    power_down_one(front, SensorSide::Front.label()).await;
+    power_down_one(rear, SensorSide::Rear.label()).await;
 }
 
 /// Power one sensor down, ignoring a wedged sensor's stop error.
@@ -588,7 +622,7 @@ async fn disarm(front_runtime: &mut SensorRuntime, rear_runtime: &mut SensorRunt
     rear_runtime.reset();
     set_pair_state(PairState::Off);
     crate::system::state::rangefinder::clear().await;
-    set_floor_drop(false).await;
+    apply_floor_drops(perception::FloorDrops::new(false, false)).await;
 }
 
 /// Hold a latched failure until an explicit disable releases it.
@@ -598,7 +632,7 @@ async fn hold_failed() {
             RangefinderCommand::Disable => {
                 set_pair_state(PairState::Off);
                 crate::system::state::rangefinder::clear().await;
-                set_floor_drop(false).await;
+                apply_floor_drops(perception::FloorDrops::new(false, false)).await;
                 return;
             }
             RangefinderCommand::Enable(request) => {
@@ -639,10 +673,18 @@ async fn publish_for(
     }
 }
 
-/// Write the floor-drop flag and raise its edge on a change.
-async fn set_floor_drop(detected: bool) {
-    if perception::set_floor_drop(detected) != ChangeDetected::NoChange {
-        raise_event(Events::FloorDropDetected { detected }).await;
+/// The per-sensor floor-drop decisions for a recovery pass, in front/rear order.
+const fn side_drops(side: SensorSide, runtime: &SensorRuntime, other: &SensorRuntime) -> perception::FloorDrops {
+    match side {
+        SensorSide::Front => perception::FloorDrops::new(runtime.lifecycle.is_drop(), other.lifecycle.is_drop()),
+        SensorSide::Rear => perception::FloorDrops::new(other.lifecycle.is_drop(), runtime.lifecycle.is_drop()),
+    }
+}
+
+/// Write the per-sensor and aggregate floor-drop flags and raise the aggregate edge.
+async fn apply_floor_drops(drops: perception::FloorDrops) {
+    if perception::set_floor_drop(drops) != ChangeDetected::NoChange {
+        raise_event(Events::FloorDropDetected { detected: drops.any() }).await;
     }
 }
 

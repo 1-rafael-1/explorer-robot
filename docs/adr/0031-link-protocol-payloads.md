@@ -62,7 +62,7 @@ pending snapshot; a newer sample replaces it.
 | `0x0001` | `POWER` | `level u8` (`0xFF` unknown), `voltage_mv u16` (`0xFFFF` unknown) | on change, at least every 5 s |
 | `0x0002` | `MOTION` | `left i8`, `right i8` | 10 Hz moving, 1 Hz idle |
 | `0x0003` | `ACTIVITY` | `procedure_id u16`, `stage u8`, `percent u8` (`0xFF` none), `detail_len u8`, `detail` UTF-8 ≤32 B | on change + 1 Hz |
-| `0x0004` | `PERCEPTION` | `flags u8` — bit 0 obstacle, bit 1 floor drop | 10 Hz |
+| `0x0004` | `PERCEPTION` | `flags u8` — bit 0 obstacle, bit 1 floor drop (either sensor), bit 2 front floor drop, bit 3 rear floor drop; bits 4–7 reserved (ADR-0051) | 10 Hz |
 | `0x0005` | `LIDAR_CLOUD` | `slots [u16; 360]` cm, `0xFFFF` = no return | 10 Hz |
 | `0x0006` | `CALIBRATION` | `motor u8`, `imu u8`, `mag u8`, `distance u8` — 0 unknown, 1 loaded, 2 missing; the retired `imu` and `mag` bytes both carry the DMP calibration status (ADR-0045) | on change + 5 s |
 | `0x0010` | `POSE` | reserved | 20 Hz once odometry lands |

@@ -13,12 +13,13 @@ host workspace consume the same manifest. The repo map is in
 
 ## Versioning
 
-The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `2`/`0`,
-the manifest is `2.0.0`, and a test asserts the two agree. Every consumer states
-`version = "2"`, so a major bump fails resolution until each is reviewed. Additive ids and
-enums bump the minor; a payload-layout or header-semantics change bumps the major (ADR-0040).
-The 2.0.0 bump added the Station Network SSID to `BridgeStatus` (ADR-0050); the Bridge's
-`EXPH` preamble keeps its own major.
+The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `2`/`1`,
+the manifest is `2.1.0`, and a test asserts the two agree. Every consumer states
+`version = "2"`, so a major bump fails resolution until each is reviewed. Additive ids,
+enums and optional fields bump the minor; a payload-layout or header-semantics change bumps
+the major (ADR-0040). The 2.1.0 bump gave the reserved `PERCEPTION` bits 2/3 the front and
+rear floor-drop meanings (ADR-0051). The 2.0.0 bump added the Station Network SSID to
+`BridgeStatus` (ADR-0050); the Bridge's `EXPH` preamble keeps its own major.
 
 ## API map
 
