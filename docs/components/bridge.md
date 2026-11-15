@@ -7,6 +7,12 @@ raises Setup Mode when it has no usable credentials. The glossary's
 [Remote Link vocabulary](../../CONTEXT.md#remote-link) defines the Bridge, the
 Link Port, Setup Mode, the Credential Record and the Pairing Token.
 
+It also originates the 1 Hz **Bridge Status** snapshot: RSSI, channel, station state,
+flags and six counters (28 bytes), then a length-prefixed Station Network SSID
+(`ssid_len` at offset 28 and 32 SSID bytes at 29), for 61 bytes in total. The snapshot
+is read-only telemetry; it is unacknowledged and does not renew the Session lease or
+re-arm the Deadman (ADR-0042, ADR-0050).
+
 There is no packaged Bridge: no published binary, OTA update, tag or release
 artifact. You build the image from source and write it over USB with `espflash`.
 The Wi-Fi credentials and Pairing Token are device state on the `bridge_data`
@@ -221,10 +227,18 @@ version, bad CRC, bad flags, bad credential lengths or a token outside the
 alphabet all mean unprovisioned — the Bridge fails closed into Setup Mode instead
 of misreading a changed layout.
 
+**The Device Name.** One derivation from the station MAC's last two bytes produces
+`ExplorerRobot-XXXX` (upper-case hex), which is both the Setup Mode AP's SSID and the
+DHCP hostname the station stack sends as option 12, so a router can list the Bridge by
+name without a reservation. The Discovery Beacon's name field is 16 bytes, so it
+carries the short form `Explorer-XXXX` with the same suffix; it is display-only and
+deduplication is by device id (ADR-0050). Whether a given router's client list honours
+option 12 is **bench-required** to confirm.
+
 **Setup Mode.** The bounded provisioning state from
 [ADR-0036](../../docs/adr/0036-wifi-provisioning.md): a WPA2-PSK SoftAP
-`ExplorerRobot-XXXX` (uppercase hex of the AP interface MAC's last two bytes),
-password `explorer-setup`, at most two clients, on `192.168.4.1/24` with a
+`ExplorerRobot-XXXX` (the **Device Name**; uppercase hex of the last two bytes of
+the station MAC), password `explorer-setup`, at most two clients, on `192.168.4.1/24` with a
 two-address DHCP pool, a DNS catch-all and a one-page HTTP portal. It is raised
 by an unprovisioned boot, once per boot after five continuous minutes without a
 station link, or by the robot panel's `BRIDGE_CONTROL` request. The window is ten
@@ -417,3 +431,5 @@ Owning decisions:
   reliability mechanisms in the shared protocol crate.
 - [ADR-0042](../../docs/adr/0042-bridge-telemetry.md) — Bridge telemetry and
   Bridge Status.
+- [ADR-0050](../../docs/adr/0050-network-identity.md) — the Device Name, the DHCP
+  hostname and the Station Network SSID.

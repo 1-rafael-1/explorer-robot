@@ -13,10 +13,12 @@ host workspace consume the same manifest. The repo map is in
 
 ## Versioning
 
-The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `1`/`1`,
-the manifest is `1.1.0`, and a test asserts the two agree. Every consumer states
-`version = "1"`, so a major bump fails resolution until each is reviewed. Additive ids and
+The crate version **mirrors the wire version**: `PROTOCOL_MAJOR`/`PROTOCOL_MINOR` are `2`/`0`,
+the manifest is `2.0.0`, and a test asserts the two agree. Every consumer states
+`version = "2"`, so a major bump fails resolution until each is reviewed. Additive ids and
 enums bump the minor; a payload-layout or header-semantics change bumps the major (ADR-0040).
+The 2.0.0 bump added the Station Network SSID to `BridgeStatus` (ADR-0050); the Bridge's
+`EXPH` preamble keeps its own major.
 
 ## API map
 
@@ -26,7 +28,7 @@ enums bump the minor; a payload-layout or header-semantics change bumps the majo
 | `codec` | `encode_*`/`decode_*` for command, control, event and stream; `PayloadCodec` |
 | `crc` | `Crc16`, incremental and one-shot, CRC-16/CCITT-FALSE |
 | `ids` | `Stream`, `BridgeStream` (`Status = 0x0007`), `Command`, `Event`, `Control`, `ProcedureId`, `Caps` |
-| `payload` | the typed stream, event, command and control payloads, including `BridgeControl` and the 28-byte `BridgeStatus` |
+| `payload` | the typed stream, event, command and control payloads, including `BridgeControl` and the 61-byte `BridgeStatus` |
 | `parser` | `Parser<CAP>`, `RobotToPcParser`, `PcToRobotParser`, `MAX_*_FRAME` |
 | `reliability` | `AckTracker`, `CommandWindow`, `ReplayWindow`, `RetryPolicy`, `Throttle` |
 | `sim` | `FakeRemote`, `Faults`, `Wire`, behind the `std` feature |
@@ -34,6 +36,14 @@ enums bump the minor; a payload-layout or header-semantics change bumps the majo
 
 `Class` is stream/command/event/control: commands are reliable and at-most-once, events
 reliable and at-least-once, streams lossy and latest-wins, and control is per frame (ADR-0030).
+
+## Bridge Status
+
+`BridgeStatus` is 61 bytes in both directions. The first 28 bytes are the link and resilience
+snapshot: `rssi_dbm`, `channel`, `station`, `flags`, then six little-endian `u32` counters. Offset
+28 is `ssid_len` and 29–60 are the zero-padded **Station Network** SSID. `ssid_len = 0` means
+unknown; the decoder rejects any other payload length and any `ssid_len` above 32. The SSID is an
+octet string and is kept verbatim (ADR-0042, ADR-0050).
 
 ## Parser statistics
 

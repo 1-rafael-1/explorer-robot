@@ -12,7 +12,7 @@ std = ["link-protocol/std"]
 
 [dependencies]
 heapless = "0.9"
-link-protocol = { path = "../link-protocol", version = "1" }
+link-protocol = { path = "../link-protocol", version = "2" }
 
 [lints]
 workspace = true

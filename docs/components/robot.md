@@ -7,6 +7,13 @@ Protocol (the `LinkCore` in [link-core](../../robot/crates/link/link-core/README
 The firmware package's manifest is `robot/Cargo.toml`; the root `Cargo.toml` is
 a virtual workspace manifest that lists `robot` and its crates as members.
 
+The panel's **Link screen** has five info rows: Bridge presence and Peer, RSSI and
+Channel, Station and Setup, the **Bridge Status** freshness (`No status` /
+`Fresh` / `Stale`), and a full-width `Network` row naming the **Station Network**
+(`Network: --` when the Bridge reports none). The row text and layout are
+host-tested; confirming the rendered glass and the actions below the block is
+**bench-required**.
+
 Run every command on this page from the **repository root**. Cargo discovers
 `.cargo/config.toml` from the current directory upward, and the root file sets
 both the `thumbv8m.main-none-eabihf` default target and the `probe-rs` runner.
@@ -73,7 +80,7 @@ A cold cache compiles the whole workspace; a warm cache compiles only what
 changed. Either way the last line is the invariant:
 
 ```text
-   Compiling link-protocol v1.1.0 (...)
+   Compiling link-protocol v2.0.0 (...)
    Compiling link-core v0.1.0 (...)
     Finished `release` profile [optimized + debuginfo] target(s) in 0.61s
 ```
@@ -253,3 +260,7 @@ Owning decisions:
 - [ADR-0035](../../docs/adr/0035-failsafe-deadman.md) — the Deadman.
 - [ADR-0040](../../docs/adr/0040-repo-and-build-layout.md) — the three
   workspaces.
+- [ADR-0042](../../docs/adr/0042-bridge-telemetry.md) — Bridge Status on the
+  Link screen.
+- [ADR-0050](../../docs/adr/0050-network-identity.md) — the Device Name and the
+  Station Network.

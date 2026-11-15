@@ -11,7 +11,7 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 std = ["link-protocol/std"]
 
 [dependencies]
-link-protocol = { path = "../../robot/crates/link/link-protocol", version = "1" }
+link-protocol = { path = "../../robot/crates/link/link-protocol", version = "2" }
 bridge-net = { path = "../../remote/bridge-net", version = "1" }
 
 [lints]

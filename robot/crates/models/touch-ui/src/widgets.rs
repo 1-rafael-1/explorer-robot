@@ -13,17 +13,17 @@ use embedded_graphics::{
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text, renderer::TextRenderer},
 };
-use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, Snapshot};
+use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, SSID_CAPACITY, Snapshot, StationSsid};
 
 use crate::{
-    buffer::TextBuf,
+    buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
-        BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, PANEL_BORDER, SCROLL_MIN_THUMB_H, SCROLL_W,
-        footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
-        link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, prompt_instruction_rect, prompt_progress_rect, prompt_status_rect, readout_area,
-        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
-        slider_track_rect,
+        BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, LINK_INFO_ROWS, PANEL_BORDER, SCROLL_MIN_THUMB_H,
+        SCROLL_W, footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
+        link_info_cell_rect, link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height,
+        nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect,
+        prompt_progress_rect, prompt_status_rect, readout_area, readout_rect, readout_row_rect, room_scan_caption_rect,
+        save_button_rect, scroll_track_rect, slider_thumb_rect, slider_track_rect,
     },
     hit::{HeaderAction, Hit, LinkAction, PromptAction},
     imu::ImuReadout,
@@ -497,12 +497,13 @@ where
 /// Draw the Link screen: a compact info block, the three Bridge Control action
 /// buttons, and the result band.
 ///
-/// The info block keeps Bridge presence, Peer, RSSI, channel, station and setup
-/// state visible. The actions are drawn and hittable even when no Bridge is
-/// present, so the firmware — not the panel — decides what to do with them. The
-/// result band shows the latest Bridge Control outcome: pending, timed out, or
-/// the Bridge's credentials or pairing code. `pressed` selects an action's
-/// accent fill while the pen is on it.
+/// The info block keeps Bridge presence, Peer, RSSI, channel, station, setup and
+/// freshness state visible, and names the Station Network on its fifth, full-width
+/// row. The actions are drawn and hittable even when no Bridge is present, so the
+/// firmware — not the panel — decides what to do with them. The result band shows
+/// the latest Bridge Control outcome: pending, timed out, or the Bridge's
+/// credentials or pairing code. `pressed` selects an action's accent fill while the
+/// pen is on it.
 ///
 /// # Errors
 ///
@@ -513,10 +514,18 @@ where
 {
     let style = MonoTextStyle::new(SMALL_FONT, TEXT);
 
-    for (row, cells) in link_info_rows(snapshot).iter().enumerate() {
+    let rows = link_info_rows(snapshot);
+    for (row, cells) in rows.iter().enumerate() {
+        // The last row is the full-width Station Network, not a two-column cell.
+        let full_width = row + 1 == LINK_INFO_ROWS;
         for (column, text) in cells.iter().enumerate() {
             if !text.as_str().is_empty() {
-                draw_left_text(d, link_info_cell_rect(row, column), text.as_str(), style)?;
+                let area = if full_width {
+                    link_info_row_rect(row)
+                } else {
+                    link_info_cell_rect(row, column)
+                };
+                draw_left_text(d, area, text.as_str(), style)?;
             }
         }
     }
@@ -615,8 +624,13 @@ where
 }
 
 /// The Link info block, row by row: `Bridge`/`Peer`, `RSSI`/`Channel`,
-/// `Station`/`Setup`, and `Status` on its own.
-fn link_info_rows(snapshot: &Snapshot) -> [[TextBuf; 2]; 4] {
+/// `Station`/`Setup`, `Status`, and the full-width `Network` row.
+///
+/// This is the screen's host-test seam: the returned text is exactly what
+/// [`draw_link`] draws, so a test can assert the rows without asserting pixels.
+/// The last row's second cell is always empty; drawing gives it the whole width.
+#[must_use]
+pub fn link_info_rows(snapshot: &Snapshot) -> [[TextBuf; 2]; LINK_INFO_ROWS] {
     let bridge = snapshot.bridge;
 
     let mut presence = TextBuf::new();
@@ -660,12 +674,49 @@ fn link_info_rows(snapshot: &Snapshot) -> [[TextBuf; 2]; 4] {
     };
     status.fill(format_args!("Status: {label}"));
 
+    let network = link_network_row(bridge.and_then(|status| status.ssid));
+
     [
         [presence, peer],
         [rssi, channel],
         [station, setup],
         [status, TextBuf::new()],
+        [network, TextBuf::new()],
     ]
+}
+
+/// The `Network: <ssid>` row, or `Network: --` when the Bridge has no Station Network.
+///
+/// An SSID is arbitrary bytes, so every byte outside printable ASCII is shown as `?`: the row is
+/// text, and a raw non-UTF-8 byte would otherwise clear the buffer. A name of spaces only also
+/// reads as unknown, matching the Remote App. The SSID is bounded before formatting so the label
+/// and a legal 32-byte SSID always fit [`TEXT_BUF_LEN`].
+fn link_network_row(ssid: Option<StationSsid>) -> TextBuf {
+    let mut row = TextBuf::new();
+    let Some(ssid) = ssid else {
+        row.fill(format_args!("Network: --"));
+        return row;
+    };
+
+    let label = "Network: ";
+    let bytes = ssid.as_bytes();
+    let mut sanitised = [b'?'; SSID_CAPACITY];
+    let take = bytes.len().min(TEXT_BUF_LEN - label.len());
+    for (slot, byte) in sanitised.iter_mut().zip(&bytes[..take]) {
+        *slot = if byte.is_ascii_graphic() || *byte == b' ' {
+            *byte
+        } else {
+            b'?'
+        };
+    }
+    // The sanitised slice is ASCII by construction; the fallback keeps the formatter total.
+    let text = core::str::from_utf8(&sanitised[..take]).unwrap_or("");
+    if text.bytes().all(|byte| byte == b' ') {
+        row.fill(format_args!("Network: --"));
+        return row;
+    }
+    row.fill(format_args!("Network: {text}"));
+    row
 }
 
 /// Draw the scroll indicator: a muted track over the list view with an accent

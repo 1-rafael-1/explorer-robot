@@ -1,8 +1,11 @@
-//! The Bridge identity served in the challenge and the Beacon (ADR-0037, ADR-0039).
+//! The Bridge identity served in the challenge and the Beacon (ADR-0037, ADR-0039, ADR-0050).
 //!
 //! The device id, name and flag bits are the same fields in both places: the challenge's identity
 //! lets a manual `host:port` connection learn what the Beacon would have advertised, and the flag
 //! bits are this crate's Beacon definitions, so both sides share one source.
+//!
+//! [`DeviceName`] derives the operator-facing name from the device id once, so the DHCP hostname,
+//! the setup AP's SSID and the Beacon's short label share one suffix.
 //!
 //! Everything here is `no_std` and allocation-free: the fields are fixed-size arrays and the
 //! identity is a plain `Copy` value.
@@ -133,6 +136,74 @@ impl core::ops::BitOr for Flags {
 impl core::ops::BitOrAssign for Flags {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+/// The operator-facing Device Name (ADR-0050): `ExplorerRobot-XXXX`, with `XXXX` the last two
+/// bytes of the station MAC as upper-case hex.
+///
+/// The full eighteen bytes are both the DHCP hostname (option 12) and the setup AP's SSID. The
+/// Discovery Beacon's name field is [`Name::ENCODED_LEN`] bytes and cannot hold them, so the Beacon
+/// carries [`DeviceName::beacon_label`]'s short form `Explorer-XXXX`; this one derivation produces
+/// all three, so their suffix cannot drift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceName([u8; Self::ENCODED_LEN]);
+
+impl DeviceName {
+    /// The full name's length in bytes: the prefix plus four hex digits.
+    pub const ENCODED_LEN: usize = 18;
+
+    /// The full name's prefix, shared by the DHCP hostname and the setup AP's SSID.
+    pub const PREFIX: &str = "ExplorerRobot-";
+
+    /// The Beacon label's shorter prefix, so the label fits [`Name::ENCODED_LEN`].
+    pub const BEACON_PREFIX: &str = "Explorer-";
+
+    /// The shared suffix length in upper-case hex digits.
+    pub const SUFFIX_LEN: usize = 4;
+
+    /// Derives the name from the device id's last two bytes.
+    #[must_use]
+    pub fn from_device_id(device_id: DeviceId) -> Self {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let bytes = device_id.bytes();
+        let mut name = [0u8; Self::ENCODED_LEN];
+        name[..Self::PREFIX.len()].copy_from_slice(Self::PREFIX.as_bytes());
+        let mut index = Self::PREFIX.len();
+        for byte in [bytes[4], bytes[5]] {
+            name[index] = HEX[usize::from(byte >> 4)];
+            name[index + 1] = HEX[usize::from(byte & 0x0F)];
+            index += 2;
+        }
+        Self(name)
+    }
+
+    /// Returns the full name's bytes: the DHCP hostname and the setup AP's SSID.
+    #[must_use]
+    pub const fn bytes(&self) -> &[u8; Self::ENCODED_LEN] {
+        &self.0
+    }
+
+    /// Returns the full name as text, without padding; it is always ASCII.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.0).unwrap_or("")
+    }
+
+    /// Returns the four upper-case hex characters the three representations share.
+    #[must_use]
+    pub fn suffix(&self) -> &str {
+        core::str::from_utf8(&self.0[Self::PREFIX.len()..]).unwrap_or("")
+    }
+
+    /// Returns the Discovery Beacon's short label, zero-padded to the Beacon's name field.
+    #[must_use]
+    pub fn beacon_label(&self) -> Name {
+        let mut label = [0u8; Name::ENCODED_LEN];
+        let suffix_start = Self::BEACON_PREFIX.len();
+        label[..suffix_start].copy_from_slice(Self::BEACON_PREFIX.as_bytes());
+        label[suffix_start..suffix_start + Self::SUFFIX_LEN].copy_from_slice(self.suffix().as_bytes());
+        Name::from_padded(label)
     }
 }
 

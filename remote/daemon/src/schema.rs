@@ -451,6 +451,12 @@ pub struct BridgeStatus {
     pub channel: Option<u8>,
     /// The station association state.
     pub station: BridgeStation,
+    /// The Station Network the Bridge is joined to, `null` when the Bridge reports none.
+    ///
+    /// The wire field is arbitrary bytes; this string shows printable ASCII verbatim and replaces
+    /// every other byte with `?`, the same rule the panel uses, so a non-text SSID stays readable
+    /// instead of failing the frame. It is display-only and never a way to change the network.
+    pub ssid: Option<String>,
     /// Whether the Bridge is provisioned.
     pub provisioned: bool,
     /// Whether the Bridge's setup mode is open.

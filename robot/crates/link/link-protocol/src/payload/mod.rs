@@ -1,4 +1,4 @@
-//! The typed v1 payloads (ADR-0031).
+//! The typed wire payloads (ADR-0031, ADR-0050).
 //!
 //! Every payload is little-endian and follows ADR-0031's byte layout exactly. Decoding is strict:
 //! a structural mismatch is [`CodecError::Length`](crate::error::CodecError::Length), an
@@ -16,7 +16,9 @@ pub mod control;
 pub mod event;
 pub mod stream;
 
-pub use bridge::{BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM};
+pub use bridge::{
+    BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM, SSID_MAX_LEN, StationSsid,
+};
 pub use command::{
     AckPayload, CatalogueEntries, CatalogueEntry, CatalogueFlags, CataloguePage, DriveDistance, GetCatalogue,
     GetStatus, RotateBy, StartProcedure, StatusSnapshot, StopMotion, StopProcedure,

@@ -7,7 +7,7 @@
 use link_state::{
     BridgeFlags, BridgeStatus, ControlOutcome, ControlReply, ControlStatus, LinkPhase, LinkState,
     PAIRING_CODE_CAPACITY, PASSPHRASE_CAPACITY, PairingCode, Peer, Presence, SSID_CAPACITY, STALE_AFTER_MS,
-    SetupCredentials, Snapshot, Station,
+    SetupCredentials, Snapshot, Station, StationSsid,
 };
 
 /// The four link phases are distinct and presence takes precedence over peer.
@@ -165,6 +165,71 @@ fn snapshot_exposes_the_neutral_bridge_status_fields() {
     assert_eq!(bridge.resyncs, 4);
     assert_eq!(bridge.wdt_feeds, 5);
     assert_eq!(bridge.wdt_withheld, 6);
+    assert!(bridge.ssid.is_none(), "the sample has no Station Network");
+}
+
+/// A Bridge Status carries the Station Network SSID when the Bridge reports one and the model
+/// keeps it byte-for-byte.
+#[test]
+fn bridge_status_carries_an_optional_ssid() {
+    let mut state = LinkState::new();
+    let mut status = sample_status();
+    status.ssid = StationSsid::new(b"caf\xE9 net");
+    state.set_bridge_status(status, 0);
+
+    let Some(bridge) = state.snapshot(0).bridge else {
+        return;
+    };
+    let Some(ssid) = bridge.ssid else {
+        return;
+    };
+    assert_eq!(
+        ssid.as_bytes(),
+        b"caf\xE9 net",
+        "the SSID must round-trip byte-for-byte"
+    );
+}
+
+/// A newer status replaces the SSID with its own, including replacing a value with unknown.
+#[test]
+fn a_newer_status_replaces_the_ssid() {
+    let mut state = LinkState::new();
+    let mut first = sample_status();
+    first.ssid = StationSsid::new(b"Home Network");
+    state.set_bridge_status(first, 1_000);
+
+    let mut second = sample_status();
+    second.rssi_dbm = Some(-70);
+    second.ssid = StationSsid::new(b"Office Network");
+    state.set_bridge_status(second, 2_000);
+    let Some(bridge) = state.snapshot(2_000).bridge else {
+        return;
+    };
+    assert_eq!(
+        bridge.ssid.and_then(|ssid| ssid.as_bytes().first().copied()),
+        Some(b'O')
+    );
+
+    // An unprovisioned Bridge reports no SSID, which replaces the old value.
+    let mut third = sample_status();
+    third.ssid = None;
+    state.set_bridge_status(third, 3_000);
+    let Some(bridge) = state.snapshot(3_000).bridge else {
+        return;
+    };
+    assert!(bridge.ssid.is_none(), "a newer unknown SSID replaces the old value");
+}
+
+/// The new field does not change the staleness rule.
+#[test]
+fn the_ssid_does_not_affect_staleness() {
+    let mut state = LinkState::new();
+    let mut status = sample_status();
+    status.ssid = StationSsid::new(b"Home Network");
+    state.set_bridge_status(status, 10_000);
+
+    assert!(!state.snapshot(10_000 + STALE_AFTER_MS).bridge_stale);
+    assert!(state.snapshot(10_001 + STALE_AFTER_MS).bridge_stale);
 }
 
 /// A control request moves from Idle to Pending to an answered setup reply.
@@ -327,5 +392,6 @@ const fn sample_status() -> BridgeStatus {
         resyncs: 4,
         wdt_feeds: 5,
         wdt_withheld: 6,
+        ssid: None,
     }
 }

@@ -13,26 +13,27 @@ use embedded_graphics::{
 };
 use link_state::{
     BridgeFlags, BridgeStatus, ControlOutcome, ControlReply, ControlStatus, LinkPhase, LinkState, PairingCode, Peer,
-    Presence, STALE_AFTER_MS, SetupCredentials, Station,
+    Presence, STALE_AFTER_MS, SetupCredentials, Station, StationSsid,
 };
 use touch_ui::{
     DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure,
     PromptAction, PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
-        BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, SCROLL_MARGIN, SIDE_MARGIN,
-        back_button_rect, cancel_button_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
-        link_result_rect, max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect,
-        progress_bar_rect, prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect,
-        prompt_redo_rect, prompt_status_rect, readout_rect, readout_row_pitch, readout_row_rect,
-        room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_touch_rect,
+        BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, LINK_INFO_ROW_H, LINK_INFO_ROWS,
+        LINK_SECTION_GAP, SCROLL_MARGIN, SIDE_MARGIN, back_button_rect, cancel_button_rect, header_status_rect,
+        header_title_rect, info_row_rect, link_action_rect, link_info_row_rect, link_info_top, link_result_rect,
+        max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect,
+        prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect, prompt_redo_rect,
+        prompt_status_rect, readout_rect, readout_row_pitch, readout_row_rect, room_scan_caption_rect,
+        save_button_rect, scroll_track_rect, slider_touch_rect,
     },
     imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MAX_IMU_ROWS, MagDiagnostics, Vector3},
     palette::{SMALL_FONT, TITLE_FONT},
     radar,
     screens::{Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
-    widgets::{header_title_font, wrap_text},
+    widgets::{header_title_font, link_info_rows, wrap_text},
 };
 
 /// A draw target that discards every pixel, so a test can render a screen without
@@ -983,6 +984,7 @@ const fn sample_bridge_status() -> BridgeStatus {
         resyncs: 4,
         wdt_feeds: 5,
         wdt_withheld: 6,
+        ssid: None,
     }
 }
 
@@ -1067,6 +1069,120 @@ fn the_link_actions_are_distinct_and_hittable() {
     );
     for rect in &rects {
         assert!(!rect.contains(result.center()), "actions sit above the result band");
+    }
+}
+
+/// A link state whose Bridge reports `ssid`, for the info-row tests.
+fn link_with_ssid(ssid: Option<&[u8]>) -> LinkState {
+    let mut state = link_with_control(ControlOutcome::Idle);
+    let mut status = sample_bridge_status();
+    status.ssid = ssid.and_then(StationSsid::new);
+    state.set_bridge_status(status, 0);
+    state
+}
+
+/// The Link info block has five rows and the last names the Station Network.
+#[test]
+fn the_link_info_rows_show_a_known_station_network() {
+    let snapshot = link_with_ssid(Some(b"Home Network")).snapshot(0);
+    let rows = link_info_rows(&snapshot);
+
+    assert_eq!(rows.len(), LINK_INFO_ROWS);
+    assert_eq!(rows[0][0].as_str(), "Bridge: Ready");
+    assert_eq!(rows[0][1].as_str(), "Peer: Peer live");
+    assert_eq!(rows[3][0].as_str(), "Status: Fresh");
+    assert_eq!(rows[4][0].as_str(), "Network: Home Network");
+    assert!(rows[4][1].as_str().is_empty(), "the fifth row is full width");
+}
+
+/// Without a Station Network the row keeps its place and reads `--`.
+#[test]
+fn the_network_row_reads_unknown_without_an_ssid() {
+    let snapshot = link_with_ssid(None).snapshot(0);
+    let rows = link_info_rows(&snapshot);
+    assert_eq!(rows.len(), LINK_INFO_ROWS);
+    assert_eq!(rows[4][0].as_str(), "Network: --");
+}
+
+/// Non-ASCII and control bytes render as `?` so the row stays readable text.
+#[test]
+fn the_network_row_sanitises_non_ascii_bytes() {
+    let snapshot = link_with_ssid(Some(b"\xC3\xA9 cafe\x00")).snapshot(0);
+    let rows = link_info_rows(&snapshot);
+    assert_eq!(rows[4][0].as_str(), "Network: ?? cafe?");
+}
+
+/// A name of spaces only reads as unknown, matching the Remote App.
+#[test]
+fn a_whitespace_only_ssid_reads_as_unknown() {
+    let snapshot = link_with_ssid(Some(b"   ")).snapshot(0);
+    let rows = link_info_rows(&snapshot);
+    assert_eq!(rows[4][0].as_str(), "Network: --");
+}
+
+/// A maximum-length SSID is readable without truncation.
+#[test]
+fn a_maximum_length_ssid_fits_the_network_row() {
+    let ssid = [b'W'; 32];
+    let snapshot = link_with_ssid(Some(&ssid)).snapshot(0);
+    let rows = link_info_rows(&snapshot);
+    let row = rows[4][0].as_str();
+
+    assert_eq!(row.len(), "Network: ".len() + 32, "the whole SSID is formatted");
+    assert!(row.starts_with("Network: "));
+    assert!(row.ends_with(&"W".repeat(32)));
+}
+
+/// The fifth row is full width, the actions sit below it, and the result band stays on screen.
+#[test]
+fn the_fifth_row_and_shifted_controls_fit_the_framebuffer() {
+    let fifth = link_info_row_rect(LINK_INFO_ROWS - 1);
+    let side_margin = usize::try_from(SIDE_MARGIN).unwrap_or(0);
+    assert_eq!(
+        usize::try_from(fifth.size.width).unwrap_or(0),
+        FB_W - 2 * side_margin,
+        "the fifth row spans the block"
+    );
+    assert_eq!(fifth.size.height, LINK_INFO_ROW_H);
+
+    let rows = u32::try_from(LINK_INFO_ROWS).unwrap_or(0);
+    let expected_top = link_info_top() + rows * LINK_INFO_ROW_H + LINK_SECTION_GAP;
+    let first = link_action_rect(0);
+    assert_eq!(
+        u32::try_from(first.top_left.y).unwrap_or(u32::MAX),
+        expected_top,
+        "the actions shift down by the fifth row"
+    );
+    assert!(
+        u32::try_from(fifth.top_left.y + i32::try_from(fifth.size.height).unwrap_or(0)).unwrap_or(u32::MAX)
+            <= u32::try_from(first.top_left.y).unwrap_or(u32::MAX),
+        "the first action sits below the info block"
+    );
+
+    let result = link_result_rect();
+    let last_action = link_action_rect(LinkAction::ALL.len() - 1);
+    assert!(last_action.top_left.y < result.top_left.y);
+    assert!(
+        u32::try_from(bottom_right(result).x).unwrap_or(u32::MAX) < u32::try_from(FB_W).unwrap_or(u32::MAX)
+            && u32::try_from(bottom_right(result).y).unwrap_or(u32::MAX) < u32::try_from(FB_H).unwrap_or(u32::MAX),
+        "the result band stays inside the framebuffer"
+    );
+}
+
+/// Every Station Network state renders and leaves the three actions hittable.
+#[test]
+fn every_network_row_state_renders_and_keeps_the_actions_hittable() {
+    let cases: [Option<&[u8]>; 3] = [Some(b"Home Network"), None, Some(&[0xFF, 0xFE])];
+    for ssid in cases {
+        let mut ui = open_link();
+        assert!(ui.set_link(link_with_ssid(ssid).snapshot(0)));
+        for (index, action) in LinkAction::ALL.into_iter().enumerate() {
+            assert_eq!(
+                ui.hit_test(link_action_rect(index).center()),
+                Some(Hit::LinkAction(action))
+            );
+        }
+        render_ok(&ui);
     }
 }
 
