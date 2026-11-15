@@ -12,7 +12,10 @@
 //! Disable on an explicit `Idle`/`Standby` or when an Activity ends. Do not
 //! disable on an `EmergencyBrake`: the pair stays armed and a drop stays visible.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::{
+    pin::pin,
+    sync::atomic::{AtomicU8, AtomicU32, Ordering},
+};
 
 use defmt::{Debug2Format, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
@@ -90,11 +93,19 @@ impl RangefinderSession {
 /// Current pair state, read lock-free by the drive gate.
 static PAIR_STATE: AtomicU8 = AtomicU8::new(0);
 
+/// Next enable-request id. Every enable carries one so the gate can tell a
+/// fresh arming request from an `Armed` state left over from the previous
+/// enabled period.
+static NEXT_REQUEST: AtomicU32 = AtomicU32::new(1);
+
+/// The most recent enable-request id the task has begun serving.
+static LAST_ENABLE_REQUEST: AtomicU32 = AtomicU32::new(0);
+
 /// Commands accepted by the rangefinder task.
 #[derive(Debug, Clone, Copy)]
 enum RangefinderCommand {
-    /// Arm the pair, if it is not already armed.
-    Enable,
+    /// Arm the pair, if it is not already armed; carries the request id.
+    Enable(u32),
     /// Power the pair down and clear its telemetry.
     Disable,
 }
@@ -109,11 +120,18 @@ static COMMAND: Channel<CriticalSectionRawMutex, RangefinderCommand, 4> = Channe
 /// One-way and idempotent: a duplicate enable is inert. A latched
 /// [`PairState::Failed`] is released first with a disable/enable pair, so a
 /// caller that retries after fixing the hardware gets a fresh bring-up.
-pub async fn enable() {
+///
+/// Returns the request id. [`arm_for_motion`] waits until the task has begun
+/// serving this request, so an `Armed` state from an earlier enabled period
+/// cannot satisfy a gate whose `Disable` is still queued.
+#[allow(clippy::must_use_candidate)]
+pub async fn enable() -> u32 {
+    let request = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
     if status() == PairState::Failed {
         COMMAND.send(RangefinderCommand::Disable).await;
     }
-    COMMAND.send(RangefinderCommand::Enable).await;
+    COMMAND.send(RangefinderCommand::Enable(request)).await;
+    request
 }
 
 /// Ask the task to disarm and power down the pair.
@@ -132,22 +150,27 @@ pub fn status() -> PairState {
 
 /// Arm the pair and apply the Floor-Drop Gate before a movement action.
 ///
-/// Enables the pair, waits up to [`GATE_TIMEOUT_MS`] for both sensors to arm,
-/// then requires a clear floor-drop flag. A missing, degraded or failed pair
-/// fails with [`GateRefusal::NotReady`]; a drop already present fails with
+/// Enables the pair, waits up to [`GATE_TIMEOUT_MS`] for the task to begin
+/// serving this enable request and for both sensors to arm, then requires a
+/// clear floor-drop flag. A missing, degraded or failed pair fails with
+/// [`GateRefusal::NotReady`]; a drop already present fails with
 /// [`GateRefusal::FloorDrop`].
 ///
 /// # Errors
 ///
 /// Returns the [`GateRefusal`] reason the drive completion reports.
 pub async fn arm_for_motion() -> Result<(), GateRefusal> {
-    enable().await;
+    let request = enable().await;
 
     let deadline = Instant::now() + Duration::from_millis(GATE_TIMEOUT_MS);
     loop {
         let state = status();
         let floor_drop = perception::is_floor_drop_detected();
-        if state == PairState::Armed || Instant::now() >= deadline {
+        let acknowledged = LAST_ENABLE_REQUEST.load(Ordering::Relaxed) >= request;
+        if acknowledged && (state == PairState::Armed || Instant::now() >= deadline) {
+            return gate(state, floor_drop);
+        }
+        if Instant::now() >= deadline {
             return gate(state, floor_drop);
         }
         Timer::after(Duration::from_millis(10)).await;
@@ -163,6 +186,37 @@ enum EnabledEnd {
     Disabled,
     /// Both sensors failed and could not be brought up again.
     Failed,
+}
+
+/// Whether the task should keep serving the enabled period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Maintenance {
+    /// Keep serving the pair.
+    Continue,
+    /// A disable arrived during recovery; power down and end the period.
+    Disabled,
+}
+
+/// How one recovery attempt ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttemptOutcome {
+    /// The reset succeeded.
+    Recovered,
+    /// The reset failed; try the next attempt.
+    Failed,
+    /// A disable arrived; stop recovering.
+    Disabled,
+}
+
+/// How a sensor's recovery ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryEnd {
+    /// The reset succeeded.
+    Recovered,
+    /// Every attempt failed and the sensor latched failed.
+    Failed,
+    /// A disable arrived during recovery.
+    Disabled,
 }
 
 /// VL53L1X pair task.
@@ -181,7 +235,9 @@ pub async fn rangefinder_task(session: RangefinderSession) {
 
     loop {
         match COMMAND.receive().await {
-            RangefinderCommand::Enable => {}
+            RangefinderCommand::Enable(request) => {
+                LAST_ENABLE_REQUEST.store(request, Ordering::Relaxed);
+            }
             RangefinderCommand::Disable => continue,
         }
 
@@ -242,13 +298,13 @@ async fn serve_enabled(
     loop {
         match select4(front.wait_ready(), rear.wait_ready(), COMMAND.receive(), ticker.next()).await {
             Either4::First(result) => {
-                handle_read(front, front_runtime, result, delay).await;
+                handle_read(front, front_runtime, result).await;
             }
             Either4::Second(result) => {
-                handle_read(rear, rear_runtime, result, delay).await;
+                handle_read(rear, rear_runtime, result).await;
             }
             Either4::Third(command) => match command {
-                RangefinderCommand::Enable => {}
+                RangefinderCommand::Enable(request) => LAST_ENABLE_REQUEST.store(request, Ordering::Relaxed),
                 RangefinderCommand::Disable => {
                     power_down(front, rear).await;
                     disarm(front_runtime, rear_runtime).await;
@@ -259,8 +315,15 @@ async fn serve_enabled(
         }
 
         let now = now_ms();
-        maintain(front, front_runtime, delay, now).await;
-        maintain(rear, rear_runtime, delay, now).await;
+        let mut maintenance = maintain(front, front_runtime, rear, rear_runtime, delay, &mut ticker, now).await;
+        if matches!(maintenance, Maintenance::Continue) {
+            maintenance = maintain(rear, rear_runtime, front, front_runtime, delay, &mut ticker, now).await;
+        }
+        if matches!(maintenance, Maintenance::Disabled) {
+            power_down(front, rear).await;
+            disarm(front_runtime, rear_runtime).await;
+            return EnabledEnd::Disabled;
+        }
 
         let pair = pair_state(true, front_runtime.lifecycle.state(), rear_runtime.lifecycle.state());
         let floor_drop = front_runtime.lifecycle.is_drop() || rear_runtime.lifecycle.is_drop();
@@ -271,12 +334,14 @@ async fn serve_enabled(
 }
 
 /// Handle one `INT`-ready result for a sensor.
+///
+/// A failure marks the sensor for recovery; the caller's `maintain` pass runs
+/// the reset alongside the other sensor's reads.
 #[allow(clippy::large_futures)]
 async fn handle_read<I2C, X, I>(
     driver: &mut Rangefinder<I2C, X, I>,
     runtime: &mut SensorRuntime,
     ready: Result<(), rangefinder::Error<I2C::Error>>,
-    delay: &mut Delay,
 ) where
     I2C: embedded_hal_async::i2c::I2c,
     X: embedded_hal::digital::OutputPin,
@@ -284,7 +349,7 @@ async fn handle_read<I2C, X, I>(
 {
     if let Err(error) = ready {
         warn!("[rangefinder] interrupt wait failed: {:?}", Debug2Format(&error));
-        recover_sensor(driver, runtime, delay).await;
+        runtime.needs_recovery = true;
         return;
     }
 
@@ -293,26 +358,43 @@ async fn handle_read<I2C, X, I>(
         Err(rangefinder::Error::NotReady) => {}
         Err(error) => {
             warn!("[rangefinder] read failed: {:?}", Debug2Format(&error));
-            recover_sensor(driver, runtime, delay).await;
+            runtime.needs_recovery = true;
         }
     }
 }
 
 /// Check a sensor's stale and invalid watchdogs, recovering it when needed.
-#[allow(clippy::large_futures)]
-async fn maintain<I2C, X, I>(
-    driver: &mut Rangefinder<I2C, X, I>,
+///
+/// Recovery drives the reset attempts while still servicing the other sensor's
+/// `INT` line, commands and periodic publication, so a long boot poll cannot
+/// starve the healthy sensor into a false stale reset.
+#[allow(clippy::large_futures, clippy::too_many_arguments)]
+async fn maintain(
+    driver: &mut SensorDriver,
     runtime: &mut SensorRuntime,
+    other_driver: &mut SensorDriver,
+    other_runtime: &mut SensorRuntime,
     delay: &mut Delay,
+    ticker: &mut Ticker,
     now_ms: u64,
-) where
-    I2C: embedded_hal_async::i2c::I2c,
-    X: embedded_hal::digital::OutputPin,
-    I: embedded_hal_async::digital::Wait,
-{
+) -> Maintenance {
+    if runtime.needs_recovery {
+        runtime.needs_recovery = false;
+        warn!("[rangefinder] read or interrupt failure");
+        return recovery_maintenance(recover_sensor(driver, runtime, other_driver, other_runtime, delay, ticker).await);
+    }
     if let Some(cause) = runtime.lifecycle.recovery_cause(now_ms) {
         warn!("[rangefinder] sensor unhealthy: {:?}", Debug2Format(&cause));
-        recover_sensor(driver, runtime, delay).await;
+        return recovery_maintenance(recover_sensor(driver, runtime, other_driver, other_runtime, delay, ticker).await);
+    }
+    Maintenance::Continue
+}
+
+/// Map a recovery result onto the enabled period's next action.
+const fn recovery_maintenance(end: RecoveryEnd) -> Maintenance {
+    match end {
+        RecoveryEnd::Recovered | RecoveryEnd::Failed => Maintenance::Continue,
+        RecoveryEnd::Disabled => Maintenance::Disabled,
     }
 }
 
@@ -348,18 +430,26 @@ where
 }
 
 /// Reset one failed sensor with the remaining per-enable attempts.
-#[allow(clippy::large_futures)]
-async fn recover_sensor<I2C, X, I>(driver: &mut Rangefinder<I2C, X, I>, runtime: &mut SensorRuntime, delay: &mut Delay)
-where
-    I2C: embedded_hal_async::i2c::I2c,
-    X: embedded_hal::digital::OutputPin,
-    I: embedded_hal_async::digital::Wait,
-{
+///
+/// The reset future is selected alongside the other sensor's `INT` line, the
+/// command channel and the publish ticker, so the healthy sensor keeps being
+/// read and published while a boot poll runs. A `Disable` cancels the reset;
+/// the caller powers both sensors down and disarms the pair.
+#[allow(clippy::large_futures, clippy::too_many_arguments)]
+async fn recover_sensor(
+    driver: &mut SensorDriver,
+    runtime: &mut SensorRuntime,
+    other_driver: &mut SensorDriver,
+    other_runtime: &mut SensorRuntime,
+    delay: &mut Delay,
+    ticker: &mut Ticker,
+) -> RecoveryEnd {
     // A latched failure stays put until a fresh enable; an INT edge must not
     // re-enter recovery and flap the pair.
     if matches!(runtime.lifecycle.state(), SensorState::Failed) {
-        return;
+        return RecoveryEnd::Failed;
     }
+    runtime.needs_recovery = false;
 
     // An armed sensor fails safe immediately, so a drive already in progress
     // brakes instead of continuing blind while the reset attempts run. Publish
@@ -368,28 +458,69 @@ where
     // clear it.
     runtime.lifecycle.begin_recovery();
     set_pair_state(PairState::Degraded);
-    if runtime.lifecycle.is_drop() {
-        set_floor_drop(true).await;
-    }
+    let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
+    let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
+    publish(runtime, other_runtime, pair, floor_drop).await;
+    set_floor_drop(floor_drop).await;
 
     while let Some(attempt) = runtime.lifecycle.begin_attempt() {
-        match driver.reset(delay).await {
-            Ok(()) => {
+        let outcome = {
+            let mut reset = pin!(driver.reset(delay));
+            loop {
+                match select4(
+                    reset.as_mut(),
+                    other_driver.wait_ready(),
+                    COMMAND.receive(),
+                    ticker.next(),
+                )
+                .await
+                {
+                    Either4::First(result) => match result {
+                        Ok(()) => break AttemptOutcome::Recovered,
+                        Err(error) => {
+                            warn!(
+                                "[rangefinder] reset attempt {} failed: {:?}",
+                                attempt,
+                                Debug2Format(&error)
+                            );
+                            break AttemptOutcome::Failed;
+                        }
+                    },
+                    Either4::Second(ready) => {
+                        handle_read(other_driver, other_runtime, ready).await;
+                    }
+                    Either4::Third(command) => match command {
+                        RangefinderCommand::Enable(request) => {
+                            LAST_ENABLE_REQUEST.store(request, Ordering::Relaxed);
+                        }
+                        RangefinderCommand::Disable => break AttemptOutcome::Disabled,
+                    },
+                    Either4::Fourth(()) => {}
+                }
+
+                let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
+                let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
+                set_pair_state(pair);
+                publish(runtime, other_runtime, pair, floor_drop).await;
+                set_floor_drop(floor_drop).await;
+            }
+        };
+
+        match outcome {
+            AttemptOutcome::Recovered => {
                 runtime.on_sensor_ready(now_ms());
                 info!("[rangefinder] sensor recovered");
-                return;
+                return RecoveryEnd::Recovered;
             }
-            Err(error) => warn!(
-                "[rangefinder] reset attempt {} failed: {:?}",
-                attempt,
-                Debug2Format(&error)
-            ),
+            AttemptOutcome::Disabled => return RecoveryEnd::Disabled,
+            AttemptOutcome::Failed => {}
         }
     }
 
     runtime.lifecycle.mark_failed();
     warn!("[rangefinder] sensor failed after its reset attempts");
     power_down_one(driver, "sensor").await;
+    RecoveryEnd::Failed
 }
 
 /// Power both sensors down, ignoring a wedged sensor's stop error.
@@ -430,7 +561,9 @@ async fn hold_failed() {
                 set_floor_drop(false).await;
                 return;
             }
-            RangefinderCommand::Enable => {}
+            RangefinderCommand::Enable(request) => {
+                LAST_ENABLE_REQUEST.store(request, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -475,6 +608,9 @@ struct SensorRuntime {
     last_reading_ms: Option<u64>,
     /// The last Rangefinder Reading, kept whole so its fields cannot drift.
     last_reading: Option<RangefinderReading>,
+    /// A read or interrupt failure that should start recovery on the next
+    /// maintenance pass.
+    needs_recovery: bool,
 }
 
 impl SensorRuntime {
@@ -484,6 +620,7 @@ impl SensorRuntime {
             lifecycle: SensorLifecycle::new(DROP_THRESHOLD_MM),
             last_reading_ms: None,
             last_reading: None,
+            needs_recovery: false,
         }
     }
 
@@ -491,6 +628,7 @@ impl SensorRuntime {
     const fn clear_reading(&mut self) {
         self.last_reading_ms = None;
         self.last_reading = None;
+        self.needs_recovery = false;
     }
 
     /// Reset the runtime for a fresh enable.
@@ -515,6 +653,7 @@ impl SensorRuntime {
     const fn apply_reading(&mut self, reading: RangefinderReading, now_ms: u64) {
         self.last_reading = Some(reading);
         self.last_reading_ms = Some(now_ms);
+        self.needs_recovery = false;
         self.lifecycle.on_reading(reading, now_ms);
     }
 
