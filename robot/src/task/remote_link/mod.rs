@@ -822,22 +822,40 @@ const fn map_station(station: link_protocol::BridgeStation) -> link_state::Stati
 }
 
 /// Map the wire Bridge Status onto the neutral one the panel renders.
-const fn map_bridge_status(status: link_protocol::BridgeStatus) -> link_state::BridgeStatus {
+///
+/// The wire struct is destructured without `..`, so a new wire field makes this mapping fail to
+/// compile until it is revisited. The SSID is copied byte-for-byte into the model's own
+/// fixed-capacity type, so the neutral model does not depend on the wire crate.
+fn map_bridge_status(status: link_protocol::BridgeStatus) -> link_state::BridgeStatus {
+    let link_protocol::BridgeStatus {
+        rssi_dbm,
+        channel,
+        station,
+        flags,
+        uart_dropped_bytes,
+        dma_stalls,
+        crc_failures,
+        resyncs,
+        wdt_feeds,
+        wdt_withheld,
+        ssid,
+    } = status;
     link_state::BridgeStatus {
-        rssi_dbm: status.rssi_dbm,
-        channel: status.channel,
-        station: map_station(status.station),
+        rssi_dbm,
+        channel,
+        station: map_station(station),
         flags: link_state::BridgeFlags {
-            provisioned: status.flags.contains(link_protocol::BridgeStatusFlags::PROVISIONED),
-            setup_open: status.flags.contains(link_protocol::BridgeStatusFlags::SETUP_OPEN),
-            link_ready: status.flags.contains(link_protocol::BridgeStatusFlags::LINK_READY),
+            provisioned: flags.contains(link_protocol::BridgeStatusFlags::PROVISIONED),
+            setup_open: flags.contains(link_protocol::BridgeStatusFlags::SETUP_OPEN),
+            link_ready: flags.contains(link_protocol::BridgeStatusFlags::LINK_READY),
         },
-        uart_dropped_bytes: status.uart_dropped_bytes,
-        dma_stalls: status.dma_stalls,
-        crc_failures: status.crc_failures,
-        resyncs: status.resyncs,
-        wdt_feeds: status.wdt_feeds,
-        wdt_withheld: status.wdt_withheld,
+        uart_dropped_bytes,
+        dma_stalls,
+        crc_failures,
+        resyncs,
+        wdt_feeds,
+        wdt_withheld,
+        ssid: ssid.and_then(|ssid| link_state::StationSsid::new(ssid.as_bytes())),
     }
 }
 

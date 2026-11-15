@@ -32,7 +32,7 @@ version      = "0.1.0"
 # binary joins it here when ticket 04 lands.
 
 [dependencies]
-link-protocol = { path = "../robot/crates/link/link-protocol", version = "1" }
+link-protocol = { path = "../robot/crates/link/link-protocol", version = "2" }
 bridge-net = { path = "../remote/bridge-net", version = "1" }
 bridge-core = { path = "bridge-core", version = "0.1.0" }
 
@@ -59,6 +59,7 @@ esp-bootloader-esp-idf = { version = "0.6.0", features = ["defmt", "esp32c3"] }
 embassy-net = { version = "0.9.1", features = [
   "defmt",
   "dhcpv4",
+  "dhcpv4-hostname",
   "medium-ethernet",
   "tcp",
   "udp",

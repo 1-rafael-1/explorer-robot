@@ -1,11 +1,11 @@
-//! Host tests for the `BRIDGE_STATUS` payload and its `Control`/`BridgeStream` ids (ADR-0031).
+//! Host tests for the `BRIDGE_STATUS` payload and its `Control`/`BridgeStream` ids (ADR-0042).
 //!
-//! The Bridge publishes the same 28-byte snapshot to the robot as an unacknowledged control frame
+//! The Bridge publishes the same 61-byte snapshot to the robot as an unacknowledged control frame
 //! and to the daemon as a latest-wins stream frame.
 
 use link_protocol::{
     BridgeStation, BridgeStatus, BridgeStatusFlags, BridgeStream, CodecError, Control, ControlMessage, EncodeError,
-    Stream,
+    SSID_MAX_LEN, StationSsid, Stream,
     codec::PayloadCodec,
     decode_control, encode_control,
     payload::bridge::{CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM},
@@ -24,6 +24,7 @@ fn full() -> BridgeStatus {
         resyncs: 8,
         wdt_feeds: 9,
         wdt_withheld: 10,
+        ssid: StationSsid::new(b"Home Network 2.4"),
     }
 }
 
@@ -40,6 +41,7 @@ const fn empty() -> BridgeStatus {
         resyncs: 0,
         wdt_feeds: 0,
         wdt_withheld: 0,
+        ssid: None,
     }
 }
 
@@ -68,7 +70,7 @@ fn encode_uses_the_documented_offsets() {
     let Some(written) = snapshot.encode_into(&mut buffer).ok() else {
         return;
     };
-    assert_eq!(written, 28);
+    assert_eq!(written, BridgeStatus::ENCODED_LEN);
     assert_eq!(buffer[0], (-42i8).to_le_bytes()[0], "rssi_dbm at offset 0");
     assert_eq!(buffer[1], 6, "channel at offset 1");
     assert_eq!(buffer[2], 2, "station at offset 2");
@@ -83,12 +85,15 @@ fn encode_uses_the_documented_offsets() {
     assert_eq!(&buffer[16..20], &8u32.to_le_bytes(), "resyncs at offset 16");
     assert_eq!(&buffer[20..24], &9u32.to_le_bytes(), "wdt_feeds at offset 20");
     assert_eq!(&buffer[24..28], &10u32.to_le_bytes(), "wdt_withheld at offset 24");
+    assert_eq!(buffer[28], 16, "ssid_len at offset 28");
+    assert_eq!(&buffer[29..45], b"Home Network 2.4", "ssid at offset 29");
+    assert_eq!(&buffer[45..61], &[0; 16], "the ssid field is zero-padded");
 }
 
 /// Hand-built bytes decode to the expected snapshot, proving the decode offsets.
 #[test]
 fn decode_uses_the_documented_offsets() {
-    let mut bytes = [0u8; 28];
+    let mut bytes = [0u8; BridgeStatus::ENCODED_LEN];
     bytes[0] = (-42i8).to_le_bytes()[0];
     bytes[1] = 6;
     bytes[2] = 2;
@@ -99,6 +104,8 @@ fn decode_uses_the_documented_offsets() {
     bytes[16..20].copy_from_slice(&8u32.to_le_bytes());
     bytes[20..24].copy_from_slice(&9u32.to_le_bytes());
     bytes[24..28].copy_from_slice(&10u32.to_le_bytes());
+    bytes[28] = 16;
+    bytes[29..45].copy_from_slice(b"Home Network 2.4");
 
     assert_eq!(BridgeStatus::decode(&bytes).ok(), Some(full()));
 }
@@ -110,7 +117,7 @@ fn sentinels_map_to_none_and_back() {
     assert_eq!(CHANNEL_UNKNOWN, 0);
 
     let decoded = BridgeStatus::decode(&{
-        let mut bytes = [0u8; 28];
+        let mut bytes = [0u8; BridgeStatus::ENCODED_LEN];
         bytes[0] = RSSI_UNKNOWN_DBM.to_le_bytes()[0];
         bytes[1] = CHANNEL_UNKNOWN;
         bytes
@@ -151,7 +158,7 @@ fn reserved_flag_bits_are_cleared() {
     assert!(BridgeStatusFlags::from_bits(0xF8).is_empty(), "bits 3-7 are reserved");
     assert!(BridgeStatusFlags::from_bits(0xFF).contains(BridgeStatusFlags::LINK_READY));
 
-    let mut bytes = [0u8; 28];
+    let mut bytes = [0u8; BridgeStatus::ENCODED_LEN];
     bytes[3] = 0xFF;
     let Some(snapshot) = BridgeStatus::decode(&bytes).ok() else {
         return;
@@ -184,11 +191,11 @@ fn station_covers_the_wire_values() {
 /// An unassigned station byte is a value error, never a panic.
 #[test]
 fn unknown_station_is_a_value_error() {
-    let mut bytes = [0u8; 28];
+    let mut bytes = [0u8; BridgeStatus::ENCODED_LEN];
     bytes[2] = 3;
     assert_eq!(BridgeStatus::decode(&bytes), Err(CodecError::Value));
 
-    let mut high = [0u8; 28];
+    let mut high = [0u8; BridgeStatus::ENCODED_LEN];
     high[2] = 0xFF;
     assert_eq!(BridgeStatus::decode(&high), Err(CodecError::Value));
 }
@@ -197,9 +204,14 @@ fn unknown_station_is_a_value_error() {
 #[test]
 fn lengths_are_strict() {
     assert_eq!(BridgeStatus::decode(&[]), Err(CodecError::Length));
-    assert_eq!(BridgeStatus::decode(&[0u8; 27]), Err(CodecError::Length));
-    assert_eq!(BridgeStatus::decode(&[0u8; 29]), Err(CodecError::Length));
-    let mut all_unknown = [0u8; 28];
+    assert_eq!(
+        BridgeStatus::decode(&[0u8; 28]),
+        Err(CodecError::Length),
+        "the old length is rejected"
+    );
+    assert_eq!(BridgeStatus::decode(&[0u8; 60]), Err(CodecError::Length));
+    assert_eq!(BridgeStatus::decode(&[0u8; 62]), Err(CodecError::Length));
+    let mut all_unknown = [0u8; BridgeStatus::ENCODED_LEN];
     all_unknown[0] = RSSI_UNKNOWN_DBM.to_le_bytes()[0];
     assert_eq!(BridgeStatus::decode(&all_unknown).ok(), Some(empty()));
 
@@ -208,6 +220,104 @@ fn lengths_are_strict() {
 
     let mut exact = [0u8; BridgeStatus::ENCODED_LEN];
     assert_eq!(full().encode_into(&mut exact), Ok(BridgeStatus::ENCODED_LEN));
+}
+
+/// The encoded length grew by the length byte and the 32-byte SSID field.
+#[test]
+fn the_encoded_length_is_sixty_one() {
+    assert_eq!(BridgeStatus::ENCODED_LEN, 61);
+    assert_eq!(SSID_MAX_LEN, 32);
+}
+
+/// An SSID survives a round trip byte-for-byte, including spaces and non-UTF-8 bytes.
+#[test]
+fn a_value_ssid_round_trips_byte_for_byte() {
+    let bytes = b"caf\xE9 net";
+    let mut snapshot = full();
+    snapshot.ssid = StationSsid::new(bytes);
+    assert_eq!(snapshot.ssid.map(|ssid| ssid.as_bytes().to_vec()), Some(bytes.to_vec()));
+
+    let mut buffer = [0u8; BridgeStatus::ENCODED_LEN];
+    let Some(written) = snapshot.encode_into(&mut buffer).ok() else {
+        return;
+    };
+    let Some(decoded) = BridgeStatus::decode(&buffer[..written]).ok() else {
+        return;
+    };
+    let Some(ssid) = decoded.ssid else {
+        return;
+    };
+    assert_eq!(ssid.as_bytes(), bytes, "the SSID bytes must be preserved exactly");
+}
+
+/// A maximum-length SSID is preserved in full, including spaces and a non-UTF-8 byte.
+#[test]
+fn a_maximum_length_ssid_is_preserved() {
+    let mut bytes = [b' '; SSID_MAX_LEN];
+    bytes[0] = 0xFF;
+    bytes[1] = b'A';
+    let mut snapshot = full();
+    snapshot.ssid = StationSsid::new(&bytes);
+
+    let mut buffer = [0u8; BridgeStatus::ENCODED_LEN];
+    let Some(written) = snapshot.encode_into(&mut buffer).ok() else {
+        return;
+    };
+    assert_eq!(
+        buffer[28],
+        u8::try_from(SSID_MAX_LEN).unwrap_or(0),
+        "ssid_len covers the whole field"
+    );
+    let Some(decoded) = BridgeStatus::decode(&buffer[..written]).ok() else {
+        return;
+    };
+    assert_eq!(decoded.ssid.map(|ssid| ssid.as_bytes().to_vec()), Some(bytes.to_vec()));
+}
+
+/// Unknown encodes `ssid_len = 0` and zero padding; a zero length decodes to `None` even when the
+/// padding is not zero.
+#[test]
+fn an_unknown_ssid_encodes_zero_and_decodes_none() {
+    let mut buffer = [0u8; BridgeStatus::ENCODED_LEN];
+    let Some(written) = empty().encode_into(&mut buffer).ok() else {
+        return;
+    };
+    assert_eq!(buffer[28], 0, "ssid_len = 0 means unknown");
+    assert_eq!(&buffer[29..61], &[0; 32], "the unknown SSID is zero-padded");
+
+    let Some(decoded) = BridgeStatus::decode(&buffer[..written]).ok() else {
+        return;
+    };
+    assert_eq!(decoded.ssid, None);
+
+    let mut padded = [0u8; BridgeStatus::ENCODED_LEN];
+    padded[28] = 0;
+    padded[29..61].fill(0xFF);
+    let Some(decoded) = BridgeStatus::decode(&padded).ok() else {
+        return;
+    };
+    assert_eq!(decoded.ssid, None, "a zero length ignores the padding");
+}
+
+/// A length byte above the field width is a value error, never a truncated read.
+#[test]
+fn an_out_of_range_ssid_length_is_a_value_error() {
+    for length in [33u8, 64, 0xFF] {
+        let mut bytes = [0u8; BridgeStatus::ENCODED_LEN];
+        bytes[28] = length;
+        assert_eq!(BridgeStatus::decode(&bytes), Err(CodecError::Value), "length {length}");
+    }
+}
+
+/// The typed SSID rejects the lengths the wire cannot represent.
+#[test]
+fn station_ssid_rejects_zero_and_oversized_input() {
+    assert!(StationSsid::new(&[]).is_none(), "an empty SSID is unknown, not a value");
+    assert!(StationSsid::new(&[b'A'; SSID_MAX_LEN + 1]).is_none());
+    let Some(maximum) = StationSsid::new(&[b'A'; SSID_MAX_LEN]) else {
+        return;
+    };
+    assert_eq!(maximum.as_bytes().len(), SSID_MAX_LEN);
 }
 
 /// `BRIDGE_STATUS` is control `0x0005`; the Bridge stream is `0x0007` and stays out of `Stream`.

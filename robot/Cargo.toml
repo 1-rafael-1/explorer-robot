@@ -57,7 +57,7 @@ st7789-async = { path = "crates/drivers/st7789-async" }
 coin-d6 = { path = "crates/drivers/coin-d6" }
 lidar-cloud = { path = "crates/models/lidar-cloud" }
 link-core = { path = "crates/link/link-core" }
-link-protocol = { path = "crates/link/link-protocol", version = "1" }
+link-protocol = { path = "crates/link/link-protocol", version = "2" }
 link-state = { path = "crates/models/link-state" }
 moving_median = "0.4.0"
 touch-async = { path = "crates/drivers/touch-async" }

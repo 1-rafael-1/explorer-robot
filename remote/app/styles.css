@@ -852,6 +852,12 @@ progress {
   overflow-wrap: anywhere;
 }
 
+/* A Station Network name may contain spaces and run to 32 characters. */
+#bridge-network {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .subpanel {
   margin-top: 10px;
   padding-top: 8px;

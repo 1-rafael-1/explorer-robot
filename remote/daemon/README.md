@@ -9,9 +9,119 @@ ports); ADR-0040 records the layout. It is a member of the `remote/` host worksp
 page is [docs/components/remote.md](../../docs/components/remote.md) and the repo map is
 [docs/architecture.md](../../docs/architecture.md).
 
-## Running
+## Installing for the current user
 
-From `remote/` (the current-directory rule, ADR-0040):
+Install once from the `remote/` workspace (the current-directory rule, ADR-0040):
+
+```sh
+cd remote
+cargo install --path daemon --locked
+```
+
+That builds the `remote-daemon` package and puts `remote-daemon` in
+`~/.cargo/bin`, which is on the user's `PATH`, so it starts from any directory.
+The install builds only the daemon and its dependencies (`bridge-net`,
+`link-protocol` and the crates they use), not the bench stubs: the
+`libudev`/`pkg-config` prerequisite comes from `robot-stub`'s `serialport`
+dependency and does **not** apply to this install. The SPA is embedded at
+compile time, so the installed binary is self-contained; `--assets` remains a
+development override.
+
+`cargo install` is per-machine and source-based. It needs this clone and a Rust
+toolchain, and it is a convenience for the operator on this machine, not a way
+to distribute the daemon to someone else. There is no release artifact or
+package.
+
+## Running from a terminal
+
+Once installed, start it from any directory:
+
+```sh
+remote-daemon
+```
+
+It binds the app on loopback, prints the URL, opens the default browser at it,
+and serves until `Ctrl-C`, which shuts it down cleanly and closes the app's
+WebSockets with code **1001**. Trace and error output goes to stderr. To suppress
+the browser launch, or to pick a port:
+
+```sh
+remote-daemon --no-open
+remote-daemon --no-open --port 9000
+```
+
+The printed URL is the address actually bound: `--port` is honoured as given and
+the default **8765** falls back to an ephemeral port when it is taken. Pairing is
+unchanged — there is deliberately no token flag, and the token is entered in the
+app and kept in the config store described below. The process opens no robot
+Session until an app connects, so leaving it running is cheap.
+
+## Running as a user service
+
+The installed binary can also run as a systemd **user** unit, started and
+stopped by hand with `systemctl --user`. It is **not enabled at login**: nothing
+starts it until you do. This is the path that survives closing a terminal, keeps
+a log in the journal and restarts the process after a crash.
+
+The unit is checked in beside the daemon
+([`remote-daemon.service`](remote-daemon.service)) so its flags cannot drift
+from the CLI. From the repository root, install it once for the current user by
+copying it into the user unit directory — `$XDG_CONFIG_HOME/systemd/user`, or
+`~/.config/systemd/user` when `XDG_CONFIG_HOME` is unset — and reloading the
+manager:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp remote/daemon/remote-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+```
+
+Start, inspect and stop it:
+
+```sh
+systemctl --user start remote-daemon
+systemctl --user status remote-daemon
+systemctl --user stop remote-daemon
+```
+
+While it runs, the app is at **http://127.0.0.1:8765/**, which is stable across
+restarts and worth bookmarking. The choices that matter:
+
+- `ExecStart=%h/.cargo/bin/remote-daemon --no-open --host 127.0.0.1 --port 8765`
+  names the installed binary by an absolute, home-relative path, because the user
+  manager does not inherit the shell's `PATH`.
+- `--host 127.0.0.1` keeps the loopback-only default of a terminal run.
+- `--port 8765` is fixed so the bookmark never moves. The CLI's ephemeral
+  fallback applies only when the port is omitted, so a port already in use fails
+  the unit visibly instead of moving the app.
+- `--no-open` suppresses the browser, because a unit has no browser session; the
+  bookmark replaces it.
+- `Type=simple` because the daemon stays in the foreground and holds the
+  process.
+- `Restart=on-failure` with `RestartSec=5` retries a crash after five seconds;
+  systemd's start rate limiting turns a persistent failure (a taken port, say)
+  into a failed unit rather than a restart storm.
+
+There is no `After=network-online.target` and no `WorkingDirectory`: the user
+manager has no such target, and the daemon binds its sockets and retries
+discovery while the network settles. The SPA is embedded, so the working
+directory does not matter.
+
+Logs — trace and error output written to stderr reach the user journal:
+
+```sh
+journalctl --user -u remote-daemon -f
+```
+
+Add `--verbose` to `ExecStart` in a drop-in if you want discovery and Session
+changes traced. To enable the unit at login instead of starting it by hand, run
+`systemctl --user enable remote-daemon`; that is optional and outside the
+documented path.
+
+## Running from a source checkout
+
+For development, run it through Cargo from `remote/` (the current-directory rule,
+ADR-0040):
 
 ```sh
 cargo run -p remote-daemon -- --help
@@ -35,8 +145,9 @@ the only token source.
 ## The config store
 
 `config.toml` lives in the platform's per-user config directory
-(`explorer-remote/config.toml`; `$XDG_CONFIG_HOME/explorer-remote/config.toml` on Linux). It is
-created mode `0600` on Unix and written atomically. Fields:
+(`explorer-remote/config.toml`; on Linux `$XDG_CONFIG_HOME/explorer-remote/config.toml`, or
+`~/.config/explorer-remote/config.toml` when `XDG_CONFIG_HOME` is unset). It is created mode
+`0600` on Unix and written atomically. Fields:
 
 | key | meaning |
 |---|---|
@@ -49,6 +160,53 @@ A discovered device uses only its own token; an unpaired device is reported as
 `pairing_required`, and the app's `pair` message stores the code under the last device. A
 manual endpoint uses `default_token`. On Unix an existing file is tightened to `0600`; a
 malformed file is an error rather than a silent loss of tokens.
+
+The store is the only token source. Pairing still happens in the app: there is
+**no token flag**, and no token is passed on the command line. The operator types
+the robot's Pairing Token into the app's connection screen; the app's `pair`
+message stores it under the last device in this file, and the daemon reads it
+from here.
+
+## Upgrading
+
+Re-run the install from `remote/` (the same command as the first install):
+
+```sh
+cd remote
+cargo install --path daemon --locked
+```
+
+Cargo replaces the installed binary. A process that is already running keeps the
+old binary until it is restarted, so restart it — `Ctrl-C` and start
+`remote-daemon` again from the terminal, or, under the user unit:
+
+```sh
+systemctl --user restart remote-daemon
+```
+
+The config store above is not touched, so the pairing token and last endpoint
+survive.
+
+## Uninstalling
+
+If you installed the user unit, stop it and remove it first:
+
+```sh
+systemctl --user stop remote-daemon
+rm ~/.config/systemd/user/remote-daemon.service
+systemctl --user daemon-reload
+```
+
+Then remove the binary:
+
+```sh
+cargo uninstall remote-daemon
+```
+
+That removes `remote-daemon` from `~/.cargo/bin`. The per-user config store and
+the pairing token are deliberately left in place; delete
+`explorer-remote/config.toml` from the platform's config directory yourself if
+you want to forget them.
 
 ## Network defaults
 

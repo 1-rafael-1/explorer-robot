@@ -1578,7 +1578,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "link-protocol"
-version = "1.1.0"
+version = "2.0.0"
 
 [[package]]
 name = "linked_list_allocator"

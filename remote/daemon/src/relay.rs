@@ -679,7 +679,12 @@ impl Relay {
     /// The status is Bridge/network state, independent of the robot's Boot Id, so it survives a
     /// Session close and a Boot Id change; its `ts` exposes staleness. The caller only feeds it
     /// from within an open Session, so this method does not require [`Relay::is_connected`].
-    pub const fn on_bridge_status(&mut self, status: &WireBridgeStatus, now_ms: u64) {
+    ///
+    /// The Station Network is the one field the App Boundary cannot carry byte-for-byte: an SSID is
+    /// an octet string while the boundary is JSON, so every non-printable byte is shown as `?`
+    /// here — the same rule the panel uses. Keeping the rest of a status is worth more than
+    /// refusing the whole value over one odd byte.
+    pub fn on_bridge_status(&mut self, status: &WireBridgeStatus, now_ms: u64) {
         self.bridge = Some(BridgeStatus {
             ts: now_ms,
             rssi_dbm: status.rssi_dbm,
@@ -689,6 +694,18 @@ impl Relay {
                 WireBridgeStation::Connecting => BridgeStation::Connecting,
                 WireBridgeStation::Associated => BridgeStation::Associated,
             },
+            ssid: status.ssid.as_ref().map(|ssid| {
+                ssid.as_bytes()
+                    .iter()
+                    .map(|byte| {
+                        if byte.is_ascii_graphic() || *byte == b' ' {
+                            char::from(*byte)
+                        } else {
+                            '?'
+                        }
+                    })
+                    .collect()
+            }),
             provisioned: status.flags.contains(WireBridgeFlags::PROVISIONED),
             setup_open: status.flags.contains(WireBridgeFlags::SETUP_OPEN),
             link_ready: status.flags.contains(WireBridgeFlags::LINK_READY),

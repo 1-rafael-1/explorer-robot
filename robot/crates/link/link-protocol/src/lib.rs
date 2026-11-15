@@ -7,7 +7,7 @@
 //! valid for the firmware.
 //!
 //! The crate version mirrors the wire version: changing [`PROTOCOL_MAJOR`] or [`PROTOCOL_MINOR`]
-//! changes the crate's major or minor version, and every consumer states a `version = "1"`
+//! changes the crate's major or minor version, and every consumer states a `version = "2"`
 //! requirement so a major bump cannot pass unnoticed (ADR-0040).
 
 #![no_std]
@@ -40,7 +40,9 @@ pub use frame::{Class, Direction, Flags, Frame, FrameHeader, HEADER_LEN, MAGIC, 
 pub use ids::{BridgeStream, Caps, Command, Control, Event, ProcedureId, Stream};
 pub use parser::{MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, Parser, PcToRobotParser, RobotToPcParser};
 pub use payload::{
-    bridge::{BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM},
+    bridge::{
+        BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, RSSI_UNKNOWN_DBM, SSID_MAX_LEN, StationSsid,
+    },
     control::{
         BridgeControl, BridgeControlAction, BridgeControlReply, Hello, HelloAck, PAIRING_CODE_LEN, PairingCode, Ping,
         PingAck, RateEntries, RateEntry, RateFlags, SetupCredentials, Throttle as ThrottleHint, ThrottleAction,
@@ -60,7 +62,7 @@ pub use reliability::{
 pub use sim::{FakeRemote, Faults, Wire};
 
 /// The wire major version carried in every frame header.
-pub const PROTOCOL_MAJOR: u8 = 1;
+pub const PROTOCOL_MAJOR: u8 = 2;
 
 /// The wire minor version exchanged in the session handshake.
-pub const PROTOCOL_MINOR: u8 = 1;
+pub const PROTOCOL_MINOR: u8 = 0;
