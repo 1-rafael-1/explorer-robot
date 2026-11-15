@@ -31,9 +31,6 @@ fn decodes_unknown_codes_verbatim() {
 #[test]
 fn faults_are_only_the_recovery_set() {
     assert!(RangeStatus::HardwareFail.is_fault());
-    assert!(RangeStatus::SigmaFail.is_fault());
-    assert!(RangeStatus::WrapFail.is_fault());
-    assert!(RangeStatus::XtalkFail.is_fault());
     assert!(RangeStatus::NoUpdate.is_fault());
     assert!(RangeStatus::Unknown(0).is_fault());
 
@@ -44,6 +41,18 @@ fn faults_are_only_the_recovery_set() {
     assert!(!RangeStatus::OutOfBounds.is_fault());
     assert!(!RangeStatus::MinRangeFail.is_fault());
     assert!(!RangeStatus::Synchronization.is_fault());
+    assert!(
+        !RangeStatus::SigmaFail.is_fault(),
+        "sigma is a scene condition, not a wedged sensor"
+    );
+    assert!(
+        !RangeStatus::WrapFail.is_fault(),
+        "a wrapped far target is a scene condition, not a wedged sensor"
+    );
+    assert!(
+        !RangeStatus::XtalkFail.is_fault(),
+        "crosstalk is a scene condition, not a wedged sensor"
+    );
 }
 
 #[test]
@@ -68,7 +77,7 @@ fn no_wrap_check_is_deliberately_no_target() {
 }
 
 #[test]
-fn faults_and_synchronization_produce_invalid_readings() {
+fn invalid_statuses_produce_invalid_readings() {
     for status in [
         RangeStatus::Synchronization,
         RangeStatus::NoUpdate,

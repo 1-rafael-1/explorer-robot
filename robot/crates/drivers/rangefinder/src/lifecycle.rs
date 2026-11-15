@@ -9,10 +9,11 @@
 //! The detector is owned here as well: a sensor's floor decision and its
 //! lifecycle state advance together.
 //!
-//! Only a **Rangefinder Fault** status drives invalid-streak recovery. No-target,
-//! min-range, min-clip, no-wrap-check and synchronization readings still hold the
-//! last decision and fail safe after the invalid hold, but they never reset a
-//! healthy sensor.
+//! Only a **Rangefinder Fault** status drives invalid-streak recovery: a
+//! hardware, no-update or unknown code. No-target, min-range, min-clip,
+//! no-wrap-check, synchronization, sigma, wrap and crosstalk readings still hold
+//! the last decision and fail safe after the invalid hold, but they never reset a
+//! healthy sensor: they describe the scene, not the sensor's health.
 
 use crate::{
     RangefinderReading,
@@ -160,8 +161,9 @@ impl SensorLifecycle {
     /// still waiting for its first valid reading, and the detector has failed
     /// safe. Waiting matters so a sensor that boots but only ever reports
     /// hardware faults is reset instead of sitting in `Waiting` forever.
-    /// No-target, min-range, min-clip, no-wrap-check and synchronization readings
-    /// hold the decision and fail safe without starting recovery.
+    /// No-target, min-range, min-clip, no-wrap-check, synchronization, sigma,
+    /// wrap and crosstalk readings hold the decision and fail safe without
+    /// starting recovery.
     #[must_use]
     pub const fn recovery_cause(&self, now_ms: u64) -> Option<RecoveryCause> {
         if matches!(self.state, SensorState::Failed) {

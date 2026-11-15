@@ -1,5 +1,10 @@
 # VL53L1X rangefinder pair: in-repo async driver and 8-bit status
 
+> **Superseded in part by [ADR-0052](0052-scene-statuses-do-not-drive-recovery.md).**
+> The driver, status vocabulary and read path below remain valid. The recovery
+> set is now hardware, no-update and unknown; sigma, wrap and crosstalk are
+> scene statuses that stay invalid readings and fail safe without a reset.
+
 The robot's rangefinder modules are TOF0400C/VL53L1X parts, not the VL53L0X
 assumed by ADR-0048. The pair is still the floor-drop safety sensor on two
 dedicated I2C buses (ADR-0026): unswitched 3.3 V, low power, with `XSHUT` and

@@ -66,16 +66,17 @@ impl RangeStatus {
 
     /// Whether this status may drive the lifecycle's invalid-streak recovery.
     ///
-    /// This is the recovery set only: hardware, sigma, wrap, crosstalk,
-    /// no-update and unknown codes. No-target, min-range, min-clip,
-    /// no-wrap-check and synchronization readings keep the last decision but do
-    /// not reset the sensor.
+    /// This is the recovery set only: hardware, no-update and unknown codes —
+    /// the statuses that can indicate a wedged device which a reset may clear.
+    /// Sigma, wrap and crosstalk statuses describe the *scene* (a noisy, wrapped
+    /// or over-threshold target), so a reset cannot change them. They remain
+    /// [`Invalid`](Reading::Invalid) readings that hold the last decision and
+    /// fail safe, but they never reset a healthy sensor. No-target, min-range,
+    /// min-clip, no-wrap-check and synchronization readings likewise keep the
+    /// last decision without a reset.
     #[must_use]
     pub const fn is_fault(self) -> bool {
-        matches!(
-            self,
-            Self::HardwareFail | Self::SigmaFail | Self::WrapFail | Self::XtalkFail | Self::NoUpdate | Self::Unknown(_)
-        )
+        matches!(self, Self::HardwareFail | Self::NoUpdate | Self::Unknown(_))
     }
 }
 
