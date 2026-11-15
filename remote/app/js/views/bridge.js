@@ -20,6 +20,15 @@ export function stationLabel(station) {
   return 'Unknown';
 }
 
+/**
+ * Returns the Station Network's name, or the app's unknown placeholder.
+ *
+ * An SSID is an octet string, and a name of spaces is not a name: both read as unknown.
+ */
+export function networkLabel(ssid) {
+  return typeof ssid === 'string' && ssid.trim() !== '' ? ssid : '—';
+}
+
 /** Returns a shape-and-word RSSI bucket, so hue is never the only signal. */
 export function rssiBucket(rssi) {
   if (rssi == null) return '—';
@@ -42,6 +51,7 @@ export function renderBridge(state, now = relayNow(state)) {
   setText(byId('bridge-rssi'), bridge?.rssi_dbm == null ? '—' : `${bridge.rssi_dbm} dBm`);
   setText(byId('bridge-rssi-bucket'), rssiBucket(bridge?.rssi_dbm));
   setText(byId('bridge-channel'), orUnknown(bridge?.channel));
+  setText(byId('bridge-network'), networkLabel(bridge?.ssid));
   setText(byId('bridge-provisioned'), yesNo(bridge?.provisioned));
   setText(byId('bridge-setup'), yesNo(bridge?.setup_open));
   setText(byId('bridge-link-ready'), yesNo(bridge?.link_ready));

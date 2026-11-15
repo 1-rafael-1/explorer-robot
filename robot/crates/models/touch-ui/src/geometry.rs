@@ -122,7 +122,13 @@ pub const RANGEFINDER_FOOTER_GAP: u32 = 4;
 pub const INFO_ROW_H: u32 = 26;
 
 /// Height of one compact Link info row, in pixels.
-pub const LINK_INFO_ROW_H: u32 = 13;
+///
+/// The five-row block and the result band must both fit the 240-pixel framebuffer, so this is
+/// one pixel tighter than the four-row layout it replaces.
+pub const LINK_INFO_ROW_H: u32 = 12;
+
+/// Number of rows in the Link screen's compact info block.
+pub const LINK_INFO_ROWS: usize = 5;
 
 /// Width of the Link info block's left column, in pixels.
 ///
@@ -144,7 +150,7 @@ pub const LINK_ACTION_GAP: u32 = 3;
 pub const LINK_ACTION_COUNT: usize = 3;
 
 /// Height of one line in the Link result band, in pixels.
-pub const LINK_RESULT_LINE_H: u32 = 14;
+pub const LINK_RESULT_LINE_H: u32 = 12;
 
 /// Number of lines in the Link result band.
 pub const LINK_RESULT_LINES: usize = 3;
@@ -611,7 +617,7 @@ pub const fn link_info_cell_rect(row: usize, column: usize) -> Rectangle {
 /// Vertical offset of the Link screen's action buttons.
 #[must_use]
 pub const fn link_actions_top() -> u32 {
-    link_info_top() + 4 * LINK_INFO_ROW_H + LINK_SECTION_GAP
+    link_info_top() + LINK_INFO_ROWS as u32 * LINK_INFO_ROW_H + LINK_SECTION_GAP
 }
 
 /// The on-screen rectangle of Link action button `index`.

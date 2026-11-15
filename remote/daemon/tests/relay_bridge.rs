@@ -2,7 +2,9 @@
 
 mod support;
 
-use link_protocol::{BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags};
+use link_protocol::{
+    BridgeStation as WireBridgeStation, BridgeStatus as WireBridgeStatus, BridgeStatusFlags, StationSsid,
+};
 use remote_daemon::{
     relay::Relay,
     schema::{BridgeStation, BridgeStatus, ServerMessage},
@@ -22,6 +24,15 @@ fn wire_status() -> WireBridgeStatus {
         resyncs: 4,
         wdt_feeds: 5,
         wdt_withheld: 6,
+        ssid: None,
+    }
+}
+
+/// A wire status whose Station Network is `ssid`, or unknown for [`None`].
+fn wire_status_with_ssid(ssid: Option<&[u8]>) -> WireBridgeStatus {
+    WireBridgeStatus {
+        ssid: ssid.and_then(StationSsid::new),
+        ..wire_status()
     }
 }
 
@@ -32,6 +43,7 @@ const fn expected(ts: u64) -> BridgeStatus {
         rssi_dbm: Some(-54),
         channel: Some(6),
         station: BridgeStation::Associated,
+        ssid: None,
         provisioned: true,
         setup_open: false,
         link_ready: true,
@@ -105,5 +117,116 @@ fn a_boot_id_change_keeps_the_bridge_status() {
         assembled.bridge,
         Some(expected(10)),
         "the Bridge status is independent of the robot Boot Id"
+    );
+}
+
+/// Before the first Bridge status the snapshot carries none, so the app has nothing to invent.
+#[test]
+fn a_snapshot_before_the_first_status_carries_no_bridge() {
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+
+    let messages = relay.poll(app, 0);
+    let assembled = must(snapshot(&messages), "snapshot");
+    assert_eq!(assembled.bridge, None);
+    assert!(
+        bridges(&relay.poll(app, 1)).is_empty(),
+        "no bridge message before the first status"
+    );
+}
+
+/// The Station Network reaches the live message and the snapshot unchanged from the wire.
+#[test]
+fn a_station_network_reaches_the_app_unchanged() {
+    const SSID: &str = "Home Network 0123456789 abcdefgh";
+    assert_eq!(SSID.len(), 32, "the fixture is a maximum-length SSID");
+
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+    let _ = relay.poll(app, 0);
+    relay.on_bridge_status(&wire_status_with_ssid(Some(SSID.as_bytes())), 10);
+
+    let messages = relay.poll(app, 11);
+    let live = must(bridges(&messages).into_iter().next(), "live bridge message");
+    assert_eq!(
+        live.ssid.as_deref(),
+        Some(SSID),
+        "the live message keeps the value verbatim"
+    );
+
+    let assembled = must(relay.snapshot(app, 12), "snapshot");
+    let bridge = must(assembled.bridge, "snapshot bridge");
+    assert_eq!(
+        bridge.ssid.as_deref(),
+        Some(SSID),
+        "the snapshot keeps the value verbatim"
+    );
+}
+
+/// A later status replaces the Station Network, and an unknown SSID clears it to `None`.
+#[test]
+fn a_later_status_replaces_the_station_network() {
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+    let _ = relay.poll(app, 0);
+
+    relay.on_bridge_status(&wire_status_with_ssid(Some(b"Home")), 10);
+    let messages = relay.poll(app, 11);
+    let live = must(bridges(&messages).into_iter().next(), "first bridge message");
+    assert_eq!(live.ssid.as_deref(), Some("Home"));
+
+    relay.on_bridge_status(&wire_status_with_ssid(Some(b"Rover Lab")), 20);
+    let messages = relay.poll(app, 21);
+    let live = must(bridges(&messages).into_iter().next(), "second bridge message");
+    assert_eq!(
+        live.ssid.as_deref(),
+        Some("Rover Lab"),
+        "a re-provisioning replaces the name"
+    );
+
+    relay.on_bridge_status(&wire_status_with_ssid(None), 30);
+    let messages = relay.poll(app, 31);
+    let live = must(bridges(&messages).into_iter().next(), "third bridge message");
+    assert_eq!(live.ssid, None, "an unknown SSID is null, not a stale name");
+}
+
+/// A non-ASCII SSID is sanitised at the JSON boundary instead of dropping the status.
+#[test]
+fn a_non_ascii_station_network_is_sanitised_at_the_boundary() {
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+    let _ = relay.poll(app, 0);
+    relay.on_bridge_status(&wire_status_with_ssid(Some(b"Caf\xe9")), 10);
+
+    let messages = relay.poll(app, 11);
+    let live = must(bridges(&messages).into_iter().next(), "live bridge message");
+    assert_eq!(
+        live.ssid.as_deref(),
+        Some("Caf?"),
+        "non-ASCII bytes become `?`, matching the panel"
+    );
+}
+
+/// The boundary's JSON carries the SSID as a string, and as `null` when there is none.
+#[test]
+fn the_station_network_crosses_the_json_boundary() {
+    let mut relay = Relay::new();
+    let app = session_with_app(&mut relay, 7, 0);
+    let _ = relay.poll(app, 0);
+
+    relay.on_bridge_status(&wire_status_with_ssid(Some(b"Rover Lab")), 10);
+    let messages = relay.poll(app, 11);
+    let live = must(bridges(&messages).into_iter().next(), "live bridge message");
+    let value = must(serde_json::to_value(&live).ok(), "bridge json");
+    assert_eq!(value.get("ssid").and_then(serde_json::Value::as_str), Some("Rover Lab"));
+
+    relay.on_bridge_status(&wire_status_with_ssid(None), 20);
+    let messages = relay.poll(app, 21);
+    let live = must(bridges(&messages).into_iter().next(), "live bridge message");
+    let value = must(serde_json::to_value(&live).ok(), "bridge json");
+    assert_eq!(
+        value.get("ssid"),
+        Some(&serde_json::Value::Null),
+        "an unknown network is null, never an empty string"
     );
 }

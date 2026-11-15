@@ -4,8 +4,12 @@ The PC-side client: the `remote-daemon` binary hosts the **Relay** and serves
 the static web app, with the two bench stubs and the shared `bridge-net`
 network edge in the same workspace. The daemon owns the **Session** and the
 protocol; the app draws pixels. Nothing here is built for the robot's target.
-There is no installer or release artifact: the operator path is a clone plus
-the commands below.
+There is still no release artifact or packaged installer: the operator starts
+from a clone, and either installs the daemon for their own account with
+`cargo install --path daemon --locked` (it then runs as `remote-daemon` from any
+directory, in a terminal or as a manually started systemd user unit; see the
+[daemon README](../../remote/daemon/README.md#installing-for-the-current-user))
+or runs it through Cargo with the commands below.
 
 ## Prerequisites
 
@@ -21,6 +25,12 @@ the commands below.
 - On macOS or Windows, `libudev` is not needed, but the workspace config pins
   the Linux host triple. Set `CARGO_BUILD_TARGET` to the host triple before
   building; see [ADR-0040](../../docs/adr/0040-repo-and-build-layout.md).
+
+`libudev` and `pkg-config` are needed to build the whole workspace (and
+therefore `robot-stub`). Installing only the daemon —
+`cd remote && cargo install --path daemon --locked`, below — builds the
+`remote-daemon` package and its dependencies, not `robot-stub`, so it does not
+need either.
 
 ## The current-directory rule
 
@@ -104,7 +114,48 @@ Nothing is produced for the robot, the Bridge or the Release profile.
 
 ### Run the daemon
 
-Print the flags without starting the long-running process:
+Install it for the current user once, from `remote/` (this builds only the
+daemon package, so the bench stubs' `libudev`/`pkg-config` prerequisite does not
+apply):
+
+```sh
+cd remote && cargo install --path daemon --locked
+```
+
+That puts `remote-daemon` in `~/.cargo/bin`, on `PATH`, so it starts from any
+directory. Stop it with `Ctrl-C`:
+
+```sh
+remote-daemon --no-open
+```
+
+Without `--no-open` it opens the default browser at the printed URL; `--port`
+chooses the app port.
+
+Or run it as a systemd **user** service instead of leaving a terminal open. The
+unit is checked in at
+[`remote/daemon/remote-daemon.service`](../../remote/daemon/remote-daemon.service)
+and is started and stopped by hand — it is deliberately **not enabled at login**:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp remote/daemon/remote-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user start remote-daemon
+systemctl --user status remote-daemon
+```
+
+The service keeps the loopback-only default and a fixed bookmarked URL,
+`http://127.0.0.1:8765/`; its logs are in `journalctl --user -u remote-daemon`.
+The [daemon README](../../remote/daemon/README.md#running-as-a-user-service) has
+the install, upgrade and uninstall details. There is no token flag, and pairing
+still happens in the app. Upgrade either path by re-running the install and
+restarting (the unit with `systemctl --user restart remote-daemon`), and
+uninstall with `cargo uninstall remote-daemon`; the
+[daemon README](../../remote/daemon/README.md#upgrading) has the details.
+
+To work from the source checkout instead, print the flags without starting the
+long-running process:
 
 ```sh
 cd remote && cargo run -p remote-daemon -- --help
@@ -129,16 +180,17 @@ Options:
   -V, --version        Print version
 ```
 
-To serve the app, start the daemon and stop it with `Ctrl-C`:
+To serve from the checkout, start the daemon and stop it with `Ctrl-C`:
 
 ```sh
 cd remote && cargo run -p remote-daemon -- --no-open
 ```
 
 It prints the app URL and serves at `http://127.0.0.1:8765/` (or an ephemeral
-port if 8765 is taken). `--no-open` suppresses the browser launch. This
-long-running form was not started during verification; `--help` was used
-instead.
+port if 8765 is taken). `--no-open` suppresses the browser launch. The installed
+binary was verified from a directory outside the clone: `GET /` returned the
+embedded app and `GET /ws` completed a WebSocket upgrade; a real browser launch
+was not exercised headlessly.
 
 ## Daemon flags
 
@@ -155,8 +207,9 @@ instead.
 There is deliberately **no token flag**: a pairing secret is never accepted on
 the command line, so it cannot land in shell history, process listings or
 screenshots. The config store is the only token source. The
-[daemon README](../../remote/daemon/README.md) documents the network defaults,
-the app messages and the headless Bridge Stub recipe.
+[daemon README](../../remote/daemon/README.md) documents the install, upgrade and
+uninstall lifecycle, the network defaults, the app messages and the headless
+Bridge Stub recipe.
 
 ## The Remote App
 
@@ -193,9 +246,11 @@ wire. The full module map and test commands are in the
   with an unread badge, replay from the snapshot after a reload, and a sequence
   gap or overflow marks an in-flight Volatile Command's outcome unknown.
 - **Bridge status.** A header chip (station and RSSI bucket) and a Robot/Link
-  panel (RSSI, channel, provisioning, setup open, link ready, UART/DMA/CRC and
-  watchdog counters). The app shows status only; it does not rotate the token or
-  duplicate the panel's Link screen.
+  panel (RSSI, channel, network, provisioning, setup open, link ready, UART/DMA/CRC and
+  watchdog counters). The network row names the **Station Network** and shows the
+  app's own unknown placeholder (`—`) when the Bridge reports none or only spaces; a
+  non-text SSID arrives as the daemon's replacement characters. The app shows status
+  only; it does not rotate the token or duplicate the panel's Link screen.
 - **Accessibility and phone.** Native controls, a visible 3 px focus ring,
   logical focus order, Escape closes overlays and cancels a preview, 34 px
   targets, and states labelled as well as coloured. One responsive shell: wide
@@ -312,7 +367,9 @@ machine:
 - reading the panel's Pairing Token, typing it into the app, and rotating it;
 - running `robot-stub --port /dev/ttyUSB0` (or `/dev/ttyACM*`) against a real
   Bridge;
-- Wi-Fi provisioning and Setup Mode.
+- Wi-Fi provisioning and Setup Mode;
+- reading the Bridge panel's network row against a real Bridge (the fake socket and
+  the Bridge Stub cover the rendering, not a live SSID).
 
 The headless `bridge-stub` chain is covered by `run_real_chain.sh` above. The
 stubs replace hardware but are still bench tools: see the
@@ -362,3 +419,7 @@ Owning decisions:
 - [ADR-0039](../../docs/adr/0039-remote-daemon-relay.md) — the daemon relay.
 - [ADR-0040](../../docs/adr/0040-repo-and-build-layout.md) — the
   current-directory rule and the three workspaces.
+- [ADR-0042](../../docs/adr/0042-bridge-telemetry.md) — Bridge Status and the
+  daemon's `bridge` message.
+- [ADR-0050](../../docs/adr/0050-network-identity.md) — the Station Network in the
+  Bridge panel.

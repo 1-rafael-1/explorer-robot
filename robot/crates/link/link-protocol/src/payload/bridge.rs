@@ -1,7 +1,7 @@
-//! The `BRIDGE_STATUS` payload: the Bridge's link and resilience snapshot (ADR-0031).
+//! The `BRIDGE_STATUS` payload: the Bridge's link and resilience snapshot (ADR-0042, ADR-0050).
 //!
 //! The Bridge publishes it at 1 Hz to the robot as an unacknowledged `control` frame and to the
-//! daemon as a latest-wins `stream` frame; both carry the same 28-byte little-endian layout.
+//! daemon as a latest-wins `stream` frame; both carry the same 61-byte little-endian layout.
 //!
 //! | offset | size | field | encoding |
 //! |---|---|---|---|
@@ -15,9 +15,18 @@
 //! | 16 | 4 | `resyncs` | `u32` little-endian |
 //! | 20 | 4 | `wdt_feeds` | `u32` little-endian |
 //! | 24 | 4 | `wdt_withheld` | `u32` little-endian |
+//! | 28 | 1 | `ssid_len` | `0` = unknown; `1..=32` = a Station Network SSID length |
+//! | 29 | 32 | `ssid` | [`StationSsid`] bytes, zero-padded after `ssid_len` |
 //!
 //! The sentinels are ordinary wire values and survive a round trip; `None` maps to a sentinel on
-//! encode and back to `None` on decode.
+//! encode and back to `None` on decode. Decoding is strict: the payload is exactly
+//! [`BridgeStatus::ENCODED_LEN`] bytes, and an `ssid_len` above [`SSID_MAX_LEN`] is a value error.
+//!
+//! ## The Station Network SSID
+//!
+//! An SSID is an octet string, not text: the 802.11 field permits any byte values and is not
+//! required to be UTF-8. [`StationSsid`] therefore keeps the bytes verbatim, and a decode/encode
+//! round trip preserves them exactly, including spaces and non-UTF-8 bytes.
 
 use crate::{
     codec::{PayloadCodec, read_u32_le, write_u32_le},
@@ -29,6 +38,49 @@ pub const RSSI_UNKNOWN_DBM: i8 = i8::MIN;
 
 /// The `channel` sentinel meaning "unknown".
 pub const CHANNEL_UNKNOWN: u8 = 0;
+
+/// The maximum Station Network SSID length in bytes.
+///
+/// The wire field after `ssid_len` is exactly this wide; a longer value is not a legal SSID.
+pub const SSID_MAX_LEN: usize = 32;
+
+/// The Station Network's SSID: one to [`SSID_MAX_LEN`] arbitrary bytes.
+///
+/// An SSID is an octet string, not text: the 802.11 field permits any byte values and is not
+/// required to be UTF-8. This type stores the bytes verbatim and offers no text conversion, so a
+/// decode/encode round trip preserves them byte-for-byte. The unused tail is zero-padded, matching
+/// the wire field. A zero-length SSID cannot be represented: `ssid_len = 0` on the wire means
+/// "unknown", which the optional field expresses with [`None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StationSsid {
+    /// The SSID bytes, zero-padded after `len`.
+    bytes: [u8; SSID_MAX_LEN],
+    /// The number of valid bytes in `bytes`; always `1..=SSID_MAX_LEN`.
+    len: u8,
+}
+
+impl StationSsid {
+    /// Builds an SSID from arbitrary bytes, returning [`None`] outside one to [`SSID_MAX_LEN`]
+    /// bytes.
+    #[must_use]
+    pub fn new(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() || bytes.len() > SSID_MAX_LEN {
+            return None;
+        }
+        let mut padded = [0u8; SSID_MAX_LEN];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        Some(Self {
+            bytes: padded,
+            len: u8::try_from(bytes.len()).ok()?,
+        })
+    }
+
+    /// Returns the SSID bytes, without the zero padding.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
 
 /// The `station` byte: the Bridge's Wi-Fi association state.
 #[repr(u8)]
@@ -145,11 +197,13 @@ pub struct BridgeStatus {
     pub wdt_feeds: u32,
     /// Watchdog feeds withheld because a task was late.
     pub wdt_withheld: u32,
+    /// The Station Network's SSID, or [`None`] so far as the Bridge knows.
+    pub ssid: Option<StationSsid>,
 }
 
 impl BridgeStatus {
     /// The encoded payload length in bytes.
-    pub const ENCODED_LEN: usize = 28;
+    pub const ENCODED_LEN: usize = 29 + SSID_MAX_LEN;
 }
 
 impl<'a> PayloadCodec<'a> for BridgeStatus {
@@ -166,6 +220,15 @@ impl<'a> PayloadCodec<'a> for BridgeStatus {
             value => Some(value),
         };
         let station = BridgeStation::from_wire(bytes[2]).ok_or(CodecError::Value)?;
+        let ssid_len = usize::from(bytes[28]);
+        if ssid_len > SSID_MAX_LEN {
+            return Err(CodecError::Value);
+        }
+        let ssid = if ssid_len == 0 {
+            None
+        } else {
+            Some(StationSsid::new(&bytes[29..29 + ssid_len]).ok_or(CodecError::Value)?)
+        };
         Ok(Self {
             rssi_dbm,
             channel,
@@ -177,6 +240,7 @@ impl<'a> PayloadCodec<'a> for BridgeStatus {
             resyncs: read_u32_le(bytes, 16),
             wdt_feeds: read_u32_le(bytes, 20),
             wdt_withheld: read_u32_le(bytes, 24),
+            ssid,
         })
     }
 
@@ -194,6 +258,13 @@ impl<'a> PayloadCodec<'a> for BridgeStatus {
         write_u32_le(out, 16, self.resyncs);
         write_u32_le(out, 20, self.wdt_feeds);
         write_u32_le(out, 24, self.wdt_withheld);
+
+        let ssid_len = self.ssid.as_ref().map_or(0, |ssid| ssid.as_bytes().len());
+        out[28] = u8::try_from(ssid_len).map_err(|_| EncodeError::Value)?;
+        out[29..29 + SSID_MAX_LEN].fill(0);
+        if let Some(ssid) = &self.ssid {
+            out[29..29 + ssid.as_bytes().len()].copy_from_slice(ssid.as_bytes());
+        }
         Ok(Self::ENCODED_LEN)
     }
 }

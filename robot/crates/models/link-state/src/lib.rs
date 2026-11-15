@@ -18,8 +18,44 @@ use heapless::String;
 /// A Bridge Status older than this many milliseconds is stale.
 pub const STALE_AFTER_MS: u64 = 2_000;
 
-/// The maximum setup SSID length in bytes.
+/// The maximum SSID length in bytes, for the Station Network and the setup AP.
 pub const SSID_CAPACITY: usize = 32;
+
+/// The Station Network's SSID: one to [`SSID_CAPACITY`] arbitrary bytes.
+///
+/// An SSID is an octet string, not text, so the bytes are kept verbatim and can be shown, compared
+/// and replaced without loss, including spaces and non-UTF-8 bytes. The model deliberately does
+/// not depend on the wire crate, so this type mirrors the wire's rather than reusing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StationSsid {
+    /// The SSID bytes, zero-padded after `len`.
+    bytes: [u8; SSID_CAPACITY],
+    /// The number of valid bytes in `bytes`; always `1..=SSID_CAPACITY`.
+    len: u8,
+}
+
+impl StationSsid {
+    /// Builds an SSID from arbitrary bytes, returning [`None`] outside one to [`SSID_CAPACITY`]
+    /// bytes.
+    #[must_use]
+    pub fn new(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() || bytes.len() > SSID_CAPACITY {
+            return None;
+        }
+        let mut padded = [0u8; SSID_CAPACITY];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        Some(Self {
+            bytes: padded,
+            len: u8::try_from(bytes.len()).ok()?,
+        })
+    }
+
+    /// Returns the SSID bytes, without the zero padding.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
 
 /// The maximum setup passphrase length in bytes.
 pub const PASSPHRASE_CAPACITY: usize = 63;
@@ -151,6 +187,8 @@ pub struct BridgeFlags {
 /// The values mirror the Bridge's 1 Hz status payload without naming its wire ids.
 /// [`BridgeStatus::rssi_dbm`] and [`BridgeStatus::channel`] are [`None`] when the Bridge
 /// reports its unknown sentinel. The six counters are cumulative since the Bridge's boot.
+/// [`BridgeStatus::ssid`] is the Station Network the Bridge is joining, or [`None`] when it has
+/// no credentials or has not reported one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct BridgeStatus {
     /// The station `RSSI` in dBm, or [`None`] for unknown.
@@ -173,6 +211,8 @@ pub struct BridgeStatus {
     pub wdt_feeds: u32,
     /// Watchdog feeds withheld because a task was late.
     pub wdt_withheld: u32,
+    /// The Station Network's SSID, or [`None`] so far as the Bridge knows.
+    pub ssid: Option<StationSsid>,
 }
 
 /// The Bridge's verdict on a Bridge Control request.

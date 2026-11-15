@@ -1,0 +1,32 @@
+# The remote-daemon systemd *user* unit (ADR-0039).
+#
+# Copy it to the user unit directory and start it with `systemctl --user`; it is
+# deliberately not enabled at login. remote/daemon/README.md has the procedure.
+#
+# ExecStart names the installed binary by an absolute, home-relative path: the
+# user manager does not inherit the shell's PATH, so a bare `remote-daemon`
+# would not resolve. %h keeps the path right for any home directory.
+#
+# --no-open: a unit has no browser session; the operator bookmarks
+# http://127.0.0.1:8765/ instead.
+# --port 8765: fixed so the bookmark never moves. The CLI's ephemeral fallback
+# applies only when --port is omitted, so an occupied port fails this unit
+# visibly instead of moving the app.
+#
+# There is no After=network-online.target: the user manager has no such target,
+# and the daemon binds its sockets and retries discovery while the network
+# settles. No WorkingDirectory is needed: the SPA is embedded and the config
+# store is resolved from the platform's per-user directory.
+
+[Unit]
+Description=Remote explorer daemon (app on http://127.0.0.1:8765/)
+Documentation=https://github.com/1-rafael-1/explorer-robot/blob/main/remote/daemon/README.md
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/remote-daemon --no-open --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

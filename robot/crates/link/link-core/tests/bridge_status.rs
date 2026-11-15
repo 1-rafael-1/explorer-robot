@@ -50,6 +50,7 @@ fn status(uart_dropped_bytes: u32) -> BridgeStatus {
         resyncs: 4,
         wdt_feeds: 100,
         wdt_withheld: 1,
+        ssid: None,
     }
 }
 

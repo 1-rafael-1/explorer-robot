@@ -21,9 +21,11 @@ arms the Deadman on the same timestamp, and ADR-0039 declares the robot stalled 
 a decoded robot frame. A Bridge-local 1 Hz frame in the PC→robot direction would keep the lease
 alive and hide a dead robot unless the origin is accounted for.
 
-**Status:** accepted. The Bridge publishes one `BRIDGE_STATUS` snapshot at 1 Hz from the same
-28-byte payload to two consumers with the class chosen per direction: `control` `0x0005` to the
-robot, `stream` `0x0007` to the daemon. The robot does not relay it. The lease (ADR-0030, amended
+**Status:** accepted. The Bridge publishes one `BRIDGE_STATUS` snapshot at 1 Hz to two consumers
+with the class chosen per direction: `control` `0x0005` to the robot, `stream` `0x0007` to the
+daemon. The robot does not relay it. The delivery classes, ids, routing and lease rules below
+still stand; the **28-byte payload layout is superseded by ADR-0050**, which adds the Station
+Network SSID and widens the snapshot to 61 bytes. The lease (ADR-0030, amended
 with ADR-0035) and the daemon's stall timer are narrowed to Remote-originated and robot-originated
 frames respectively, so a healthy Bridge cannot mask a dead Remote or a dead robot.
 
@@ -53,7 +55,7 @@ frames respectively, so a healthy Bridge cannot mask a dead Remote or a dead rob
 | robot (panel / Link Task, future) | Bridge → robot | control | `0x0005` `BRIDGE_STATUS` | 1 Hz, lossy, unacknowledged |
 | daemon → PC app | Bridge → PC | stream | `0x0007` `BRIDGE_STATUS` | 1 Hz, latest-wins in the 8 KiB ring |
 
-The same 28-byte payload travels both ways:
+The same 28-byte payload travelled both ways (superseded by ADR-0050's 61-byte layout):
 
 | offset | field | encoding |
 |---|---|---|
@@ -127,7 +129,7 @@ direction under 1 KB/s. No ring size or baud changes (ADR-0033).
   is still required to open that Session on the real robot, so the robot panel is a follow-up, not a
   dependency.
 - One payload and two ids is the smallest change that satisfies both consumers: the robot's `Stream`
-  catalogue stays six, and the daemon and robot share one 28-byte codec.
+  catalogue stays six, and the daemon and robot shared one 28-byte codec (now 61 bytes, ADR-0050).
 - The Bridge is no longer payload-agnostic for this one message. It must sample and encode its own
   state; it remains a forwarder for every other payload.
 - The lease and Deadman rules gain an origin distinction. That is a semantic narrowing, not a new

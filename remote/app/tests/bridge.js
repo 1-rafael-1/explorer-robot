@@ -1,5 +1,5 @@
 import { apply, initialState } from '../js/store.js';
-import { renderBridge, rssiBucket, stationLabel } from '../js/views/bridge.js';
+import { networkLabel, renderBridge, rssiBucket, stationLabel } from '../js/views/bridge.js';
 import { assert, assertEqual, autorun, test } from './harness.js';
 
 const NOW = 1_700_000_000_000;
@@ -11,6 +11,7 @@ function bridgeMessage(overrides = {}) {
     rssi_dbm: -61,
     channel: 6,
     station: 'associated',
+    ssid: 'Home Network',
     provisioned: true,
     setup_open: false,
     link_ready: true,
@@ -113,6 +114,7 @@ test('renderBridge writes the station, RSSI and every counter', () => {
   assertEqual(text('bridge-rssi'), '-61 dBm');
   assertEqual(text('bridge-rssi-bucket'), 'Good');
   assertEqual(text('bridge-channel'), '6');
+  assertEqual(text('bridge-network'), 'Home Network');
   assertEqual(text('bridge-provisioned'), 'Yes');
   assertEqual(text('bridge-setup'), 'No');
   assertEqual(text('bridge-link-ready'), 'Yes');
@@ -133,6 +135,7 @@ test('renderBridge leaves "—" in every missing value slot', () => {
   assertEqual(text('bridge-rssi'), '—');
   assertEqual(text('bridge-rssi-bucket'), '—');
   assertEqual(text('bridge-channel'), '—');
+  assertEqual(text('bridge-network'), '—');
   assertEqual(text('bridge-provisioned'), '—');
   assertEqual(text('bridge-setup'), '—');
   assertEqual(text('bridge-link-ready'), '—');
@@ -152,7 +155,35 @@ test('renderBridge leaves "—" in every missing value slot', () => {
   assertEqual(text('bridge-chip-station'), 'Unknown');
   assertEqual(text('bridge-chip-rssi'), '—');
   assertEqual(text('bridge-rssi'), '—');
+  assertEqual(text('bridge-network'), '—');
   assertEqual(text('bridge-age'), 'not reported');
+});
+
+test('the network row keeps the SSID or shows the unknown placeholder', () => {
+  const longest = 'Home Network 0123456789 abcdefgh';
+  assertEqual(longest.length, 32, 'the fixture is a maximum-length SSID');
+
+  renderBridge({ bridge: bridgeMessage({ ssid: longest }) }, NOW);
+  assertEqual(text('bridge-network'), longest, 'a full-length SSID is rendered whole');
+
+  renderBridge({ bridge: bridgeMessage({ ssid: 'Caf\uFFFD' }) }, NOW);
+  assertEqual(text('bridge-network'), 'Caf\uFFFD', 'the daemon replacement character is shown as-is');
+
+  renderBridge({ bridge: bridgeMessage({ ssid: null }) }, NOW);
+  assertEqual(text('bridge-network'), '—', 'null is the unknown state');
+
+  renderBridge({ bridge: { ts: NOW, station: 'down' } }, NOW);
+  assertEqual(text('bridge-network'), '—', 'an older daemon without the field is unknown');
+});
+
+test('a network label keeps spaces and rejects a missing or blank name', () => {
+  assertEqual(networkLabel('Rover Lab'), 'Rover Lab');
+  assertEqual(networkLabel(' Rover Lab '), ' Rover Lab ', 'surrounding spaces are the network name');
+  assertEqual(networkLabel(null), '—');
+  assertEqual(networkLabel(undefined), '—');
+  assertEqual(networkLabel(''), '—', 'an empty name is not a network');
+  assertEqual(networkLabel('   '), '—', 'a blank name is not a network');
+  assertEqual(networkLabel(42), '—', 'a non-string is not a network');
 });
 
 test('the chip keeps a stable station and RSSI data attribute', () => {

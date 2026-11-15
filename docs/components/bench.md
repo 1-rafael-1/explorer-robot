@@ -282,7 +282,8 @@ curl -s http://192.168.4.1/status     # unprovisioned
 curl -s http://192.168.4.1/ | head
 ```
 
-The AP is `ExplorerRobot-XXXX` (uppercase hex of the AP MAC's last two bytes),
+The AP is `ExplorerRobot-XXXX` (uppercase hex of the station MAC's last two
+bytes; the AP MAC differs only in the first octet's local-admin bit),
 WPA2-PSK `explorer-setup`, on `192.168.4.1/24`. The portal is the only service;
 the Link Protocol listener is never on the AP interface. The successful
 provisioning submit needs the owner's home SSID and passphrase and is not part

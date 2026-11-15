@@ -84,7 +84,7 @@ use bridge_core::{
 };
 use bridge_net::{
     beacon::{self, Beacon},
-    identity::{DeviceId, Flags as IdentityFlags, Identity, Name},
+    identity::{DeviceId, DeviceName, Flags as IdentityFlags, Identity, Name},
     ports::{BEACON_UDP, LINK_TCP_DEFAULT},
     preamble::{self, DenyReason, HEADER_LEN, MAX_PAYLOAD_LEN, Message, NONCE_LEN, Received},
 };
@@ -93,7 +93,7 @@ use defmt::{info, warn};
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_executor::Spawner;
 use embassy_net::{
-    Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4,
+    DhcpConfig, Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4,
     tcp::TcpSocket,
     udp::{PacketMetadata, UdpSocket},
 };
@@ -129,7 +129,8 @@ use heapless::spsc::Queue;
 use link_protocol::{
     BridgeControlAction, BridgeControlReply, BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, Control,
     ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec,
-    PcToRobotParser, RobotToPcParser, SetupCredentials, ThrottleHint, encode_bridge_control_ack, encode_control,
+    PcToRobotParser, RobotToPcParser, SetupCredentials, StationSsid, ThrottleHint, encode_bridge_control_ack,
+    encode_control,
 };
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use sequential_storage::{
@@ -328,9 +329,6 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 // Setup Mode constants (ADR-0036)
 // ---------------------------------------------------------------------------------------------
 
-/// The setup SSID's prefix; the four hex characters of the AP MAC's last two bytes follow it.
-const AP_SSID_PREFIX: &[u8] = b"ExplorerRobot-";
-
 /// The documented, build-fixed WPA2 setup password (ADR-0036: public by construction).
 const AP_PASSWORD: &str = "explorer-setup";
 
@@ -389,6 +387,14 @@ static SETUP_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Whether a usable credential pair exists; the Beacon's `provisioned` bit reads it.
 static PROVISIONED: AtomicBool = AtomicBool::new(false);
+
+/// The Station Network the Bridge is joining, read from the Credential Record and updated by the
+/// portal and the panel. `None` while unprovisioned.
+///
+/// This `esp-radio` beta exposes no current-SSID getter on the controller, so the provisioned
+/// value is retained rather than scanned: it names the network the Bridge is joining even while
+/// it is still connecting.
+static STATION_SSID: Mutex<RefCell<Option<StationSsid>>> = Mutex::new(RefCell::new(None));
 
 /// The portal's current status line, shared by the supervisory loop and the HTTP workers.
 static PORTAL_STATUS: Mutex<RefCell<Status>> = Mutex::new(RefCell::new(Status::Unprovisioned));
@@ -637,6 +643,17 @@ fn portal_status() -> Status {
     with_portal_status(|status| *status)
 }
 
+/// Returns the retained Station Network SSID, or `None` while the Bridge is unprovisioned.
+fn station_ssid() -> Option<StationSsid> {
+    critical_section::with(|cs| *STATION_SSID.borrow(cs).borrow())
+}
+
+/// Retains the Station Network the Bridge is joining, or clears it on forget.
+fn set_station_ssid(ssid: Option<&[u8]>) {
+    let ssid = ssid.and_then(StationSsid::new);
+    critical_section::with(|cs| *STATION_SSID.borrow(cs).borrow_mut() = ssid);
+}
+
 /// Runs `action` with the best-of-N scan cache.
 fn with_scan_cache<R>(action: impl FnOnce(&mut ScanCache) -> R) -> R {
     critical_section::with(|cs| action(&mut SCAN_CACHE.borrow(cs).borrow_mut()))
@@ -734,7 +751,7 @@ async fn main(spawner: Spawner) -> ! {
         device_id[3],
         device_id[4],
         device_id[5],
-        bridge_name().as_str(),
+        beacon_name().as_str(),
         token_text
     );
 
@@ -765,6 +782,7 @@ async fn main(spawner: Spawner) -> ! {
         credentials = None;
     }
     PROVISIONED.store(provisioned, Ordering::Relaxed);
+    set_station_ssid(credentials.as_ref().map(|credentials| credentials.ssid()));
 
     let (mut setup, boot_event) = SetupWindow::boot(provisioned, now_ms());
     SETUP_OPEN.store(setup.is_open(), Ordering::Relaxed);
@@ -802,7 +820,7 @@ async fn main(spawner: Spawner) -> ! {
     let station_interface = Interface::station();
     let (station_stack, station_runner) = embassy_net::new(
         station_interface,
-        embassy_net::Config::dhcpv4(Default::default()),
+        embassy_net::Config::dhcpv4(station_dhcp_config()),
         STA_RESOURCES.init(StackResources::new()),
         0x1234_5678_9abc_def0,
     );
@@ -1041,6 +1059,7 @@ async fn main(spawner: Spawner) -> ! {
                     credentials = Some(new_credentials);
                     station_config = Some(new_station.clone());
                     PROVISIONED.store(true, Ordering::Relaxed);
+                    set_station_ssid(Some(new_credentials.ssid()));
                     if let Some(event) = setup.set_provisioned(true, now_ms) {
                         log_setup_event(event);
                     }
@@ -1080,6 +1099,7 @@ async fn main(spawner: Spawner) -> ! {
                     credentials = None;
                     station_config = None;
                     PROVISIONED.store(false, Ordering::Relaxed);
+                    set_station_ssid(None);
                     let station_up = station_connected && station_stack.config_v4().is_some();
                     let _ = setup.forget(now_ms, station_up);
                     SETUP_OPEN.store(true, Ordering::Relaxed);
@@ -1108,6 +1128,7 @@ async fn main(spawner: Spawner) -> ! {
             credentials = None;
             station_config = None;
             PROVISIONED.store(false, Ordering::Relaxed);
+            set_station_ssid(None);
             if controller.is_connected() {
                 let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
             }
@@ -1417,20 +1438,20 @@ fn build_access_point_config(ssid: Ssid) -> Option<AccessPointConfig> {
     )
 }
 
-/// Builds the setup SSID from the AP interface MAC's last two bytes, uppercase hex (ADR-0036).
+/// Returns the Device Name derived from the station MAC's last two bytes (ADR-0050).
+fn device_name() -> DeviceName {
+    DeviceName::from_device_id(device_id())
+}
+
+/// Builds the setup SSID from the Device Name. The AP interface's MAC differs from the station's
+/// only in the local-admin bit of its first octet, so the station device id derives the same
+/// four-character suffix (ADR-0050).
 fn setup_ssid() -> ([u8; portal::MAX_SSID_BYTES], usize) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mac = interface_mac_address(InterfaceMacAddress::AccessPoint);
-    let bytes = mac.as_bytes();
-    let mut ssid = [0u8; portal::MAX_SSID_BYTES];
-    ssid[..AP_SSID_PREFIX.len()].copy_from_slice(AP_SSID_PREFIX);
-    let mut index = AP_SSID_PREFIX.len();
-    for byte in [bytes[4], bytes[5]] {
-        ssid[index] = HEX[usize::from(byte >> 4)];
-        ssid[index + 1] = HEX[usize::from(byte & 0x0F)];
-        index += 2;
-    }
-    (ssid, index)
+    let name = device_name();
+    let ssid = name.bytes();
+    let mut padded = [0u8; portal::MAX_SSID_BYTES];
+    padded[..ssid.len()].copy_from_slice(ssid);
+    (padded, ssid.len())
 }
 
 /// Applies station-only mode.
@@ -2757,7 +2778,7 @@ async fn beacon_task(stack: Stack<'static>) {
             let beacon = Beacon {
                 major: beacon::LINK_MAJOR,
                 device_id: device_id(),
-                name: bridge_name(),
+                name: beacon_name(),
                 tcp_port,
                 flags: flags_now(),
             };
@@ -2819,17 +2840,21 @@ fn device_id() -> DeviceId {
     with_device_id(|bytes| DeviceId::new(*bytes))
 }
 
-/// Returns the display name, `Explorer-XXXX` from the device id's last two bytes.
-fn bridge_name() -> Name {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let bytes = device_id().bytes();
-    let mut padded = [0u8; Name::ENCODED_LEN];
-    padded[..9].copy_from_slice(b"Explorer-");
-    padded[9] = HEX[usize::from(bytes[4] >> 4)];
-    padded[10] = HEX[usize::from(bytes[4] & 0x0F)];
-    padded[11] = HEX[usize::from(bytes[5] >> 4)];
-    padded[12] = HEX[usize::from(bytes[5] & 0x0F)];
-    Name::from_padded(padded)
+/// Returns the Discovery Beacon's short label, `Explorer-XXXX` (ADR-0050).
+fn beacon_name() -> Name {
+    device_name().beacon_label()
+}
+
+/// Builds the station stack's DHCP configuration with the Device Name as its hostname.
+#[allow(
+    clippy::field_reassign_with_default,
+    reason = "DhcpConfig is non_exhaustive outside embassy-net, so it cannot be built with \
+    struct-update syntax"
+)]
+fn station_dhcp_config() -> DhcpConfig {
+    let mut config = DhcpConfig::default();
+    config.hostname = Some(heapless::String::try_from(device_name().as_str()).unwrap_or_default());
+    config
 }
 
 /// Returns whether a valid Link Protocol frame arrived from the robot inside the pinned window.
@@ -2881,6 +2906,7 @@ fn emit_bridge_status(controller: &WifiController<'_>, station_up: bool) {
         resyncs: UART_RESYNCS.load(Ordering::Relaxed),
         wdt_feeds: WATCHDOG_FEEDS.load(Ordering::Relaxed),
         wdt_withheld: WATCHDOG_WITHHELD.load(Ordering::Relaxed),
+        ssid: station_ssid(),
     };
 
     let mut payload = [0u8; BridgeStatus::ENCODED_LEN];
@@ -2935,7 +2961,7 @@ fn flags_now() -> IdentityFlags {
 fn identity_now() -> Identity {
     Identity {
         device_id: device_id(),
-        name: bridge_name(),
+        name: beacon_name(),
         flags: flags_now(),
     }
 }
