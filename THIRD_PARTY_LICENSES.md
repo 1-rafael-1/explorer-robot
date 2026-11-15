@@ -66,3 +66,45 @@ belong to JLCEDA / EasyEDA. The upstream notice requires attribution to the
 "JLCEDA/EasyEDA official library" and links to the official home pages.
 
 Upstream pages: <https://lceda.cn/>, <https://easyeda.com/>.
+
+## `vl53l1x-simple` 0.2.0
+
+Applies to:
+
+- `robot/crates/drivers/vl53l1x/src/driver.rs` — VL53L1X initialisation and read
+  sequences
+- `robot/crates/drivers/vl53l1x/src/registers.rs` — VL53L1X register map
+- `robot/crates/drivers/vl53l1x/tests/driver.rs` — expected register sequences
+  used by the host tests
+
+The initialisation and read sequences were ported from `vl53l1x-simple` 0.2.0
+and adapted (async I2C, 16-bit register addressing, explicit `GPIO1` interrupt
+configuration, boot-NACK tolerance, status and diagnostics exposure, and the
+one-time VHV/phasecal calibration placement). The register map was taken from
+the same crate and cross-checked against the ST VL53L1X ULD.
+
+Source: `vl53l1x-simple` 0.2.0, <https://crates.io/crates/vl53l1x-simple/0.2.0>,
+upstream repository <https://github.com/NZRosto/vl53l1x-simple>.
+
+License: MIT OR Apache-2.0. This project uses the ported material under the MIT
+option.
+
+Copyright (c) 2024 the `vl53l1x-simple` authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

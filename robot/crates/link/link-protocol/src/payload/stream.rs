@@ -203,8 +203,9 @@ impl<'a> PayloadCodec<'a> for Activity<'a> {
 
 /// A `PERCEPTION` sample: the obstacle and floor-drop flags.
 ///
-/// Bits 2–7 are reserved: they are cleared on decode and always sent as zero, so a peer can add a
-/// meaning later without this version echoing garbage.
+/// The aggregate `FLOOR_DROP` bit stays for peers that cannot carry the per-sensor split. Bits 4–7
+/// are reserved: they are cleared on decode and always sent as zero, so a peer can add a meaning
+/// later without this version echoing garbage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Perception(u8);
 
@@ -214,11 +215,15 @@ pub type PerceptionFlags = Perception;
 impl Perception {
     /// The obstacle flag.
     pub const OBSTACLE: Self = Self(0x01);
-    /// The floor-drop flag.
+    /// The aggregate floor-drop flag: either sensor, or a peer that cannot say which.
     pub const FLOOR_DROP: Self = Self(0x02);
+    /// The front rangefinder sees a floor drop.
+    pub const FLOOR_DROP_FRONT: Self = Self(0x04);
+    /// The rear rangefinder sees a floor drop.
+    pub const FLOOR_DROP_REAR: Self = Self(0x08);
 
     /// The reserved bits, cleared by [`Perception::from_bits`].
-    const RESERVED_BITS: u8 = 0xFC;
+    const RESERVED_BITS: u8 = 0xF0;
 
     /// The encoded payload length in bytes.
     pub const ENCODED_LEN: usize = 1;

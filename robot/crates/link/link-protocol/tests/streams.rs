@@ -170,19 +170,28 @@ fn activity_rejects_unrepresentable_values() {
     );
 }
 
-/// `PERCEPTION` round-trips its two flags and masks the reserved bits on decode.
+/// `PERCEPTION` round-trips its flags and masks the reserved bits on decode.
 #[test]
 fn perception_round_trips_and_masks_reserved_bits() {
     let both = Perception::OBSTACLE | Perception::FLOOR_DROP;
     assert_round_trip(&StreamSample::Perception(both));
     assert_round_trip(&StreamSample::Perception(Perception::default()));
 
+    let split =
+        Perception::OBSTACLE | Perception::FLOOR_DROP | Perception::FLOOR_DROP_FRONT | Perception::FLOOR_DROP_REAR;
+    assert_round_trip(&StreamSample::Perception(split));
+
     let Ok(decoded) = Perception::decode(&[0xFF]) else {
         return;
     };
-    assert_eq!(decoded.bits(), 0x03, "reserved bits must be cleared on decode");
+    assert_eq!(decoded.bits(), 0x0F, "reserved bits must be cleared on decode");
     assert!(decoded.contains(Perception::OBSTACLE), "obstacle is set");
     assert!(decoded.contains(Perception::FLOOR_DROP), "floor drop is set");
+    assert!(
+        decoded.contains(Perception::FLOOR_DROP_FRONT),
+        "front floor drop is set"
+    );
+    assert!(decoded.contains(Perception::FLOOR_DROP_REAR), "rear floor drop is set");
 }
 
 /// `LIDAR_CLOUD` round-trips all 360 slots, including the no-return sentinel.

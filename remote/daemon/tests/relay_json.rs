@@ -205,6 +205,8 @@ fn a_stream_message_round_trips() {
         v: StreamValue::Perception {
             obstacle: true,
             floor_drop: false,
+            floor_drop_front: Some(false),
+            floor_drop_rear: Some(false),
         },
     });
     let value = json!({
@@ -212,7 +214,12 @@ fn a_stream_message_round_trips() {
         "name": "perception",
         "seq": 9,
         "ts": 12345,
-        "v": {"obstacle": true, "floor_drop": false},
+        "v": {
+            "obstacle": true,
+            "floor_drop": false,
+            "floor_drop_front": false,
+            "floor_drop_rear": false,
+        },
     });
     assert_round_trip(&message, value);
 }

@@ -419,6 +419,8 @@ impl ProcedureId {
     ///
     /// `0x000D` is the Activity-only Manual Drive id and is deliberately skipped.
     pub const DMP_COMPASS_CALIBRATION: Self = Self(0x000E);
+    /// Rangefinder Test, hands-on and never Remote-startable.
+    pub const RANGFINDER_TEST: Self = Self(0x000F);
 
     /// Wraps a raw wire value, including one this version does not know.
     #[must_use]

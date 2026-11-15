@@ -13,7 +13,7 @@
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
-use crate::{buffer::TextBuf, imu::ImuReadout};
+use crate::{buffer::TextBuf, imu::ImuReadout, rangefinder::RangefinderTestReadout};
 
 /// One entry in a list screen.
 ///
@@ -171,9 +171,9 @@ impl Submenu {
 
 /// A unit of work the Panel can start.
 ///
-/// Eleven are modelled and all eleven are listed: motor, DMP compass and
-/// distance calibration; coast-and-avoid; the six test modes beside the deferred
-/// attempt-straight.
+/// Twelve are modelled and all twelve are listed: motor, DMP compass and
+/// distance calibration; coast-and-avoid; the seven test modes beside the
+/// deferred attempt-straight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Procedure {
     /// Calibrate: motor calibration, opening the running screen.
@@ -201,6 +201,8 @@ pub enum Procedure {
     Imu6Axis,
     /// Test Mode: the nine-axis IMU test, opening the running screen.
     Imu9Axis,
+    /// Test Mode: the hands-on Rangefinder Test, opening the running screen.
+    RangefinderTest,
 }
 
 impl Procedure {
@@ -219,6 +221,7 @@ impl Procedure {
             Self::ArcDrive => "Arc Drive",
             Self::Imu6Axis => "IMU Test (6-axis)",
             Self::Imu9Axis => "IMU Test (9-axis)",
+            Self::RangefinderTest => "Rangefinders",
         }
     }
 
@@ -242,7 +245,8 @@ impl Procedure {
             | Self::StraightDrive
             | Self::ArcDrive
             | Self::Imu6Axis
-            | Self::Imu9Axis => Screen::Status,
+            | Self::Imu9Axis
+            | Self::RangefinderTest => Screen::Status,
         }
     }
 
@@ -260,6 +264,7 @@ impl Procedure {
             Self::BasicMotor | Self::Turns | Self::StraightDrive | Self::ArcDrive | Self::Imu6Axis | Self::Imu9Axis => {
                 Some(Screen::TestMode)
             }
+            Self::RangefinderTest => Some(Screen::TestMode),
         }
     }
 
@@ -292,8 +297,8 @@ impl Procedure {
     /// This is the firmware's one availability rule
     /// (`procedure::is_startable(_, ClaimOrigin::Remote)`), which reads this set
     /// rather than keeping a second copy: motor, DMP compass and distance
-    /// calibration, the basic-motor test, and attempt-straight. A Procedure left
-    /// out of this set is Remote-startable.
+    /// calibration, the basic-motor test, the Rangefinder Test and
+    /// attempt-straight. A Procedure left out of this set is Remote-startable.
     #[must_use]
     pub const fn is_hands_on(self) -> bool {
         matches!(
@@ -302,6 +307,7 @@ impl Procedure {
                 | Self::DmpCompassCalibration
                 | Self::DistanceCalibration
                 | Self::BasicMotor
+                | Self::RangefinderTest
                 | Self::AttemptStraight
         )
     }
@@ -310,14 +316,14 @@ impl Procedure {
     ///
     /// The flag is entry data: a run-to-completion test finishes on its own, while
     /// an interactive one and coast-and-avoid run until the operator stops them.
-    /// The basic-motor, six-axis and nine-axis tests and coast-and-avoid are
-    /// interactive; the calibrations, the remaining tests and the deferred
-    /// attempt-straight are not.
+    /// The basic-motor, six-axis, nine-axis and Rangefinder tests and
+    /// coast-and-avoid are interactive; the calibrations, the remaining tests and
+    /// the deferred attempt-straight are not.
     #[must_use]
     pub const fn interactive(self) -> bool {
         matches!(
             self,
-            Self::CoastAndAvoid | Self::BasicMotor | Self::Imu6Axis | Self::Imu9Axis
+            Self::CoastAndAvoid | Self::BasicMotor | Self::Imu6Axis | Self::Imu9Axis | Self::RangefinderTest
         )
     }
 }
@@ -396,13 +402,14 @@ const DRIVE_MODE_ITEMS: [Item; 2] = [
 ///
 /// Room Scan is the last entry: it opens the sensor's live radar rather than
 /// running a test-mode task, but it shares the menu and its single-active guard.
-const TEST_MODE_ITEMS: [Item; 7] = [
+const TEST_MODE_ITEMS: [Item; 8] = [
     Item::Procedure(Procedure::BasicMotor),
     Item::Procedure(Procedure::Turns),
     Item::Procedure(Procedure::StraightDrive),
     Item::Procedure(Procedure::ArcDrive),
     Item::Procedure(Procedure::Imu6Axis),
     Item::Procedure(Procedure::Imu9Axis),
+    Item::Procedure(Procedure::RangefinderTest),
     Item::ScreenEntry(ScreenEntry::RoomScan),
 ];
 
@@ -584,6 +591,19 @@ impl ValueFlow {
     }
 }
 
+/// The typed readout a running screen shows instead of its body line.
+///
+/// The IMU tests and the Rangefinder Test each fill the status panel with their
+/// own telemetry, so the view carries which readout it is rather than assuming
+/// one. A Procedure that shows no readout leaves [`StatusView::readout`] empty.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Readout {
+    /// An IMU Test Readout.
+    Imu(ImuReadout),
+    /// A Rangefinder Test Readout.
+    Rangefinder(RangefinderTestReadout),
+}
+
 /// The neutral content of a running/status screen.
 ///
 /// The firmware maps its activity state onto this and calls
@@ -596,8 +616,8 @@ impl ValueFlow {
 /// Manual Drive's command label) travels in a fixed-capacity [`TextBuf`] and is
 /// drawn instead of `body`. The model never formats a number, so no dynamic text
 /// is produced here. When a readout is present it replaces the body line and any
-/// progress bar: the IMU tests use the panel for their five-row telemetry rather
-/// than a phase line.
+/// progress bar: the IMU tests and the Rangefinder Test use the panel for their
+/// typed telemetry rather than a phase line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusView {
     /// The header title.
@@ -608,9 +628,9 @@ pub struct StatusView {
     /// A runtime-formatted body line, drawn instead of [`StatusView::body`] when
     /// present.
     text_body: Option<TextBuf>,
-    /// An IMU Test Readout, drawn instead of the body line and any progress bar
-    /// when present.
-    readout: Option<ImuReadout>,
+    /// A typed readout, drawn instead of the body line and any progress bar when
+    /// present.
+    readout: Option<Readout>,
     /// Percent progress (0–100), drawn as a bar; `None` to draw no bar. Ignored
     /// when [`StatusView::readout`] is present.
     pub progress: Option<u8>,
@@ -675,22 +695,22 @@ impl StatusView {
         self.text_body.as_ref().map_or(self.body, |body| body.as_str())
     }
 
-    /// Give the view an IMU Test Readout, drawn instead of the body line and any
+    /// Give the view a typed readout, drawn instead of the body line and any
     /// progress bar.
     ///
-    /// The IMU tests use this; every other running screen leaves it empty and
-    /// keeps its ordinary body line.
+    /// The IMU tests and the Rangefinder Test use this; every other running
+    /// screen leaves it empty and keeps its ordinary body line.
     #[must_use]
-    pub const fn with_readout(self, readout: ImuReadout) -> Self {
+    pub const fn with_readout(self, readout: Readout) -> Self {
         Self {
             readout: Some(readout),
             ..self
         }
     }
 
-    /// The IMU Test Readout to draw, if this view carries one.
+    /// The typed readout to draw, if this view carries one.
     #[must_use]
-    pub const fn readout(&self) -> Option<&ImuReadout> {
+    pub const fn readout(&self) -> Option<&Readout> {
         self.readout.as_ref()
     }
 

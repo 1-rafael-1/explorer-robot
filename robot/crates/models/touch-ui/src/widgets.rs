@@ -22,14 +22,16 @@ use crate::{
         SCROLL_W, footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
         link_info_cell_rect, link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height,
         nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect,
-        prompt_progress_rect, prompt_status_rect, readout_area, readout_rect, readout_row_rect, room_scan_caption_rect,
-        save_button_rect, scroll_track_rect, slider_thumb_rect, slider_track_rect,
+        prompt_progress_rect, prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area,
+        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
+        slider_track_rect,
     },
     hit::{HeaderAction, Hit, LinkAction, PromptAction},
     imu::ImuReadout,
     palette::{ACCENT, BG, BUTTON_BG, BUTTON_BORDER, LABEL_FONT, MUTED, READOUT_FONT, SMALL_FONT, TEXT, TITLE_FONT},
     radar,
-    screens::{PromptView, StatusView, ValueFlow},
+    rangefinder::RangefinderTestReadout,
+    screens::{PromptView, Readout, StatusView, ValueFlow},
     sensor::SensorState,
     system_info::SystemInfo,
     ui::HeaderStatus,
@@ -348,7 +350,10 @@ where
         .draw(d)?;
 
     if let Some(readout) = view.readout() {
-        return draw_imu_readout(d, readout);
+        return match readout {
+            Readout::Imu(readout) => draw_imu_readout(d, readout),
+            Readout::Rangefinder(readout) => draw_rangefinder_readout(d, readout),
+        };
     }
 
     let track = progress_bar_rect();
@@ -465,17 +470,65 @@ where
 
     for (index, row) in readout.rows().iter().take(row_count).enumerate() {
         let rect = readout_row_rect(index, row_count);
-        let size = style
-            .measure_string(row.as_str(), Point::zero(), Baseline::Top)
-            .bounding_box
-            .size;
-        let position = Point::new(
-            rect.top_left.x,
-            rect.top_left.y + (rect.size.height as i32 - size.height as i32) / 2,
-        );
-        Text::with_baseline(row.as_str(), position, style, Baseline::Top).draw(&mut clipped)?;
+        draw_readout_line(&mut clipped, rect, row.as_str(), style)?;
     }
     Ok(())
+}
+
+/// Draw the Rangefinder Test Readout's two sensor columns and footer inside the
+/// status panel.
+///
+/// The cells come from the readout model, so labels, units, raw-status names and
+/// placeholders stay in one place. The front column is drawn on the left and the
+/// rear on the right, each with its seven rows, and the footer carries the pair
+/// state, the aggregate floor state and the threshold. Drawing is clipped to the
+/// readout area so a hostile over-long value cannot paint over the panel border.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+pub fn draw_rangefinder_readout<D>(d: &mut D, readout: &RangefinderTestReadout) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = readout_area();
+    let mut clipped = d.clipped(&area);
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    let cells = readout.cells();
+
+    for (column, column_cells) in cells.iter().enumerate() {
+        for (row, cell) in column_cells.iter().enumerate() {
+            let rect = rangefinder_column_rect(column, row);
+            draw_readout_line(&mut clipped, rect, cell.as_str(), style)?;
+        }
+    }
+
+    let footer = readout.footer();
+    draw_readout_line(&mut clipped, rangefinder_footer_rect(), footer.as_str(), style)
+}
+
+/// Draw one readout line at its row's left edge, vertically centred on a
+/// ten-pixel glyph.
+fn draw_readout_line<D>(
+    d: &mut D,
+    rect: Rectangle,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let size = style
+        .measure_string(text, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size;
+    let position = Point::new(
+        rect.top_left.x,
+        rect.top_left.y + (rect.size.height as i32 - size.height as i32) / 2,
+    );
+    Text::with_baseline(text, position, style, Baseline::Top)
+        .draw(d)
+        .map(|_| ())
 }
 
 /// Draw the System Info rows, one per line in [`SMALL_FONT`].

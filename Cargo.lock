@@ -735,6 +735,7 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-graphics",
+ "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
  "embedded-storage-async",
@@ -751,6 +752,7 @@ dependencies = [
  "nalgebra",
  "nanorand",
  "panic-probe",
+ "rangefinder",
  "sequential-storage",
  "st7789-async",
  "static_cell",
@@ -1166,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "link-protocol"
-version = "2.0.0"
+version = "2.1.0"
 
 [[package]]
 name = "link-state"
@@ -1546,6 +1548,13 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rangefinder"
+version = "0.1.0"
+dependencies = [
+ "vl53l1x",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -2040,6 +2049,14 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vl53l1x"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+]
 
 [[package]]
 name = "void"

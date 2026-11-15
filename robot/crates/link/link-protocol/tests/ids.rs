@@ -57,6 +57,7 @@ fn procedure_ids_match_the_catalogue_and_tolerate_unknown_values() {
         (ProcedureId::IMU_6_AXIS, 0x000B),
         (ProcedureId::IMU_9_AXIS, 0x000C),
         (ProcedureId::DMP_COMPASS_CALIBRATION, 0x000E),
+        (ProcedureId::RANGFINDER_TEST, 0x000F),
     ];
 
     let mut seen = HashSet::new();

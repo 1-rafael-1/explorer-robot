@@ -65,4 +65,4 @@ pub use sim::{FakeRemote, Faults, Wire};
 pub const PROTOCOL_MAJOR: u8 = 2;
 
 /// The wire minor version exchanged in the session handshake.
-pub const PROTOCOL_MINOR: u8 = 0;
+pub const PROTOCOL_MINOR: u8 = 1;

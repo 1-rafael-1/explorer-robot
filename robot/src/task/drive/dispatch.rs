@@ -9,10 +9,12 @@
 //! channels (left track, right track).
 
 use defmt::info;
+use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
+use rangefinder::{GateRefusal, gate};
 
 use crate::{
-    system::state::motion,
+    system::state::{motion, perception},
     task::{
         drive::{
             api::{self, DriveCommandEnvelope},
@@ -54,24 +56,13 @@ impl DriveLoop {
 
     /// Dispatch a [`DriveAction`] to the appropriate handler.
     pub(super) async fn handle_drive_action(&mut self, action: DriveAction, completion_requested: bool) {
-        // Gate movement commands until the IMU is streaming stabilised data.
-        // On first movement command: start IMU, wait for first sample, wait for
-        // DMP filter stabilise (150 ms). Subsequent commands skip this.
-        // Non-movement commands (Coast, Brake, Idle, Standby) pass through.
-        if action_requires_imu(&action) && !ensure_imu_ready().await {
-            api::send_completion(
-                completion_requested,
-                DriveCompletion {
-                    status: CompletionStatus::Failed("IMU not responding"),
-                    telemetry: types::CompletionTelemetry::None,
-                },
-            )
-            .await;
-            return;
+        if action_requires_motion(&action) {
+            if !self.run_motion_preflight(&action, completion_requested).await {
+                return;
+            }
+        } else {
+            self.wake_from_standby(&action).await;
         }
-
-        // Wake from standby if a movement command arrives.
-        self.wake_from_standby(&action).await;
 
         match action {
             DriveAction::Differential { left, right } => {
@@ -122,6 +113,59 @@ impl DriveLoop {
                 .await;
             }
         }
+    }
+
+    /// Run the interruptible motion pre-flight.
+    ///
+    /// Arms the pair, waits for both sensors, waits for the IMU and wakes the
+    /// drivers. The whole wait is selected against the drive interrupt, so an
+    /// emergency brake can preempt a long arming or IMU wait. A gate refusal or
+    /// IMU timeout sends the completion and returns `false`; an interrupt is
+    /// handled and also returns `false`. After a successful wait the live gate
+    /// is rechecked before any motor command, because a drop can arrive during
+    /// the wait without reaching the interrupt handler yet.
+    async fn run_motion_preflight(&mut self, action: &DriveAction, completion_requested: bool) -> bool {
+        let preflight = async {
+            crate::task::sensors::rangefinder::arm_for_motion()
+                .await
+                .map_err(PreflightFailure::Gate)?;
+            if !ensure_imu_ready().await {
+                return Err(PreflightFailure::Imu);
+            }
+            self.wake_from_standby(action).await;
+            Ok(())
+        };
+        match select(preflight, api::DRIVE_INTERRUPT.wait()).await {
+            Either::First(Ok(())) => {}
+            Either::First(Err(PreflightFailure::Gate(refusal))) => {
+                send_preflight_failure(completion_requested, refusal.reason()).await;
+                return false;
+            }
+            Either::First(Err(PreflightFailure::Imu)) => {
+                send_preflight_failure(completion_requested, "IMU not responding").await;
+                return false;
+            }
+            Either::Second(kind) => {
+                self.handle_interrupt(kind).await;
+                api::send_completion(
+                    completion_requested,
+                    DriveCompletion {
+                        status: CompletionStatus::Cancelled,
+                        telemetry: types::CompletionTelemetry::None,
+                    },
+                )
+                .await;
+                return false;
+            }
+        }
+
+        if let Err(refusal) = preflight_gate() {
+            motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+            motion::set_track_speeds(0, 0).await;
+            send_preflight_failure(completion_requested, refusal.reason()).await;
+            return false;
+        }
+        true
     }
 
     /// Wake motor drivers from standby if the action is a movement command.
@@ -213,6 +257,9 @@ impl DriveLoop {
 
     /// Handle an `Idle` command.
     async fn handle_idle(&mut self, duration_ms: u64, completion_requested: bool) {
+        // An explicit idle disarms the pair: the robot is parked, and the next
+        // movement re-arms it through the Floor-Drop Gate.
+        crate::task::sensors::rangefinder::disable().await;
         motor_driver::send_motor_command(MotorCommand::CoastAll).await;
         motion::set_track_speeds(0, 0).await;
 
@@ -238,6 +285,7 @@ impl DriveLoop {
 
     /// Handle a `Standby` command.
     async fn handle_standby(&mut self) {
+        crate::task::sensors::rangefinder::disable().await;
         lifecycle::stop_encoder_sampling().await;
 
         if !self.standby_enabled {
@@ -338,14 +386,49 @@ pub(super) async fn execute_intent_teardown(teardown: IntentTeardown) {
     }
 }
 
-/// Returns `true` if the drive action requires IMU data.
-const fn action_requires_imu(action: &DriveAction) -> bool {
+/// Send the completion for a failed pre-flight.
+async fn send_preflight_failure(completion_requested: bool, reason: &'static str) {
+    api::send_completion(
+        completion_requested,
+        DriveCompletion {
+            status: CompletionStatus::Failed(reason),
+            telemetry: types::CompletionTelemetry::None,
+        },
+    )
+    .await;
+}
+
+/// Why the interruptible movement pre-flight stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreflightFailure {
+    /// The Floor-Drop Gate refused the action.
+    Gate(GateRefusal),
+    /// The IMU did not start streaming within its timeout.
+    Imu,
+}
+
+/// Returns `true` if the drive action requires motion, and so both the
+/// Floor-Drop Gate and the IMU pre-flight.
+const fn action_requires_motion(action: &DriveAction) -> bool {
     matches!(
         action,
         DriveAction::Differential { .. }
             | DriveAction::DriveDistance { .. }
             | DriveAction::DriveContinuous { .. }
             | DriveAction::RotateExact { .. }
+    )
+}
+
+/// Recheck the live Floor-Drop Gate after the interruptible pre-flight.
+///
+/// # Errors
+///
+/// Returns the [`GateRefusal`] the action reports when the pair is not armed or
+/// a drop is already present.
+fn preflight_gate() -> Result<(), GateRefusal> {
+    gate(
+        crate::task::sensors::rangefinder::status(),
+        perception::is_floor_drop_detected(),
     )
 }
 

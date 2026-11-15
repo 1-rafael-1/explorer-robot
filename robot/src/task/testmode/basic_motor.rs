@@ -16,7 +16,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 
 use crate::{
-    system::state::activity,
+    system::state::{activity, perception},
     task::{
         drive::{clear_encoder_measurement, get_latest_encoder_measurement},
         motor_driver::{self, MotorCommand, Track},
@@ -97,6 +97,13 @@ pub(super) fn spawn(spawner: Spawner, claim: Claim) -> bool {
 /// Basic motor test mode runner.
 #[embassy_executor::task]
 async fn basic_motor_test_task(claim: Claim) {
+    // This test drives the motor driver directly, so it must run the same
+    // Floor-Drop Gate the drive dispatch applies before a motor command.
+    if let Err(refusal) = crate::task::sensors::rangefinder::arm_for_motion().await {
+        claim.fail(refusal.reason()).await;
+        return;
+    }
+
     // Enable both motor drivers before running the test.
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
     Timer::after(Duration::from_millis(10)).await;
@@ -110,10 +117,18 @@ async fn basic_motor_test_task(claim: Claim) {
     encoders::send_command(EncoderCommand::Start { interval_ms: 50 }).await;
     Timer::after(Duration::from_millis(100)).await;
 
-    // The test is interactive: the legs cycle until the operator stops them.
+    // The test is interactive: the legs cycle until the operator stops them or
+    // floor-drop protection trips. A drop can arrive between legs or during
+    // one, so both the leg boundary and the leg loop check the live flag; a
+    // braked fault path is never overridden by the next leg's SetTracks.
+    let mut fault: Option<&'static str> = None;
     'cycling: loop {
         for (index, leg) in LEGS.iter().enumerate() {
             if claim.is_stop_requested() {
+                break 'cycling;
+            }
+            if perception::is_floor_drop_detected() {
+                fault = Some("floor drop detected");
                 break 'cycling;
             }
 
@@ -127,31 +142,64 @@ async fn basic_motor_test_task(claim: Claim) {
             Timer::after(Duration::from_millis(100)).await;
             clear_encoder_measurement().await;
 
+            if perception::is_floor_drop_detected() {
+                fault = Some("floor drop detected");
+                break 'cycling;
+            }
+
             motor_driver::send_motor_command(MotorCommand::SetTracks {
                 left_speed: leg.left,
                 right_speed: leg.right,
             })
             .await;
 
-            run_leg(leg, &claim).await;
+            match run_leg(leg, &claim).await {
+                LegEnd::Completed => {}
+                LegEnd::Stopped => break 'cycling,
+                LegEnd::Fault => {
+                    fault = Some("floor drop detected");
+                    break 'cycling;
+                }
+            }
 
             motor_driver::send_motor_command(MotorCommand::CoastAll).await;
             Timer::after(Duration::from_millis(200)).await;
         }
     }
 
-    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     encoders::send_command(EncoderCommand::Stop).await;
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
-    claim.finish().await;
+    if fault.is_some() {
+        // The floor-drop EmergencyBrake owns this stop: keep the brake latched
+        // and leave the drivers enabled until the next activity manages them.
+        motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+        claim.fail(fault.unwrap_or("floor drop detected")).await;
+    } else {
+        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+        motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+        claim.finish().await;
+    }
+}
+
+/// Why a leg ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegEnd {
+    /// The leg ran for its full duration.
+    Completed,
+    /// The operator pressed Stop.
+    Stopped,
+    /// Floor-drop protection tripped.
+    Fault,
 }
 
 /// Drive one leg for its duration, logging the encoder count as it goes.
-async fn run_leg(leg: &Leg, claim: &Claim) {
+async fn run_leg(leg: &Leg, claim: &Claim) -> LegEnd {
     let mut elapsed_ms = 0;
     while elapsed_ms < LEG_DURATION_MS {
         if claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
-            return;
+            return LegEnd::Stopped;
+        }
+        if perception::is_floor_drop_detected() {
+            return LegEnd::Fault;
         }
         elapsed_ms += SAMPLE_INTERVAL_MS;
 
@@ -163,4 +211,5 @@ async fn run_leg(leg: &Leg, claim: &Claim) {
             });
         info!("basic-motor: {=str} encoder={=u16}", leg.phase, count);
     }
+    LegEnd::Completed
 }

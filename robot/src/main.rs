@@ -1,8 +1,8 @@
 //! explorer-robot v3 firmware entry point
 //!
 //! Core0 hosts orchestrator, motor driver, encoders, battery monitor,
-//! RGB LED, panel (TFT + touch), VL53L0X stub, flash storage, UI, testmode and
-//! startup.
+//! RGB LED, panel (TFT + touch), the VL53L1X rangefinder pair, flash storage,
+//! UI, testmode and startup.
 //!
 //! Core1 hosts the real COIN-D6 `LiDAR` driver task, powered on demand.
 
@@ -56,12 +56,12 @@ mod task;
 
 /// Shared I2C0 bus protected by a critical-section mutex.
 ///
-/// Reserved for the front VL53L0X rangefinder on core0.
+/// Reserved for the front VL53L1X rangefinder on core0.
 pub type I2cBusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
 
 /// Shared I2C1 bus protected by a critical-section mutex.
 ///
-/// Reserved for the rear VL53L0X rangefinder on core0. Keeping the two
+/// Reserved for the rear VL53L1X rangefinder on core0. Keeping the two
 /// sensors on separate buses avoids an address clash when both use the default
 /// `0x29` address.
 pub type I2c1BusShared = Mutex<CriticalSectionRawMutex, I2c<'static, Async>>;
@@ -117,7 +117,7 @@ static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 // ── Shared bus helpers ─────────────────────────────────────────────────────────
 
-/// Initialise the shared I2C0 bus for the front VL53L0X rangefinder.
+/// Initialise the shared I2C0 bus for the front VL53L1X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new` enables `I2C0_IRQ` on
 /// core0's NVIC. Returns a `'static` reference for sharing across tasks.
@@ -135,7 +135,7 @@ fn init_i2c_bus(
     I2C_BUS.init(Mutex::new(i2c))
 }
 
-/// Initialise the shared I2C1 bus for the rear VL53L0X rangefinder.
+/// Initialise the shared I2C1 bus for the rear VL53L1X rangefinder.
 ///
 /// Must be called on core0 so that `I2c::new` enables `I2C1_IRQ` on
 /// core0's NVIC. The two sensors may share the same 7-bit address because they
@@ -263,14 +263,25 @@ fn init_motor_driver(spawner: Spawner, motor_pins: MotorDriverResources) {
     spawner.spawn(task::drive::drive().unwrap());
 }
 
-/// Spawn the synthetic VL53L0X rangefinder stub task on core0.
+/// Build the VL53L1X pair session and spawn its task on core0.
 ///
-/// Only compiled with the `floor_drop_stub` feature; the stub does not read a
-/// sensor, it alternates synthetic floor readings to exercise the pipeline.
-#[cfg(feature = "floor_drop_stub")]
+/// Both modules start held off through `XSHUT`; the task releases and
+/// initialises them on demand. The buses are initialised here so `I2C0_IRQ` and
+/// `I2C1_IRQ` are enabled on core0's NVIC.
 #[allow(clippy::unwrap_used)]
-fn init_vl53l0x_stub(spawner: Spawner) {
-    spawner.spawn(task::sensors::vl53l0x_stub::vl53l0x_stub_task().unwrap());
+fn init_rangefinder(spawner: Spawner, front: Rangefinder0Resources, rear: Rangefinder1Resources) {
+    let front_bus = init_i2c_bus(front.i2c, front.sda, front.scl);
+    let rear_bus = init_i2c1_bus(rear.i2c, rear.sda, rear.scl);
+
+    let session = task::sensors::rangefinder::RangefinderSession::new(
+        front_bus,
+        rear_bus,
+        front.xshut,
+        front.interrupt,
+        rear.xshut,
+        rear.interrupt,
+    );
+    spawner.spawn(task::sensors::rangefinder::rangefinder_task(session).unwrap());
 }
 
 /// Set up flash storage for calibration data persistence.
@@ -476,14 +487,8 @@ fn main() -> ! {
     // ── Core0: all other tasks ──────────────────────────────────────────────
     let executor0 = EXECUTOR0.init(Executor::new());
     executor0.run(move |spawner| {
-        // I2C0 bus reserved for the front VL53L0X rangefinder stub.
-        // Initialised inside the closure so I2c::new enables I2C0_IRQ
-        // on core0's NVIC.
-        let _i2c_bus = init_i2c_bus(rangefinder0.i2c, rangefinder0.sda, rangefinder0.scl);
-
-        // I2C1 bus reserved for the rear VL53L0X on a separate bus, so both
-        // sensors can keep the default 0x29 address.
-        let _i2c1_bus = init_i2c1_bus(rangefinder1.i2c, rangefinder1.sda, rangefinder1.scl);
+        // I2C0 and I2C1 are reserved one per VL53L1X, so both sensors keep the
+        // default 0x29 address.
 
         // SPI bus for ICM20948 IMU
         let (imu_spi, imu_cs) = init_imu_spi(imu.spi, imu.sck, imu.mosi, imu.miso, imu.cs, imu.tx_dma, imu.rx_dma);
@@ -496,8 +501,7 @@ fn main() -> ! {
         init_rgb_led(spawner, rgb_pins);
         init_motor_driver(spawner, motor_pins);
         init_ui(spawner, panel_pins);
-        #[cfg(feature = "floor_drop_stub")]
-        init_vl53l0x_stub(spawner);
+        init_rangefinder(spawner, rangefinder0, rangefinder1);
         init_imu(spawner, imu_spi, imu_cs);
         init_remote_link(spawner, remote_link_pins, core.trng);
         init_flash_storage(spawner, storage.flash, storage.dma);

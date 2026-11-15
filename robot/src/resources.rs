@@ -163,7 +163,7 @@ assign_resources! {
         rx_dma: DMA_CH2,
     }
 
-    /// I2C0 bus for the front-down VL53L0X rangefinder.
+    /// I2C0 bus for the front-down VL53L1X rangefinder.
     rangefinder0: Rangefinder0Resources {
         /// I2C0 peripheral instance.
         i2c: I2C0,
@@ -177,7 +177,7 @@ assign_resources! {
         interrupt: PIN_2,
     }
 
-    /// I2C1 bus for the rear-down VL53L0X rangefinder.
+    /// I2C1 bus for the rear-down VL53L1X rangefinder.
     rangefinder1: Rangefinder1Resources {
         /// I2C1 peripheral instance.
         i2c: I2C1,

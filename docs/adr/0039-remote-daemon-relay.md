@@ -251,7 +251,7 @@ The conversion is ADR-0031 → ADR-0038 with these concrete rules:
 | `POWER` `0xFF` / `0xFFFF` | `null` |
 | `ACTIVITY` stage 0/1/2 | `running` / `complete` / `failed`; `percent 0xFF` → `null` |
 | `CALIBRATION` 0/1/2 | `unknown` / `loaded` / `missing` |
-| `PERCEPTION` flags bit 0/1 | `obstacle`, `floor_drop` booleans |
+| `PERCEPTION` flags bit 0/1/2/3 | `obstacle`, `floor_drop`, `floor_drop_front`, `floor_drop_rear` booleans; the per-sensor fields are `null` when the robot sends only the aggregate (ADR-0051) |
 | `LIDAR_CLOUD` 360 × u16, `0xFFFF` | `ranges_cm` with `null`; `first_deg:0`, `step_deg:1`, `clockwise:true` |
 | `OBSTACLE` source 0 | `"lidar"`; an unknown source is `"unknown"` |
 | `ROTATE_BY` `angle_cdeg` (clockwise) | `angle_deg` counter-clockwise; the daemon sends `round(-angle_deg × 100)` |

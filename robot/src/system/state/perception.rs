@@ -6,8 +6,9 @@
 //! the only writer of the obstacle flag.
 //!
 //! Obstacle perception is driven by a 360° `LiDAR` point cloud. The front and
-//! rear VL53L0X rangefinders are floor-drop detectors (stairs, ledges) — they are
-//! **not** obstacle sensors.
+//! rear VL53L1X rangefinders are floor-drop detectors (stairs, ledges) — they are
+//! **not** obstacle sensors. The rangefinder task is the sole writer of the
+//! aggregate and per-sensor floor-drop flags.
 //!
 //! Lock order (when multiple state mutexes are needed):
 //! 1) power state mutex (use power module accessors)
@@ -16,6 +17,7 @@
 //! 4) `MOTION_STATE`
 //! 5) `ACTIVITY_STATE` (use accessor functions, see `activity` module)
 //! 6) `IMU_TEST_STATE` — independent leaf; never taken while another state mutex is held
+//! 7) `RANGEFINDER_STATE` / `RANGEFINDER_TEST_STATE` — independent leaves; never taken while another state mutex is held
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,8 +35,35 @@ use lidar_cloud::Cloud;
 
 /// `LiDAR` obstacle detection flag — written by `set_lidar_obstacle`, read lock-free.
 static LIDAR_OBSTACLE: AtomicBool = AtomicBool::new(false);
-/// Floor-drop detection flag — written by `set_floor_drop`, read lock-free.
+/// Aggregate floor-drop flag (the OR of both sensors) — written by the rangefinder task.
 static FLOOR_DROP: AtomicBool = AtomicBool::new(false);
+/// Front rangefinder floor-drop flag — written by the rangefinder task.
+static FLOOR_DROP_FRONT: AtomicBool = AtomicBool::new(false);
+/// Rear rangefinder floor-drop flag — written by the rangefinder task.
+static FLOOR_DROP_REAR: AtomicBool = AtomicBool::new(false);
+
+/// The per-sensor floor-drop decisions and their aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloorDrops {
+    /// The front rangefinder's held floor-drop decision.
+    pub front: bool,
+    /// The rear rangefinder's held floor-drop decision.
+    pub rear: bool,
+}
+
+impl FloorDrops {
+    /// Build the pair from its sides.
+    #[must_use]
+    pub const fn new(front: bool, rear: bool) -> Self {
+        Self { front, rear }
+    }
+
+    /// Whether either sensor sees a floor drop.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.front || self.rear
+    }
+}
 
 // ── Mutex (full picture: point cloud) ─────────────────────────────────────────
 
@@ -73,9 +102,17 @@ pub fn set_lidar_obstacle(detected: bool) -> ChangeDetected {
     change_detected(old, detected)
 }
 
-/// Set the floor-drop flag.
-pub fn set_floor_drop(detected: bool) {
+/// Set the per-sensor floor-drop flags and their aggregate.
+///
+/// Returns whether the aggregate changed. The rangefinder task is the sole
+/// writer; the floor-drop behaviour handler only reads the live value.
+pub fn set_floor_drop(drops: FloorDrops) -> ChangeDetected {
+    FLOOR_DROP_FRONT.store(drops.front, Ordering::Relaxed);
+    FLOOR_DROP_REAR.store(drops.rear, Ordering::Relaxed);
+    let detected = drops.any();
+    let old = FLOOR_DROP.load(Ordering::Relaxed);
     FLOOR_DROP.store(detected, Ordering::Relaxed);
+    change_detected(old, detected)
 }
 
 /// Returns `true` if the `LiDAR` sensor reports an obstacle.
@@ -88,6 +125,15 @@ pub fn is_obstacle_detected() -> bool {
 /// Lock-free — safe to call from any context.
 pub fn is_floor_drop_detected() -> bool {
     FLOOR_DROP.load(Ordering::Relaxed)
+}
+
+/// Returns the per-sensor floor-drop decisions.
+/// Lock-free — safe to call from any context.
+pub fn floor_drops() -> FloorDrops {
+    FloorDrops::new(
+        FLOOR_DROP_FRONT.load(Ordering::Relaxed),
+        FLOOR_DROP_REAR.load(Ordering::Relaxed),
+    )
 }
 
 // ── Public accessors (async — touch the mutex) ────────────────────────────────

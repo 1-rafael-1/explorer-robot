@@ -79,7 +79,13 @@ test('a snapshot replaces every stream from the array and keeps unknown null', (
   assertEqual(state.streams.calibration.v.mag, 'missing');
   assertEqual(powerView(state), { level: null, voltage_mv: 12100, ts: 900 });
   assertEqual(motionView(state), { left: 0, right: 35, ts: 950 });
-  assertEqual(perceptionView(state), { obstacle: false, floor_drop: null, ts: 960 });
+  assertEqual(perceptionView(state), {
+    obstacle: false,
+    floor_drop: null,
+    floor_drop_front: null,
+    floor_drop_rear: null,
+    ts: 960,
+  });
   assertEqual(lidarView(state).present, true);
   assertEqual(lidarView(state).ranges_cm, [null, 120]);
   assertEqual(state.catalogue, CATALOGUE.procedures);
@@ -118,7 +124,7 @@ test('streams dedupe by name and sequence, never by name alone', () => {
     name: 'perception',
     seq: 5,
     ts: 30,
-    v: { obstacle: true, floor_drop: false },
+    v: { obstacle: true, floor_drop: false, floor_drop_front: false, floor_drop_rear: false },
   });
   assertEqual(perceptionView(otherName).obstacle, true, 'the same sequence on another stream is accepted');
 });
@@ -559,6 +565,7 @@ test('a missing or omitted stream is unknown, never zero or a stale value', () =
   assertEqual(motionView(state).left, 0, 'zero is a value, not unknown');
   assertEqual(perceptionView(state).obstacle, null);
   assertEqual(perceptionView(state).floor_drop, false, 'clear is a value, not unknown');
+  assertEqual(perceptionView(state).floor_drop_front, null, 'an omitted per-sensor flag is unknown');
 
   state = apply(
     state,
@@ -577,7 +584,13 @@ test('a missing or omitted stream is unknown, never zero or a stale value', () =
   const empty = initialState();
   assertEqual(powerView(empty), { level: null, voltage_mv: null, ts: null });
   assertEqual(motionView(empty), { left: null, right: null, ts: null });
-  assertEqual(perceptionView(empty), { obstacle: null, floor_drop: null, ts: null });
+  assertEqual(perceptionView(empty), {
+    obstacle: null,
+    floor_drop: null,
+    floor_drop_front: null,
+    floor_drop_rear: null,
+    ts: null,
+  });
 });
 
 test('apply never mutates the state it is given', () => {

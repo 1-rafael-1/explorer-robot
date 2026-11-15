@@ -1,0 +1,33 @@
+[package]
+name = "rangefinder"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "VL53L1X floor-drop policy facade: pair lifecycle, detector and gate"
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+vl53l1x = { path = "../vl53l1x" }
+
+[features]
+std = []
+
+[[test]]
+name = "detector"
+required-features = ["std"]
+
+[[test]]
+name = "pair"
+required-features = ["std"]
+
+[[test]]
+name = "lifecycle"
+required-features = ["std"]
+
+[[test]]
+name = "constants"
+required-features = ["std"]

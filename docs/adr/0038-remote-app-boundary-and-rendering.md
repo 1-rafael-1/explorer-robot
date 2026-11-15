@@ -89,7 +89,7 @@ flips the sign.** The app never sees the wire convention: a positive `angle_deg`
 | `power` | `{level, voltage_mv}` |
 | `motion` | `{left, right}` |
 | `activity` | `{id, stage, percent, detail}`; `stage` is running / complete / failed |
-| `perception` | `{obstacle, floor_drop}` |
+| `perception` | `{obstacle, floor_drop, floor_drop_front, floor_drop_rear}`; the per-sensor fields are `null` when the robot reports only the aggregate (ADR-0051) |
 | `lidar` | `{ranges_cm, first_deg, step_deg, clockwise}`; 360 entries, `null` = no return, slot 0 ahead and clockwise |
 | `calibration` | `{motor, imu, mag, distance}`; loaded / missing / unknown |
 | `pose` (reserved) | `{x_cm, y_cm, yaw_deg, confidence}`; absent in v1 |

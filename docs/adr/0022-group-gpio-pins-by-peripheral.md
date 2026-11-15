@@ -138,7 +138,7 @@ lines (ADR-0024, ADR-0026); no GPIOs are spare.
   expansion on UART1) still holds, but this ADR moves the camera wiring to GPIO 23/24/25
   and the expansion UART1 to GPIO 36/37. When the expansion connector is added, the
   camera moves to PIO0 on the same pins, so the board wiring does not change.
-- The second rangefinder gets a dedicated I2C1 bus on GPIO 26/27. Two VL53L0X sensors
+- The second rangefinder gets a dedicated I2C1 bus on GPIO 26/27. Two VL53L1X sensors
   can therefore both keep the default `0x29` address: each bus has its own address space
   and its own pull-ups. The firmware binds `I2C1_IRQ` and initialises the second bus
   separately from I2C0.

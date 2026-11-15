@@ -146,7 +146,7 @@ fn a_status_snapshot_seeds_its_five_streams() {
         stage: ActivityStage::Running,
         percent: None,
         detail: "panel",
-        flags: perception(0b11),
+        flags: perception(0b1111),
         calibration: calibration(
             CalibrationStatus::Loaded,
             CalibrationStatus::Unknown,
@@ -188,6 +188,8 @@ fn a_status_snapshot_seeds_its_five_streams() {
         StreamValue::Perception {
             obstacle: true,
             floor_drop: true,
+            floor_drop_front: Some(true),
+            floor_drop_rear: Some(true),
         }
     );
     let calibration_entry = must(entry(&assembled.streams, StreamName::Calibration), "calibration");

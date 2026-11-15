@@ -16,8 +16,9 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station, StationSsid,
 };
 use touch_ui::{
-    DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, HeaderStatus, Hit, Item, LinkAction, Procedure,
-    PromptAction, PromptView, ScreenEntry, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, FloorState, HeaderStatus, Hit, Item, LinkAction,
+    Procedure, PromptAction, PromptView, ProtectionState, RangeStatusName, RangefinderTestReadout, ScreenEntry,
+    SensorReadout, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, LINK_INFO_ROW_H, LINK_INFO_ROWS,
@@ -25,13 +26,14 @@ use touch_ui::{
         header_title_rect, info_row_rect, link_action_rect, link_info_row_rect, link_info_top, link_result_rect,
         max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect,
         prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect, prompt_redo_rect,
-        prompt_status_rect, readout_rect, readout_row_pitch, readout_row_rect, room_scan_caption_rect,
-        save_button_rect, scroll_track_rect, slider_touch_rect,
+        prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area, readout_rect,
+        readout_row_pitch, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect,
+        slider_touch_rect,
     },
     imu::{Euler, ImuHealth, ImuReadout, ImuReadoutKind, MAX_IMU_ROWS, MagDiagnostics, Vector3},
     palette::{SMALL_FONT, TITLE_FONT},
     radar,
-    screens::{Screen, StatusView, ValueFlow},
+    screens::{Readout, Screen, StatusView, ValueFlow},
     system_info::{CalibrationStatus, SystemInfo},
     widgets::{header_title_font, link_info_rows, wrap_text},
 };
@@ -200,6 +202,7 @@ fn the_menu_tree_matches_the_robot() {
             Item::Procedure(Procedure::ArcDrive),
             Item::Procedure(Procedure::Imu6Axis),
             Item::Procedure(Procedure::Imu9Axis),
+            Item::Procedure(Procedure::RangefinderTest),
             Item::ScreenEntry(ScreenEntry::RoomScan),
         ]
         .as_slice()
@@ -221,6 +224,7 @@ fn the_menu_tree_matches_the_robot() {
             "Arc Drive",
             "IMU Test (6-axis)",
             "IMU Test (9-axis)",
+            "Rangefinders",
             "Room Scan",
         ]
     );
@@ -273,6 +277,7 @@ fn every_menu_entry_is_a_listed_item() {
             Item::Procedure(Procedure::ArcDrive),
             Item::Procedure(Procedure::Imu6Axis),
             Item::Procedure(Procedure::Imu9Axis),
+            Item::Procedure(Procedure::RangefinderTest),
             Item::ScreenEntry(ScreenEntry::RoomScan),
         ]
     );
@@ -284,7 +289,7 @@ fn every_menu_entry_is_a_listed_item() {
     assert_eq!(Item::ScreenEntry(ScreenEntry::Link).label(), "Link");
 }
 
-/// Test that the menus list eleven Procedures: the ten the firmware runs today
+/// Test that the menus list twelve Procedures: the eleven the firmware runs today
 /// plus the deferred attempt-straight, and no Procedure twice.
 #[test]
 fn the_menus_list_every_procedure_once() {
@@ -293,7 +298,7 @@ fn the_menus_list_every_procedure_once() {
         .flat_map(|screen| screen.items().iter().copied())
         .filter_map(Item::as_procedure)
         .collect();
-    assert_eq!(procedures.len(), 11);
+    assert_eq!(procedures.len(), 12);
     for (index, procedure) in procedures.iter().enumerate() {
         assert!(!procedure.label().is_empty(), "{procedure:?} is labelled");
         assert!(!procedures[..index].contains(procedure), "{procedure:?} is listed once");
@@ -348,7 +353,7 @@ fn back_returns_from_every_submenu() {
 #[test]
 fn every_entry_names_its_own_title_and_parent() {
     // Every entry the crate ships, with the parent it states for itself.
-    let expected: [(Item, Screen); 17] = [
+    let expected: [(Item, Screen); 18] = [
         (Item::ScreenEntry(ScreenEntry::SystemInfo), Screen::MainMenu),
         (Item::Submenu(Submenu::Calibrate), Screen::MainMenu),
         (Item::Submenu(Submenu::DriveMode), Screen::MainMenu),
@@ -365,6 +370,7 @@ fn every_entry_names_its_own_title_and_parent() {
         (Item::Procedure(Procedure::ArcDrive), Screen::TestMode),
         (Item::Procedure(Procedure::Imu6Axis), Screen::TestMode),
         (Item::Procedure(Procedure::Imu9Axis), Screen::TestMode),
+        (Item::Procedure(Procedure::RangefinderTest), Screen::TestMode),
         (Item::ScreenEntry(ScreenEntry::RoomScan), Screen::TestMode),
     ];
 
@@ -431,6 +437,7 @@ fn interactive_procedures_match_their_producers() {
         Procedure::BasicMotor,
         Procedure::Imu6Axis,
         Procedure::Imu9Axis,
+        Procedure::RangefinderTest,
     ] {
         assert!(procedure.interactive(), "{procedure:?} ends only on a stop");
         assert!(Item::Procedure(procedure).interactive());
@@ -549,6 +556,7 @@ fn a_procedure_supplies_its_running_views_title_and_parent() {
         (Procedure::ArcDrive, Screen::TestMode),
         (Procedure::Imu6Axis, Screen::TestMode),
         (Procedure::Imu9Axis, Screen::TestMode),
+        (Procedure::RangefinderTest, Screen::TestMode),
     ] {
         let view = StatusView::for_procedure(procedure, "Running");
         assert_eq!(view.parent, parent, "{procedure:?} states where Stop returns");
@@ -571,6 +579,7 @@ fn a_procedure_supplies_its_running_views_title_and_parent() {
         Procedure::ArcDrive,
         Procedure::Imu6Axis,
         Procedure::Imu9Axis,
+        Procedure::RangefinderTest,
     ] {
         assert!(!procedure.is_calibration(), "{procedure:?} is not a calibration");
     }
@@ -1503,7 +1512,7 @@ fn open_room_scan() -> Ui {
 }
 
 /// The Room Scan entry's index in the Test Mode menu.
-const ROOM_SCAN_INDEX: usize = 6;
+const ROOM_SCAN_INDEX: usize = 7;
 
 /// Test that the Room Scan entry opens from the Test Mode menu and Back returns.
 #[test]
@@ -1838,20 +1847,23 @@ fn the_health_row_names_waiting_live_and_not_responding() {
 /// value reports one, so the 10 Hz tick flushes only on a visible change.
 #[test]
 fn a_readout_redraws_only_when_a_displayed_value_changes() {
-    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let view =
+        StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(Readout::Imu(sample_readout()));
     let mut ui = Ui::new();
     assert!(ui.show_status(view));
     assert!(!ui.set_status(view));
 
-    let not_responding = view.with_readout(sample_readout().with_health(ImuHealth::NotResponding, 100));
+    let not_responding = view.with_readout(Readout::Imu(
+        sample_readout().with_health(ImuHealth::NotResponding, 100),
+    ));
     assert!(ui.set_status(not_responding));
     assert!(!ui.set_status(not_responding));
 
-    let moved = view.with_readout(sample_readout().with_orientation(Euler {
+    let moved = view.with_readout(Readout::Imu(sample_readout().with_orientation(Euler {
         yaw: 13.3,
         pitch: -45.6,
         roll: 78.9,
-    }));
+    })));
     assert!(ui.set_status(moved));
 }
 
@@ -1859,10 +1871,216 @@ fn a_readout_redraws_only_when_a_displayed_value_changes() {
 /// target.
 #[test]
 fn a_running_screen_with_a_readout_renders() {
-    let view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(sample_readout());
+    let view =
+        StatusView::for_procedure(Procedure::Imu6Axis, "6-axis streaming").with_readout(Readout::Imu(sample_readout()));
     let mut ui = Ui::new();
     assert!(ui.show_status(view));
     render_ok(&ui);
+}
+
+/// Test that the readout slot accepts either variant and returns the one stored.
+#[test]
+fn the_readout_enum_carries_imu_and_rangefinder_variants() {
+    let imu = Readout::Imu(sample_readout());
+    let imu_view = StatusView::for_procedure(Procedure::Imu6Axis, "6-axis").with_readout(imu);
+    assert_eq!(imu_view.readout(), Some(&imu));
+
+    let rangefinder = Readout::Rangefinder(sample_rangefinder());
+    let rangefinder_view = StatusView::for_procedure(Procedure::Imu6Axis, "rangefinder").with_readout(rangefinder);
+    assert_eq!(rangefinder_view.readout(), Some(&rangefinder));
+}
+
+/// A fully populated Rangefinder Test Readout: both sensors, the pair and the
+/// threshold.
+const fn sample_rangefinder() -> RangefinderTestReadout {
+    RangefinderTestReadout {
+        front: SensorReadout {
+            state: Some(ProtectionState::Armed),
+            range_mm: Some(123),
+            status: Some(RangeStatusName::Valid),
+            raw_status: Some(11),
+            signal_rate: Some(1574),
+            ambient_rate: Some(51),
+            floor: Some(FloorState::Floor),
+            age_ms: Some(10),
+        },
+        rear: SensorReadout {
+            state: Some(ProtectionState::Degraded),
+            range_mm: Some(812),
+            status: Some(RangeStatusName::SignalFail),
+            raw_status: Some(4),
+            signal_rate: Some(1000),
+            ambient_rate: Some(200),
+            floor: Some(FloorState::Drop),
+            age_ms: Some(20),
+        },
+        pair: Some(ProtectionState::Degraded),
+        floor_drop: Some(true),
+        threshold_mm: 400,
+    }
+}
+
+/// Test that the Rangefinder Test Readout renders both sensor columns with the
+/// seven row labels and values, and the pair/floor/threshold footer.
+#[test]
+fn the_rangefinder_readout_renders_both_sensor_columns_and_the_footer() {
+    let cells = sample_rangefinder().cells();
+
+    let front = [
+        "St Armed",
+        "Rng 123mm",
+        "Sts Valid (11)",
+        "Sig 12.3",
+        "Amb 0.4",
+        "Flr Floor",
+        "Age 10ms",
+    ];
+    let rear = [
+        "St Degr",
+        "Rng 812mm",
+        "Sts Signal (4)",
+        "Sig 7.8",
+        "Amb 1.6",
+        "Flr Drop",
+        "Age 20ms",
+    ];
+
+    for (cell, expected) in cells[0].iter().zip(front) {
+        assert_eq!(cell.as_str(), expected);
+    }
+    for (cell, expected) in cells[1].iter().zip(rear) {
+        assert_eq!(cell.as_str(), expected);
+    }
+
+    assert_eq!(sample_rangefinder().footer().as_str(), "Pair Degr  Flr DROP  TH 400mm");
+}
+
+/// Test that a missing state, range, status, signal, ambient, floor or age
+/// renders a clear `--` placeholder rather than a stale or zero value.
+#[test]
+fn a_missing_rangefinder_value_renders_a_placeholder() {
+    let waiting = RangefinderTestReadout::waiting(400);
+    let placeholders = ["St --", "Rng --", "Sts --", "Sig --", "Amb --", "Flr --", "Age --"];
+
+    let cells = waiting.cells();
+    for (cell, expected) in cells[0].iter().zip(placeholders) {
+        assert_eq!(cell.as_str(), expected);
+    }
+    for (cell, expected) in cells[1].iter().zip(placeholders) {
+        assert_eq!(cell.as_str(), expected);
+    }
+    assert_eq!(waiting.footer().as_str(), "Pair --  Flr --  TH 400mm");
+
+    let partial = RangefinderTestReadout {
+        front: SensorReadout {
+            range_mm: Some(300),
+            raw_status: Some(4),
+            ..SensorReadout::empty()
+        },
+        ..RangefinderTestReadout::waiting(400)
+    };
+    assert_eq!(partial.cells()[0][0].as_str(), "St --");
+    assert_eq!(partial.cells()[0][1].as_str(), "Rng 300mm");
+    assert_eq!(partial.cells()[0][2].as_str(), "Sts --");
+
+    // A decoded name without its raw code also renders the placeholder.
+    let no_raw = RangefinderTestReadout {
+        front: SensorReadout {
+            status: Some(RangeStatusName::NoWrapCheck),
+            ..SensorReadout::empty()
+        },
+        ..RangefinderTestReadout::waiting(400)
+    };
+    assert_eq!(no_raw.cells()[0][2].as_str(), "Sts --");
+}
+
+/// Test that every Range Status name uses the VL53L1X vocabulary label the
+/// adapter supplies, and that the status row pairs it with the raw code.
+#[test]
+fn the_range_status_names_match_the_vl53l1x_vocabulary() {
+    for (name, label) in [
+        (RangeStatusName::Valid, "Valid"),
+        (RangeStatusName::MinRangeClipped, "MinClip"),
+        (RangeStatusName::NoWrapCheck, "NoWrap"),
+        (RangeStatusName::SignalFail, "Signal"),
+        (RangeStatusName::OutOfBounds, "Phase"),
+        (RangeStatusName::MinRangeFail, "MinRange"),
+        (RangeStatusName::SigmaFail, "Sigma"),
+        (RangeStatusName::WrapFail, "Wrap"),
+        (RangeStatusName::XtalkFail, "Xtalk"),
+        (RangeStatusName::HardwareFail, "HW"),
+        (RangeStatusName::Synchronization, "Sync"),
+        (RangeStatusName::NoUpdate, "NoUpd"),
+        (RangeStatusName::Unknown, "Unknown"),
+    ] {
+        assert_eq!(name.label(), label);
+    }
+
+    let readout = RangefinderTestReadout {
+        front: SensorReadout {
+            status: Some(RangeStatusName::SigmaFail),
+            raw_status: Some(7),
+            ..SensorReadout::empty()
+        },
+        ..RangefinderTestReadout::waiting(400)
+    };
+    assert_eq!(readout.cells()[0][2].as_str(), "Sts Sigma (7)");
+}
+
+/// Test that a `StatusView` carrying a Rangefinder readout renders into the
+/// existing discard target.
+#[test]
+fn a_running_screen_with_a_rangefinder_readout_renders() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "rangefinder")
+        .with_readout(Readout::Rangefinder(sample_rangefinder()));
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    render_ok(&ui);
+}
+
+/// Test that a Rangefinder readout reports no change while it is unchanged and
+/// one when a displayed value moves.
+#[test]
+fn a_rangefinder_readout_redraws_only_when_a_displayed_value_changes() {
+    let view = StatusView::for_procedure(Procedure::Imu6Axis, "rangefinder")
+        .with_readout(Readout::Rangefinder(sample_rangefinder()));
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    assert!(!ui.set_status(view));
+
+    let sample = sample_rangefinder();
+    let changed = RangefinderTestReadout {
+        rear: SensorReadout {
+            signal_rate: Some(2000),
+            ..sample.rear
+        },
+        ..sample
+    };
+    let changed_view = view.with_readout(Readout::Rangefinder(changed));
+    assert!(ui.set_status(changed_view));
+    assert!(!ui.set_status(changed_view));
+}
+
+/// Test that every Rangefinder row and the footer sit inside the readout area
+/// and the status panel, so the two columns never overpaint the border.
+#[test]
+fn the_rangefinder_columns_and_footer_fit_inside_the_status_panel() {
+    let panel = panel_rect();
+    let area = readout_area();
+
+    for column in 0..2 {
+        for row in 0..7 {
+            let rect = rangefinder_column_rect(column, row);
+            assert!(rect.top_left.x >= area.top_left.x);
+            assert!(rect.top_left.y >= area.top_left.y);
+            assert!(bottom_right(rect).x <= bottom_right(area).x);
+            assert!(bottom_right(rect).y <= bottom_right(area).y);
+        }
+    }
+
+    let footer = rangefinder_footer_rect();
+    assert!(footer.top_left.y > rangefinder_column_rect(0, 6).top_left.y);
+    assert!(bottom_right(footer).y < bottom_right(panel).y);
 }
 
 /// Test that the six-axis row block fits inside the status panel, with the last
@@ -2191,7 +2409,7 @@ fn the_nine_axis_last_row_fits_inside_the_status_panel() {
 }
 
 /// Every Procedure the crate models.
-const ALL_PROCEDURES: [Procedure; 11] = [
+const ALL_PROCEDURES: [Procedure; 12] = [
     Procedure::MotorCalibration,
     Procedure::DmpCompassCalibration,
     Procedure::DistanceCalibration,
@@ -2203,6 +2421,7 @@ const ALL_PROCEDURES: [Procedure; 11] = [
     Procedure::ArcDrive,
     Procedure::Imu6Axis,
     Procedure::Imu9Axis,
+    Procedure::RangefinderTest,
 ];
 
 /// Build the prompt for the DMP compass calibration: the Procedure supplies the
@@ -2446,6 +2665,7 @@ fn the_hands_on_set_mirrors_the_firmware_availability_rule() {
         Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
         Procedure::BasicMotor,
+        Procedure::RangefinderTest,
         Procedure::AttemptStraight,
     ];
     for procedure in ALL_PROCEDURES {

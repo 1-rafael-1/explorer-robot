@@ -83,7 +83,7 @@ pub async fn sample_and_publish(core: &mut LinkCore, now_ms: u64) {
 /// This is the one list: [`procedure_id`] is the one id table, and the command
 /// seam searches this array for the inverse rather than restating either.
 /// Manual Drive is an Activity, not a Procedure, so it is absent.
-pub(super) const PROCEDURES: [Procedure; 11] = [
+pub(super) const PROCEDURES: [Procedure; 12] = [
     Procedure::MotorCalibration,
     Procedure::DmpCompassCalibration,
     Procedure::DistanceCalibration,
@@ -95,6 +95,7 @@ pub(super) const PROCEDURES: [Procedure; 11] = [
     Procedure::ArcDrive,
     Procedure::Imu6Axis,
     Procedure::Imu9Axis,
+    Procedure::RangefinderTest,
 ];
 
 /// The wire `ProcedureId` for a firmware Procedure.
@@ -115,6 +116,7 @@ pub(super) const fn procedure_id(procedure: Procedure) -> ProcedureId {
         Procedure::ArcDrive => ProcedureId::ARC_DRIVE,
         Procedure::Imu6Axis => ProcedureId::IMU_6_AXIS,
         Procedure::Imu9Axis => ProcedureId::IMU_9_AXIS,
+        Procedure::RangefinderTest => ProcedureId::RANGFINDER_TEST,
     }
 }
 
@@ -168,12 +170,22 @@ fn sample_perception(core: &mut LinkCore, now_ms: u64) {
 }
 
 /// Build the lock-free perception flags.
+///
+/// The aggregate `FLOOR_DROP` bit stays set whenever either sensor sees a drop;
+/// the front/rear bits let the Remote app name the sensor that tripped it.
 pub(super) fn perception_sample() -> Perception {
     let mut flags = Perception::default();
     if perception::is_obstacle_detected() {
         flags |= Perception::OBSTACLE;
     }
-    if perception::is_floor_drop_detected() {
+    let drops = perception::floor_drops();
+    if drops.front {
+        flags |= Perception::FLOOR_DROP_FRONT;
+    }
+    if drops.rear {
+        flags |= Perception::FLOOR_DROP_REAR;
+    }
+    if drops.any() {
         flags |= Perception::FLOOR_DROP;
     }
     flags
