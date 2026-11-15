@@ -149,10 +149,12 @@ impl SensorLifecycle {
     ///
     /// A failed sensor needs no further recovery: its attempts are spent and it
     /// waits for a fresh enable. A stale sensor is recovered at any live state;
-    /// a sustained **Rangefinder Fault** only matters once the sensor has armed
-    /// and the detector has failed safe. No-target, min-range, min-clip,
-    /// no-wrap-check and synchronization readings hold the decision and fail
-    /// safe without starting recovery.
+    /// a sustained **Rangefinder Fault** matters once the sensor has armed or is
+    /// still waiting for its first valid reading, and the detector has failed
+    /// safe. Waiting matters so a sensor that boots but only ever reports
+    /// hardware faults is reset instead of sitting in `Waiting` forever.
+    /// No-target, min-range, min-clip, no-wrap-check and synchronization readings
+    /// hold the decision and fail safe without starting recovery.
     #[must_use]
     pub const fn recovery_cause(&self, now_ms: u64) -> Option<RecoveryCause> {
         if matches!(self.state, SensorState::Failed) {
@@ -161,7 +163,7 @@ impl SensorLifecycle {
         if self.detector.is_stale(now_ms) {
             return Some(RecoveryCause::Stale);
         }
-        if matches!(self.state, SensorState::Armed)
+        if matches!(self.state, SensorState::Armed | SensorState::Waiting)
             && self.last_fault
             && matches!(self.detector.state(), FloorState::Drop)
         {

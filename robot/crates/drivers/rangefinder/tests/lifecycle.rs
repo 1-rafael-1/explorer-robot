@@ -278,6 +278,53 @@ fn a_sustained_fault_status_starts_recovery() {
 }
 
 #[test]
+fn a_waiting_sensor_recovers_from_a_sustained_fault() {
+    let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
+    lifecycle.begin_enable(0);
+
+    lifecycle.on_reading(hardware_fail(), 100);
+    assert_eq!(lifecycle.state(), SensorState::Waiting);
+    assert_eq!(lifecycle.recovery_cause(150), None, "the invalid hold is still running");
+
+    lifecycle.on_reading(hardware_fail(), 300);
+    assert_eq!(lifecycle.floor(), FloorState::Drop, "the fault streak fails safe");
+    assert_eq!(
+        lifecycle.recovery_cause(300),
+        Some(RecoveryCause::InvalidStreak),
+        "a sensor that never arms on a fault must still be reset"
+    );
+}
+
+#[test]
+fn a_waiting_sensor_does_not_recover_from_non_fault_invalids() {
+    for (status, raw_status) in [
+        (RangeStatus::NoWrapCheck, 9),
+        (RangeStatus::Synchronization, 18),
+        (RangeStatus::SignalFail, 4),
+        (RangeStatus::OutOfBounds, 5),
+        (RangeStatus::MinRangeFail, 13),
+    ] {
+        let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
+        lifecycle.begin_enable(0);
+
+        for now in [100, 300] {
+            let reading = match status {
+                RangeStatus::Synchronization => reading(Reading::Invalid(status), status, raw_status),
+                _ => reading(Reading::NoTarget, status, raw_status),
+            };
+            lifecycle.on_reading(reading, now);
+        }
+
+        assert_eq!(lifecycle.floor(), FloorState::Drop, "{status:?} fails safe");
+        assert_eq!(
+            lifecycle.recovery_cause(300),
+            None,
+            "{status:?} must not reset a waiting sensor"
+        );
+    }
+}
+
+#[test]
 fn a_disable_resets_the_lifecycle_and_the_detector() {
     let mut lifecycle = SensorLifecycle::new(DROP_THRESHOLD_MM);
     lifecycle.begin_enable(0);

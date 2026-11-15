@@ -154,7 +154,9 @@ pub fn status() -> PairState {
 /// serving this enable request and for both sensors to arm, then requires a
 /// clear floor-drop flag. A missing, degraded or failed pair fails with
 /// [`GateRefusal::NotReady`]; a drop already present fails with
-/// [`GateRefusal::FloorDrop`].
+/// [`GateRefusal::FloorDrop`]. A timeout that expires before the task has
+/// acknowledged the request also fails closed, so an `Armed` state left over
+/// from an earlier enabled period can never satisfy the gate.
 ///
 /// # Errors
 ///
@@ -171,7 +173,10 @@ pub async fn arm_for_motion() -> Result<(), GateRefusal> {
             return gate(state, floor_drop);
         }
         if Instant::now() >= deadline {
-            return gate(state, floor_drop);
+            // Fail closed: an unacknowledged request cannot rely on the old
+            // state, so treat the pair as not ready even if it still reads
+            // Armed. The live drop flag keeps its more specific refusal.
+            return gate(if acknowledged { state } else { PairState::Off }, floor_drop);
         }
         Timer::after(Duration::from_millis(10)).await;
     }
@@ -217,6 +222,15 @@ enum RecoveryEnd {
     Failed,
     /// A disable arrived during recovery.
     Disabled,
+}
+
+/// Which physical sensor a recovery pass is driving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SensorSide {
+    /// The front sensor.
+    Front,
+    /// The rear sensor.
+    Rear,
 }
 
 /// VL53L1X pair task.
@@ -315,9 +329,29 @@ async fn serve_enabled(
         }
 
         let now = now_ms();
-        let mut maintenance = maintain(front, front_runtime, rear, rear_runtime, delay, &mut ticker, now).await;
+        let mut maintenance = maintain(
+            SensorSide::Front,
+            front,
+            front_runtime,
+            rear,
+            rear_runtime,
+            delay,
+            &mut ticker,
+            now,
+        )
+        .await;
         if matches!(maintenance, Maintenance::Continue) {
-            maintenance = maintain(rear, rear_runtime, front, front_runtime, delay, &mut ticker, now).await;
+            maintenance = maintain(
+                SensorSide::Rear,
+                rear,
+                rear_runtime,
+                front,
+                front_runtime,
+                delay,
+                &mut ticker,
+                now,
+            )
+            .await;
         }
         if matches!(maintenance, Maintenance::Disabled) {
             power_down(front, rear).await;
@@ -370,6 +404,7 @@ async fn handle_read<I2C, X, I>(
 /// starve the healthy sensor into a false stale reset.
 #[allow(clippy::large_futures, clippy::too_many_arguments)]
 async fn maintain(
+    side: SensorSide,
     driver: &mut SensorDriver,
     runtime: &mut SensorRuntime,
     other_driver: &mut SensorDriver,
@@ -381,11 +416,15 @@ async fn maintain(
     if runtime.needs_recovery {
         runtime.needs_recovery = false;
         warn!("[rangefinder] read or interrupt failure");
-        return recovery_maintenance(recover_sensor(driver, runtime, other_driver, other_runtime, delay, ticker).await);
+        return recovery_maintenance(
+            recover_sensor(side, driver, runtime, other_driver, other_runtime, delay, ticker).await,
+        );
     }
     if let Some(cause) = runtime.lifecycle.recovery_cause(now_ms) {
         warn!("[rangefinder] sensor unhealthy: {:?}", Debug2Format(&cause));
-        return recovery_maintenance(recover_sensor(driver, runtime, other_driver, other_runtime, delay, ticker).await);
+        return recovery_maintenance(
+            recover_sensor(side, driver, runtime, other_driver, other_runtime, delay, ticker).await,
+        );
     }
     Maintenance::Continue
 }
@@ -437,6 +476,7 @@ where
 /// the caller powers both sensors down and disarms the pair.
 #[allow(clippy::large_futures, clippy::too_many_arguments)]
 async fn recover_sensor(
+    side: SensorSide,
     driver: &mut SensorDriver,
     runtime: &mut SensorRuntime,
     other_driver: &mut SensorDriver,
@@ -460,7 +500,7 @@ async fn recover_sensor(
     set_pair_state(PairState::Degraded);
     let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
     let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
-    publish(runtime, other_runtime, pair, floor_drop).await;
+    publish_for(side, runtime, other_runtime, pair, floor_drop).await;
     set_floor_drop(floor_drop).await;
 
     while let Some(attempt) = runtime.lifecycle.begin_attempt() {
@@ -501,7 +541,7 @@ async fn recover_sensor(
                 let pair = pair_state(true, runtime.lifecycle.state(), other_runtime.lifecycle.state());
                 let floor_drop = runtime.lifecycle.is_drop() || other_runtime.lifecycle.is_drop();
                 set_pair_state(pair);
-                publish(runtime, other_runtime, pair, floor_drop).await;
+                publish_for(side, runtime, other_runtime, pair, floor_drop).await;
                 set_floor_drop(floor_drop).await;
             }
         };
@@ -579,6 +619,24 @@ async fn publish(front: &SensorRuntime, rear: &SensorRuntime, pair: PairState, f
         threshold_mm: DROP_THRESHOLD_MM,
     })
     .await;
+}
+
+/// Publish while one sensor is recovering, preserving its physical side.
+///
+/// `recover_sensor` holds the recovering sensor and the healthy one in that
+/// order regardless of whether the recovering sensor is the front or the rear
+/// unit, so the telemetry needs the side to keep front/rear correct.
+async fn publish_for(
+    side: SensorSide,
+    sensor: &SensorRuntime,
+    other: &SensorRuntime,
+    pair: PairState,
+    floor_drop: bool,
+) {
+    match side {
+        SensorSide::Front => publish(sensor, other, pair, floor_drop).await,
+        SensorSide::Rear => publish(other, sensor, pair, floor_drop).await,
+    }
 }
 
 /// Write the floor-drop flag and raise its edge on a change.
