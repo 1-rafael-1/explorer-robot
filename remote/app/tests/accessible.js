@@ -211,6 +211,8 @@ test('the ids and live regions the modules bind are present', async () => {
     'activity-dismiss',
     'perception-obstacle',
     'perception-floor-drop',
+    'perception-floor-drop-front',
+    'perception-floor-drop-rear',
     'events-panel',
     'events-heading',
     'events-list',
@@ -283,6 +285,8 @@ test('status is carried by words, not colour alone', async () => {
     'activity-label',
     'perception-obstacle',
     'perception-floor-drop',
+    'perception-floor-drop-front',
+    'perception-floor-drop-rear',
     'tab-activity',
   ]) {
     assert(doc.getElementById(id).textContent.trim().length > 0, `#${id} has a text label`);

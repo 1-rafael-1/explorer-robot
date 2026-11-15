@@ -114,7 +114,7 @@ fn calibration_statuses_map() {
     );
 }
 
-/// The perception flag bits become booleans.
+/// The perception flag bits become booleans, with the per-sensor split.
 #[test]
 fn perception_bits_become_booleans() {
     let mut relay = Relay::new();
@@ -124,23 +124,52 @@ fn perception_bits_become_booleans() {
         StreamValue::Perception {
             obstacle: false,
             floor_drop: false,
+            floor_drop_front: Some(false),
+            floor_drop_rear: Some(false),
         }
     );
-    let entry = relay.on_perception(perception(0b01), 11);
+    let entry = relay.on_perception(perception(0b0001), 11);
     assert_eq!(
         entry.v,
         StreamValue::Perception {
             obstacle: true,
             floor_drop: false,
+            floor_drop_front: Some(false),
+            floor_drop_rear: Some(false),
         }
     );
-    let entry = relay.on_perception(perception(0b10), 12);
+    let entry = relay.on_perception(perception(0b0010), 12);
     assert_eq!(
         entry.v,
         StreamValue::Perception {
             obstacle: false,
             floor_drop: true,
-        }
+            floor_drop_front: None,
+            floor_drop_rear: None,
+        },
+        "an aggregate-only peer cannot say which sensor dropped"
+    );
+    let entry = relay.on_perception(perception(0b0100), 13);
+    assert_eq!(
+        entry.v,
+        StreamValue::Perception {
+            obstacle: false,
+            floor_drop: true,
+            floor_drop_front: Some(true),
+            floor_drop_rear: Some(false),
+        },
+        "a per-sensor bit also sets the aggregate"
+    );
+    let entry = relay.on_perception(perception(0b1110), 14);
+    assert_eq!(
+        entry.v,
+        StreamValue::Perception {
+            obstacle: false,
+            floor_drop: true,
+            floor_drop_front: Some(true),
+            floor_drop_rear: Some(true),
+        },
+        "both sensors can drop at once"
     );
 }
 

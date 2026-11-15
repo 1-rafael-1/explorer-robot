@@ -73,12 +73,13 @@
   zero stream count), not a magic distance. It is neither floor nor a valid far
   reading.
 - **Invalid Reading** — A Rangefinder Reading whose Range Status is
-  synchronization (`18`), no-update (`255`) or a fault code; its range is not
-  trusted.
-- **Rangefinder Fault** — A status that may drive recovery: hardware, sigma,
-  wrap, crosstalk, no-update and unknown. No-target, min-range, min-clip,
-  no-wrap-check and synchronization hold the decision and fail safe but never
-  reset a healthy sensor.
+  synchronization (`18`), no-update (`255`), a scene status (sigma, wrap or
+  crosstalk) or a fault code; its range is not trusted.
+- **Rangefinder Fault** — A status that may drive recovery: hardware,
+  no-update and unknown. No-target, min-range, min-clip, no-wrap-check,
+  synchronization, sigma, wrap and crosstalk hold the decision and fail safe
+  but never reset a healthy sensor; a reset cannot change a scene condition
+  (ADR-0052).
 - **Floor-Drop Protection** — The pair's armed state: `Off`, `Arming`,
   `Armed`, `Degraded` or `Failed`. It is distinct from **Floor Drop**; motion
   requires `Armed`. _Avoid_: rangefinder state.
@@ -129,7 +130,7 @@ Three data flow patterns coexist, chosen by latency requirements:
 
 - **Event bus** — Semantic events (obstacle detected, button pressed, calibration loaded) flow through `Events` channel → orchestrator → handlers. Used for state changes that multiple consumers may care about.
 - **Direct channels** — High-frequency sensor data (encoder pulses, IMU orientation) flows point-to-point via dedicated `Channel`s directly into the drive subsystem, bypassing the event bus. Avoids event channel congestion.
-- **Perception atomics** — `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the rangefinder task writes the floor-drop flag; read by autonomous modes and the UI without acquiring a mutex. `FLOOR_DROP` is the OR of the pair's per-sensor states.
+- **Perception atomics** — `LIDAR_OBSTACLE` and the floor-drop atomics (`FLOOR_DROP` aggregate plus `FLOOR_DROP_FRONT`/`FLOOR_DROP_REAR`) provide lock-free reads on the hot path. The `LiDAR` task writes the obstacle flag and the rangefinder task writes the floor-drop flags; read by autonomous modes and the UI without acquiring a mutex. `FLOOR_DROP` is the OR of the pair's per-sensor states.
 
 ### Remote Link
 
@@ -242,7 +243,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Claim Origin** — The transient `Panel` or `Remote` tag on an **Active Claim**, cleared with it. A `Drive` claim is always Remote and a `Procedure` takes the origin of its starter. It exists only so the **Deadman** can stop the Remote's work without touching the panel's; it is not authority and never reaches the wire (ADR-0035).
 - **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout** or **Rangefinder Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
 - **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
-- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and `FLOOR_DROP` atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). A slot is `None` for no return. The `LiDAR` task is the sole writer of the obstacle flag; the rangefinder task is the sole writer of the floor-drop flag (ADR-0015, ADR-0048).
+- **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and floor-drop (`FLOOR_DROP`, `FLOOR_DROP_FRONT`, `FLOOR_DROP_REAR`) atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). A slot is `None` for no return. The `LiDAR` task is the sole writer of the obstacle flag; the rangefinder task is the sole writer of the floor-drop flags (ADR-0015, ADR-0048, ADR-0051).
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
 - **ChangeDetected** — Enum returned by perception setters: `NoChange`, `ChangedToDetected`, `ChangedToCleared`. Enables edge-triggered reactions to obstacle state transitions without polling.
 - **DMP Calibration Snapshot State** — The panel-only typed `DmpCalibrationSnapshot` a DMP Compass Calibration publishes at the panel's telemetry rate: the current Compass Step, heading, target, Compass Accuracy, hint and check outcome. It is an independent leaf and never enters Activity State or the Link Protocol.

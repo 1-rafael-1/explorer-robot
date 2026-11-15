@@ -279,8 +279,14 @@ pub enum StreamValue {
     Perception {
         /// Whether an obstacle is present.
         obstacle: bool,
-        /// Whether a floor drop is present.
+        /// Whether a floor drop is present on either rangefinder.
         floor_drop: bool,
+        /// Whether the front rangefinder sees a floor drop; `None` when the
+        /// robot only reports the aggregate flag.
+        floor_drop_front: Option<bool>,
+        /// Whether the rear rangefinder sees a floor drop; `None` when the
+        /// robot only reports the aggregate flag.
+        floor_drop_rear: Option<bool>,
     },
     /// `lidar`: the 360-slot range grid, slot 0 ahead and clockwise.
     Lidar {

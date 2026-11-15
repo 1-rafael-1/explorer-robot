@@ -182,6 +182,8 @@ export function perceptionView(state) {
   return {
     obstacle: value.obstacle ?? null,
     floor_drop: value.floor_drop ?? null,
+    floor_drop_front: value.floor_drop_front ?? null,
+    floor_drop_rear: value.floor_drop_rear ?? null,
     ts: entry?.ts ?? null,
   };
 }

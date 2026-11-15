@@ -1415,10 +1415,24 @@ fn activity_value(activity: &Activity<'_>) -> StreamValue {
 }
 
 /// Builds the app-facing Perception value from the wire flags.
+///
+/// The aggregate bit covers a peer that cannot say which sensor dropped. When
+/// the aggregate is set but neither per-sensor bit is, both sides are `None`.
 const fn perception_value(perception: WirePerception) -> StreamValue {
+    let front_bit = perception.contains(WirePerception::FLOOR_DROP_FRONT);
+    let rear_bit = perception.contains(WirePerception::FLOOR_DROP_REAR);
+    let floor_drop = perception.contains(WirePerception::FLOOR_DROP) || front_bit || rear_bit;
+    let (floor_drop_front, floor_drop_rear) = match (front_bit, rear_bit, floor_drop) {
+        (true, _, _) => (Some(true), Some(rear_bit)),
+        (false, true, _) => (Some(false), Some(true)),
+        (false, false, true) => (None, None),
+        (false, false, false) => (Some(false), Some(false)),
+    };
     StreamValue::Perception {
         obstacle: perception.contains(WirePerception::OBSTACLE),
-        floor_drop: perception.contains(WirePerception::FLOOR_DROP),
+        floor_drop,
+        floor_drop_front,
+        floor_drop_rear,
     }
 }
 

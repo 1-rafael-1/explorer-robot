@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-result="running">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote App — streams tests</title>
+  </head>
+  <body>
+    <h1>Streams tests</h1>
+    <p id="status">running</p>
+    <main>
+      <span id="motion-left"></span>
+      <span id="motion-right"></span>
+      <span id="motion-age"></span>
+      <span id="power-age"></span>
+      <p id="perception-line">
+        <span id="perception-obstacle">Obstacle: unknown</span>
+        <span id="perception-floor-drop" hidden>Floor drop: unknown</span>
+        <span id="perception-floor-drop-front">Front: unknown</span>
+        <span id="perception-floor-drop-rear">Rear: unknown</span>
+        <span id="perception-age"></span>
+      </p>
+    </main>
+    <pre id="results"></pre>
+    <script type="application/json" id="test-results">{}</script>
+    <script type="module" src="./streams.js"></script>
+  </body>
+</html>

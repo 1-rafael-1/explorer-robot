@@ -735,12 +735,16 @@ input {
 }
 
 #perception-obstacle[data-detected="true"],
-#perception-floor-drop[data-detected="true"] {
+#perception-floor-drop[data-detected="true"],
+#perception-floor-drop-front[data-detected="true"],
+#perception-floor-drop-rear[data-detected="true"] {
   color: var(--warn);
 }
 
 #perception-obstacle[data-detected="unknown"],
 #perception-floor-drop[data-detected="unknown"],
+#perception-floor-drop-front[data-detected="unknown"],
+#perception-floor-drop-rear[data-detected="unknown"],
 #motion-left[data-unknown="true"],
 #motion-right[data-unknown="true"] {
   color: var(--muted);

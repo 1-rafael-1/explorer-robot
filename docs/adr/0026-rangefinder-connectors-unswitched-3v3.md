@@ -78,9 +78,10 @@ here are unchanged.
   the driver is written.
 - The rangefinders are a floor-drop/near-field pair for now. Using them as
   obstacle sources would change the `ObstacleSource` model and is deferred.
-- The front and rear floor-drop sources are independent. The current single
-  `FLOOR_DROP` flag and `FloorDropDetected` event do not distinguish them; that
-  is a firmware follow-up, not a hardware change.
+- The front and rear floor-drop sources are independent. The aggregate
+  `FLOOR_DROP` flag and `FloorDropDetected` event still do not distinguish them;
+  the `PERCEPTION` stream now carries front/rear bits for the Remote App
+  (ADR-0051), while the event and the drive gate stay aggregate.
 - The 0603 33 Ω part is not yet selected, so its MPN/LCSC metadata is
   intentionally absent until a suitable JLCPCB part is chosen.
 - No polyfuse or ESD protection is populated. A shorted enclosure cable relies

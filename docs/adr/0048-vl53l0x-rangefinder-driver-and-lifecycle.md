@@ -84,8 +84,10 @@ blocking or young; the only genuinely async one is `edrv-vl53l0x`.
   fails rather than driving without floor-drop protection.
 - A single sensor failure blocks motion (`Degraded`), even though the other
   sensor still publishes. Direction-aware degraded motion is deferred.
-- The panel test mode is the only place that shows per-sensor detail; the Link
-  Protocol keeps the single `FLOOR_DROP` bit and `FloorDrop` event.
+- The panel test mode is the only place that shows the full per-sensor
+  readout; the Link Protocol keeps the aggregate `FLOOR_DROP` bit and
+  `FloorDrop` event. ADR-0051 later adds front/rear floor-drop bits to the
+  `PERCEPTION` stream for the Remote App, without moving the detailed readout.
 - `edrv-vl53l0x` is 0.1.1 and young; pin the exact version and bench-test both
   units before relying on it. The wrapper keeps a swap to a blocking driver
   local if that becomes necessary.
