@@ -25,6 +25,8 @@
 //! - [`widgets`] holds the drawing functions.
 //! - [`system_info`] holds the neutral System Info snapshot the firmware maps
 //!   onto.
+//! - [`basic_motor`] holds the neutral Basic Motor Test Readout the firmware
+//!   maps onto and the label/value formatting the panel draws.
 //! - [`imu`] holds the neutral IMU Test Readout the firmware maps onto and the
 //!   row formatting the panel draws.
 //! - [`rangefinder`] holds the neutral Rangefinder Test Readout the firmware
@@ -60,6 +62,7 @@
     clippy::cast_precision_loss
 )]
 
+pub mod basic_motor;
 pub mod buffer;
 pub mod dmp_cal;
 pub mod geometry;
@@ -74,6 +77,7 @@ pub mod system_info;
 pub mod ui;
 pub mod widgets;
 
+pub use basic_motor::{BasicMotorReadout, Direction, StepIndex, TestLeg, Track};
 pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint};
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction, PromptAction};

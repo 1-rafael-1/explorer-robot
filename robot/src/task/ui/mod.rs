@@ -39,15 +39,16 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, PromptAction,
-    RangefinderTestReadout, Readout, Screen, ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
+    BasicMotorReadout, DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure,
+    PromptAction, RangefinderTestReadout, Readout, Screen, ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS,
+    Ui, ValueFlow,
 };
 
 use crate::{
     resources::PanelResources,
     system::state::{
         activity::{self, Activity, Snapshot, Stage},
-        calibration, dmp_cal, imu_test, link, perception, power, rangefinder_test,
+        basic_motor_test, calibration, dmp_cal, imu_test, link, perception, power, rangefinder_test,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
@@ -756,10 +757,13 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// runs, then streaming once it settles, without the controller formatting text
 /// of its own.
 ///
-/// `readout` is the IMU Test Telemetry snapshot. An IMU Procedure attaches it to
-/// the view; every other Procedure ignores it. When no snapshot has been
-/// published yet the view carries an empty Waiting readout, so the panel shows
-/// placeholders from the moment the test starts.
+/// `readout` is the panel-only telemetry snapshot for a Procedure that
+/// publishes one. An IMU Procedure, the Rangefinder Test and the Basic Motor
+/// Test attach it to the view; every other Procedure ignores it. When no
+/// snapshot has been published yet the view carries an empty Waiting readout, so
+/// the panel shows placeholders from the moment the test starts. A failed Basic
+/// Motor Test attaches nothing, so its failure reason keeps the panel instead of
+/// being hidden behind telemetry.
 fn status_view(snapshot: &Snapshot, readout: Option<Readout>) -> StatusView {
     // A running Procedure names itself: its title and where Stop returns both come
     // from the Menu Entry that started it. The boot flow and the idle state have no
@@ -780,6 +784,11 @@ fn status_view(snapshot: &Snapshot, readout: Option<Readout>) -> StatusView {
         Some(Procedure::RangefinderTest) => view.with_readout(readout.unwrap_or(Readout::Rangefinder(
             RangefinderTestReadout::waiting(rangefinder::DROP_THRESHOLD_MM),
         ))),
+        // A failed Basic Motor Test keeps its reason on the panel: a safety stop
+        // is never hidden behind numbers.
+        Some(Procedure::BasicMotor) if snapshot.stage != Stage::Failed => {
+            view.with_readout(readout.unwrap_or(Readout::BasicMotor(BasicMotorReadout::waiting())))
+        }
         Some(procedure) => ImuReadoutKind::for_procedure(procedure).map_or(view, |kind| {
             view.with_readout(readout.unwrap_or_else(|| Readout::Imu(ImuReadout::waiting(kind))))
         }),
@@ -901,9 +910,9 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
 /// caller has already read the snapshot, so the follow rule and this refresh
 /// share one Activity read.
 ///
-/// For an IMU Procedure the IMU Test Telemetry snapshot is read on the same
-/// tick, so the readout updates at the tick rate. Other screens never take that
-/// lock.
+/// For an IMU Procedure, the Rangefinder Test or the Basic Motor Test, the
+/// panel-only telemetry snapshot is read on the same tick, so the readout updates
+/// at the tick rate. Other screens never take those locks.
 async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
     if snapshot.activity == Activity::Idle {
         return false;
@@ -927,6 +936,7 @@ async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
 
     let readout = match snapshot.procedure() {
         Some(Procedure::RangefinderTest) => rangefinder_test::snapshot().await.map(Readout::Rangefinder),
+        Some(Procedure::BasicMotor) => basic_motor_test::snapshot().await.map(Readout::BasicMotor),
         Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => {
             imu_test::snapshot().await.map(Readout::Imu)
         }

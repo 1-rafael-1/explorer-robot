@@ -16,14 +16,16 @@ use embedded_graphics::{
 use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, SSID_CAPACITY, Snapshot, StationSsid};
 
 use crate::{
+    basic_motor::BasicMotorReadout,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, LINK_INFO_ROWS, PANEL_BORDER, SCROLL_MIN_THUMB_H,
-        SCROLL_W, footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
-        link_info_cell_rect, link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height,
-        nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect,
-        prompt_progress_rect, prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area,
-        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
+        SCROLL_W, basic_motor_label_rect, basic_motor_readout_area, basic_motor_value_rect, footer_rect,
+        header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
+        link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect,
+        nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect, prompt_progress_rect,
+        prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area, readout_rect,
+        readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
         slider_track_rect,
     },
     hit::{HeaderAction, Hit, LinkAction, PromptAction},
@@ -329,16 +331,18 @@ where
 }
 
 /// Draw a running/status screen: an accent-bordered panel carrying the body
-/// line.
+/// line or a typed readout.
 ///
 /// When the view reports progress the body sits above a bar across the panel's
-/// lower edge. When the view carries an IMU Test Readout, the rows replace both
-/// the body line and the progress bar. The header carries the dynamic title and
-/// the Stop button.
+/// lower edge. A readout replaces the body line, but the bar is still drawn
+/// whenever the view reports progress, so the Basic Motor Test Readout keeps the
+/// bar that shows how far through the cycle it is. The IMU and Rangefinder
+/// readouts pass no percent, so their screens are unchanged. The header carries
+/// the dynamic title and the Stop button.
 ///
 /// # Errors
 ///
-/// Returns the draw target's error if a primitive fails to draw.
+/// Returns the draw target's error if a primitive or text fails to draw.
 pub fn draw_status<D>(d: &mut D, view: &StatusView) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
@@ -349,24 +353,25 @@ where
         .into_styled(PrimitiveStyle::with_stroke(ACCENT, PANEL_BORDER))
         .draw(d)?;
 
-    if let Some(readout) = view.readout() {
-        return match readout {
-            Readout::Imu(readout) => draw_imu_readout(d, readout),
-            Readout::Rangefinder(readout) => draw_rangefinder_readout(d, readout),
-        };
-    }
-
     let track = progress_bar_rect();
-    // With a bar, the body sits in the space above it so the two cannot overlap.
-    let body_area = if view.progress.is_some() {
-        Rectangle::new(
-            panel.top_left,
-            Size::new(panel.size.width, (track.top_left.y - panel.top_left.y) as u32),
-        )
+    if let Some(readout) = view.readout() {
+        match readout {
+            Readout::Imu(readout) => draw_imu_readout(d, readout)?,
+            Readout::Rangefinder(readout) => draw_rangefinder_readout(d, readout)?,
+            Readout::BasicMotor(readout) => draw_basic_motor_readout(d, readout)?,
+        }
     } else {
-        panel
-    };
-    draw_centered_text(d, body_area, view.body_text(), MonoTextStyle::new(SMALL_FONT, TEXT))?;
+        // With a bar, the body sits in the space above it so the two cannot overlap.
+        let body_area = if view.progress.is_some() {
+            Rectangle::new(
+                panel.top_left,
+                Size::new(panel.size.width, (track.top_left.y - panel.top_left.y) as u32),
+            )
+        } else {
+            panel
+        };
+        draw_centered_text(d, body_area, view.body_text(), MonoTextStyle::new(SMALL_FONT, TEXT))?;
+    }
 
     if let Some(percent) = view.progress {
         track.into_styled(PrimitiveStyle::with_fill(BUTTON_BORDER)).draw(d)?;
@@ -505,6 +510,37 @@ where
 
     let footer = readout.footer();
     draw_readout_line(&mut clipped, rangefinder_footer_rect(), footer.as_str(), style)
+}
+
+/// Draw the Basic Motor Test Readout's label/value rows inside the status panel,
+/// above the progress bar.
+///
+/// The rows come from the readout model, so labels, the percent and the
+/// placeholders stay in one place. Each row draws its label at the row's left
+/// edge and its value after the label column, both left-aligned and vertically
+/// centred on a ten-pixel glyph. Drawing is clipped to the readout band, which
+/// ends above the bar, so a hostile over-long value cannot paint over the bar or
+/// the panel border.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+pub fn draw_basic_motor_readout<D>(d: &mut D, readout: &BasicMotorReadout) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = basic_motor_readout_area();
+    let mut clipped = d.clipped(&area);
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+    let rows = readout.rows();
+
+    for (index, (label, value)) in rows.iter().enumerate() {
+        let label_rect = basic_motor_label_rect(index, rows.len());
+        let value_rect = basic_motor_value_rect(index, rows.len());
+        draw_readout_line(&mut clipped, label_rect, label.as_str(), style)?;
+        draw_readout_line(&mut clipped, value_rect, value.as_str(), style)?;
+    }
+    Ok(())
 }
 
 /// Draw one readout line at its row's left edge, vertically centred on a

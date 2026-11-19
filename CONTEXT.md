@@ -233,7 +233,7 @@ The `drive` module tree owns all motion control. Commands flow through a thin di
 ## State Modules
 
 Lock order (documented in each module): **power → calibration → perception → motion → activity**.
-`imu_test`, `dmp_cal`, `rangefinder` and `rangefinder_test` are independent leaves that are never held with another state lock.
+`imu_test`, `dmp_cal`, `rangefinder`, `rangefinder_test` and `basic_motor_test` are independent leaves that are never held with another state lock.
 
 - **Power State** — Battery level (0–100%), pack voltage and motor rail voltage. Accessed via `power::get_battery_snapshot()` for level and pack voltage, and `power::try_get_rail_sample()` for the non-blocking hot-path rail sample.
 - **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
@@ -241,7 +241,7 @@ Lock order (documented in each module): **power → calibration → perception �
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
 - **Active Claim** — The single exclusive right to be the robot's current Activity and to produce motion: held by the boot flow, one Procedure, one **Manual Drive**, or the Room Scan screen. A second claimant is `BUSY`; the holder is the only writer of a live Activity. Any operator may stop the holder; there is no owner, no takeover mode and no authority derived from the link lease (ADR-0034).
 - **Claim Origin** — The transient `Panel` or `Remote` tag on an **Active Claim**, cleared with it. A `Drive` claim is always Remote and a `Procedure` takes the origin of its starter. It exists only so the **Deadman** can stop the Remote's work without touching the panel's; it is not authority and never reaches the wire (ADR-0035).
-- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout** or **Rangefinder Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
+- **Activity State** — What the robot is currently doing: a Procedure, recorded by its identity, the boot flow, or a transient **Manual Drive**, with a small progress snapshot — phase and percent. Written by the **Active Claim**'s owner, read by the touch UI, which is the only thing that draws, and mirrored by the `ACTIVITY` stream. Live sensor data is not Activity State; an **IMU Test Readout**, a **Rangefinder Test Readout** or a **Basic Motor Test Readout** has its own telemetry. A finished Procedure is presented as a Result Report.
 - **Result Report** — The status screen for a finished Activity State: it names the outcome, gives the reason on failure, and holds until the operator deliberately leaves it. A successful Procedure may return on its own; a failed one never does.
 - **Perception State** — Dual-path architecture for obstacle detection. *Lock-free path:* the `LIDAR_OBSTACLE` and floor-drop (`FLOOR_DROP`, `FLOOR_DROP_FRONT`, `FLOOR_DROP_REAR`) atomic booleans for hot-path reads. *Detailed path:* a mutex-protected optional cloud (`lidar-cloud`'s `Cloud` — 360 one-degree slots of an optional distance in centimetres, with a sequence counter). A slot is `None` for no return. The `LiDAR` task is the sole writer of the obstacle flag; the rangefinder task is the sole writer of the floor-drop flags (ADR-0015, ADR-0048, ADR-0051).
 - **ObstacleSource** — Enum (`Lidar` only, for now) carried by `ObstacleDetected` events. Identifies which sensor triggered the detection. Only the LiDAR raises obstacle edges: the rangefinder pair is a floor-drop/near-field sensor and raises its own `FloorDropDetected` edge, which is never an obstacle. A rangefinder obstacle source remains deferred (ADR-0026).
@@ -289,6 +289,17 @@ Lock order (documented in each module): **power → calibration → perception �
 - **DMP-Calibrated Magnetometer** — The magnetometer vector after the DMP's internal compass bias correction, shown as `M dmp`; it is distinct from the raw `M raw` vector.
 - **IMU Test Health** — Whether the IMU is producing samples during an IMU Test: `Waiting` before the first sample, `Live` while samples arrive, and **IMU Not Responding** after a sustained gap. The last state is shown in the readout rather than ending the Procedure. Every reading carries its acquisition time, so a value the driver stops updating reads as missing instead of staying `Live`.
 - **Heading Remap** — A candidate magnetometer heading from one of eight axis-sign permutations of a magnetometer plane, used to diagnose the sensor's mounting and axis mapping; the nine-axis readout shows eight per plane for XY, XZ and YZ.
+
+## Motor Test
+
+- **Basic Motor Test** — A bench Procedure that runs one track at a time, forward then reverse, stepping the commanded power from 10 % to 100 % in 10 % steps and cycling until the operator stops it. An operator Stop ends it with no Result Report.
+  _Avoid_: motor check, bench spin
+- **Power Step** — One track, one direction and one commanded power level within a Basic Motor Test: the unit that owns exactly one encoder count.
+  _Avoid_: leg (one track and one direction holds ten Power Steps), speed (that names the commanded value, not the unit)
+- **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle is four Test Legs in that order.
+  _Avoid_: leg (that names the Gap Analysis **Leg**), pass (that names the same Test Leg again)
+- **Breakaway** — The lowest Power Step of one direction of one track that produced a non-zero encoder count, i.e. the power at which that track first moved. Shown as `--` when the track did not move at any power up to 100 %.
+- **Basic Motor Test Readout** — The panel-only block inside the Basic Motor Test's running screen: the current Power Step with its power level, the live encoder count, the last completed Power Step with the count it finished with, the Breakaway, and the step index within the forty-step cycle. It is not part of Activity State and never reaches the Link Protocol.
 
 ## Development Practices
 

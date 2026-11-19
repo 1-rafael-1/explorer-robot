@@ -13,7 +13,7 @@
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
-use crate::{buffer::TextBuf, imu::ImuReadout, rangefinder::RangefinderTestReadout};
+use crate::{basic_motor::BasicMotorReadout, buffer::TextBuf, imu::ImuReadout, rangefinder::RangefinderTestReadout};
 
 /// One entry in a list screen.
 ///
@@ -593,15 +593,18 @@ impl ValueFlow {
 
 /// The typed readout a running screen shows instead of its body line.
 ///
-/// The IMU tests and the Rangefinder Test each fill the status panel with their
-/// own telemetry, so the view carries which readout it is rather than assuming
-/// one. A Procedure that shows no readout leaves [`StatusView::readout`] empty.
+/// The IMU tests, the Rangefinder Test and the Basic Motor Test each fill the
+/// status panel with their own telemetry, so the view carries which readout it
+/// is rather than assuming one. A Procedure that shows no readout leaves
+/// [`StatusView::readout`] empty.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Readout {
     /// An IMU Test Readout.
     Imu(ImuReadout),
     /// A Rangefinder Test Readout.
     Rangefinder(RangefinderTestReadout),
+    /// A Basic Motor Test Readout.
+    BasicMotor(BasicMotorReadout),
 }
 
 /// The neutral content of a running/status screen.
@@ -615,9 +618,9 @@ pub enum Readout {
 /// running. `body` is a compile-time line; a runtime-formatted line (such as a
 /// Manual Drive's command label) travels in a fixed-capacity [`TextBuf`] and is
 /// drawn instead of `body`. The model never formats a number, so no dynamic text
-/// is produced here. When a readout is present it replaces the body line and any
-/// progress bar: the IMU tests and the Rangefinder Test use the panel for their
-/// typed telemetry rather than a phase line.
+/// is produced here. When a readout is present it replaces the body line; the
+/// progress bar is still drawn when `progress` is present, so the Basic Motor
+/// Test keeps its cycle bar below its rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusView {
     /// The header title.
@@ -628,11 +631,9 @@ pub struct StatusView {
     /// A runtime-formatted body line, drawn instead of [`StatusView::body`] when
     /// present.
     text_body: Option<TextBuf>,
-    /// A typed readout, drawn instead of the body line and any progress bar when
-    /// present.
+    /// A typed readout, drawn instead of the body line when present.
     readout: Option<Readout>,
-    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar. Ignored
-    /// when [`StatusView::readout`] is present.
+    /// Percent progress (0–100), drawn as a bar; `None` to draw no bar.
     pub progress: Option<u8>,
     /// The screen the header action returns to.
     pub parent: Screen,
@@ -695,11 +696,11 @@ impl StatusView {
         self.text_body.as_ref().map_or(self.body, |body| body.as_str())
     }
 
-    /// Give the view a typed readout, drawn instead of the body line and any
-    /// progress bar.
+    /// Give the view a typed readout, drawn instead of the body line.
     ///
-    /// The IMU tests and the Rangefinder Test use this; every other running
-    /// screen leaves it empty and keeps its ordinary body line.
+    /// The IMU tests, the Rangefinder Test and the Basic Motor Test use this;
+    /// every other running screen leaves it empty and keeps its ordinary body
+    /// line. A progress bar, when the view has one, is still drawn.
     #[must_use]
     pub const fn with_readout(self, readout: Readout) -> Self {
         Self {

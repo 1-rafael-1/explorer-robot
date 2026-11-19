@@ -107,6 +107,18 @@ pub const READOUT_INSET: u32 = 4;
 /// one compresses below it so every row still fits.
 pub const READOUT_MAX_PITCH: u32 = 26;
 
+/// Width of the Basic Motor Test Readout's label column, in pixels.
+///
+/// The label sits on the left and the value follows it, so the two columns stay
+/// aligned down the block while the panel's inner width is 264 pixels.
+pub const BASIC_MOTOR_LABEL_W: u32 = 120;
+
+/// Vertical gap between the Basic Motor Test Readout and the progress bar, in
+/// pixels.
+///
+/// The readout band stops short of the bar's top edge so the two never touch.
+pub const BASIC_MOTOR_BAR_GAP: u32 = 4;
+
 /// Horizontal gap between the Rangefinder Test Readout's two sensor columns, in
 /// pixels.
 pub const RANGEFINDER_COLUMN_GAP: u32 = 8;
@@ -434,15 +446,7 @@ pub const fn readout_area() -> Rectangle {
 /// crowded. Zero rows use a zero pitch.
 #[must_use]
 pub const fn readout_row_pitch(rows: usize) -> u32 {
-    if rows == 0 {
-        return 0;
-    }
-    let fill = readout_area().size.height / rows as u32;
-    if fill < READOUT_MAX_PITCH {
-        fill
-    } else {
-        READOUT_MAX_PITCH
-    }
+    row_pitch_in(readout_area(), rows)
 }
 
 /// The on-screen rectangle of readout row `index` of `rows`.
@@ -452,8 +456,26 @@ pub const fn readout_row_pitch(rows: usize) -> u32 {
 /// twelve rows fill it without touching the border.
 #[must_use]
 pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
-    let area = readout_area();
-    let pitch = readout_row_pitch(rows);
+    row_rect_in(readout_area(), index, rows)
+}
+
+/// The row pitch for `rows` rows inside `area`, capped at
+/// [`READOUT_MAX_PITCH`].
+const fn row_pitch_in(area: Rectangle, rows: usize) -> u32 {
+    if rows == 0 {
+        return 0;
+    }
+    let fill = area.size.height / rows as u32;
+    if fill < READOUT_MAX_PITCH {
+        fill
+    } else {
+        READOUT_MAX_PITCH
+    }
+}
+
+/// The rectangle of row `index` of `rows` inside `area`, centred as a block.
+const fn row_rect_in(area: Rectangle, index: usize, rows: usize) -> Rectangle {
+    let pitch = row_pitch_in(area, rows);
     let block = (rows as u32).saturating_mul(pitch);
     let offset = area.size.height.saturating_sub(block) / 2;
     Rectangle::new(
@@ -462,6 +484,54 @@ pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
             area.top_left.y + (offset as i32) + (index as u32).saturating_mul(pitch) as i32,
         ),
         Size::new(area.size.width, pitch),
+    )
+}
+
+/// The on-screen rectangle of the Basic Motor Test Readout: the panel inset like
+/// the other readouts, ending above the progress bar.
+///
+/// The IMU and Rangefinder readouts fill [`readout_area`]. The Basic Motor Test
+/// keeps its cycle bar below the readout, so its band stops
+/// [`BASIC_MOTOR_BAR_GAP`] short of the bar's top edge and never overlaps it.
+#[must_use]
+pub const fn basic_motor_readout_area() -> Rectangle {
+    let area = readout_area();
+    let bar = progress_bar_rect();
+    let available = bar.top_left.y - area.top_left.y;
+    let height = if available > 0 { available as u32 } else { 0 };
+    Rectangle::new(
+        area.top_left,
+        Size::new(area.size.width, height.saturating_sub(BASIC_MOTOR_BAR_GAP)),
+    )
+}
+
+/// The on-screen rectangle of Basic Motor Test Readout row `index` among
+/// `rows`.
+///
+/// The rows share [`basic_motor_readout_area`] at up to [`READOUT_MAX_PITCH`]
+/// and the block is centred in the band, so a short block reads like the other
+/// readouts and the rows still fit above the bar.
+#[must_use]
+pub const fn basic_motor_row_rect(index: usize, rows: usize) -> Rectangle {
+    row_rect_in(basic_motor_readout_area(), index, rows)
+}
+
+/// The on-screen rectangle of the label cell in Basic Motor Test Readout row
+/// `index` among `rows`.
+#[must_use]
+pub const fn basic_motor_label_rect(index: usize, rows: usize) -> Rectangle {
+    let row = basic_motor_row_rect(index, rows);
+    Rectangle::new(row.top_left, Size::new(BASIC_MOTOR_LABEL_W, row.size.height))
+}
+
+/// The on-screen rectangle of the value cell in Basic Motor Test Readout row
+/// `index` among `rows`, starting after the label column.
+#[must_use]
+pub const fn basic_motor_value_rect(index: usize, rows: usize) -> Rectangle {
+    let row = basic_motor_row_rect(index, rows);
+    Rectangle::new(
+        Point::new(row.top_left.x + BASIC_MOTOR_LABEL_W as i32, row.top_left.y),
+        Size::new(row.size.width - BASIC_MOTOR_LABEL_W, row.size.height),
     )
 }
 

@@ -16,13 +16,15 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station, StationSsid,
 };
 use touch_ui::{
-    DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, FloorState, HeaderStatus, Hit, Item, LinkAction,
-    Procedure, PromptAction, PromptView, ProtectionState, RangeStatusName, RangefinderTestReadout, ScreenEntry,
-    SensorReadout, SensorState, Submenu, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, Ui,
+    BasicMotorReadout, Direction, DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, FloorState,
+    HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction, PromptView, ProtectionState, RangeStatusName,
+    RangefinderTestReadout, ScreenEntry, SensorReadout, SensorState, StepIndex, Submenu, TAP_MAX_MOVE,
+    TAP_MIN_DURATION_MS, TestLeg, Track, Ui,
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BACK_MARGIN, BACK_W, FB_H, FB_W, HEADER_ACTION_GAP, HEADER_H, HEADER_STATUS_W, LINK_INFO_ROW_H, LINK_INFO_ROWS,
-        LINK_SECTION_GAP, SCROLL_MARGIN, SIDE_MARGIN, back_button_rect, cancel_button_rect, header_status_rect,
+        LINK_SECTION_GAP, SCROLL_MARGIN, SIDE_MARGIN, back_button_rect, basic_motor_label_rect,
+        basic_motor_readout_area, basic_motor_row_rect, basic_motor_value_rect, cancel_button_rect, header_status_rect,
         header_title_rect, info_row_rect, link_action_rect, link_info_row_rect, link_info_top, link_result_rect,
         max_scroll_for, menu_item_rect, nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect,
         prompt_action_rect, prompt_done_rect, prompt_instruction_rect, prompt_progress_rect, prompt_redo_rect,
@@ -2081,6 +2083,429 @@ fn the_rangefinder_columns_and_footer_fit_inside_the_status_panel() {
     let footer = rangefinder_footer_rect();
     assert!(footer.top_left.y > rangefinder_column_rect(0, 6).top_left.y);
     assert!(bottom_right(footer).y < bottom_right(panel).y);
+}
+
+/// A step position at `position` of the forty-step cycle, as the task reports
+/// it.
+const fn step(position: u8) -> StepIndex {
+    StepIndex { position, total: 40 }
+}
+
+/// A running Basic Motor Test Readout: left forward at 60 % with a live count.
+fn sample_basic_motor() -> BasicMotorReadout {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Forward,
+        },
+        60,
+        step(12),
+    );
+    readout.sample(1234);
+    readout
+}
+
+/// Test that a readout with no Power Step yet renders `--` in both rows, so "no
+/// data yet" is never read as zero counts.
+#[test]
+fn a_waiting_basic_motor_readout_shows_placeholders() {
+    let rows = BasicMotorReadout::waiting().rows();
+    assert_eq!(rows[0].0.as_str(), "--");
+    assert_eq!(rows[0].1.as_str(), "--");
+    assert_eq!(rows[1].0.as_str(), "Count");
+    assert_eq!(rows[1].1.as_str(), "--");
+    assert_eq!(rows[2].0.as_str(), "Last");
+    assert_eq!(rows[2].1.as_str(), "--");
+    assert_eq!(rows[3].0.as_str(), "Breakaway");
+    assert_eq!(rows[3].1.as_str(), "--");
+    assert_eq!(rows[4].0.as_str(), "Step");
+    assert_eq!(rows[4].1.as_str(), "--");
+}
+
+/// Test that a running readout names the current Power Step with its power and
+/// shows the live encoder count.
+#[test]
+fn a_running_basic_motor_readout_names_the_step_and_count() {
+    let rows = sample_basic_motor().rows();
+    assert_eq!(rows[0].0.as_str(), "Left forward");
+    assert_eq!(rows[0].1.as_str(), "60%");
+    assert_eq!(rows[1].0.as_str(), "Count");
+    assert_eq!(rows[1].1.as_str(), "1234");
+}
+
+/// Test that the live count survives the encoder reset and the next Power Step's
+/// start, and is replaced only when a new sample arrives.
+#[test]
+fn the_live_count_holds_through_a_step_start_and_is_replaced_by_a_sample() {
+    let leg = TestLeg {
+        track: Track::Right,
+        direction: Direction::Reverse,
+    };
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(leg, 10, step(1));
+    readout.sample(987);
+    assert_eq!(readout.rows()[1].1.as_str(), "987");
+
+    // The reset and the next step's start keep the operator's reading.
+    readout.start_step(leg, 20, step(2));
+    assert_eq!(readout.rows()[0].1.as_str(), "20%");
+    assert_eq!(readout.rows()[1].1.as_str(), "987");
+
+    readout.sample(12);
+    assert_eq!(readout.rows()[1].1.as_str(), "12");
+}
+
+/// Test that the `Last` row carries the completed step's own leg, power and
+/// count, so the number is never attributed to a different Power Step.
+#[test]
+fn the_last_row_names_the_completed_step_and_its_count() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Forward,
+        },
+        50,
+        step(5),
+    );
+    readout.sample(500);
+    readout.complete(987);
+
+    let rows = readout.rows();
+    assert_eq!(rows[2].0.as_str(), "Last");
+    assert_eq!(rows[2].1.as_str(), "L fwd 50%  987");
+    // The step keeps naming the command that produced those numbers, so the panel
+    // does not blank for the coast between Power Steps.
+    assert_eq!(rows[0].0.as_str(), "Left forward");
+    assert_eq!(rows[0].1.as_str(), "50%");
+}
+
+/// Test that the `Last` row survives a pass boundary: the final step of left
+/// forward stays readable during the first step of left reverse.
+#[test]
+fn the_last_row_survives_a_test_leg_boundary() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Forward,
+        },
+        100,
+        step(10),
+    );
+    readout.sample(65535);
+    readout.complete(65535);
+
+    // The next Test Leg begins on left reverse; the completed step is still the last
+    // step of left forward.
+    readout.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Reverse,
+        },
+        10,
+        step(11),
+    );
+    readout.sample(0);
+
+    let rows = readout.rows();
+    assert_eq!(rows[0].0.as_str(), "Left reverse");
+    assert_eq!(rows[0].1.as_str(), "10%");
+    assert_eq!(rows[2].1.as_str(), "L fwd 100%  65535");
+}
+
+/// Test that the `Last` row reads `--` until the first Power Step completes,
+/// even while one is running, so "no data yet" is never read as a count.
+#[test]
+fn the_last_row_reads_a_placeholder_before_the_first_completion() {
+    let rows = sample_basic_motor().rows();
+    assert_eq!(rows[2].0.as_str(), "Last");
+    assert_eq!(rows[2].1.as_str(), "--");
+}
+
+/// Test that completing without a current Power Step leaves the retained `Last`
+/// value untouched rather than overwriting it.
+#[test]
+fn a_complete_without_a_current_step_keeps_the_last_row() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Forward,
+        },
+        60,
+        step(6),
+    );
+    readout.sample(1234);
+    readout.complete(1234);
+    assert_eq!(readout.rows()[2].1.as_str(), "L fwd 60%  1234");
+
+    // A second completion with no step in progress must not overwrite it.
+    readout.complete(999);
+    assert_eq!(readout.rows()[2].1.as_str(), "L fwd 60%  1234");
+}
+
+/// Test that the widest `Last` value, a 100 % step with a full-range count, fits
+/// the value column without clipping.
+#[test]
+fn the_last_rows_widest_value_fits_the_value_column() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(
+        TestLeg {
+            track: Track::Right,
+            direction: Direction::Forward,
+        },
+        100,
+        step(30),
+    );
+    readout.sample(65535);
+    readout.complete(65535);
+
+    let rows = readout.rows();
+    let value = rows[2].1.as_str();
+    assert_eq!(value, "R fwd 100%  65535");
+    let width = u32::try_from(value.len()).unwrap_or(u32::MAX) * SMALL_FONT.character_size.width;
+    let column = basic_motor_value_rect(2, rows.len());
+    assert!(
+        width <= column.size.width,
+        "{value} needs {width} px of {} px",
+        column.size.width
+    );
+}
+
+/// Test that every Basic Motor Test Readout row sits between the panel's top
+/// edge and the progress bar's top edge, so the five-row readout never covers
+/// the bar.
+#[test]
+fn the_basic_motor_readout_rows_sit_between_the_panel_and_the_bar() {
+    let panel = panel_rect();
+    let bar = progress_bar_rect();
+    let area = basic_motor_readout_area();
+    assert!(area.top_left.y > panel.top_left.y);
+    assert!(bottom_right(area).y < bar.top_left.y);
+
+    let rows = sample_basic_motor().rows().len();
+    assert_eq!(
+        rows, 5,
+        "the block is the current step, the count, the last step, the breakaway and the step index"
+    );
+    for index in 0..rows {
+        let rect = basic_motor_row_rect(index, rows);
+        assert!(rect.top_left.y > panel.top_left.y);
+        assert!(bottom_right(rect).y < bar.top_left.y);
+    }
+}
+
+/// Test that the `Breakaway` latches at the first step of a Test Leg that moved
+/// and does not follow a later, higher power in the same leg.
+#[test]
+fn the_breakaway_latches_at_the_first_moving_step_of_a_test_leg() {
+    let leg = TestLeg {
+        track: Track::Left,
+        direction: Direction::Forward,
+    };
+    let mut readout = BasicMotorReadout::waiting();
+
+    // A step that did not move is not a Breakaway.
+    readout.start_step(leg, 10, step(1));
+    readout.sample(0);
+    readout.complete(0);
+    assert_eq!(readout.rows()[3].0.as_str(), "Breakaway");
+    assert_eq!(readout.rows()[3].1.as_str(), "--");
+
+    // The first moving step is the lowest, so it latches here.
+    readout.start_step(leg, 20, step(2));
+    readout.sample(14);
+    readout.complete(14);
+    assert_eq!(readout.rows()[3].1.as_str(), "20%");
+
+    // A later, higher power that moves must not replace the latched one.
+    readout.start_step(leg, 30, step(3));
+    readout.sample(900);
+    readout.complete(900);
+    assert_eq!(readout.rows()[3].1.as_str(), "20%");
+}
+
+/// Test that the `Breakaway` resets when the Test Leg changes, so each leg
+/// reports its own.
+#[test]
+fn the_breakaway_resets_when_the_test_leg_changes() {
+    let left_forward = TestLeg {
+        track: Track::Left,
+        direction: Direction::Forward,
+    };
+    let left_reverse = TestLeg {
+        track: Track::Left,
+        direction: Direction::Reverse,
+    };
+
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_step(left_forward, 30, step(3));
+    readout.sample(40);
+    readout.complete(40);
+    assert_eq!(readout.rows()[3].1.as_str(), "30%");
+
+    // The next leg starts absent, even though the previous leg moved.
+    readout.start_step(left_reverse, 10, step(11));
+    assert_eq!(readout.rows()[3].1.as_str(), "--");
+
+    readout.sample(8);
+    readout.complete(8);
+    assert_eq!(readout.rows()[3].1.as_str(), "10%");
+}
+
+/// Test that a Test Leg in which every completed count was zero leaves the
+/// `Breakaway` at a placeholder: the verdict that the track did not move at any
+/// power up to 100 %.
+#[test]
+fn a_test_leg_that_never_moved_leaves_the_breakaway_at_a_placeholder() {
+    let leg = TestLeg {
+        track: Track::Right,
+        direction: Direction::Reverse,
+    };
+    let mut readout = BasicMotorReadout::waiting();
+
+    readout.start_step(leg, 10, step(31));
+    readout.sample(0);
+    readout.complete(0);
+    readout.start_step(leg, 20, step(32));
+    readout.sample(0);
+    readout.complete(0);
+    readout.start_step(leg, 100, step(40));
+    readout.sample(0);
+    readout.complete(0);
+
+    let rows = readout.rows();
+    assert_eq!(rows[1].1.as_str(), "0", "a zero count is shown as zero");
+    assert_eq!(rows[3].1.as_str(), "--");
+    assert_eq!(rows[4].1.as_str(), "40/40");
+}
+
+/// Test that the `Step` row reads the one-based position of the forty-step
+/// cycle and restarts at one when a new cycle begins.
+#[test]
+fn the_step_row_reads_the_position_and_restarts_with_a_new_cycle() {
+    let right_reverse = TestLeg {
+        track: Track::Right,
+        direction: Direction::Reverse,
+    };
+    let mut readout = BasicMotorReadout::waiting();
+
+    readout.start_step(right_reverse, 10, step(1));
+    readout.sample(0);
+    readout.complete(0);
+    assert_eq!(readout.rows()[4].0.as_str(), "Step");
+    assert_eq!(readout.rows()[4].1.as_str(), "1/40");
+
+    readout.start_step(right_reverse, 20, step(2));
+    assert_eq!(readout.rows()[4].1.as_str(), "2/40");
+
+    readout.start_step(right_reverse, 100, step(40));
+    assert_eq!(readout.rows()[4].1.as_str(), "40/40");
+
+    // The next cycle starts at one again.
+    let left_forward = TestLeg {
+        track: Track::Left,
+        direction: Direction::Forward,
+    };
+    readout.start_step(left_forward, 10, step(1));
+    assert_eq!(readout.rows()[4].1.as_str(), "1/40");
+}
+
+/// Test that every label and value fits its own column at the 6 px glyph, over
+/// the widest cells the readout can produce: a spelled-out Test Leg, a `100%`
+/// Breakaway and a `40/40` step index.
+#[test]
+fn every_basic_motor_row_fits_its_label_and_value_columns() {
+    let leg = TestLeg {
+        track: Track::Left,
+        direction: Direction::Forward,
+    };
+    let mut readout = BasicMotorReadout::waiting();
+    // The full-power step that moved is the widest Breakaway, and its completion
+    // leaves the widest `Last` value behind.
+    readout.start_step(leg, 100, step(39));
+    readout.sample(65535);
+    readout.complete(65535);
+    // The last step of the cycle names the widest current step and step index.
+    readout.start_step(leg, 100, step(40));
+    readout.sample(65535);
+
+    let rows = readout.rows();
+    assert_eq!(rows[0].0.as_str(), "Left forward");
+    assert_eq!(rows[3].1.as_str(), "100%");
+    assert_eq!(rows[4].1.as_str(), "40/40");
+
+    for (index, (label, value)) in rows.iter().enumerate() {
+        let label_rect = basic_motor_label_rect(index, rows.len());
+        let label_width = u32::try_from(label.as_str().len()).unwrap_or(u32::MAX) * SMALL_FONT.character_size.width;
+        assert!(
+            label_width <= label_rect.size.width,
+            "{} needs {label_width} px of {} px",
+            label.as_str(),
+            label_rect.size.width
+        );
+
+        let value_rect = basic_motor_value_rect(index, rows.len());
+        let value_width = u32::try_from(value.as_str().len()).unwrap_or(u32::MAX) * SMALL_FONT.character_size.width;
+        assert!(
+            value_width <= value_rect.size.width,
+            "{} needs {value_width} px of {} px",
+            value.as_str(),
+            value_rect.size.width
+        );
+    }
+}
+
+/// Test that the status view redraws when a displayed Basic Motor value changes
+/// and not when the same values are presented again.
+#[test]
+fn a_basic_motor_readout_redraws_only_when_a_displayed_value_changes() {
+    let view = StatusView::for_procedure(Procedure::BasicMotor, "Basic motor test")
+        .with_readout(Readout::BasicMotor(sample_basic_motor()))
+        .with_progress(40);
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    assert!(!ui.set_status(view));
+
+    let mut sampled = sample_basic_motor();
+    sampled.sample(1235);
+    let changed = view.with_readout(Readout::BasicMotor(sampled));
+    assert!(ui.set_status(changed));
+    assert!(!ui.set_status(changed));
+
+    let mut next_step = sample_basic_motor();
+    next_step.start_step(
+        TestLeg {
+            track: Track::Left,
+            direction: Direction::Reverse,
+        },
+        70,
+        step(2),
+    );
+    assert!(ui.set_status(view.with_readout(Readout::BasicMotor(next_step))));
+}
+
+/// Test that a running screen with the readout and the progress bar together
+/// renders into the existing discard target.
+#[test]
+fn a_running_screen_with_a_basic_motor_readout_and_bar_renders() {
+    let view = StatusView::for_procedure(Procedure::BasicMotor, "Basic motor test")
+        .with_readout(Readout::BasicMotor(sample_basic_motor()))
+        .with_progress(40);
+    let mut ui = Ui::new();
+    assert!(ui.show_status(view));
+    render_ok(&ui);
+}
+
+/// Test that the readout slot carries the Basic Motor Test variant through the
+/// status view unchanged.
+#[test]
+fn the_readout_enum_carries_the_basic_motor_variant() {
+    let basic = Readout::BasicMotor(sample_basic_motor());
+    let view = StatusView::for_procedure(Procedure::BasicMotor, "Basic motor test").with_readout(basic);
+    assert_eq!(view.readout(), Some(&basic));
 }
 
 /// Test that the six-axis row block fits inside the status panel, with the last
