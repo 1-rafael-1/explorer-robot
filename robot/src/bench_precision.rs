@@ -38,28 +38,30 @@
 //!
 //! This is a bench diagnostic, not a `#[cfg(test)]` test: it needs the real board,
 //! motors, encoders and a current-limited supply.
-
-#[cfg(all(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
-compile_error!("enable only one of `bench_motor_calibrate` or `bench_motor_measure`");
+//!
+//! When both features are enabled (for example under `cargo --all-features`), the
+//! calibrate phase takes precedence and the measure phase is not compiled; enable
+//! exactly one feature explicitly for a bench run.
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-
 #[cfg(feature = "bench_motor_calibrate")]
 use embassy_time::Instant;
-
-use crate::system::state::calibration;
-
+use embassy_time::{Duration, Timer};
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
+use motor_cal::{Direction, MEASUREMENT_WINDOW_MS, QUIESCENCE_HOLD_MS, QUIESCENCE_TIMEOUT_MS, SETTLE_MS};
 #[cfg(feature = "bench_motor_calibrate")]
 use touch_ui::Procedure;
 
-#[cfg(feature = "bench_motor_calibrate")]
-use crate::{
-    system::state::activity::{self, Stage},
-    task::procedure::{self, ClaimOrigin, StartOutcome},
+use crate::system::state::calibration;
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
+use crate::task::{
+    drive::{clear_encoder_measurement, get_latest_encoder_measurement},
+    motor_sweep::{
+        DIRECTIONS, NO_SAMPLE_TIMEOUT_MS, SAMPLE_INTERVAL_MS, now_ms, signed_speed, start_encoders, stop_encoders,
+    },
+    sensors::encoders::{self, EncoderCommand, EncoderMeasurement},
 };
-
 // Both phases share the driver command path and the raw sweep schedule for the
 // warm-up, so these are needed whenever either feature is on.
 #[cfg(any(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
@@ -67,17 +69,10 @@ use crate::task::{
     motor_driver::{self, MotorCommand},
     motor_sweep,
 };
-
-#[cfg(feature = "bench_motor_measure")]
-use motor_cal::{Direction, MEASUREMENT_WINDOW_MS, QUIESCENCE_HOLD_MS, QUIESCENCE_TIMEOUT_MS, SETTLE_MS};
-
-#[cfg(feature = "bench_motor_measure")]
-use crate::task::{
-    drive::{clear_encoder_measurement, get_latest_encoder_measurement},
-    motor_sweep::{
-        DIRECTIONS, NO_SAMPLE_TIMEOUT_MS, SAMPLE_INTERVAL_MS, now_ms, signed_speed, start_encoders, stop_encoders,
-    },
-    sensors::encoders::{self, EncoderCommand, EncoderMeasurement},
+#[cfg(feature = "bench_motor_calibrate")]
+use crate::{
+    system::state::activity::{self, Stage},
+    task::procedure::{self, ClaimOrigin, StartOutcome},
 };
 
 // ── Spawn ───────────────────────────────────────────────────────────────────────
@@ -234,18 +229,18 @@ async fn wait_for_terminal(procedure: Procedure) -> Option<Stage> {
 // ── Phase 2: measure ────────────────────────────────────────────────────────────
 
 /// The corrected-divergence pass threshold, in percent.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 const PASS_DIVERGENCE_PERCENT: f32 = 5.0;
 
 /// Repeats per direction and power.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 const REPEATS: u8 = 2;
 
 /// The powers the corrected-divergence regression measures.
 ///
 /// 100 % is deliberately absent: both tracks at 100 % need a bench supply rated
 /// for at least 2 A. Add `100` only with such a supply.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 const BENCH_POWERS: [u8; 8] = [20, 30, 40, 50, 60, 70, 80, 90];
 
 /// The lowest power that gates the corrected-divergence pass.
@@ -254,7 +249,7 @@ const BENCH_POWERS: [u8; 8] = [20, 30, 40, 50, 60, 70, 80, 90];
 /// floor is 20 %, and the 20 % left/right ratio changes sign from run to run. A
 /// point there cannot distinguish a calibration error from breakaway noise, so
 /// 20 % rows are still measured and logged for diagnosis but do not gate PASS.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 const PASS_MIN_POWER: u8 = 30;
 
 /// Run the corrected-divergence regression from the menu, then hold.
@@ -274,7 +269,7 @@ async fn bench_measure_task() {
 }
 
 /// One measured corrected pair at one direction and power.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 struct PointReading {
     /// The left track's encoder delta over the Measurement Window.
     left: u16,
@@ -285,7 +280,7 @@ struct PointReading {
 }
 
 /// Measure every direction and power, logging each repeat and the final maximum.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 async fn run_regression() {
     start_encoders().await;
 
@@ -347,7 +342,7 @@ async fn run_regression() {
 
 /// Brake, quiesce, reset both counters, command the curve-applied pair, and
 /// measure both deltas over the settle-excluded window.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 async fn measure_point(direction: Direction, power: u8) -> Option<PointReading> {
     if !quiesce().await {
         return None;
@@ -388,7 +383,7 @@ async fn measure_point(direction: Direction, power: u8) -> Option<PointReading> 
 
 /// Brake both tracks and wait until neither counter has changed for the hold
 /// window.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 async fn quiesce() -> bool {
     motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
 
@@ -432,7 +427,7 @@ async fn quiesce() -> bool {
 
 /// Wait for a fresh sample at or after `threshold_ms`, or give up on a dead
 /// encoder task.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 async fn wait_sample_at_or_after(threshold_ms: u64) -> Option<EncoderMeasurement> {
     let started_ms = now_ms();
     let mut last_timestamp: Option<u64> = None;
@@ -466,7 +461,7 @@ async fn wait_sample_at_or_after(threshold_ms: u64) -> Option<EncoderMeasurement
 ///
 /// A pair with no counts cannot be compared; it reports 100 % so the run fails
 /// visibly rather than passing on missing data.
-#[cfg(feature = "bench_motor_measure")]
+#[cfg(all(feature = "bench_motor_measure", not(feature = "bench_motor_calibrate")))]
 fn divergence_percent(left: u16, right: u16) -> f32 {
     let min = left.min(right);
     if min == 0 {
