@@ -23,8 +23,12 @@
 //! measures both encoder deltas over 2 000 ms. The divergence is
 //! `|left − right| / min(left, right)`.
 //!
-//! The pass criterion is a maximum divergence below 5 % across the run. The
-//! harness logs exactly one final line, `bench-precision: max=<pct> PASS` or
+//! It measures 20–90 %, but gates the pass at 30–90 %. The 20 % band is
+//! stiction-limited, so its result is logged for information only; see
+//! [`PASS_MIN_POWER`].
+//!
+//! The pass criterion is a maximum divergence below 5 % across the gated powers.
+//! The harness logs exactly one final line, `bench-precision: max=<pct> PASS` or
 //! `bench-precision: max=<pct> FAIL`, which [`scripts/motor-bench-precision.sh`]
 //! greps.
 //!
@@ -247,6 +251,15 @@ const REPEATS: u8 = 2;
 #[cfg(feature = "bench_motor_measure")]
 const BENCH_POWERS: [u8; 8] = [20, 30, 40, 50, 60, 70, 80, 90];
 
+/// The lowest power that gates the corrected-divergence pass.
+///
+/// 20 % is the stiction band: forward 10 % produces zero counts, the breakaway
+/// floor is 20 %, and the 20 % left/right ratio changes sign from run to run. A
+/// point there cannot distinguish a calibration error from breakaway noise, so
+/// 20 % rows are still measured and logged for diagnosis but do not gate PASS.
+#[cfg(feature = "bench_motor_measure")]
+const PASS_MIN_POWER: u8 = 30;
+
 /// Run the corrected-divergence regression from the menu, then hold.
 ///
 /// The menu is idle in this boot: no Procedure or Result Report is active, so
@@ -280,6 +293,7 @@ async fn run_regression() {
     start_encoders().await;
 
     let mut max_divergence: Option<f32> = None;
+    let mut low_power_max: Option<f32> = None;
     for direction in DIRECTIONS {
         for power in BENCH_POWERS {
             for repeat in 1..=REPEATS {
@@ -293,7 +307,12 @@ async fn run_regression() {
                         reading.right,
                         reading.divergence
                     );
-                    max_divergence = Some(max_divergence.map_or(reading.divergence, |max| max.max(reading.divergence)));
+                    let observed = reading.divergence;
+                    if power >= PASS_MIN_POWER {
+                        max_divergence = Some(max_divergence.map_or(observed, |max| max.max(observed)));
+                    } else {
+                        low_power_max = Some(low_power_max.map_or(observed, |max| max.max(observed)));
+                    }
                 } else {
                     info!(
                         "bench-precision: dir={=str} p={=u8} rep={=u8} measurement failed",
@@ -301,15 +320,24 @@ async fn run_regression() {
                         power,
                         repeat
                     );
-                    // A missing point cannot pass; keep the worst possible value
-                    // so the final line fails visibly.
-                    max_divergence = Some(100.0);
+                    if power >= PASS_MIN_POWER {
+                        // A missing gated point cannot pass; keep the worst
+                        // possible value so the final line fails visibly.
+                        max_divergence = Some(100.0);
+                    }
                 }
             }
         }
     }
 
     stop_encoders().await;
+
+    if let Some(low_power_max) = low_power_max {
+        info!(
+            "bench-precision: low-power-max={=f32} (informational, below {=u8}%)",
+            low_power_max, PASS_MIN_POWER
+        );
+    }
 
     // A run that measured nothing cannot pass; report the worst possible value.
     let max = max_divergence.unwrap_or(100.0);

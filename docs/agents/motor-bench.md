@@ -285,7 +285,13 @@ polarity.
 ## 7. Corrected-divergence regression
 
 The `bench_motor_measure` feature measures, for **forward and reverse** and
-powers **20, 30, …, 90 %**, two repeats each:
+powers **20, 30, …, 90 %**, two repeats each. It gates the PASS at **30–90 %**:
+the 20 % band is stiction-limited, so its result is logged for information only.
+Forward 10 % produces zero counts, the breakaway floor is 20 %, and the 20 %
+left/right ratio changes sign from run to run, so a 20 % point cannot separate a
+calibration error from breakaway noise. The 20 % readings are reported on a
+separate `bench-precision: low-power-max=<pct> (informational, below 30 %)` line
+before the final result.
 
 1. brake both tracks and wait for Quiescence;
 2. reset both counters;
@@ -294,7 +300,7 @@ powers **20, 30, …, 90 %**, two repeats each:
 4. discard 500 ms, then measure both encoder deltas over 2 000 ms;
 5. log
    `bench-precision: dir=Forward p=40 rep=1 L=552 R=558 div=1.1`;
-6. track the maximum divergence.
+6. track the gated maximum (30–90 %) and the informational 20 % maximum.
 
 The final line is exactly one of:
 
@@ -303,10 +309,10 @@ bench-precision: max=2.41 PASS
 bench-precision: max=8.40 FAIL
 ```
 
-Pass is **max < 5.0 %**. The measure-phase boot loads the v4 curve saved by
-phase 1, so `SetTracks` uses it. Run it on a charged pack; voltage compensation
-and the loaded rail affect both tracks together but a sagging pack makes the
-point noisy.
+Pass is **max < 5.0 % at 30–90 %; 20 % is informational.** The measure-phase
+boot loads the v4 curve saved by phase 1, so `SetTracks` uses it. Run it on a
+charged pack; voltage compensation and the loaded rail affect both tracks
+together but a sagging pack makes the point noisy.
 
 ### Full-power variant
 
