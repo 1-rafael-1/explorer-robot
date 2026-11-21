@@ -105,7 +105,7 @@ fn a_sample_from_before_the_reset_is_stale() {
 }
 
 #[test]
-fn a_sample_at_the_reset_instant_cannot_confirm_it() {
+fn a_sample_at_the_reset_instant_confirms_it() {
     let mut engine = MeasurementEngine::new();
     engine.begin_step(0);
     engine.observe(sample(0, 0));
@@ -114,7 +114,8 @@ fn a_sample_at_the_reset_instant_cannot_confirm_it() {
 
     engine.observe(sample(300, 0));
 
-    assert_eq!(engine.result(), Some(PointResult::Invalid(InvalidReason::StaleSample)));
+    assert_eq!(engine.phase(), Phase::ReadyToCommand);
+    assert_eq!(engine.result(), None);
 }
 
 #[test]

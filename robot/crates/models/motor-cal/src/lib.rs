@@ -360,12 +360,13 @@ impl MeasurementEngine {
 
     /// Confirm the reset with a fresh sample at zero.
     ///
-    /// The confirming sample must be timestamped strictly after the reset
-    /// instant. A sample at or before it was taken before the reset, so it can
-    /// never confirm it and is reported as stale. A fresh sample that is not
-    /// zero means the reset did not take.
+    /// The confirming sample must not predate the reset instant. A sample
+    /// strictly before it was taken before the reset and is reported as stale;
+    /// a sample in the same millisecond is accepted because the caller records
+    /// the reset instant before clearing the stale drive-side copy. A fresh
+    /// sample that is not zero means the reset did not take.
     const fn observe_reset(&mut self, sample: EncoderSample) {
-        if sample.timestamp_ms <= self.reset_ms {
+        if sample.timestamp_ms < self.reset_ms {
             self.invalidate(InvalidReason::StaleSample);
         } else if sample.count == 0 {
             self.phase = Phase::ReadyToCommand;

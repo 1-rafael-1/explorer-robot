@@ -281,8 +281,13 @@ where
                     // so the confirming sample can only be a fresh one.
                     encoders::send_command(EncoderCommand::Reset).await;
                     Timer::after(Duration::from_millis(2 * SAMPLE_INTERVAL_MS)).await;
-                    clear_encoder_measurement().await;
+                    // Fix the reset instant before dropping the stale drive-side
+                    // copy: a sample published between the clear and the reset
+                    // would otherwise carry a timestamp at or before the reset
+                    // and be rejected as stale even though the counters had
+                    // already been reset.
                     engine.reset_now(now_ms());
+                    clear_encoder_measurement().await;
                 } else if last_sample_ms.saturating_sub(started_ms) >= QUIESCENCE_TIMEOUT_MS {
                     engine.abort(InvalidReason::QuiescenceTimeout);
                     break;
@@ -378,7 +383,7 @@ where
                     break 'cycle SweepEnd::Stopped;
                 }
                 if perception::is_floor_drop_detected() {
-                    break 'cycle SweepEnd::Aborted(FLOOR_DROP_REASON);
+                    return SweepEnd::Aborted(FLOOR_DROP_REASON);
                 }
 
                 let step = StepRef {
