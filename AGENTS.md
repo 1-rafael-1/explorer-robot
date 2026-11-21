@@ -18,3 +18,9 @@ A graphify knowledge graph is generated into `graphify-out/` (gitignored). See
 `docs/agents/graphify.md` for what it contains, when to refresh it and how to query it;
 refresh with `scripts/graphify-update.sh check|code|docs`. Treat the code as the source
 of truth.
+
+### Motor bench
+
+Hardware-in-the-loop motor testing (auto-start recipe, power/floor caveats, RTT
+parsing, and the corrected-divergence harness) is in `docs/agents/motor-bench.md`.
+Use it before touching the panel or changing the measurement code.
