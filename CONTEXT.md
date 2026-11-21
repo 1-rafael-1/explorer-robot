@@ -8,7 +8,7 @@
 - **Track** — Left or right side of the robot. Each track has three sprockets: rear drive sprocket (motor-coupled, toothed), middle road wheel (weight-bearing, smooth), and front idler (tensioner, smooth). Rear drive keeps the bottom track run in tension under load, maximizing traction and preventing track bunching.
 - **Motor** — A single JGB37-520 6V 165RPM DC motor with hall encoder. Two motors (one per track).
 - **Motor Driver** — The TB6612FNG dual H-bridge chip. Controls direction (via direct GPIO) and speed (via PWM) for both motors. One standby pin enables/disables the driver.
-- **Encoder** — Two-channel (A/B) hall encoder on each JGB37-520 motor. Counts 1320 pulses per output shaft revolution (165:1 gear ratio) via PWM input mode. Only one channel is read, so direction is inferred from the motor command rather than measured from the A/B phase.
+- **Encoder** — Two-channel (A/B) hall encoder on each JGB37-520 motor, read as a single-channel rising-edge pulse counter via PWM input mode. The encoder is on the motor shaft (11 pulses per motor revolution) behind the 30:1 gearbox, giving **330 pulses per sprocket revolution**. The counter measures rotation only, so direction is inferred from the motor command rather than measured from the A/B phase.
 - **IMU** — ICM-20948 9-axis inertial measurement unit (accelerometer, gyroscope, magnetometer). Connected via dedicated SPI bus (CS, SCK, MOSI, MISO). Its **VDDIO is 1.8 V only** (1.71–1.95 V, unlike the MPU-9250), so it runs on a dedicated 1.8 V rail and its SPI and INT lines are level-shifted to the 3V3 MCU (ADR-0017). The CS line is pulled up to 3V3 on the MCU side (`R46`, 2.2 kΩ) so the IMU stays deselected while the RP2350 is in reset; firmware resets the IMU before verifying its identity.
 - **LiDAR** — COIN-D6 360° spinning dTOF LiDAR on dedicated UART0 (core1): MCU TX on GPIO28, MCU RX on GPIO29, with an active-high TPS22917 high-side load switch on GPIO30. The 5 V branch is switched; the connector ground is solid. Emits continuous scan data at a native 0.9° resolution (400 points per revolution) with distances in millimetres, over UART at 230400 baud 8N1 with a start/stop command protocol. Driven by the `coin-d6` workspace crate on core1, and powered only while a mode needs it. Its UART is quiesced, deinitialized, and both TX and RX are tri-stated before the branch is switched off (ADR-0023).
 - **AI Cam** — Grove Vision AI V2 on-device ML camera module (Himax WiseEye2), on a PIO0 UART (core0): MCU TX on GPIO24, MCU RX on GPIO25, with an active-high TPS22917 high-side load switch on GPIO23. The module requires a 5 V input (its Grove `VCC` feeds an on-module 3.3 V buck); the branch is switched from `+5V`, and its UART is 3.3 V. Not yet integrated — pins reserved only. The PIO transport leaves hardware UART1 free for the expansion connector (ADR-0021). Its UART is quiesced, its PIO state machines are dropped, and both pins are tri-stated before the branch is switched off (ADR-0023, ADR-0027).
@@ -236,7 +236,7 @@ Lock order (documented in each module): **power → calibration → perception �
 `imu_test`, `dmp_cal`, `rangefinder`, `rangefinder_test` and `basic_motor_test` are independent leaves that are never held with another state lock.
 
 - **Power State** — Battery level (0–100%), pack voltage and motor rail voltage. Accessed via `power::get_battery_snapshot()` for level and pack voltage, and `power::try_get_rail_sample()` for the non-blocking hot-path rail sample.
-- **Calibration State** — Motor calibration factors (`left_factor`/`right_factor`), DMP calibration status, distance calibration factor. Persisted to flash.
+- **Calibration State** — The load status of each calibration (motor curve, DMP bias, distance factor) and the distance factor in RAM. The motor curve itself lives in the motor driver and the flash cache, not here. Persisted to flash.
 - **Procedure** — A long-running, operator-started, stoppable unit of work: a test mode, a calibration, or a drive mode. Identified by the Menu Entry that starts it, and it holds the **Active Claim** while it runs.
   _Avoid_: job, task (that names an embassy task), mode (that names an autonomous mode)
 - **Active Claim** — The single exclusive right to be the robot's current Activity and to produce motion: held by the boot flow, one Procedure, one **Manual Drive**, or the Room Scan screen. A second claimant is `BUSY`; the holder is the only writer of a live Activity. Any operator may stop the holder; there is no owner, no takeover mode and no authority derived from the link lease (ADR-0034).
@@ -267,8 +267,11 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Calibration
 
-- **Motor Calibration** — Per-track speed multipliers (`left_factor`/`right_factor`, range `(0.0, 1.0]`). The faster track is always the reference at 1.0; the slower track gets a factor < 1.0. Computed by running each track at fixed PWM and measuring encoder pulses.
-- **Distance Calibration** — Single factor (range 0.5–2.0) mapping encoder pulses to real-world centimeters. Corrects for surface friction and tire wear.
+- **Motor Calibration** — The bench Procedure that measures and saves the **Motor Calibration Curve**. It uses the same measurement the Basic Motor Test displays: one Test Leg at a time, ten Power Steps, each starting from **Quiescence** and counted over a **Measurement Window**.
+- **Motor Calibration Curve** — The per-track, per-direction mapping from a requested speed to the raw command that produces the **Target Speed**, measured at 10 % Power Steps and interpolated between them. It is stored as the raw measurements plus the derived corrections.
+- **Target Speed** — The speed a Motor Calibration corrects every leg towards at a given Power Step: the slower of the two tracks in that direction.
+- **Calibration Floor** — The lowest Power Step at which every leg moves. A Motor Calibration corrects nothing below it, and it is set by the slowest leg.
+- **Distance Calibration** — A single factor mapping encoder counts to real-world centimetres. Corrects for surface friction, track wear and the nominal sprocket circumference.
 - **DMP Compass Calibration** — A guided Procedure that walks the operator through a fixed sequence of movements, verifies the resulting magnetic heading at two known headings, and saves the ICM-20948 DMP's bias snapshot. Starting it does not start the DMP calibration engine; the engine runs continuously while nine-axis fusion is enabled, and the Procedure only guides the motion and snapshots the result.
   _Avoid_: Mag Calibration, mag ceremony
 - **Compass Step** — One instructed movement in a DMP Compass Calibration, advanced by the operator's Done action.
@@ -276,8 +279,8 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Compass Heading** — The magnetic bearing derived from DMP yaw by the fixed mounting/sign conversion; it is magnetic north, not true north, and carries no declination.
 - **Compass Accuracy** — The DMP's 0–3 confidence in its compass calibration, where 3 is most accurate; the final Compass Check requires 3.
 - **DMP Bias Snapshot** — The nine raw DMP bias words (gyroscope, accelerometer and compass) saved to flash after a successful DMP Compass Calibration and restored to the DMP at boot. It does not include the DMP's internal accuracy/covariance state.
-- **Boot Sequence** — On `Initialize`, the initialization module sends individual `GetData` commands to flash storage for motor, DMP bias snapshot, and distance calibration data. Each response raises a `CalibrationDataLoaded` event. When all three are received, the UI shows the main menu.
-- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves motor calibration (2× f32 as `MotorCalibration`), distance factor (1× f32), and the DMP Bias Snapshot (nine i32 plus version/checksum) to the dedicated FLASH_STORAGE region (last 8KB of flash).
+- **Boot Sequence** — On `Initialize`, the initialization module sends individual `GetData` commands to flash storage for the motor calibration curve, DMP bias snapshot, and distance calibration data. Each response raises a `CalibrationDataLoaded` event. When all three are received, the UI shows the main menu.
+- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves the Motor Calibration Curve (versioned and checksummed raw measurements), the distance factor (1× f32), and the DMP Bias Snapshot (nine i32 plus version/checksum) to the dedicated FLASH_STORAGE region (last 8KB of flash).
 
 ## IMU Test
 
@@ -292,14 +295,16 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Motor Test
 
-- **Basic Motor Test** — A bench Procedure that runs one track at a time, forward then reverse, stepping the commanded power from 10 % to 100 % in 10 % steps and cycling until the operator stops it. An operator Stop ends it with no Result Report.
+- **Basic Motor Test** — A bench Procedure that runs one cycle — four Test Legs of ten Power Steps — and ends in a Result Report carrying the **Basic Motor Test Readout**. An operator Stop ends it early with no Result Report, and it does not cycle.
   _Avoid_: motor check, bench spin
 - **Power Step** — One track, one direction and one commanded power level within a Basic Motor Test: the unit that owns exactly one encoder count.
   _Avoid_: leg (one track and one direction holds ten Power Steps), speed (that names the commanded value, not the unit)
 - **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle is four Test Legs in that order.
   _Avoid_: leg (that names the Gap Analysis **Leg**), pass (that names the same Test Leg again)
-- **Breakaway** — The lowest Power Step of one direction of one track that produced a non-zero encoder count, i.e. the power at which that track first moved. Shown as `--` when the track did not move at any power up to 100 %.
-- **Basic Motor Test Readout** — The panel-only block inside the Basic Motor Test's running screen: the current Power Step with its power level, the live encoder count, the last completed Power Step with the count it finished with, the Breakaway, and the step index within the forty-step cycle. It is not part of Activity State and never reaches the Link Protocol.
+- **Breakaway** — The lowest Power Step of a Test Leg whose Measurement Window showed sustained motion above the motion threshold. Shown as `--` when the leg did not move at any power up to 100 %.
+- **Quiescence** — The confirmed state of a track that has produced no encoder pulses for a hold window. It is the precondition for attributing a count to a command; a brake or a coast alone does not establish it.
+- **Measurement Window** — The settle-excluded interval of a Power Step over which its encoder count is taken. It starts after the commanded motion has settled and ends before the coast-down.
+- **Basic Motor Test Readout** — The panel-only block inside the Basic Motor Test: the live running rows (the current Power Step with its power level, the live encoder count, the last completed Power Step with its count, the Breakaway, the correction applied at the current Power Step, and the step index within the forty-step cycle), and, in the Result Report, each Test Leg's Breakaway, its counts at 40, 60, 80 and 100 %, and the corrections applied at those steps. It is not part of Activity State and never reaches the Link Protocol.
 
 ## Development Practices
 

@@ -2,6 +2,8 @@
 
 The Basic Motor Test's forty Power Steps publish a panel-only `state::basic_motor_test` snapshot; the touch UI reads it on its tick and renders a multi-row **Basic Motor Test Readout** inside the existing running screen, above the progress bar. It does not enter Activity State, the `ACTIVITY` stream or the Link Protocol, and the Remote never sees it. Unlike the IMU Test and Rangefinder Test readouts, this one keeps the bar instead of suppressing it: the bar carries "where am I in the forty-step cycle", the readout carries per-step counts, and neither substitutes for the other — the difference is deliberate, not an oversight. The readout owns its own rules — the Breakaway latch, the last-completed identity and the live-count hold — so the test task keeps the timing and the motor commands and the model keeps the formatting. Extending `activity::Snapshot`, a `UiEvent` carrying the counts, direct drawing from the test task, and suppressing the bar as the other readouts do were rejected: they turn Activity State into a sensor snapshot and drag the wire with it, couple the task to the panel and lose the snapshot on a UI restart, break the single-drawer invariant and bypass touch/Stop, or throw away the only whole-cycle cue.
 
+**Status:** accepted. Partly superseded by ADR-0055: the test runs one cycle and ends in a held Result Report, and the progress bar is running-only. The telemetry leaf and the panel-only rule stand.
+
 ## Considered Options
 
 - **Dedicated `state::basic_motor_test` snapshot + neutral `touch_ui` readout** — chosen. The task publishes at the sampling rate and the model formats every row, following [ADR-0044](0044-imu-test-telemetry-path.md)'s precedent.
