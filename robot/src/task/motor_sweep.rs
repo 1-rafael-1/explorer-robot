@@ -58,7 +58,7 @@ use crate::{
 };
 
 /// The encoder sampling interval for the duration of a sweep, in milliseconds.
-const SAMPLE_INTERVAL_MS: u64 = 20;
+pub const SAMPLE_INTERVAL_MS: u64 = 20;
 
 /// How long a Power Step waits for a fresh encoder sample before treating the
 /// encoder task as dead, in milliseconds.
@@ -67,7 +67,7 @@ const SAMPLE_INTERVAL_MS: u64 = 20;
 /// missing samples is far beyond a scheduling hiccup. The engines' own timeouts
 /// only advance when samples arrive, so this wall-clock bound is the only thing
 /// that stops a dead encoder task from leaving a step waiting forever.
-const NO_SAMPLE_TIMEOUT_MS: u64 = 500;
+pub const NO_SAMPLE_TIMEOUT_MS: u64 = 500;
 
 /// The reason a dead encoder task reports as a structural abort.
 const NO_SAMPLE_REASON: &str = "encoder timeout";
@@ -100,7 +100,7 @@ pub const TOTAL_STEPS: usize = DIRECTIONS.len() * motor_cal::POWER_STEPS;
 /// [`run_sweep`] calls this before its first step and [`stop_encoders`] after its
 /// last. Clearing the drive-side sample after the reset means the first read can
 /// only be a fresh one.
-async fn start_encoders() {
+pub async fn start_encoders() {
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
     Timer::after(Duration::from_millis(10)).await;
 
@@ -591,7 +591,7 @@ fn per_mille(factor: f32) -> u16 {
 }
 
 /// The current time, in milliseconds since boot.
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     Instant::now().as_millis()
 }
 

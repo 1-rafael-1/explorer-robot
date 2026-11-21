@@ -274,11 +274,14 @@ const fn curve_track(track: Track) -> CurveTrack {
 /// Resolve one requested track speed to the per-mille duty the driver applies.
 ///
 /// The order is fixed: zero stays zero, a magnitude below the Calibration Floor
-/// is passed through raw, otherwise the interpolated correction for (track,
-/// direction, magnitude) is clamped to `0..=1000`; then voltage compensation and
-/// a single rounding to the nearest per-mille, then a final clamp to
-/// `-1000..=1000` with the original sign. The command is not rounded before the
-/// voltage compensation.
+/// is passed through raw, otherwise the curve resolves the command to the nearest
+/// per-mille (0.1 %) for (track, direction, magnitude), clamped to `0..=1000`.
+/// Voltage compensation is applied to that per-mille value, and the compensated
+/// duty is rounded once to the nearest per-mille for
+/// `set_duty_cycle_fraction(_, 1000)`, then clamped to `-1000..=1000` with the
+/// original sign. There are therefore two quantisations: the curve's resolution to
+/// the nearest per-mille, then the compensated duty's rounding to the nearest
+/// per-mille.
 ///
 /// An absent curve is the identity: the raw magnitude goes straight to voltage
 /// compensation, so a missing or failed calibration never blocks driving.

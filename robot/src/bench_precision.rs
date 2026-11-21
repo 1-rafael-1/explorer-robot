@@ -44,7 +44,10 @@ compile_error!("enable only one of `bench_motor_calibrate` or `bench_motor_measu
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
+
+#[cfg(feature = "bench_motor_calibrate")]
+use embassy_time::Instant;
 
 use crate::system::state::calibration;
 
@@ -71,7 +74,9 @@ use motor_cal::{Direction, MEASUREMENT_WINDOW_MS, QUIESCENCE_HOLD_MS, QUIESCENCE
 #[cfg(feature = "bench_motor_measure")]
 use crate::task::{
     drive::{clear_encoder_measurement, get_latest_encoder_measurement},
-    motor_sweep::{DIRECTIONS, signed_speed},
+    motor_sweep::{
+        DIRECTIONS, NO_SAMPLE_TIMEOUT_MS, SAMPLE_INTERVAL_MS, now_ms, signed_speed, start_encoders, stop_encoders,
+    },
     sensors::encoders::{self, EncoderCommand, EncoderMeasurement},
 };
 
@@ -228,14 +233,6 @@ async fn wait_for_terminal(procedure: Procedure) -> Option<Stage> {
 
 // ── Phase 2: measure ────────────────────────────────────────────────────────────
 
-/// The encoder sampling interval, matching the sweep's.
-#[cfg(feature = "bench_motor_measure")]
-const SAMPLE_INTERVAL_MS: u64 = 20;
-
-/// How long to tolerate no fresh encoder sample before giving up, in milliseconds.
-#[cfg(feature = "bench_motor_measure")]
-const NO_SAMPLE_TIMEOUT_MS: u64 = 500;
-
 /// The corrected-divergence pass threshold, in percent.
 #[cfg(feature = "bench_motor_measure")]
 const PASS_DIVERGENCE_PERCENT: f32 = 5.0;
@@ -357,6 +354,10 @@ async fn measure_point(direction: Direction, power: u8) -> Option<PointReading> 
     }
 
     encoders::send_command(EncoderCommand::Reset).await;
+    // This reset only keeps the counters small. The measurement below is a delta
+    // taken from a sample after `SETTLE_MS`, so it does not depend on the encoder
+    // task confirming the reset. The sweep must confirm a fresh zero because it
+    // attributes counts to a command; here quiescence plus the delta is enough.
     Timer::after(Duration::from_millis(2 * SAMPLE_INTERVAL_MS)).await;
     clear_encoder_measurement().await;
 
@@ -461,30 +462,6 @@ async fn wait_sample_at_or_after(threshold_ms: u64) -> Option<EncoderMeasurement
     }
 }
 
-/// Enable the drivers and start the encoder sampler at the sweep's interval.
-#[cfg(feature = "bench_motor_measure")]
-async fn start_encoders() {
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
-    Timer::after(Duration::from_millis(10)).await;
-
-    encoders::send_command(EncoderCommand::Stop).await;
-    Timer::after(Duration::from_millis(100)).await;
-    encoders::send_command(EncoderCommand::Reset).await;
-    Timer::after(Duration::from_millis(100)).await;
-    clear_encoder_measurement().await;
-    encoders::send_command(EncoderCommand::Start {
-        interval_ms: SAMPLE_INTERVAL_MS,
-    })
-    .await;
-    Timer::after(Duration::from_millis(100)).await;
-}
-
-/// Stop the encoder sampler.
-#[cfg(feature = "bench_motor_measure")]
-async fn stop_encoders() {
-    encoders::send_command(EncoderCommand::Stop).await;
-}
-
 /// `|left − right| / min(left, right)`, in percent.
 ///
 /// A pair with no counts cannot be compared; it reports 100 % so the run fails
@@ -496,10 +473,4 @@ fn divergence_percent(left: u16, right: u16) -> f32 {
         return 100.0;
     }
     (f32::from(left.abs_diff(right)) / f32::from(min)) * 100.0
-}
-
-/// The current time, in milliseconds since boot.
-#[cfg(feature = "bench_motor_measure")]
-fn now_ms() -> u64 {
-    Instant::now().as_millis()
 }

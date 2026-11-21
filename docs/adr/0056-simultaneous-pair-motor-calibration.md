@@ -23,8 +23,10 @@ Inverting the measured (20, 259) and (30, 435) points picks command 28, predicte
 to measure about 1.5 % high.
 
 What remains is not bounded by whole-percent command resolution. The resolved
-command is carried as per-mille (tenths of a percent) and rounded exactly once,
-after voltage compensation, into a 1/1000 PWM duty cycle. The HIL pass then
+command is carried as per-mille (tenths of a percent): the curve resolves it to
+the nearest per-mille (0.1 %), then the driver applies voltage compensation and
+rounds the compensated duty once to the nearest per-mille for
+`set_duty_cycle_fraction(_, 1000)`. The HIL pass then
 showed the 30 % / 40 % residual was a cold-state (thermal/friction) effect, not
 the rounding floor.
 
@@ -54,6 +56,9 @@ the rounding floor.
 - A **Power Step** is a direction and a commanded power measured as a simultaneous
   pair: both tracks are commanded at the same requested power and both encoder
   counts are taken over the same **Measurement Window**.
+- The calibration sweep commands raw `SetTracksRaw`, so it measures the drivetrain,
+  not the curve it is about to replace. Normal driving and the bench regression
+  apply the curve through `SetTracks`.
 - A cycle is 2 directions × 10 Power Steps = 20 pair steps. The four **Test Legs**
   are still reported, two at a time; the Result Report summary remains per Test
   Leg.
@@ -68,6 +73,11 @@ the rounding floor.
 - The stored record is version 4. A version 3 single-track record is rejected as
   "not calibrated" and is not migrated; the robot must be recalibrated after the
   upgrade.
+- The left motor's drive leads are physically reversed relative to the right, so
+  the driver negates only the left hardware output, after the curve and voltage
+  compensation are resolved. The curve, the logical command, the corrections and
+  Motion State stay logical. A curve saved under the old polarity is invalid and
+  must be re-derived.
 - The **Basic Motor Test Readout** shows the pair: the direction and power, both
   live counts, both Breakaways, both corrections, and the index within the
   twenty-step cycle. The summary tables stay per Test Leg.
@@ -75,7 +85,9 @@ the rounding floor.
   `bench_motor_calibrate` and `bench_motor_measure` features: it runs calibration
   and measurement in two separate boots, each preceded by a discarded 20-step raw
   warm-up, and asserts corrected divergence below 5 % at 30–90 %, with 20 %
-  measured for information because it is the stiction band. A two-track
+  measured for information because it is the stiction band. It checks speed
+  symmetry (`|Δcounts|`), not rotation direction; direction is verified by the
+  Basic Motor Test / physical observation. A two-track
   100 % run needs a bench supply of at least 2 A.
 
 **Consequences**
@@ -88,12 +100,13 @@ the rounding floor.
 - A version 3 record reads as "not calibrated". The only robot has to be
   recalibrated with the pair sweep; the old single-track curve was the source of
   the low-power over-correction.
-- Per-mille resolution is now implemented: the command is rounded once, after
-  voltage compensation, into a 1/1000 PWM duty
-  (`set_duty_cycle_fraction(_, 1000)`).
+- Per-mille resolution is now implemented: the curve resolves the command to the
+  nearest per-mille (0.1 %), then the driver applies voltage compensation and
+  rounds the compensated duty once to the nearest per-mille for
+  `set_duty_cycle_fraction(_, 1000)`.
 - The HIL warm-up experiment showed that cold low-duty imbalance, not rounding, is
   the dominant low-power effect.
-- The `ResetUnconfirmed` race is fixed by waiting for a fresh all-zero sample
+- The sweep's `ResetUnconfirmed` race is fixed by waiting for a fresh all-zero sample
   rather than a fixed sleep.
 - The 20 % power is excluded from the HIL PASS gate. It is the stiction band:
   forward 10 % produces zero counts, the breakaway floor is 20 %, and the 20 %

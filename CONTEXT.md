@@ -302,7 +302,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 - **Basic Motor Test** — A bench Procedure that runs one cycle — twenty simultaneous-pair Power Steps covering four Test Legs — and ends in a Result Report carrying the **Basic Motor Test Readout**. An operator Stop ends it early with no Result Report, and it does not cycle.
   _Avoid_: motor check, bench spin
-- **Power Step** — One direction and one commanded power level within a Basic Motor Test, measured as a simultaneous pair: both tracks are commanded at that power and each owns one encoder count.
+- **Power Step** — One direction and one commanded power level within a Basic Motor Test, measured as a simultaneous pair: both tracks are commanded at the same requested power and both encoder deltas are taken over the same **Measurement Window**.
   _Avoid_: leg (one Test Leg holds ten Power Steps), speed (that names the commanded value, not the unit)
 - **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle covers all four; each simultaneous pair measures one Test Leg per track, so two are measured at a time.
   _Avoid_: leg (that names the Gap Analysis **Leg**), pass (that names the same Test Leg again)
