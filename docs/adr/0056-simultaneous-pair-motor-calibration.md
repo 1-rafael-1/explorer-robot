@@ -111,7 +111,9 @@ the rounding floor.
 - The Basic Motor Test and Motor Calibration still share one measurement engine;
   the test stays read-only and the calibration remains the only writer.
 
-**Measured outcome (2026-11-21):** with the discarded warm-up and per-mille
-resolution, 3 of 4 HIL runs passed at a maximum corrected divergence of 2.2–3.7 %.
-The only sample above 5 % was Reverse 20 % at 5.00 %, in the stiction band. The
-gate is 30–90 %; 20 % is measured and reported for information.
+**Measured outcome (2026-11-21):** with the discarded warm-up, per-mille
+resolution, wait-for-zero reset confirmation and the 30–90 % gate, three
+confirmation runs all passed with a gated maximum corrected divergence of
+2.60–3.63 %; the reset race did not recur. The informational 20 % maxima were
+4.07–5.06 %, confirming the stiction band. An earlier ungated set passed 3 of 4
+(max 2.2–3.7 %) with the one sample above 5 % at Reverse 20 %.
