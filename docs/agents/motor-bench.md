@@ -147,9 +147,12 @@ divergence was 17.6 % at 20 %, 13.6 % at 30 %, 8.7 % at 40 %, 5.6 % at 50 %,
 5.1 % at 60 %, then 3.2 % at 70 %, 0.95 % at 80 % and 0.46 % at 90 %. The raw
 simultaneous ratios were much smaller (1.2–3.4 % forward, 1.9–6.6 % reverse), so
 a calibration derived from **simultaneous pair** counts would be expected to
-meet the target; the current single-track method does not at low power. Until
-that spec decision is made, measure the corrected **simultaneous** condition
-(section 6) before claiming < 5 %.
+meet the target; the current single-track method does not at low power. A
+prototype simultaneous pair + linear ratio got 12.1 % raw to 3.1 % at 20 %
+forward and < 3 % at 40–90 %, but left 8.4 % at 30 % forward because the motor
+speed-vs-command response is nonlinear; inverse interpolation (or a second
+iteration) is needed there. Until that spec decision is made, measure the
+corrected **simultaneous** condition (section 6) before claiming < 5 %.
 
 The Result Report's `Spread` line is `(max − min) / min` over the four legs at
 100 %; it includes forward-vs-reverse, which the per-direction target does not
