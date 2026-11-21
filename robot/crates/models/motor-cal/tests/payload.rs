@@ -157,6 +157,7 @@ fn expected_curve(legs: &[[StepMeasurement; POWER_STEPS]; TEST_LEGS]) -> Curve {
 
 #[test]
 fn the_encoded_record_has_a_fixed_documented_length() {
+    assert_eq!(RECORD_FORMAT_VERSION, 4, "the pair-measured record is version 4");
     assert_eq!(RECORD_ENCODED_LEN, 856);
 
     let mut buffer = [0_u8; RECORD_ENCODED_LEN];
@@ -369,6 +370,20 @@ fn a_record_from_an_unknown_schema_version_is_rejected() {
     assert_eq!(
         MotorCalibrationRecord::decode(&bytes).err(),
         Some(DecodeError::UnsupportedVersion { found: unknown })
+    );
+}
+
+#[test]
+fn a_version_3_single_track_record_is_not_calibrated() {
+    // Version 3 was measured one track at a time. It is rejected rather than
+    // migrated: the simultaneous-pair curve model needs pair measurements.
+    let mut bytes = encoded(&sample_record());
+    bytes[0] = 3;
+    fix_checksum(&mut bytes);
+
+    assert_eq!(
+        MotorCalibrationRecord::decode(&bytes).err(),
+        Some(DecodeError::UnsupportedVersion { found: 3 })
     );
 }
 

@@ -2094,20 +2094,18 @@ const fn step(position: u8) -> StepIndex {
     StepIndex { position, total: 40 }
 }
 
-/// A running Basic Motor Test Readout: left forward at 60 % with a live count
-/// and the curve's interpolated correction.
-fn sample_basic_motor() -> BasicMotorReadout {
+/// A running Basic Motor Test Readout: forward at 60 % with both live counts
+/// and a curve correction on the left track only.
+const fn sample_basic_motor() -> BasicMotorReadout {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         60,
         step(12),
         Correction::Factor(930),
+        Correction::Identity,
     );
-    readout.sample(1234);
+    readout.sample(583, 568);
     readout
 }
 
@@ -2117,140 +2115,171 @@ fn sample_basic_motor() -> BasicMotorReadout {
 fn a_waiting_basic_motor_readout_shows_placeholders() {
     let rows = BasicMotorReadout::waiting().rows();
     assert_eq!(rows.len(), 6, "the live block is six rows");
-    assert_eq!(rows[0].0.as_str(), "--");
     for (index, (_, value)) in rows.iter().enumerate() {
         assert_eq!(value.as_str(), "--", "row {index} has no value yet");
     }
+    assert_eq!(rows[0].0.as_str(), "Step");
     assert_eq!(rows[1].0.as_str(), "Count");
     assert_eq!(rows[2].0.as_str(), "Last");
     assert_eq!(rows[3].0.as_str(), "Breakaway");
     assert_eq!(rows[4].0.as_str(), "Correction");
-    assert_eq!(rows[5].0.as_str(), "Step");
+    assert_eq!(rows[5].0.as_str(), "Index");
 }
 
-/// Test that a running readout names the current Power Step with its power and
-/// shows the live encoder count and the correction in force.
+/// Test that a running readout names the current pair with its direction and
+/// power and shows both live encoder counts and both corrections.
 #[test]
-fn a_running_basic_motor_readout_names_the_step_and_count() {
+fn a_running_basic_motor_readout_names_the_pair_and_counts() {
     let rows = sample_basic_motor().rows();
-    assert_eq!(rows[0].0.as_str(), "Left forward");
-    assert_eq!(rows[0].1.as_str(), "60%");
+    assert_eq!(rows[0].0.as_str(), "Step");
+    assert_eq!(rows[0].1.as_str(), "Fwd 60%");
     assert_eq!(rows[1].0.as_str(), "Count");
-    assert_eq!(rows[1].1.as_str(), "1234");
+    assert_eq!(rows[1].1.as_str(), "L 583 R 568");
     assert_eq!(rows[4].0.as_str(), "Correction");
-    assert_eq!(rows[4].1.as_str(), "0.93");
+    assert_eq!(rows[4].1.as_str(), "L 0.93 R 1.00");
+    assert_eq!(rows[5].1.as_str(), "12/40");
 }
 
-/// Test that the correction row names the curve in force: an interpolated factor,
-/// the raw command below the Calibration Floor, and identity when no curve is
-/// loaded (user story 24).
+/// Test that the correction row names each track's curve in force: interpolated
+/// factors, the raw command below the Calibration Floor, and identity when no
+/// curve is loaded (user story 24).
 #[test]
 fn the_correction_row_shows_the_curve_in_force() {
-    let leg = TestLeg {
-        track: Track::Left,
-        direction: Direction::Forward,
-    };
     let mut readout = BasicMotorReadout::waiting();
 
-    readout.start_step(leg, 10, step(1), Correction::Identity);
-    assert_eq!(readout.rows()[4].1.as_str(), "1.00");
+    readout.start_pair(
+        Direction::Forward,
+        10,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[4].1.as_str(), "L 1.00 R 1.00");
 
-    readout.start_step(leg, 20, step(2), Correction::Raw);
-    assert_eq!(readout.rows()[4].1.as_str(), "raw");
+    readout.start_pair(Direction::Forward, 20, step(2), Correction::Raw, Correction::Raw);
+    assert_eq!(readout.rows()[4].1.as_str(), "L raw R raw");
 
-    readout.start_step(leg, 30, step(3), Correction::Factor(875));
-    assert_eq!(readout.rows()[4].1.as_str(), "0.88");
+    readout.start_pair(
+        Direction::Forward,
+        30,
+        step(3),
+        Correction::Factor(875),
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[4].1.as_str(), "L 0.88 R 1.00");
 
-    readout.start_step(leg, 40, step(4), Correction::Factor(1000));
-    assert_eq!(readout.rows()[4].1.as_str(), "1.00");
+    readout.start_pair(
+        Direction::Forward,
+        40,
+        step(4),
+        Correction::Factor(1000),
+        Correction::Factor(930),
+    );
+    assert_eq!(readout.rows()[4].1.as_str(), "L 1.00 R 0.93");
 }
 
-/// Test that the live count survives the encoder reset and the next Power Step's
-/// start, and is replaced only when a new sample arrives.
+/// Test that a pair that has been named but not yet sampled renders both sides
+/// as placeholders, and that the correction row already names each track's
+/// factor.
 #[test]
-fn the_live_count_holds_through_a_step_start_and_is_replaced_by_a_sample() {
-    let leg = TestLeg {
-        track: Track::Right,
-        direction: Direction::Reverse,
-    };
+fn a_named_pair_without_a_sample_shows_both_sides_as_placeholders() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(leg, 10, step(1), Correction::Identity);
-    readout.sample(987);
-    assert_eq!(readout.rows()[1].1.as_str(), "987");
+    readout.start_pair(Direction::Forward, 30, step(3), Correction::Identity, Correction::Raw);
 
-    // The reset and the next step's start keep the operator's reading.
-    readout.start_step(leg, 20, step(2), Correction::Identity);
-    assert_eq!(readout.rows()[0].1.as_str(), "20%");
-    assert_eq!(readout.rows()[1].1.as_str(), "987");
-
-    readout.sample(12);
-    assert_eq!(readout.rows()[1].1.as_str(), "12");
+    let rows = readout.rows();
+    assert_eq!(rows[0].1.as_str(), "Fwd 30%");
+    assert_eq!(rows[1].1.as_str(), "L -- R --");
+    assert_eq!(rows[3].1.as_str(), "L -- R --");
+    assert_eq!(rows[4].1.as_str(), "L 1.00 R raw");
 }
 
-/// Test that the `Last` row carries the completed step's own leg, power and
-/// count, so the number is never attributed to a different Power Step.
+/// Test that the live counts survive the encoder reset and the next pair's
+/// start, and are replaced only when a new sample arrives.
 #[test]
-fn the_last_row_names_the_completed_step_and_its_count() {
+fn the_live_counts_hold_through_a_pair_start_and_are_replaced_by_a_sample() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Reverse,
+        10,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(987, 1234);
+    assert_eq!(readout.rows()[1].1.as_str(), "L 987 R 1234");
+
+    // The reset and the next pair's start keep the operator's reading, even when
+    // the direction changes.
+    readout.start_pair(
+        Direction::Forward,
+        20,
+        step(2),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[0].1.as_str(), "Fwd 20%");
+    assert_eq!(readout.rows()[1].1.as_str(), "L 987 R 1234");
+
+    readout.sample(12, 34);
+    assert_eq!(readout.rows()[1].1.as_str(), "L 12 R 34");
+}
+
+/// Test that the `Last` row carries the completed pair's own direction, power
+/// and both counts, so the numbers are never attributed to a different pair.
+#[test]
+fn the_last_row_names_the_completed_pair_and_its_counts() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_pair(
+        Direction::Forward,
         50,
         step(5),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(500);
-    readout.complete(Some(987), true);
+    readout.sample(500, 480);
+    readout.complete(Some(987), Some(966), true, true);
 
     let rows = readout.rows();
     assert_eq!(rows[2].0.as_str(), "Last");
-    assert_eq!(rows[2].1.as_str(), "L fwd 50%  987");
-    // The step keeps naming the command that produced those numbers, so the panel
-    // does not blank for the coast between Power Steps.
-    assert_eq!(rows[0].0.as_str(), "Left forward");
-    assert_eq!(rows[0].1.as_str(), "50%");
+    assert_eq!(rows[2].1.as_str(), "Fwd 50% L 987 R 966");
+    // The step keeps naming the pair that produced those numbers, so the panel
+    // does not blank for the coast between pairs.
+    assert_eq!(rows[0].0.as_str(), "Step");
+    assert_eq!(rows[0].1.as_str(), "Fwd 50%");
 }
 
-/// Test that the `Last` row survives a pass boundary: the final step of left
-/// forward stays readable during the first step of left reverse.
+/// Test that the `Last` row survives a direction boundary: the final pair of
+/// forward stays readable during the first pair of reverse.
 #[test]
-fn the_last_row_survives_a_test_leg_boundary() {
+fn the_last_row_survives_a_direction_boundary() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         100,
         step(10),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(65535);
-    readout.complete(Some(65535), true);
+    readout.sample(65535, 65535);
+    readout.complete(Some(65535), Some(65535), true, true);
 
-    // The next Test Leg begins on left reverse; the completed step is still the last
-    // step of left forward.
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Reverse,
-        },
+    // Reverse begins; the completed pair is still the last forward pair.
+    readout.start_pair(
+        Direction::Reverse,
         10,
         step(11),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(0);
+    readout.sample(0, 0);
 
     let rows = readout.rows();
-    assert_eq!(rows[0].0.as_str(), "Left reverse");
-    assert_eq!(rows[0].1.as_str(), "10%");
-    assert_eq!(rows[2].1.as_str(), "L fwd 100%  65535");
+    assert_eq!(rows[0].1.as_str(), "Rev 10%");
+    assert_eq!(rows[2].1.as_str(), "Fwd 100% L 65535 R 65535");
 }
 
-/// Test that the `Last` row reads `--` until the first Power Step completes,
-/// even while one is running, so "no data yet" is never read as a count.
+/// Test that the `Last` row reads `--` until the first pair completes, even
+/// while one is running, so "no data yet" is never read as a count.
 #[test]
 fn the_last_row_reads_a_placeholder_before_the_first_completion() {
     let rows = sample_basic_motor().rows();
@@ -2258,72 +2287,86 @@ fn the_last_row_reads_a_placeholder_before_the_first_completion() {
     assert_eq!(rows[2].1.as_str(), "--");
 }
 
-/// Test that completing without a current Power Step leaves the retained `Last`
-/// value untouched rather than overwriting it.
+/// Test that completing without a current pair leaves the retained `Last` value
+/// untouched rather than overwriting it.
 #[test]
-fn a_complete_without_a_current_step_keeps_the_last_row() {
+fn a_complete_without_a_current_pair_keeps_the_last_row() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         60,
         step(6),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(1234);
-    readout.complete(Some(1234), true);
-    assert_eq!(readout.rows()[2].1.as_str(), "L fwd 60%  1234");
+    readout.sample(1234, 1200);
+    readout.complete(Some(1234), Some(1200), true, true);
+    assert_eq!(readout.rows()[2].1.as_str(), "Fwd 60% L 1234 R 1200");
 
-    // A second completion with no step in progress must not overwrite it.
-    readout.complete(Some(999), true);
-    assert_eq!(readout.rows()[2].1.as_str(), "L fwd 60%  1234");
+    // A second completion with no pair in progress must not overwrite it.
+    readout.complete(Some(999), Some(999), true, true);
+    assert_eq!(readout.rows()[2].1.as_str(), "Fwd 60% L 1234 R 1200");
 }
 
-/// Test that an invalid Power Step keeps its name in the `Last` row but shows no
+/// Test that an invalid side keeps its pair name in the `Last` row but shows no
 /// count, so a failed measurement is visibly `--` and never read as zero pulses.
 #[test]
-fn an_invalid_point_shows_no_count_and_no_breakaway() {
+fn an_invalid_side_shows_no_count_and_no_breakaway() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Right,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         40,
         step(24),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(12);
-    readout.complete(None, false);
+    readout.sample(12, 34);
+    readout.complete(Some(583), None, true, false);
 
     let rows = readout.rows();
-    assert_eq!(rows[2].1.as_str(), "R fwd 40%  --");
-    assert_eq!(rows[3].1.as_str(), "--");
-    assert_eq!(rows[1].1.as_str(), "12", "the live reading is not a measurement");
+    assert_eq!(rows[2].1.as_str(), "Fwd 40% L 583 R --");
+    assert_eq!(rows[3].1.as_str(), "L 40% R --");
+    assert_eq!(rows[1].1.as_str(), "L 12 R 34", "the live reading is not a measurement");
 }
 
-/// Test that the widest `Last` value, a 100 % step with a full-range count, fits
+/// Test that both invalid sides render `--` in the `Last` row and both
+/// Breakaways.
+#[test]
+fn both_invalid_sides_show_no_counts_and_no_breakaways() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_pair(
+        Direction::Reverse,
+        40,
+        step(30),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(12, 34);
+    readout.complete(None, None, false, false);
+
+    let rows = readout.rows();
+    assert_eq!(rows[2].1.as_str(), "Rev 40% L -- R --");
+    assert_eq!(rows[3].1.as_str(), "L -- R --");
+}
+
+/// Test that the widest `Last` value, a 100 % pair with full-range counts, fits
 /// the value column without clipping.
 #[test]
 fn the_last_rows_widest_value_fits_the_value_column() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Right,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         100,
         step(30),
         Correction::Identity,
+        Correction::Identity,
     );
-    readout.sample(65535);
-    readout.complete(Some(65535), true);
+    readout.sample(65535, 65535);
+    readout.complete(Some(65535), Some(65535), true, true);
 
     let rows = readout.rows();
     let value = rows[2].1.as_str();
-    assert_eq!(value, "R fwd 100%  65535");
+    assert_eq!(value, "Fwd 100% L 65535 R 65535");
     let width = u32::try_from(value.len()).unwrap_or(u32::MAX) * SMALL_FONT.character_size.width;
     let column = basic_motor_value_rect(2, rows.len());
     assert!(
@@ -2347,7 +2390,7 @@ fn the_basic_motor_readout_rows_sit_between_the_panel_and_the_bar() {
     let rows = sample_basic_motor().rows().len();
     assert_eq!(
         rows, 6,
-        "the block is the current step, the count, the last step, the breakaway, the correction and the step index"
+        "the block is the pair, both counts, the last pair, both Breakaways, both corrections and the step index"
     );
     for index in 0..rows {
         let rect = basic_motor_row_rect(index, rows);
@@ -2366,166 +2409,216 @@ fn the_basic_motor_readout_rows_sit_between_the_panel_and_the_bar() {
     }
 }
 
-/// Test that the `Breakaway` latches at the first step of a Test Leg that moved
-/// and does not follow a later, higher power in the same leg.
+/// Test that each side's `Breakaway` latches at the first moving pair and does
+/// not follow a later, higher power in the same direction.
 #[test]
-fn the_breakaway_latches_at_the_first_moving_step_of_a_test_leg() {
-    let leg = TestLeg {
-        track: Track::Left,
-        direction: Direction::Forward,
-    };
+fn the_breakaway_latches_at_the_first_moving_pair() {
     let mut readout = BasicMotorReadout::waiting();
 
-    // A step that did not move is not a Breakaway.
-    readout.start_step(leg, 10, step(1), Correction::Identity);
-    readout.sample(0);
-    readout.complete(Some(0), false);
+    // A pair that did not move is not a Breakaway.
+    readout.start_pair(
+        Direction::Forward,
+        10,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(0, 0);
+    readout.complete(Some(0), Some(0), false, false);
     assert_eq!(readout.rows()[3].0.as_str(), "Breakaway");
-    assert_eq!(readout.rows()[3].1.as_str(), "--");
+    assert_eq!(readout.rows()[3].1.as_str(), "L -- R --");
 
-    // The first moving step is the lowest, so it latches here.
-    readout.start_step(leg, 20, step(2), Correction::Identity);
-    readout.sample(14);
-    readout.complete(Some(14), true);
-    assert_eq!(readout.rows()[3].1.as_str(), "20%");
+    // The first moving pair is the lowest, so it latches both sides here.
+    readout.start_pair(
+        Direction::Forward,
+        20,
+        step(2),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(14, 16);
+    readout.complete(Some(14), Some(16), true, true);
+    assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
 
-    // A later, higher power that moves must not replace the latched one.
-    readout.start_step(leg, 30, step(3), Correction::Identity);
-    readout.sample(900);
-    readout.complete(Some(900), true);
-    assert_eq!(readout.rows()[3].1.as_str(), "20%");
+    // A later, higher power that moves must not replace the latched values.
+    readout.start_pair(
+        Direction::Forward,
+        30,
+        step(3),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(900, 950);
+    readout.complete(Some(900), Some(950), true, true);
+    assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
 }
 
 /// Test that a stray pulse is not a Breakaway: the count alone never latches it,
 /// only a Measurement Window that showed sustained motion.
 #[test]
 fn the_breakaway_requires_sustained_motion() {
-    let leg = TestLeg {
-        track: Track::Left,
-        direction: Direction::Reverse,
-    };
     let mut readout = BasicMotorReadout::waiting();
 
-    readout.start_step(leg, 10, step(11), Correction::Identity);
-    readout.sample(14);
-    readout.complete(Some(14), false);
-    assert_eq!(readout.rows()[3].1.as_str(), "--");
+    readout.start_pair(
+        Direction::Reverse,
+        10,
+        step(11),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(14, 14);
+    readout.complete(Some(14), Some(14), false, false);
+    assert_eq!(readout.rows()[3].1.as_str(), "L -- R --");
 
-    readout.start_step(leg, 20, step(12), Correction::Identity);
-    readout.sample(14);
-    readout.complete(Some(14), true);
-    assert_eq!(readout.rows()[3].1.as_str(), "20%");
+    readout.start_pair(
+        Direction::Reverse,
+        20,
+        step(12),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(14, 14);
+    readout.complete(Some(14), Some(14), true, true);
+    assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
 }
 
-/// Test that the `Breakaway` resets when the Test Leg changes, so each leg
-/// reports its own.
+/// Test that each side latches its own `Breakaway`, and that a direction change
+/// clears both so each direction reports its own.
 #[test]
-fn the_breakaway_resets_when_the_test_leg_changes() {
-    let left_forward = TestLeg {
-        track: Track::Left,
-        direction: Direction::Forward,
-    };
-    let left_reverse = TestLeg {
-        track: Track::Left,
-        direction: Direction::Reverse,
-    };
-
+fn the_breakaway_latches_per_side_and_clears_when_the_direction_changes() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(left_forward, 30, step(3), Correction::Identity);
-    readout.sample(40);
-    readout.complete(Some(40), true);
-    assert_eq!(readout.rows()[3].1.as_str(), "30%");
+    readout.start_pair(
+        Direction::Forward,
+        30,
+        step(3),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(40, 0);
+    readout.complete(Some(40), Some(0), true, false);
+    assert_eq!(readout.rows()[3].1.as_str(), "L 30% R --");
 
-    // The next leg starts absent, even though the previous leg moved.
-    readout.start_step(left_reverse, 10, step(11), Correction::Identity);
-    assert_eq!(readout.rows()[3].1.as_str(), "--");
+    // Reverse starts absent, even though forward moved.
+    readout.start_pair(
+        Direction::Reverse,
+        10,
+        step(11),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[3].1.as_str(), "L -- R --");
 
-    readout.sample(8);
-    readout.complete(Some(8), true);
-    assert_eq!(readout.rows()[3].1.as_str(), "10%");
+    readout.sample(0, 8);
+    readout.complete(Some(0), Some(8), false, true);
+    assert_eq!(readout.rows()[3].1.as_str(), "L -- R 10%");
 }
 
-/// Test that a Test Leg in which every completed count was zero leaves the
-/// `Breakaway` at a placeholder: the verdict that the track did not move at any
+/// Test that a direction in which every completed count was zero leaves both
+/// `Breakaway`s at a placeholder: the verdict that neither track moved at any
 /// power up to 100 %.
 #[test]
-fn a_test_leg_that_never_moved_leaves_the_breakaway_at_a_placeholder() {
-    let leg = TestLeg {
-        track: Track::Right,
-        direction: Direction::Reverse,
-    };
+fn a_direction_that_never_moved_leaves_the_breakaways_at_a_placeholder() {
     let mut readout = BasicMotorReadout::waiting();
 
-    readout.start_step(leg, 10, step(31), Correction::Identity);
-    readout.sample(0);
-    readout.complete(Some(0), false);
-    readout.start_step(leg, 20, step(32), Correction::Identity);
-    readout.sample(0);
-    readout.complete(Some(0), false);
-    readout.start_step(leg, 100, step(40), Correction::Identity);
-    readout.sample(0);
-    readout.complete(Some(0), false);
+    for (power, index) in [(10u8, 1u8), (20, 2), (100, 40)] {
+        readout.start_pair(
+            Direction::Forward,
+            power,
+            step(index),
+            Correction::Identity,
+            Correction::Identity,
+        );
+        readout.sample(0, 0);
+        readout.complete(Some(0), Some(0), false, false);
+    }
 
     let rows = readout.rows();
-    assert_eq!(rows[1].1.as_str(), "0", "a zero count is shown as zero");
-    assert_eq!(rows[3].1.as_str(), "--");
+    assert_eq!(rows[1].1.as_str(), "L 0 R 0", "a zero count is shown as zero");
+    assert_eq!(rows[3].1.as_str(), "L -- R --");
     assert_eq!(rows[5].1.as_str(), "40/40");
 }
 
-/// Test that the `Step` row reads the one-based position of the forty-step
+/// Test that the `Index` row reads the one-based position of the forty-step
 /// cycle and restarts at one when a new cycle begins.
 #[test]
-fn the_step_row_reads_the_position_and_restarts_with_a_new_cycle() {
-    let right_reverse = TestLeg {
-        track: Track::Right,
-        direction: Direction::Reverse,
-    };
+fn the_index_row_reads_the_position_and_restarts_with_a_new_cycle() {
     let mut readout = BasicMotorReadout::waiting();
 
-    readout.start_step(right_reverse, 10, step(1), Correction::Identity);
-    readout.sample(0);
-    readout.complete(Some(0), false);
-    assert_eq!(readout.rows()[5].0.as_str(), "Step");
+    readout.start_pair(
+        Direction::Forward,
+        10,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(0, 0);
+    readout.complete(Some(0), Some(0), false, false);
+    assert_eq!(readout.rows()[5].0.as_str(), "Index");
     assert_eq!(readout.rows()[5].1.as_str(), "1/40");
 
-    readout.start_step(right_reverse, 20, step(2), Correction::Identity);
+    readout.start_pair(
+        Direction::Forward,
+        20,
+        step(2),
+        Correction::Identity,
+        Correction::Identity,
+    );
     assert_eq!(readout.rows()[5].1.as_str(), "2/40");
 
-    readout.start_step(right_reverse, 100, step(40), Correction::Identity);
+    readout.start_pair(
+        Direction::Forward,
+        100,
+        step(40),
+        Correction::Identity,
+        Correction::Identity,
+    );
     assert_eq!(readout.rows()[5].1.as_str(), "40/40");
 
     // The next cycle starts at one again.
-    let left_forward = TestLeg {
-        track: Track::Left,
-        direction: Direction::Forward,
-    };
-    readout.start_step(left_forward, 10, step(1), Correction::Identity);
+    readout.start_pair(
+        Direction::Forward,
+        10,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
     assert_eq!(readout.rows()[5].1.as_str(), "1/40");
 }
 
 /// Test that every label and value fits its own column at the 6 px glyph, over
-/// the widest cells the readout can produce: a spelled-out Test Leg, a `100%`
-/// Breakaway, a factor correction and a `40/40` step index.
+/// the widest cells the readout can produce: both directions, both full-range
+/// counts, a `100%` Breakaway, a factor correction and a `40/40` step index.
 #[test]
 fn every_basic_motor_row_fits_its_label_and_value_columns() {
-    let leg = TestLeg {
-        track: Track::Left,
-        direction: Direction::Forward,
-    };
     let mut readout = BasicMotorReadout::waiting();
-    // The full-power step that moved is the widest Breakaway, and its completion
+    // The full-power pair that moved is the widest Breakaway, and its completion
     // leaves the widest `Last` value behind.
-    readout.start_step(leg, 100, step(39), Correction::Factor(875));
-    readout.sample(65535);
-    readout.complete(Some(65535), true);
-    // The last step of the cycle names the widest current step and step index.
-    readout.start_step(leg, 100, step(40), Correction::Factor(875));
-    readout.sample(65535);
+    readout.start_pair(
+        Direction::Forward,
+        100,
+        step(39),
+        Correction::Factor(875),
+        Correction::Factor(875),
+    );
+    readout.sample(65535, 65535);
+    readout.complete(Some(65535), Some(65535), true, true);
+    // The last step of the cycle names the widest current pair and step index.
+    readout.start_pair(
+        Direction::Forward,
+        100,
+        step(40),
+        Correction::Factor(875),
+        Correction::Factor(875),
+    );
+    readout.sample(65535, 65535);
 
     let rows = readout.rows();
-    assert_eq!(rows[0].0.as_str(), "Left forward");
-    assert_eq!(rows[3].1.as_str(), "100%");
-    assert_eq!(rows[4].1.as_str(), "0.88");
+    assert_eq!(rows[0].0.as_str(), "Step");
+    assert_eq!(rows[0].1.as_str(), "Fwd 100%");
+    assert_eq!(rows[1].1.as_str(), "L 65535 R 65535");
+    assert_eq!(rows[2].1.as_str(), "Fwd 100% L 65535 R 65535");
+    assert_eq!(rows[3].1.as_str(), "L 100% R 100%");
+    assert_eq!(rows[4].1.as_str(), "L 0.88 R 0.88");
     assert_eq!(rows[5].1.as_str(), "40/40");
 
     for (index, (label, value)) in rows.iter().enumerate() {
@@ -2562,33 +2655,29 @@ fn a_basic_motor_readout_redraws_only_when_a_displayed_value_changes() {
     assert!(!ui.set_status(view));
 
     let mut sampled = sample_basic_motor();
-    sampled.sample(1235);
+    sampled.sample(584, 568);
     let changed = view.with_readout(Readout::BasicMotor(sampled));
     assert!(ui.set_status(changed));
     assert!(!ui.set_status(changed));
 
-    let mut next_step = sample_basic_motor();
-    next_step.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Reverse,
-        },
+    let mut next_pair = sample_basic_motor();
+    next_pair.start_pair(
+        Direction::Reverse,
         70,
         step(2),
         Correction::Identity,
+        Correction::Identity,
     );
-    assert!(ui.set_status(view.with_readout(Readout::BasicMotor(next_step))));
+    assert!(ui.set_status(view.with_readout(Readout::BasicMotor(next_pair))));
 
     // A correction-only change is still a displayed change.
     let mut corrected = sample_basic_motor();
-    corrected.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    corrected.start_pair(
+        Direction::Forward,
         60,
         step(12),
         Correction::Factor(940),
+        Correction::Identity,
     );
     assert!(ui.set_status(view.with_readout(Readout::BasicMotor(corrected))));
 }
@@ -2620,19 +2709,17 @@ fn a_finished_result_report_carries_no_progress_bar() {
 #[test]
 fn the_readout_survives_completion_and_a_new_run_starts_blank() {
     let mut readout = BasicMotorReadout::waiting();
-    readout.start_step(
-        TestLeg {
-            track: Track::Left,
-            direction: Direction::Forward,
-        },
+    readout.start_pair(
+        Direction::Forward,
         100,
         step(40),
         Correction::Factor(930),
+        Correction::Factor(930),
     );
-    readout.sample(2700);
-    readout.complete(Some(2650), true);
+    readout.sample(2700, 2690);
+    readout.complete(Some(2650), Some(2640), true, true);
 
-    assert_eq!(readout.rows()[2].1.as_str(), "L fwd 100%  2650");
+    assert_eq!(readout.rows()[2].1.as_str(), "Fwd 100% L 2650 R 2640");
     assert_eq!(readout.rows()[5].1.as_str(), "40/40");
 
     let fresh = BasicMotorReadout::waiting();

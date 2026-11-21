@@ -1,12 +1,11 @@
 //! Motor calibration procedure.
 //!
 //! This is the writer of the measured **Motor Calibration Curve**. It runs the
-//! same one-cycle sweep the Basic Motor Test displays — four Test Legs of ten
-//! Power Steps, each driven end to end by
-//! [`motor_cal::MeasurementEngine`] through
-//! [`crate::task::motor_sweep::run_sweep`] — and derives, stores and publishes
-//! the curve from those measurements.
-//! publishes the curve from those measurements.
+//! same one-cycle sweep the Basic Motor Test displays — forward and reverse, each
+//! over ten simultaneous pair Power Steps, with each track driven end to end by
+//! its own [`motor_cal::MeasurementEngine`] through
+//! [`crate::task::motor_sweep::run_sweep`] — and derives, stores and publishes the
+//! curve from those measurements.
 //!
 //! # Lifecycle
 //!
@@ -14,8 +13,8 @@
 //!    sample at or above the driver's 6 V compensation target. A missing sample
 //!    after a short wait, or a low rail, refuses the run before any motion.
 //! 2. Enable the drivers, start the encoder sampler at the sweep's 20 ms
-//!    interval, and run the forty Power Steps. Each step publishes its Test Leg
-//!    and cycle position so the running screen shows where the run is.
+//!    interval, and run the twenty pair steps. Each step publishes its
+//!    direction and cycle position so the running screen shows where the run is.
 //! 3. A structural problem — low rail, a dead encoder task, a floor drop — aborts
 //!    immediately. The rail is checked before the run and again after every
 //!    measured step, so a sag mid-sweep aborts rather than entering the curve.
@@ -54,7 +53,7 @@ use crate::{
     task::{
         io::flash_storage,
         motor_driver::{self, MotorCommand, TARGET_MOTOR_VOLTAGE},
-        motor_sweep::{self, STEP_POWERS, StepAction, StepObserver, StepOutcome, StepRef, SweepEnd, SweepSink},
+        motor_sweep::{self, PairOutcome, STEP_POWERS, StepAction, StepObserver, StepRef, SweepEnd, SweepSink},
         procedure::Claim,
         sensors::rangefinder,
     },
@@ -152,14 +151,14 @@ pub async fn run_motor_calibration(claim: &Claim) {
 /// The calibration shows no live six-row readout — the running screen carries the
 /// Procedure's phases and progress — so it answers the sample hook with nothing.
 struct CalibrationSink<'a> {
-    /// The engine's verdict for every Power Step, in cycle order.
+    /// Each track's engine verdict for every Power Step, in cycle order.
     results: &'a mut [[PointResult; POWER_STEPS]; TEST_LEGS],
-    /// The stored measurement for every Power Step, in cycle order.
+    /// The stored measurement for every track and Power Step, in cycle order.
     measurements: &'a mut [[StepMeasurement; POWER_STEPS]; TEST_LEGS],
 }
 
 impl StepObserver for CalibrationSink<'_> {
-    async fn sample(&mut self, _count: u16) {}
+    async fn sample(&mut self, _left: u16, _right: u16) {}
 }
 
 impl SweepSink for CalibrationSink<'_> {
@@ -168,13 +167,26 @@ impl SweepSink for CalibrationSink<'_> {
     // The trait method is async for the sink that does await work; this sink only
     // records the outcome, so there is nothing to await here.
     #[allow(clippy::unused_async_trait_impl)]
-    async fn step_measured(&mut self, step: StepRef, outcome: StepOutcome) -> StepAction {
-        self.results[step.leg_index][step.step_index] = outcome.result;
-        self.measurements[step.leg_index][step.step_index] = step_measurement(step.power, outcome);
-        log_step(step.leg, step.power, outcome.result, outcome.rail_volts);
+    async fn step_measured(&mut self, step: StepRef, outcome: PairOutcome) -> StepAction {
+        // A pair step writes the left and right Test Legs of its direction at the
+        // same power, so the curve is derived from simultaneous measurements.
+        let [left_leg, right_leg] = motor_sweep::legs(step.direction);
+        let step_index = step.step_index();
+        let left_index = motor_sweep::leg_index(left_leg);
+        let right_index = motor_sweep::leg_index(right_leg);
+
+        self.results[left_index][step_index] = outcome.left;
+        self.results[right_index][step_index] = outcome.right;
+        self.measurements[left_index][step_index] =
+            step_measurement(step.power, outcome.left, outcome.rail_volts, outcome.compensation);
+        self.measurements[right_index][step_index] =
+            step_measurement(step.power, outcome.right, outcome.rail_volts, outcome.compensation);
+
+        log_step(left_leg, step.power, outcome.left, outcome.rail_volts);
+        log_step(right_leg, step.power, outcome.right, outcome.rail_volts);
         // A rail that sags below the compensation target mid-run would bake a
         // sagging battery into the curve, so this is a structural abort, not a
-        // measurement verdict.
+        // measurement verdict. Both tracks share the one rail sample.
         if outcome.rail_volts.is_some_and(|volts| volts < TARGET_MOTOR_VOLTAGE) {
             warn!("Motor Calibration aborted: rail fell below the 6.0 V target mid-run");
             StepAction::Abort(LOW_RAIL_REASON)
@@ -297,8 +309,10 @@ async fn finish(
     match flash_storage::save_motor_curve(record).await {
         Ok(()) => {
             let summary = build_summary(results, derived_curve.as_ref()).with_status(SummaryStatus::Saved);
-            motor_readout::publish_summary(summary).await;
+            // Stop the motors before the report appears: a Result Report and
+            // motor motion must never coexist on the bench.
             release_idle().await;
+            motor_readout::publish_summary(summary).await;
             claim.complete("Calibration saved").await;
         }
         Err(reason) => {
@@ -311,10 +325,12 @@ async fn finish(
     }
 }
 
-/// Publish the Result Report summary, then fail with `reason`.
+/// Stop the motors, publish the Result Report summary, then fail with `reason`.
 async fn fail_with_summary(claim: &Claim, summary: BasicMotorSummary, reason: &'static str) {
-    motor_readout::publish_summary(summary).await;
+    // Stop the motors before the report appears: a Result Report and motor
+    // motion must never coexist on the bench.
     release_idle().await;
+    motor_readout::publish_summary(summary).await;
     claim.fail(reason).await;
 }
 
@@ -336,12 +352,17 @@ fn first_invalid(results: &[[PointResult; POWER_STEPS]; TEST_LEGS]) -> Option<In
     None
 }
 
-/// Build the stored measurement for one Power Step.
+/// Build the stored measurement for one track's Power Step.
 ///
 /// An invalid point carries no count and no window; the sweep is failed before
 /// the record is built, so those zeros can never be saved as a curve.
-fn step_measurement(power: u8, outcome: StepOutcome) -> StepMeasurement {
-    let (count, window_ms, moved) = match outcome.result {
+fn step_measurement(
+    power: u8,
+    result: PointResult,
+    rail_volts: Option<f32>,
+    compensation: Option<f32>,
+) -> StepMeasurement {
+    let (count, window_ms, moved) = match result {
         PointResult::Valid(measurement) => (
             measurement.count(),
             u32::try_from(measurement.window_ms()).unwrap_or(u32::MAX),
@@ -353,8 +374,8 @@ fn step_measurement(power: u8, outcome: StepOutcome) -> StepMeasurement {
         power,
         count,
         window_ms,
-        outcome.rail_volts.unwrap_or(0.0),
-        outcome.compensation.unwrap_or(1.0),
+        rail_volts.unwrap_or(0.0),
+        compensation.unwrap_or(1.0),
         moved,
     )
 }
@@ -371,7 +392,13 @@ fn build_summary(results: &[[PointResult; POWER_STEPS]; TEST_LEGS], curve: Optio
             let measurement = results[leg_index][step_index].measurement();
             let count = measurement.map(|measurement| measurement.count());
             let moved = measurement.is_some_and(|measurement| measurement.sustained_motion());
-            builder.record(ui, power, count, moved, motor_sweep::correction(curve, leg, power));
+            builder.record(
+                ui,
+                power,
+                count,
+                moved,
+                motor_sweep::correction(curve, leg.track, leg.direction, power),
+            );
         }
     }
     builder.build()

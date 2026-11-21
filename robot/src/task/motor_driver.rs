@@ -65,12 +65,22 @@ use embassy_rp::{
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Timer};
-use motor_cal::{Curve, CurveCommand, Direction, Track as CurveTrack};
+use motor_cal::{Curve, Direction, Track as CurveTrack};
 
 use crate::system::state::{calibration, motion, power};
 
 /// Target motor voltage (we compensate battery voltage down to this).
 pub const TARGET_MOTOR_VOLTAGE: f32 = 6.0;
+
+/// The left motor's drive leads are reversed relative to the right, so the
+/// hardware output is the negation of the logically resolved left command.
+///
+/// The inversion is applied only to the left hardware output, after the curve
+/// and voltage compensation are resolved, so the logical speeds, the curve and
+/// the reported correction all stay logical. A curve saved under the old
+/// polarity must be re-derived; the v4 pair calibration does that on its next
+/// run.
+const LEFT_MOTOR_INVERTED: bool = true;
 
 /// Command queue depth — enough for drive task bursts without blocking.
 const COMMAND_QUEUE_SIZE: usize = 16;
@@ -173,15 +183,15 @@ struct PwmChannels {
 }
 
 impl PwmChannels {
-    fn set_speed(&mut self, track: Track, speed: i8) {
+    fn set_speed(&mut self, track: Track, speed: i16) {
         let pwm = match track {
             Track::Left => &mut self.left,
             Track::Right => &mut self.right,
         };
-        let _ = pwm.set_duty_cycle_percent(speed.unsigned_abs());
+        let _ = pwm.set_duty_cycle_fraction(speed.unsigned_abs(), 1000);
     }
 
-    fn set_both(&mut self, left_speed: i8, right_speed: i8) {
+    fn set_both(&mut self, left_speed: i16, right_speed: i16) {
         self.set_speed(Track::Left, left_speed);
         self.set_speed(Track::Right, right_speed);
     }
@@ -190,7 +200,7 @@ impl PwmChannels {
 // ── Helpers ──────────────────────────────────────────────────────────────────────
 
 /// Convert speed value to motor direction.
-const fn speed_to_direction(speed: i8) -> MotorDirection {
+const fn speed_to_direction(speed: i16) -> MotorDirection {
     match speed {
         s if s > 0 => MotorDirection::Forward,
         s if s < 0 => MotorDirection::Backward,
@@ -261,36 +271,44 @@ const fn curve_track(track: Track) -> CurveTrack {
     }
 }
 
-/// Resolve one requested track speed to the duty the driver applies.
+/// Resolve one requested track speed to the per-mille duty the driver applies.
 ///
 /// The order is fixed: zero stays zero, a magnitude below the Calibration Floor
 /// is passed through raw, otherwise the interpolated correction for (track,
-/// direction, magnitude) is clamped to `0..=100`; then voltage compensation and
-/// rounding, then a final clamp to `-100..=100` with the original sign.
+/// direction, magnitude) is clamped to `0..=1000`; then voltage compensation and
+/// a single rounding to the nearest per-mille, then a final clamp to
+/// `-1000..=1000` with the original sign. The command is not rounded before the
+/// voltage compensation.
 ///
 /// An absent curve is the identity: the raw magnitude goes straight to voltage
 /// compensation, so a missing or failed calibration never blocks driving.
-#[allow(clippy::cast_possible_truncation)]
-fn resolve_track_speed(curve: Option<&Curve>, track: Track, speed: i8, voltage_comp: f32) -> i8 {
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn resolve_track_speed(curve: Option<&Curve>, track: Track, speed: i8, voltage_comp: f32) -> i16 {
     let magnitude = speed.unsigned_abs();
     let direction = if speed < 0 {
         Direction::Reverse
     } else {
         Direction::Forward
     };
-    let command = curve.map_or(CurveCommand::Raw(magnitude), |curve| {
-        curve.resolve(curve_track(track), direction, magnitude)
-    });
+    let per_mille = curve.map_or_else(
+        || u16::from(magnitude) * 10,
+        |curve| curve.resolve(curve_track(track), direction, magnitude).per_mille(),
+    );
 
-    let promised = i16::from(command.command());
+    let promised = i32::from(per_mille);
     let signed = if speed < 0 { -promised } else { promised };
-    let compensated = f32::from(signed) * voltage_comp;
+    let compensated = signed as f32 * voltage_comp;
+    // Round half away from zero exactly once, after compensation.
     let rounded = if compensated >= 0.0 {
-        (compensated + 0.5) as i8
+        (compensated + 0.5) as i32
     } else {
-        (compensated - 0.5) as i8
+        (compensated - 0.5) as i32
     };
-    rounded.clamp(-100, 100)
+    rounded.clamp(-1000, 1000) as i16
 }
 
 /// Process a `SetTracks`-family command: resolve each track through the loaded
@@ -318,19 +336,34 @@ async fn process_set_tracks(
     let final_left = resolve_track_speed(curve.as_ref(), Track::Left, left, voltage_comp);
     let final_right = resolve_track_speed(curve.as_ref(), Track::Right, right, voltage_comp);
 
+    // The left leads are reversed relative to the right, so the physical output
+    // is the negation of the logically resolved command. Apply it here, after
+    // the curve and voltage compensation, and only to the left output, so the
+    // curve, the reported correction and motion state all stay logical. A saved
+    // curve from the old polarity must be re-derived; the v4 pair calibration
+    // will do it.
+    let hardware_left = if LEFT_MOTOR_INVERTED { -final_left } else { final_left };
+
     debug!(
-        "SetTracks{}: [{}, {}] -> applied [{}, {}] (vcomp: {})",
+        "SetTracks{}: logical [{}, {}] -> resolved_permille [{}, {}] (vcomp: {}); hardware_permille left {} (inverted={})",
         if apply_curve { "" } else { " (raw)" },
         left,
         right,
         final_left,
         final_right,
-        voltage_comp
+        voltage_comp,
+        hardware_left,
+        LEFT_MOTOR_INVERTED
+    );
+    #[cfg(any(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
+    info!(
+        "bench-motor: left requested={} resolved_permille={} hardware_permille={} inverted={}",
+        left, final_left, hardware_left, LEFT_MOTOR_INVERTED
     );
 
-    left_pins.set_direction(speed_to_direction(final_left));
+    left_pins.set_direction(speed_to_direction(hardware_left));
     right_pins.set_direction(speed_to_direction(final_right));
-    pwm.set_both(final_left, final_right);
+    pwm.set_both(hardware_left, final_right);
 
     // Publish the requested (pre-correction) speeds to motion state so other
     // tasks (drive, orchestrator) see what was asked for, not the applied duty.

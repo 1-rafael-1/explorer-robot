@@ -10,7 +10,7 @@ untrustworthy: the firmware assumed 960 pulses per sprocket revolution, the
 glossary said 1320, and the hardware (11 pulses per motor revolution behind a
 30:1 gearbox, driving the sprocket directly) implies 330.
 
-**Status:** accepted
+**Status:** accepted. Partly superseded by ADR-0056: a Power Step commands both tracks as a simultaneous pair rather than one track at a time, and corrections are resolved by inverse piecewise-linear interpolation of the measured (command, speed) points rather than a linear `target / measured_speed` ratio. The curve, Target Speed and Calibration Floor rules stand; the payload stays versioned and checksummed.
 
 **Considered Options**
 

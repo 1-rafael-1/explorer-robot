@@ -5,17 +5,24 @@
 //! [`derive_curve`] produces the per-track, per-direction [`Curve`] that makes
 //! every tested leg produce the **Target Speed**.
 //!
-//! The model is defined in ADR-0054:
+//! The model is defined in ADR-0054 and refined by the simultaneous-pair
+//! precision diagnosis:
 //!
 //! - the Target Speed at a Power Step is the slower of the two tracks in that
-//!   direction, so the slower leg's correction is always `1.00` and no
-//!   correction exceeds it;
+//!   direction, so the slower leg is never attenuated and no correction exceeds
+//!   `1.00`;
 //! - the **Calibration Floor** is the highest **Breakaway** among the four legs,
 //!   and below it [`Curve::resolve`] returns the raw command;
 //! - each leg's measured speed series is made monotone (running maximum) before
 //!   inversion, so a noisy point cannot demand more than `1.00`;
-//! - corrections are interpolated linearly between measured Power Steps, a zero
-//!   request stays zero, and at or above 100 % the top point holds.
+//! - the command that produces the Target Speed is found by **inverse
+//!   piecewise-linear interpolation** of the leg's measured (command, speed)
+//!   points, with a `(0, 0)` anchor, rather than by a linear `target / speed`
+//!   ratio. The motor's speed-versus-command response is nonlinear at low duty,
+//!   and the ratio over-attenuates there;
+//! - Target Speeds and the inverse curve are interpolated linearly between
+//!   measured Power Steps, a zero request stays zero, and at or above 100 % the
+//!   top point holds.
 //!
 //! Derivations are fallible. A missing or malformed point, a leg that does not
 //! move at 100 %, or a correction below the plausibility band returns a
@@ -47,6 +54,9 @@ pub const MIN_PLAUSIBLE_CORRECTION: f32 = 0.50;
 /// The number of Test Legs in one sweep.
 pub const TEST_LEGS: usize = 4;
 
+/// The number of directions a curve resolves independently.
+const DIRECTIONS: usize = 2;
+
 /// The zero-based index of the last Power Step.
 const TOP_STEP_INDEX: usize = POWER_STEPS - 1;
 
@@ -77,6 +87,16 @@ pub enum Direction {
     Forward,
     /// Towards the back of the robot.
     Reverse,
+}
+
+impl Direction {
+    /// The index of this direction in the per-direction series.
+    const fn index(self) -> usize {
+        match self {
+            Self::Forward => 0,
+            Self::Reverse => 1,
+        }
+    }
 }
 
 /// One Test Leg: the track under test and the direction it turns.
@@ -229,15 +249,26 @@ impl<'a> Sweep<'a> {
 
 /// A derived Motor Calibration Curve.
 ///
+/// The curve stores the slowest measurement at each moved Power Step, the
+/// per-direction Target Speed series derived from them, and the Calibration
+/// Floor. It resolves a requested magnitude by inverting each leg's measured
+/// (command, speed) points, so it captures the motor's nonlinear response where
+/// a linear ratio cannot.
+///
 /// Corrections are independent per track and per direction, and only exist at
 /// or above the Calibration Floor.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Curve {
     /// The Calibration Floor, in whole percent.
     floor_percent: u8,
-    /// Corrections indexed by Test Leg and Power Step; `None` below the floor or
-    /// where the leg did not move.
-    corrections: [[Option<f32>; POWER_STEPS]; TEST_LEGS],
+    /// The monotone measured speed at each moved Power Step, in counts per
+    /// second, indexed by Test Leg and Power Step. Zero marks a point that did
+    /// not move; it is excluded from both the Target Speed and the inverse curve.
+    speeds: [[u32; POWER_STEPS]; TEST_LEGS],
+    /// The Target Speed per direction and Power Step, in counts per second.
+    /// Zero marks a Power Step with no target: below the floor, or one of the two
+    /// legs did not move there.
+    targets: [[u32; POWER_STEPS]; DIRECTIONS],
 }
 
 impl Curve {
@@ -248,77 +279,112 @@ impl Curve {
     }
 
     /// The correction in force for `track` and `direction` at
-    /// `command_percent`, or `None` below the Calibration Floor.
+    /// `command_percent`, or `None` below the Calibration Floor or when the
+    /// direction has no target there.
     ///
-    /// Between measured Power Steps the result is interpolated linearly; at or
-    /// above 100 % the top point holds.
+    /// The factor is the inverse-interpolated command that produces the
+    /// interpolated Target Speed at `command_percent`, divided by
+    /// `command_percent`, and clamped to `1.00`. Between measured Power Steps the
+    /// Target Speed is interpolated linearly; at or above 100 % the top point
+    /// holds.
     #[must_use]
     pub fn correction(&self, track: Track, direction: Direction, command_percent: u8) -> Option<f32> {
         if command_percent < self.floor_percent {
             return None;
         }
-        Some(self.interpolate(TestLeg::new(track, direction).index(), command_percent))
+        let target = self.target_speed(direction, command_percent)?;
+        let leg_index = TestLeg::new(track, direction).index();
+        let command = inverse_command(&self.speeds[leg_index], target);
+        let factor = command / f32::from(command_percent);
+        // The target is at most this leg's measured speed, so the inverse is at
+        // most the requested command; the clamp only absorbs f32 rounding.
+        Some(if factor > MAX_CORRECTION {
+            MAX_CORRECTION
+        } else {
+            factor
+        })
     }
 
     /// Resolve a requested magnitude for `track` and `direction`.
     ///
     /// A zero request resolves to zero, a request below the Calibration Floor is
-    /// returned unchanged, and any other request is scaled by the interpolated
-    /// correction and rounded to the nearest whole percent, clamped to
-    /// `0..=100`.
+    /// returned unchanged (as `magnitude * 10` per-mille), and any other request
+    /// is resolved to the command that produces the interpolated Target Speed,
+    /// rounded once to the nearest per-mille and clamped to `0..=magnitude * 10`
+    /// and `0..=1000`.
     #[must_use]
     pub fn resolve(&self, track: Track, direction: Direction, magnitude: u8) -> CurveCommand {
+        let raw = u16::from(magnitude) * 10;
         if magnitude == 0 || magnitude < self.floor_percent {
-            return CurveCommand::Raw(magnitude);
+            return CurveCommand::Raw(raw);
         }
-        let correction = self.interpolate(TestLeg::new(track, direction).index(), magnitude);
-        CurveCommand::Corrected(apply_correction(magnitude, correction))
+        let Some(target) = self.target_speed(direction, magnitude) else {
+            return CurveCommand::Raw(raw);
+        };
+        let leg_index = TestLeg::new(track, direction).index();
+        let command = inverse_command(&self.speeds[leg_index], target);
+        CurveCommand::Corrected(
+            round_permille(command)
+                .min(raw)
+                .min(u16::from(LAST_POWER_STEP_PERCENT) * 10),
+        )
     }
 
-    /// The interpolated correction at `command_percent` for a leg index.
-    fn interpolate(&self, leg_index: usize, command_percent: u8) -> f32 {
-        let series = &self.corrections[leg_index];
-        if command_percent >= LAST_POWER_STEP_PERCENT {
-            return series[TOP_STEP_INDEX].unwrap_or(MAX_CORRECTION);
+    /// The Target Speed for `direction` at `magnitude`, interpolated linearly
+    /// between the measured Power Steps.
+    ///
+    /// Zero maps to zero, and a magnitude above the highest measured Power Step
+    /// holds that point's target. `None` means no direction had a target at all.
+    #[allow(clippy::cast_precision_loss)]
+    fn target_speed(&self, direction: Direction, magnitude: u8) -> Option<f32> {
+        if magnitude == 0 {
+            return Some(0.0);
         }
-
-        let mut lower: Option<(u8, f32)> = None;
-        for (index, correction) in series.iter().enumerate() {
-            let Some(correction) = *correction else {
+        let series = &self.targets[direction.index()];
+        let mut lower: Option<(u8, u32)> = None;
+        for (index, &target) in series.iter().enumerate() {
+            if target == 0 {
                 continue;
-            };
+            }
             let percent = POWER_STEP_PERCENTS[index];
-            if percent == command_percent {
-                return correction;
+            if percent == magnitude {
+                return Some(target as f32);
             }
-            if percent > command_percent {
-                let Some((lower_percent, lower_correction)) = lower else {
-                    return correction;
-                };
-                let span = f32::from(percent - lower_percent);
-                let offset = f32::from(command_percent - lower_percent);
-                let value = lower_correction + (correction - lower_correction) * (offset / span);
-                return if value > MAX_CORRECTION { MAX_CORRECTION } else { value };
+            if percent > magnitude {
+                let upper_speed = target as f32;
+                return Some(match lower {
+                    Some((lower_percent, lower_speed)) => {
+                        let span = f32::from(percent - lower_percent);
+                        let offset = f32::from(magnitude - lower_percent);
+                        (lower_speed as f32) + (upper_speed - (lower_speed as f32)) * (offset / span)
+                    }
+                    None => {
+                        // The zero anchor: a target below the first measured
+                        // Power Step ramps up from zero.
+                        upper_speed * (f32::from(magnitude) / f32::from(percent))
+                    }
+                });
             }
-            lower = Some((percent, correction));
+            lower = Some((percent, target));
         }
-        lower.map_or(MAX_CORRECTION, |(_, correction)| correction)
+        lower.map(|(_, speed)| speed as f32)
     }
 }
 
-/// The command a curve resolves a requested magnitude to.
+/// The command a curve resolves a requested magnitude to, in per-mille
+/// (tenths of a percent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CurveCommand {
     /// Zero or below the Calibration Floor: the request is used unchanged.
-    Raw(u8),
-    /// The request scaled by the interpolated correction, in `0..=100`.
-    Corrected(u8),
+    Raw(u16),
+    /// The request resolved through the inverse curve, in `0..=1000`.
+    Corrected(u16),
 }
 
 impl CurveCommand {
-    /// The command magnitude to apply, in `0..=100`.
+    /// The command magnitude to apply, in `0..=1000` (per-mille).
     #[must_use]
-    pub const fn command(self) -> u8 {
+    pub const fn per_mille(self) -> u16 {
         match self {
             Self::Raw(command) | Self::Corrected(command) => command,
         }
@@ -353,7 +419,7 @@ pub enum CurveError {
         /// The Test Leg that did not move.
         leg: TestLeg,
     },
-    /// A derived correction fell outside the plausibility band.
+    /// A derived correction fell below the plausibility band.
     ImplausibleCorrection {
         /// The Test Leg whose correction is implausible.
         leg: TestLeg,
@@ -379,7 +445,9 @@ impl CurveError {
 
 /// Derive the Motor Calibration Curve from the four measured Test Legs.
 ///
-/// The sweep must contain all ten Power Steps of every leg. A point that never
+/// A pair-measured sweep fills both tracks at the same command, so the slower of
+/// the two tracks in a direction is the Target Speed at that Power Step. The
+/// sweep must contain all ten Power Steps of every leg. A point that never
 /// moved contributes neither to the Target Speed nor to its own leg's speed
 /// series; a leg that does not move at 100 % fails with
 /// [`CurveError::LegDidNotMove`].
@@ -447,51 +515,45 @@ pub fn derive_curve(sweep: Sweep<'_>) -> Result<Curve, CurveError> {
 
     let monotone = monotone_speeds(&speeds, &moved);
 
-    let mut corrections = [[None; POWER_STEPS]; TEST_LEGS];
-    for step_index in floor_index..POWER_STEPS {
-        for direction in [Direction::Forward, Direction::Reverse] {
-            let left = TestLeg::new(Track::Left, direction);
-            let right = TestLeg::new(Track::Right, direction);
-            let mut target: Option<u32> = None;
-            for leg in [left, right] {
-                let leg_index = leg.index();
-                if moved[leg_index][step_index] {
-                    let speed = monotone[leg_index][step_index];
-                    target = Some(target.map_or(speed, |current| current.min(speed)));
-                }
-            }
-            let Some(target) = target else {
-                continue;
-            };
-            for leg in [left, right] {
-                let leg_index = leg.index();
-                if !moved[leg_index][step_index] {
-                    continue;
-                }
-                let speed = monotone[leg_index][step_index];
-                let correction = correction_ratio(target, speed);
-                if correction < MIN_PLAUSIBLE_CORRECTION {
-                    return Err(CurveError::ImplausibleCorrection {
-                        leg,
-                        command_percent: POWER_STEP_PERCENTS[step_index],
-                        correction,
-                    });
-                }
-                // The target is the slower moving leg, so the ratio is at most
-                // 1.00 in exact arithmetic; the clamp only absorbs f32 rounding.
-                corrections[leg_index][step_index] = Some(if correction > MAX_CORRECTION {
-                    MAX_CORRECTION
-                } else {
-                    correction
-                });
+    let mut targets = [[0_u32; POWER_STEPS]; DIRECTIONS];
+    for direction in [Direction::Forward, Direction::Reverse] {
+        let left = TestLeg::new(Track::Left, direction).index();
+        let right = TestLeg::new(Track::Right, direction).index();
+        for step_index in floor_index..POWER_STEPS {
+            let left_speed = monotone[left][step_index];
+            let right_speed = monotone[right][step_index];
+            if left_speed != 0 && right_speed != 0 {
+                targets[direction.index()][step_index] = left_speed.min(right_speed);
             }
         }
     }
 
-    Ok(Curve {
+    let curve = Curve {
         floor_percent: POWER_STEP_PERCENTS[floor_index],
-        corrections,
-    })
+        speeds: monotone,
+        targets,
+    };
+
+    for direction in [Direction::Forward, Direction::Reverse] {
+        for leg in [
+            TestLeg::new(Track::Left, direction),
+            TestLeg::new(Track::Right, direction),
+        ] {
+            for &command_percent in POWER_STEP_PERCENTS.iter().skip(floor_index) {
+                if let Some(correction) = curve.correction(leg.track, leg.direction, command_percent)
+                    && correction < MIN_PLAUSIBLE_CORRECTION
+                {
+                    return Err(CurveError::ImplausibleCorrection {
+                        leg,
+                        command_percent,
+                        correction,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(curve)
 }
 
 /// The zero-based index of `percent` in the ten-step sweep, or `None` when it is
@@ -509,9 +571,10 @@ const fn step_index(percent: u8) -> Option<usize> {
 
 /// Make each leg's measured speed series monotone with a running maximum.
 ///
-/// A point that never moved carries the running maximum forward but remains
-/// absent from the target: its own speed says nothing about the track's
-/// capability.
+/// The running maximum is stored only at Power Steps that moved: a point that
+/// never moved carries nothing forward and stays absent (zero) from both the
+/// Target Speed and the leg's own inverse curve, because its speed says nothing
+/// about the track's capability.
 fn monotone_speeds(
     speeds: &[[u32; POWER_STEPS]; TEST_LEGS],
     moved: &[[bool; POWER_STEPS]; TEST_LEGS],
@@ -519,34 +582,57 @@ fn monotone_speeds(
     let mut monotone = [[0_u32; POWER_STEPS]; TEST_LEGS];
     for leg_index in 0..TEST_LEGS {
         let mut running = 0;
-        for ((out, &speed), &did_move) in monotone[leg_index]
-            .iter_mut()
-            .zip(&speeds[leg_index])
-            .zip(&moved[leg_index])
-        {
-            if did_move {
-                running = running.max(speed);
+        for (step_index, out) in monotone[leg_index].iter_mut().enumerate() {
+            if moved[leg_index][step_index] {
+                running = running.max(speeds[leg_index][step_index]);
+                *out = running;
             }
-            *out = running;
         }
     }
     monotone
 }
 
-/// The correction that scales `speed` down to `target`.
+/// Invert a leg's measured (command, speed) points at `target`.
+///
+/// The points include the `(0, 0)` anchor and every moved Power Step in command
+/// order; `speed == 0` marks an excluded point. A target at or above the leg's
+/// top speed resolves to the top command (100 %). The result is the un-rounded
+/// command in percent, so the caller rounds it to per-mille exactly once.
 #[allow(clippy::cast_precision_loss)]
-fn correction_ratio(target: u32, speed: u32) -> f32 {
-    // Both speeds are counts per second over a two-second window, far below the
-    // exact-integer range of `f32`; the cast is lossless for any real sweep.
-    target as f32 / speed as f32
+fn inverse_command(speeds: &[u32; POWER_STEPS], target: f32) -> f32 {
+    let mut lower_percent = 0.0_f32;
+    let mut lower_speed = 0.0_f32;
+    for (index, &speed) in speeds.iter().enumerate() {
+        if speed == 0 {
+            continue;
+        }
+        let percent = f32::from(POWER_STEP_PERCENTS[index]);
+        let speed = speed as f32;
+        if target <= speed {
+            if speed <= lower_speed {
+                return percent;
+            }
+            let fraction = (target - lower_speed) / (speed - lower_speed);
+            return lower_percent + (percent - lower_percent) * fraction;
+        }
+        lower_percent = percent;
+        lower_speed = speed;
+    }
+    f32::from(LAST_POWER_STEP_PERCENT)
 }
 
-/// Apply a correction to a requested magnitude, rounded and clamped to 0..=100.
+/// Round a positive command in percent to the nearest per-mille, clamped to
+/// `0..=1000`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn apply_correction(magnitude: u8, correction: f32) -> u8 {
-    // `f32::round` is unavailable in `no_std`; add a half and truncate. The
-    // correction is positive and at most 1.00, so the result is in 0..=100
-    // after the clamp.
-    let scaled = f32::from(magnitude) * correction + 0.5;
-    if scaled >= 100.0 { 100 } else { scaled as u8 }
+fn round_permille(command_percent: f32) -> u16 {
+    // `f32::round` is unavailable in `no_std`; add a half and truncate.
+    let rounded = command_percent * 10.0 + 0.5;
+    let max = f32::from(LAST_POWER_STEP_PERCENT) * 10.0;
+    if rounded <= 0.0 {
+        0
+    } else if rounded >= max {
+        max as u16
+    } else {
+        rounded as u16
+    }
 }

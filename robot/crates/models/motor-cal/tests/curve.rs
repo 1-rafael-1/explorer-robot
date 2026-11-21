@@ -1,8 +1,9 @@
 //! Host-side integration tests for the `motor-cal` Motor Calibration Curve.
 //!
 //! Every assertion is made through the crate's public API. The expected values
-//! are worked examples from `.scratch/motor-calibration/spec.md` — literal
-//! corrections and commands — never a re-run of the derivation the crate does.
+//! are worked examples from `.scratch/motor-calibration/precision-diagnosis.md`
+//! and `.scratch/motor-calibration/spec.md` — literal commands and corrections —
+//! never a re-run of the derivation the crate does.
 
 use motor_cal::{
     CurveCommand, CurveError, Direction, EncoderSample, InvalidReason, LegPoint, MEASUREMENT_WINDOW_MS,
@@ -22,6 +23,21 @@ const ALL_LEGS: [TestLeg; 4] = [
     TestLeg::new(Track::Right, Direction::Forward),
     TestLeg::new(Track::Right, Direction::Reverse),
 ];
+
+/// A linear leg: 10 counts per second per percent.
+const LINEAR: [u32; POWER_STEPS] = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+
+/// A leg that is 80 % of [`LINEAR`].
+const SLOW: [u32; POWER_STEPS] = [80, 160, 240, 320, 400, 480, 560, 640, 720, 800];
+
+/// A leg that is twice [`LINEAR`].
+const FAST: [u32; POWER_STEPS] = [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000];
+
+/// The simultaneous-pair forward left series from the 2026-11-21 bench run.
+const PAIR_LEFT: [u32; POWER_STEPS] = [130, 259, 435, 583, 720, 860, 1000, 1130, 1260, 1400];
+
+/// The simultaneous-pair forward right series from the 2026-11-21 bench run.
+const PAIR_RIGHT: [u32; POWER_STEPS] = [120, 231, 397, 568, 710, 850, 990, 1120, 1250, 1390];
 
 /// The raw count that reports `speed_counts_per_s` over [`WINDOW_MS`].
 ///
@@ -126,6 +142,16 @@ fn measured_400_counts() -> PointResult {
     engine.result().unwrap_or(PointResult::Invalid(InvalidReason::NoWindow))
 }
 
+/// The simultaneous-pair sweep from the bench run: both forward legs are the
+/// measured pair, both reverse legs are the linear identity.
+fn pair_curve() -> Result<motor_cal::Curve, CurveError> {
+    let left_forward = moving_leg(PAIR_LEFT);
+    let right_forward = moving_leg(PAIR_RIGHT);
+    let left_reverse = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
+    derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse))
+}
+
 #[test]
 fn a_leg_point_reports_its_window_speed() {
     let point = LegPoint::new(40, 400, WINDOW_MS, true);
@@ -168,11 +194,10 @@ fn an_invalid_point_result_has_no_leg_point() {
 
 #[test]
 fn identical_legs_produce_identity_corrections() {
-    let speeds = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let left_forward = moving_leg(speeds);
-    let left_reverse = moving_leg(speeds);
-    let right_forward = moving_leg(speeds);
-    let right_reverse = moving_leg(speeds);
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -184,31 +209,30 @@ fn identical_legs_produce_identity_corrections() {
                 assert_correction(curve.correction(leg.track, leg.direction, percent), 1.0);
             }
         }
+        // The inverse curve reproduces a request between measured points exactly.
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 55),
-            CurveCommand::Corrected(55)
+            CurveCommand::Corrected(550)
         );
         assert_eq!(
             curve.resolve(Track::Right, Direction::Reverse, 55),
-            CurveCommand::Corrected(55)
+            CurveCommand::Corrected(550)
         );
         assert_eq!(curve.resolve(Track::Left, Direction::Forward, 0), CurveCommand::Raw(0));
-        assert_eq!(curve.resolve(Track::Left, Direction::Forward, 9), CurveCommand::Raw(9));
+        assert_eq!(curve.resolve(Track::Left, Direction::Forward, 9), CurveCommand::Raw(90));
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 10),
-            CurveCommand::Corrected(10)
+            CurveCommand::Corrected(100)
         );
     }
 }
 
 #[test]
 fn the_slower_track_is_the_target_and_the_faster_is_attenuated() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let slow = [80, 160, 240, 320, 400, 480, 560, 640, 720, 800];
-    let left_forward = moving_leg(base);
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(slow);
-    let right_reverse = moving_leg(base);
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(SLOW);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -227,17 +251,24 @@ fn the_slower_track_is_the_target_and_the_faster_is_attenuated() {
                 }
             }
         }
+        // The faster track is commanded to the slower track's speed.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 50),
+            CurveCommand::Corrected(400)
+        );
+        assert_eq!(
+            curve.resolve(Track::Right, Direction::Forward, 50),
+            CurveCommand::Corrected(500)
+        );
     }
 }
 
 #[test]
 fn corrections_are_independent_per_direction() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let slow_reverse = [80, 160, 240, 320, 400, 480, 560, 640, 720, 800];
-    let left_forward = moving_leg(base);
-    let left_reverse = moving_leg(slow_reverse);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(SLOW);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -252,7 +283,6 @@ fn corrections_are_independent_per_direction() {
 
 #[test]
 fn the_floor_is_the_highest_breakaway_and_below_it_the_raw_command_is_used() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
     let left_forward = leg_from([
         (0, false),
         (0, false),
@@ -265,9 +295,9 @@ fn the_floor_is_the_highest_breakaway_and_below_it_the_raw_command_is_used() {
         (900, true),
         (1000, true),
     ]);
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -277,15 +307,15 @@ fn the_floor_is_the_highest_breakaway_and_below_it_the_raw_command_is_used() {
         assert_eq!(curve.resolve(Track::Left, Direction::Forward, 0), CurveCommand::Raw(0));
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 10),
-            CurveCommand::Raw(10)
+            CurveCommand::Raw(100)
         );
         assert_eq!(
             curve.resolve(Track::Right, Direction::Forward, 20),
-            CurveCommand::Raw(20)
+            CurveCommand::Raw(200)
         );
         assert_eq!(
             curve.resolve(Track::Right, Direction::Forward, 29),
-            CurveCommand::Raw(29)
+            CurveCommand::Raw(290)
         );
         assert!(curve.correction(Track::Right, Direction::Forward, 20).is_none());
         assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 1.0);
@@ -296,7 +326,6 @@ fn the_floor_is_the_highest_breakaway_and_below_it_the_raw_command_is_used() {
 
 #[test]
 fn a_floor_at_one_hundred_percent_leaves_every_lower_command_raw() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
     let left_forward = leg_from([
         (0, false),
         (0, false),
@@ -309,9 +338,9 @@ fn a_floor_at_one_hundred_percent_leaves_every_lower_command_raw() {
         (0, false),
         (1000, true),
     ]);
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -320,11 +349,11 @@ fn a_floor_at_one_hundred_percent_leaves_every_lower_command_raw() {
         assert_eq!(curve.floor_percent(), 100);
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 99),
-            CurveCommand::Raw(99)
+            CurveCommand::Raw(990)
         );
         assert_eq!(
             curve.resolve(Track::Right, Direction::Forward, 99),
-            CurveCommand::Raw(99)
+            CurveCommand::Raw(990)
         );
         assert!(curve.resolve(Track::Left, Direction::Forward, 100).is_corrected());
         assert_correction(curve.correction(Track::Left, Direction::Forward, 100), 1.0);
@@ -345,80 +374,79 @@ fn the_measured_speed_series_is_made_monotone_before_inversion() {
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
         assert_correction(curve.correction(Track::Left, Direction::Forward, 20), 1.0);
-        // The dip at 30 % is replaced by the running maximum of 200 counts/s,
-        // so the left correction is 1.00 and the right is 200/250 = 0.8.
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 1.0);
-        assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 0.8);
+        // The dip at 30 % is replaced by the running maximum of 200 counts/s, so
+        // both legs invert to command 20 there: 20 / 30.
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 2.0 / 3.0);
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 2.0 / 3.0);
         assert_correction(curve.correction(Track::Left, Direction::Forward, 40), 1.0);
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(200)
+        );
     }
 }
 
 #[test]
-fn interpolation_is_piecewise_linear_between_measured_points() {
-    let target = [100; POWER_STEPS];
-    let left = [100, 125, 160, 160, 160, 160, 160, 160, 160, 160];
-    let left_forward = moving_leg(left);
-    let left_reverse = moving_leg(target);
-    let right_forward = moving_leg(target);
-    let right_reverse = moving_leg(target);
+fn the_target_speed_is_interpolated_between_measured_steps() {
+    // The right leg reaches 300 counts/s at 20 % and sits there at 30 %, so the
+    // slower track is the linear left leg at every measured step. Half-way
+    // between 20 % and 30 % the target is therefore 250 counts/s.
+    let right = [150, 300, 300, 400, 500, 600, 700, 800, 900, 1000];
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(right);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 10), 1.0);
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 20), 0.8);
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 0.625);
-        // Half-way between 10 % (1.00) and 20 % (0.80).
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 15), 0.9);
-        // Half-way between 20 % (0.80) and 30 % (0.625).
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 25), 0.7125);
-        // 14 * 0.9 = 12.6, which rounds to 13.
+        // Target 150 at 15 %: the linear left leg is identity.
         assert_eq!(
-            curve.resolve(Track::Left, Direction::Forward, 14),
-            CurveCommand::Corrected(13)
+            curve.resolve(Track::Left, Direction::Forward, 15),
+            CurveCommand::Corrected(150)
         );
-        // 25 * 0.7125 = 17.8125, which rounds to 18.
+        // Target 250 at 25 %: the right leg needs command 16.67 % = 167 per-mille.
         assert_eq!(
-            curve.resolve(Track::Left, Direction::Forward, 25),
-            CurveCommand::Corrected(18)
+            curve.resolve(Track::Right, Direction::Forward, 25),
+            CurveCommand::Corrected(167)
         );
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 25), 2.0 / 3.0);
     }
 }
 
 #[test]
-fn the_top_point_holds_at_and_above_one_hundred_percent() {
-    let target = [100; POWER_STEPS];
-    let left = [100, 125, 125, 125, 125, 125, 125, 125, 125, 125];
-    let left_forward = moving_leg(left);
-    let left_reverse = moving_leg(target);
-    let right_forward = moving_leg(target);
-    let right_reverse = moving_leg(target);
+fn the_top_target_holds_at_and_above_one_hundred_percent() {
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(SLOW);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
         assert_correction(curve.correction(Track::Left, Direction::Forward, 100), 0.8);
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 150), 0.8);
+        // 80 / 150: the top command holds but the factor is reported against the
+        // requested magnitude.
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 150), 80.0 / 150.0);
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 100),
-            CurveCommand::Corrected(80)
+            CurveCommand::Corrected(800)
         );
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 150),
-            CurveCommand::Corrected(100)
+            CurveCommand::Corrected(800)
         );
     }
 }
 
 #[test]
 fn zero_resolves_to_zero() {
-    let base = [100; POWER_STEPS];
-    let left_forward = moving_leg(base);
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
@@ -427,7 +455,7 @@ fn zero_resolves_to_zero() {
         for leg in ALL_LEGS {
             let command = curve.resolve(leg.track, leg.direction, 0);
             assert_eq!(command, CurveCommand::Raw(0));
-            assert_eq!(command.command(), 0);
+            assert_eq!(command.per_mille(), 0);
             assert!(!command.is_corrected());
         }
     }
@@ -435,8 +463,6 @@ fn zero_resolves_to_zero() {
 
 #[test]
 fn a_point_that_never_moved_is_excluded_from_the_target() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let left_forward = moving_leg(base);
     let right_forward = leg_from([
         (100, true),
         (200, true),
@@ -449,26 +475,31 @@ fn a_point_that_never_moved_is_excluded_from_the_target() {
         (900, true),
         (1000, true),
     ]);
-    let left_reverse = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
-        // If the stalled right point were in the target it would drag the
-        // target down to its running maximum (400), making this 0.8.
+        // The stalled point is excluded, so the target at 50 % is interpolated
+        // between the measured 40 % and 60 % points (500 counts/s), not dragged
+        // down to the stalled point's running maximum (400 counts/s).
         assert_correction(curve.correction(Track::Left, Direction::Forward, 50), 1.0);
-        assert_correction(curve.correction(Track::Right, Direction::Forward, 40), 1.0);
         assert_correction(curve.correction(Track::Right, Direction::Forward, 50), 1.0);
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 40), 1.0);
         assert_correction(curve.correction(Track::Right, Direction::Forward, 60), 1.0);
+        assert_eq!(
+            curve.resolve(Track::Right, Direction::Forward, 50),
+            CurveCommand::Corrected(500)
+        );
     }
 }
 
 #[test]
 fn a_leg_that_does_not_move_at_one_hundred_percent_fails() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let left_forward = moving_leg(base);
+    let left_forward = moving_leg(LINEAR);
     let left_reverse = leg_from([
         (100, true),
         (200, true),
@@ -481,8 +512,8 @@ fn a_leg_that_does_not_move_at_one_hundred_percent_fails() {
         (900, true),
         (0, false),
     ]);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     assert_eq!(
         derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse)),
@@ -493,19 +524,39 @@ fn a_leg_that_does_not_move_at_one_hundred_percent_fails() {
 }
 
 #[test]
-fn a_correction_at_the_plausibility_band_is_accepted() {
-    let left = [1000; POWER_STEPS];
-    let right = [500; POWER_STEPS];
-    let left_forward = moving_leg(left);
-    let left_reverse = moving_leg(right);
-    let right_forward = moving_leg(right);
-    let right_reverse = moving_leg(right);
+fn a_target_below_the_first_moved_point_uses_the_zero_anchor() {
+    // The left leg produces 200 counts/s at its first moved point (10 %), while
+    // the target there is 100 counts/s. The inverse curve needs the (0, 0)
+    // anchor to reach a command below 10 %.
+    let left_forward = moving_leg(FAST);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
-        // 500 / 1000 = 0.50 is inside the inclusive band.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 10),
+            CurveCommand::Corrected(50)
+        );
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 10), 0.5);
+    }
+}
+
+#[test]
+fn a_correction_at_the_plausibility_band_is_accepted() {
+    let left_forward = moving_leg(FAST);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
+
+    let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
+
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        // The faster leg needs half the command to match the slower leg.
         assert_correction(curve.correction(Track::Left, Direction::Forward, 50), 0.5);
         assert_correction(curve.correction(Track::Right, Direction::Forward, 50), 1.0);
     }
@@ -513,12 +564,11 @@ fn a_correction_at_the_plausibility_band_is_accepted() {
 
 #[test]
 fn an_implausible_correction_fails_rather_than_being_clamped() {
-    let left = [1000; POWER_STEPS];
-    let right = [400; POWER_STEPS];
+    let left = [250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500];
     let left_forward = moving_leg(left);
-    let left_reverse = moving_leg(right);
-    let right_forward = moving_leg(right);
-    let right_reverse = moving_leg(right);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     assert_eq!(
         derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse)),
@@ -532,12 +582,11 @@ fn an_implausible_correction_fails_rather_than_being_clamped() {
 
 #[test]
 fn a_missing_point_fails_with_the_reason() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let mut left_forward = moving_leg(base);
+    let mut left_forward = moving_leg(LINEAR);
     left_forward.remove(4);
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
     assert_eq!(
         derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse)),
@@ -550,12 +599,11 @@ fn a_missing_point_fails_with_the_reason() {
 
 #[test]
 fn an_invalid_point_fails_with_the_reason() {
-    let base = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
-    let left_reverse = moving_leg(base);
-    let right_forward = moving_leg(base);
-    let right_reverse = moving_leg(base);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
 
-    let mut wrong_percent = moving_leg(base);
+    let mut wrong_percent = moving_leg(LINEAR);
     wrong_percent[1] = LegPoint::new(15, count_for(200), WINDOW_MS, true);
     assert_eq!(
         derive_curve(sweep(&wrong_percent, &left_reverse, &right_forward, &right_reverse)),
@@ -565,7 +613,7 @@ fn an_invalid_point_fails_with_the_reason() {
         })
     );
 
-    let mut zero_window = moving_leg(base);
+    let mut zero_window = moving_leg(LINEAR);
     zero_window[1] = LegPoint::new(20, count_for(200), 0, true);
     assert_eq!(
         derive_curve(sweep(&zero_window, &left_reverse, &right_forward, &right_reverse)),
@@ -575,7 +623,7 @@ fn an_invalid_point_fails_with_the_reason() {
         })
     );
 
-    let mut zero_speed = moving_leg(base);
+    let mut zero_speed = moving_leg(LINEAR);
     zero_speed[1] = LegPoint::new(20, 0, WINDOW_MS, true);
     assert_eq!(
         derive_curve(sweep(&zero_speed, &left_reverse, &right_forward, &right_reverse)),
@@ -585,7 +633,7 @@ fn an_invalid_point_fails_with_the_reason() {
         })
     );
 
-    let mut duplicate = moving_leg(base);
+    let mut duplicate = moving_leg(LINEAR);
     duplicate[1] = LegPoint::new(10, count_for(200), WINDOW_MS, true);
     assert_eq!(
         derive_curve(sweep(&duplicate, &left_reverse, &right_forward, &right_reverse)),
@@ -626,4 +674,51 @@ fn failure_reasons_name_themselves_for_the_log() {
         .label(),
         "implausible correction"
     );
+}
+
+#[test]
+fn inverse_interpolation_beats_the_linear_ratio() {
+    let curve = pair_curve();
+
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        // Target at 30 % forward is the slower right leg's 397 counts/s.
+        // The linear ratio would command `30 * 397 / 435 = 27.4 %` = 274
+        // per-mille; the inverse interpolation over left (20, 259) and (30, 435)
+        // commands 27.84 % = 278 per-mille.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(278)
+        );
+        assert_ne!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(270)
+        );
+        // The slower leg is the target, so its own command is unchanged.
+        assert_eq!(
+            curve.resolve(Track::Right, Direction::Forward, 30),
+            CurveCommand::Corrected(300)
+        );
+    }
+}
+
+#[test]
+fn the_simultaneous_pair_at_forty_percent() {
+    let curve = pair_curve();
+
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        // Raw pair: left 583, right 568. The needed left command is 38.99 %
+        // = 390 per-mille, not the linear ratio's 36 %.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 40),
+            CurveCommand::Corrected(390)
+        );
+        assert_eq!(
+            curve.resolve(Track::Right, Direction::Forward, 40),
+            CurveCommand::Corrected(400)
+        );
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 40), 0.974662);
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 40), 1.0);
+    }
 }

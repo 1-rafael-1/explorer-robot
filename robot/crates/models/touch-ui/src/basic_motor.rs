@@ -8,24 +8,25 @@
 //! `ACTIVITY` stream cannot drift apart.
 //!
 //! The readout also owns the rules the task would otherwise spread through its
-//! loops. It accepts three transitions — start a Power Step, sample a count, and
-//! complete a Power Step — and derives every row from them. Starting a step does
-//! not clear the displayed count: the encoder reset that precedes a step empties
-//! the hardware, not the operator's reading, so the live count holds until the
-//! next sample replaces it. Completing a step latches the Breakaway at the first
-//! step of a Test Leg whose Measurement Window showed sustained motion, and
-//! starting a step on a different Test Leg clears it, so each leg reports its
-//! own.
+//! loops. It accepts three transitions — start a pair, sample both counts, and
+//! complete a pair — and derives every row from them. A pair commands both
+//! tracks at the same direction and power and measures them over the same
+//! window, so the live rows carry a value for each side. Starting a pair does
+//! not clear the displayed counts: the encoder reset that precedes a pair empties
+//! the hardware, not the operator's reading, so the live counts hold until the
+//! next sample replaces them. Completing a pair latches each side's Breakaway at
+//! the lowest power whose Measurement Window showed sustained motion, and a
+//! direction change clears both, so each direction reports its own.
 //!
 //! # Rows
 //!
-//! Six rows carry the current Power Step, the live encoder count, the last
-//! completed Power Step with the count it finished with, the Breakaway, the
-//! correction the curve in force applies at the current Power Step, and the
-//! position within the cycle. A value that does not exist yet renders `--`, never
-//! `0`, so "no data yet" can never be mistaken for "zero pulses". A Breakaway
-//! that is still `--` at the end of a Test Leg is the verdict that the track did
-//! not move at any power up to 100 %.
+//! Six rows carry the current pair (direction and power), both live encoder
+//! counts, the last completed pair with the counts it finished with, both
+//! Breakaways, the correction the curve in force applies to each track at the
+//! current pair, and the position within the cycle. A value that does not exist
+//! yet renders `--`, never `0`, so "no data yet" can never be mistaken for "zero
+//! pulses". A Breakaway that is still `--` at the end of a direction is the
+//! verdict that the track did not move at any power up to 100 %.
 //!
 //! # The correction row
 //!
@@ -67,6 +68,20 @@ pub enum Direction {
     Forward,
     /// Towards the back of the robot.
     Reverse,
+}
+
+impl Direction {
+    /// The operator-facing abbreviation the pair rows use, e.g. `Fwd`.
+    ///
+    /// [`TestLeg::label`] keeps its spelled-out form for the Activity phase
+    /// line; this shorter form only labels the live pair rows.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Forward => "Fwd",
+            Self::Reverse => "Rev",
+        }
+    }
 }
 
 /// One Test Leg: the track under test and the direction it turns.
@@ -140,124 +155,148 @@ pub struct StepIndex {
     pub total: u8,
 }
 
-/// The Power Step the panel names: one Test Leg at one power level.
+/// The pair the panel names: one direction at one power level, both tracks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CurrentStep {
-    /// The leg under test.
-    leg: TestLeg,
+struct CurrentPair {
+    /// The direction both tracks turn.
+    direction: Direction,
     /// The commanded power, in percent.
     power: u8,
 }
 
-/// A Power Step that has finished: the leg and power it commanded and the
-/// Measurement Window count it ended with, or `None` when the point was invalid.
+/// A pair that has finished: the direction and power it commanded and each
+/// track's Measurement Window count, or `None` when that side was invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CompletedStep {
-    /// The leg under test.
-    leg: TestLeg,
+struct CompletedPair {
+    /// The direction both tracks turned.
+    direction: Direction,
     /// The commanded power, in percent.
     power: u8,
-    /// The Measurement Window count, or `None` when the measurement was invalid.
-    count: Option<u16>,
+    /// The left track's Measurement Window count, or `None` when invalid.
+    left: Option<u16>,
+    /// The right track's Measurement Window count, or `None` when invalid.
+    right: Option<u16>,
 }
 
-/// The neutral Basic Motor Test Readout: the current Power Step, the live encoder
-/// count, the last completed Power Step, the Breakaway, the correction in force
-/// and the step index.
+/// The correction the curve in force applies to each track at the current pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CorrectionPair {
+    /// The factor applied to the left track.
+    left: Correction,
+    /// The factor applied to the right track.
+    right: Correction,
+}
+
+/// The neutral Basic Motor Test Readout: the current pair, both live encoder
+/// counts, the last completed pair, both Breakaways, both corrections and the
+/// step index.
 ///
-/// [`BasicMotorReadout::waiting`] is the state before the first Power Step. The
+/// [`BasicMotorReadout::waiting`] is the state before the first pair. The
 /// firmware holds one locally, publishes a copy at the sampling rate, and drives
-/// it with [`BasicMotorReadout::start_step`], [`BasicMotorReadout::sample`] and
+/// it with [`BasicMotorReadout::start_pair`], [`BasicMotorReadout::sample`] and
 /// [`BasicMotorReadout::complete`]; the model decides what each row says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BasicMotorReadout {
-    /// The step the panel names: the one commanding, or the one that last
+    /// The pair the panel names: the one commanding, or the one that last
     /// commanded. It is deliberately kept past a completion, so the row does not
-    /// blank between Power Steps and the operator always knows which command the
+    /// blank between pairs and the operator always knows which command the
     /// numbers belong to.
-    step: Option<CurrentStep>,
+    step: Option<CurrentPair>,
     /// Whether `step` is still commanding, so a completion that arrives with no
-    /// step in progress cannot overwrite what the operator is reading.
+    /// pair in progress cannot overwrite what the operator is reading.
     commanding: bool,
-    /// The live encoder count for the track under test, or `None` before the
-    /// first sample.
-    count: Option<u16>,
-    /// The most recently completed Power Step, or `None` before the first
-    /// completion.
-    last: Option<CompletedStep>,
-    /// The Test Leg currently or most recently under test, retained past a
-    /// completion so the next leg's first step can clear the Breakaway.
-    leg: Option<TestLeg>,
-    /// The lowest power of `leg` whose Measurement Window showed sustained
-    /// motion, or `None` before a step in the leg moved.
-    breakaway: Option<u8>,
-    /// The correction the curve in force applies to the current step, or `None`
-    /// before the first step.
-    correction: Option<Correction>,
+    /// The live encoder count for the left track, or `None` before the first
+    /// sample.
+    count_left: Option<u16>,
+    /// The live encoder count for the right track, or `None` before the first
+    /// sample.
+    count_right: Option<u16>,
+    /// The most recently completed pair, or `None` before the first completion.
+    last: Option<CompletedPair>,
+    /// The lowest power of the current direction whose left Measurement Window
+    /// showed sustained motion, or `None` before the left track moved.
+    breakaway_left: Option<u8>,
+    /// The lowest power of the current direction whose right Measurement Window
+    /// showed sustained motion, or `None` before the right track moved.
+    breakaway_right: Option<u8>,
+    /// The corrections the curve in force applies to both tracks, or `None`
+    /// before the first pair.
+    correction: Option<CorrectionPair>,
     /// The position within the cycle of the current or most recently completed
-    /// Power Step, or `None` before the first step.
+    /// pair, or `None` before the first pair.
     index: Option<StepIndex>,
 }
 
 impl BasicMotorReadout {
-    /// A readout with no Power Step, no sample and no completed step yet.
+    /// A readout with no pair, no sample and no completed pair yet.
     #[must_use]
     pub const fn waiting() -> Self {
         Self {
             step: None,
             commanding: false,
-            count: None,
+            count_left: None,
+            count_right: None,
             last: None,
-            leg: None,
-            breakaway: None,
+            breakaway_left: None,
+            breakaway_right: None,
             correction: None,
             index: None,
         }
     }
 
-    /// Begin a Power Step on `leg` at `power` percent, at `index` within the
-    /// cycle, with `correction` the curve in force for this leg and power.
+    /// Begin a pair on `direction` at `power` percent, at `index` within the
+    /// cycle, with the curve in force for each track.
     ///
-    /// The displayed count is deliberately left alone: the encoder reset has
+    /// The displayed counts are deliberately left alone: the encoder reset has
     /// already happened, and the operator's last reading must not flicker to a
-    /// placeholder while the new command settles. A step on a different Test Leg
-    /// clears the Breakaway, so each leg reports its own.
-    pub const fn start_step(&mut self, leg: TestLeg, power: u8, index: StepIndex, correction: Correction) {
-        let same = match self.leg {
-            Some(current) => same_leg(current, leg),
+    /// placeholder while the new command settles. A direction change clears both
+    /// Breakaways, so each direction reports its own.
+    pub const fn start_pair(
+        &mut self,
+        direction: Direction,
+        power: u8,
+        index: StepIndex,
+        correction_left: Correction,
+        correction_right: Correction,
+    ) {
+        let changed = match self.step {
+            Some(current) => !same_direction(current.direction, direction),
             None => false,
         };
-        if !same {
-            self.breakaway = None;
+        if changed {
+            self.breakaway_left = None;
+            self.breakaway_right = None;
         }
-        self.leg = Some(leg);
+        self.step = Some(CurrentPair { direction, power });
         self.index = Some(index);
-        self.step = Some(CurrentStep { leg, power });
-        self.correction = Some(correction);
+        self.correction = Some(CorrectionPair {
+            left: correction_left,
+            right: correction_right,
+        });
         self.commanding = true;
     }
 
-    /// Replace the live encoder count with the latest raw sample for the track
-    /// under test.
-    pub const fn sample(&mut self, count: u16) {
-        self.count = Some(count);
+    /// Replace both live encoder counts with the latest raw samples.
+    pub const fn sample(&mut self, left: u16, right: u16) {
+        self.count_left = Some(left);
+        self.count_right = Some(right);
     }
 
-    /// End the current Power Step.
+    /// End the current pair.
     ///
-    /// `count` is the Measurement Window count, or `None` when the measurement
-    /// was invalid, in which case the `Last` row shows `--` rather than `0`.
-    /// `moved` says whether that window showed sustained motion; only a moving
-    /// step latches the Breakaway, so a stray pulse cannot be mistaken for
-    /// motion.
+    /// `left` and `right` are the Measurement Window counts, or `None` for a
+    /// side whose measurement was invalid, in which case the `Last` row shows
+    /// `--` rather than `0`. `moved_left` and `moved_right` say whether each
+    /// side's window showed sustained motion; only a moving side latches its
+    /// Breakaway, so a stray pulse cannot be mistaken for motion.
     ///
-    /// The step's own leg and power are retained for the `Last` row, and the
-    /// step's own power latches the Breakaway while it is still absent. The
-    /// current-step row keeps naming the step that just ran, so the panel does
-    /// not blank for the coast between steps. A completion with no step in
+    /// The pair's own direction and power are retained for the `Last` row, and
+    /// each side's power latches that side's Breakaway while it is still absent.
+    /// The current-pair row keeps naming the pair that just ran, so the panel
+    /// does not blank for the coast between pairs. A completion with no pair in
     /// progress is ignored, so a stray one cannot overwrite what the operator is
     /// reading.
-    pub const fn complete(&mut self, count: Option<u16>, moved: bool) {
+    pub const fn complete(&mut self, left: Option<u16>, right: Option<u16>, moved_left: bool, moved_right: bool) {
         if !self.commanding {
             return;
         }
@@ -265,60 +304,88 @@ impl BasicMotorReadout {
             return;
         };
 
-        self.last = Some(CompletedStep {
-            leg: step.leg,
+        self.last = Some(CompletedPair {
+            direction: step.direction,
             power: step.power,
-            count,
+            left,
+            right,
         });
-        if moved && self.breakaway.is_none() {
-            self.breakaway = Some(step.power);
+        if moved_left {
+            self.breakaway_left = Some(lower_power(self.breakaway_left, step.power));
+        }
+        if moved_right {
+            self.breakaway_right = Some(lower_power(self.breakaway_right, step.power));
         }
         self.commanding = false;
     }
 
-    /// The formatted label/value pairs, in row order: the current Power Step, the
-    /// live encoder count, the last completed Power Step, the Breakaway, the
-    /// correction in force and the position within the cycle.
+    /// The formatted label/value pairs, in row order: the current pair, both
+    /// live encoder counts, the last completed pair, both Breakaways, both
+    /// corrections and the position within the cycle.
+    ///
+    /// A pair row renders its `L ... R ...` form once the run has named a pair;
+    /// before the first pair every value is a bare `--`.
     #[must_use]
     pub fn rows(&self) -> [(TextBuf, TextBuf); ROWS] {
-        let (step_label, step_value) = self.step.map_or_else(
-            || (placeholder(), placeholder()),
-            |step| (labelled(step.leg.label()), power_value(step.power)),
-        );
+        let active = self.step.is_some();
 
-        let count_value = self.count.map_or_else(placeholder, number);
+        let step_cell = self
+            .step
+            .map_or_else(placeholder, |step| pair_step_value(step.direction, step.power));
 
-        let last_value = self.last.map_or_else(placeholder, completed_value);
+        let count_value = if active {
+            side_counts(self.count_left, self.count_right)
+        } else {
+            placeholder()
+        };
 
-        let breakaway_value = self.breakaway.map_or_else(placeholder, power_value);
+        let last_value = self.last.map_or_else(placeholder, completed_pair_value);
 
-        let correction_cell = self.correction.map_or_else(placeholder, correction_value);
+        let breakaway_value = if active {
+            side_powers(self.breakaway_left, self.breakaway_right)
+        } else {
+            placeholder()
+        };
+
+        let correction_cell = self.correction.map_or_else(placeholder, correction_pair_value);
 
         let index_value = self.index.map_or_else(placeholder, step_index_value);
 
         [
-            (step_label, step_value),
+            (labelled("Step"), step_cell),
             (labelled("Count"), count_value),
             (labelled("Last"), last_value),
             (labelled("Breakaway"), breakaway_value),
             (labelled("Correction"), correction_cell),
-            (labelled("Step"), index_value),
+            (labelled("Index"), index_value),
         ]
     }
 }
 
-/// Whether two Test Legs name the same track and direction.
-const fn same_leg(a: TestLeg, b: TestLeg) -> bool {
+/// Whether two directions are the same.
+const fn same_direction(a: Direction, b: Direction) -> bool {
     matches!(
-        (a.track, a.direction, b.track, b.direction),
-        (Track::Left, Direction::Forward, Track::Left, Direction::Forward)
-            | (Track::Left, Direction::Reverse, Track::Left, Direction::Reverse)
-            | (Track::Right, Direction::Forward, Track::Right, Direction::Forward)
-            | (Track::Right, Direction::Reverse, Track::Right, Direction::Reverse)
+        (a, b),
+        (Direction::Forward, Direction::Forward) | (Direction::Reverse, Direction::Reverse)
     )
 }
 
-/// Spell a Test Leg as the `Last` row's abbreviation, e.g. `L fwd`.
+/// The lower of `power` and an already latched power, so a later, higher step
+/// never replaces a Breakaway even if the task reports the steps out of order.
+const fn lower_power(current: Option<u8>, power: u8) -> u8 {
+    match current {
+        Some(current) => {
+            if current < power {
+                current
+            } else {
+                power
+            }
+        }
+        None => power,
+    }
+}
+
+/// Spell a Test Leg as the Result Report's abbreviation, e.g. `L fwd`.
 const fn abbreviated_leg(leg: TestLeg) -> &'static str {
     match (leg.track, leg.direction) {
         (Track::Left, Direction::Forward) => "L fwd",
@@ -328,16 +395,60 @@ const fn abbreviated_leg(leg: TestLeg) -> &'static str {
     }
 }
 
-/// Format the last completed Power Step: its abbreviated leg, power and count,
-/// e.g. `L fwd 50%  987`, or `L fwd 50%  --` for an invalid point.
-fn completed_value(step: CompletedStep) -> TextBuf {
-    let CompletedStep { leg, power, count } = step;
-    let leg = abbreviated_leg(leg);
+/// Format the current pair: the direction and power, e.g. `Fwd 40%`.
+fn pair_step_value(direction: Direction, power: u8) -> TextBuf {
     let mut value = TextBuf::new();
-    match count {
-        Some(count) => value.fill(format_args!("{leg} {power}%  {count}")),
-        None => value.fill(format_args!("{leg} {power}%  --")),
-    }
+    value.fill(format_args!("{} {power}%", direction.short_label()));
+    value
+}
+
+/// Format both live counts, e.g. `L 583 R 568`, with `--` for a side that has
+/// no sample.
+fn side_counts(left: Option<u16>, right: Option<u16>) -> TextBuf {
+    let left = count_side(left);
+    let right = count_side(right);
+    let mut value = TextBuf::new();
+    value.fill(format_args!("L {} R {}", left.as_str(), right.as_str()));
+    value
+}
+
+/// Format one side's live count, or `--` when it has none.
+fn count_side(count: Option<u16>) -> TextBuf {
+    count.map_or_else(placeholder, number)
+}
+
+/// Format the last completed pair: its direction, power and both counts, e.g.
+/// `Fwd 40% L 583 R 568`, with `--` for an invalid side.
+fn completed_pair_value(pair: CompletedPair) -> TextBuf {
+    let left = count_side(pair.left);
+    let right = count_side(pair.right);
+    let mut value = TextBuf::new();
+    value.fill(format_args!(
+        "{} {}% L {} R {}",
+        pair.direction.short_label(),
+        pair.power,
+        left.as_str(),
+        right.as_str()
+    ));
+    value
+}
+
+/// Format both Breakaways, e.g. `L 20% R 10%`, with `--` for a side that has
+/// not moved yet.
+fn side_powers(left: Option<u8>, right: Option<u8>) -> TextBuf {
+    let left = left.map_or_else(placeholder, power_value);
+    let right = right.map_or_else(placeholder, power_value);
+    let mut value = TextBuf::new();
+    value.fill(format_args!("L {} R {}", left.as_str(), right.as_str()));
+    value
+}
+
+/// Format both corrections, e.g. `L 0.97 R 1.00`.
+fn correction_pair_value(pair: CorrectionPair) -> TextBuf {
+    let left = correction_value(pair.left);
+    let right = correction_value(pair.right);
+    let mut value = TextBuf::new();
+    value.fill(format_args!("L {} R {}", left.as_str(), right.as_str()));
     value
 }
 

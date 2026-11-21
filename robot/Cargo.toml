@@ -14,6 +14,16 @@ telemetry_logs = []
 # Start the IMU in Axis9 and print one orientation sample per second at INFO.
 # Off by default; useful for sensor bring-up.
 imu_debug = []
+# Permanent hardware-in-the-loop motor bench, phase 1: dispatch the Motor
+# Calibration from the panel origin and hold on its Result Report.
+# Off by default: the production build is unchanged. `scripts/motor-bench-precision.sh`
+# builds this phase first, then the separate measure phase below, so a report and
+# motor motion never share a boot.
+bench_motor_calibrate = []
+# Permanent hardware-in-the-loop motor bench, phase 2: measure corrected
+# left/right divergence from the menu with the saved v4 curve loaded.
+# Off by default; see `scripts/motor-bench-precision.sh`.
+bench_motor_measure = []
 
 [lints]
 workspace = true

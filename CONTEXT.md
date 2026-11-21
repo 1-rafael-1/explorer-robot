@@ -267,12 +267,13 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Calibration
 
-- **Motor Calibration** — The bench Procedure that measures and saves the **Motor Calibration Curve**. It uses the same measurement the Basic Motor Test displays: one Test Leg at a time, ten Power Steps, each starting from **Quiescence** and counted over a **Measurement Window**.
-- **Motor Calibration Curve** — The per-track, per-direction mapping from a requested speed to the raw command that produces the **Target Speed**, measured at 10 % Power Steps and interpolated between them. It is stored as the raw measurements plus the derived corrections.
+- **Motor Calibration** — The bench Procedure that measures and saves the **Motor Calibration Curve**. It uses the same measurement the Basic Motor Test displays: for each direction, ten Power Steps measured as simultaneous pairs, each starting from **Quiescence** and counted over a **Measurement Window**.
+- **Motor Calibration Curve** — The per-track, per-direction mapping from a requested speed to the raw command that produces the **Target Speed**, derived by inverting the leg's measured (command, speed) points with piecewise-linear interpolation between them and a zero anchor. It is stored as the raw measurements plus the derived corrections; the speed-versus-command response is nonlinear at low duty, so a linear speed-to-command ratio is not used.
+  _Avoid_: linear correction, speed multiplier
 - **Calibration Run Id** — The monotonic id of a Motor Calibration sweep, stored in the Motor Calibration record and in the Calibration State leaf (the code's `motor_run_id`). `0` means no sweep has produced the record (nothing loaded, or a scale-only record); a calibration adds one without wrapping to `0`, and the flash task publishes the stored id only after the record is durable, so it names the applied save rather than the save confirmation. It distinguishes a new record from the previous one.
   _Avoid_: generation, version
-- **Target Speed** — The speed a Motor Calibration corrects every leg towards at a given Power Step: the slower of the two tracks in that direction.
-- **Calibration Floor** — The lowest Power Step at which every leg moves. A Motor Calibration corrects nothing below it, and it is set by the slowest leg.
+- **Target Speed** — The speed a Motor Calibration corrects every leg towards at a given Power Step: the slower of the two tracks measured together in that direction.
+- **Calibration Floor** — The lowest Power Step at which every leg moves when the pair is commanded. A Motor Calibration corrects nothing below it, and it is set by the slowest leg.
 - **Distance Calibration** — The panel Procedure that measures the **Distance Scale**: it drives a fixed 150 cm leg on the nominal scale and divides the accumulated encoder counts by the distance the operator tapes out. It folds surface friction, track wear and the sprocket circumference into the one measured figure.
 - **Distance Scale** — The measured encoder scale: counts per real-world centimetre, produced by Distance Calibration and stored in the same Motor Calibration record as the curve (the code's `DistanceScale`). Counts per sprocket revolution is derived from it and the sprocket circumference rather than a hard-coded pulses-per-revolution constant; until Distance Calibration has run, the drive path falls back to the inferred nominal scale (330 counts per sprocket revolution over the 19.01 cm circumference).
   _Avoid_: distance factor, pulses per revolution
@@ -284,7 +285,7 @@ Lock order (documented in each module): **power → calibration → perception �
 - **Compass Accuracy** — The DMP's 0–3 confidence in its compass calibration, where 3 is most accurate; the final Compass Check requires 3.
 - **DMP Bias Snapshot** — The nine raw DMP bias words (gyroscope, accelerometer and compass) saved to flash after a successful DMP Compass Calibration and restored to the DMP at boot. It does not include the DMP's internal accuracy/covariance state.
 - **Boot Sequence** — On `Initialize`, the initialization module sends individual `GetData` commands to flash storage for the motor calibration curve, DMP bias snapshot, and distance calibration data. Each response raises a `CalibrationDataLoaded` event. When all three are received, the UI shows the main menu.
-- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves one versioned, checksummed Motor Calibration record under the `MotorCurve` key (format version 3): the **Distance Scale** in counts per centimetre, the **Calibration Run Id**, every **Power Step**'s raw measurement (command percent, encoder count, Measurement Window length, rail voltage, applied compensation and sustained-motion flag), the per-**Test Leg** Breakaway cache, the derived-corrections cache and a CRC. A scale-only record (Distance Calibration before any motor sweep) carries the scale and no curve. The DMP Bias Snapshot (nine i32 plus version/checksum) is saved under its own key. Both live in the dedicated FLASH_STORAGE region (last 8KB of flash); the retired motor and distance-factor keys are never read, written or reused.
+- **Flash Storage** — `sequential-storage` + `embedded-storage-async`. Saves one versioned, checksummed Motor Calibration record under the `MotorCurve` key (format version 4; a version 3 single-track record is rejected, not migrated): the **Distance Scale** in counts per centimetre, the **Calibration Run Id**, every **Power Step**'s raw measurement for each track (command percent, encoder count, Measurement Window length, rail voltage, applied compensation and sustained-motion flag), the per-**Test Leg** Breakaway cache, the derived-corrections cache and a CRC. A scale-only record (Distance Calibration before any motor sweep) carries the scale and no curve. The DMP Bias Snapshot (nine i32 plus version/checksum) is saved under its own key. Both live in the dedicated FLASH_STORAGE region (last 8KB of flash); the retired motor and distance-factor keys are never read, written or reused.
 
 ## IMU Test
 
@@ -299,16 +300,16 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Motor Test
 
-- **Basic Motor Test** — A bench Procedure that runs one cycle — four Test Legs of ten Power Steps — and ends in a Result Report carrying the **Basic Motor Test Readout**. An operator Stop ends it early with no Result Report, and it does not cycle.
+- **Basic Motor Test** — A bench Procedure that runs one cycle — twenty simultaneous-pair Power Steps covering four Test Legs — and ends in a Result Report carrying the **Basic Motor Test Readout**. An operator Stop ends it early with no Result Report, and it does not cycle.
   _Avoid_: motor check, bench spin
-- **Power Step** — One track, one direction and one commanded power level within a Basic Motor Test: the unit that owns exactly one encoder count.
-  _Avoid_: leg (one track and one direction holds ten Power Steps), speed (that names the commanded value, not the unit)
-- **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle is four Test Legs in that order.
+- **Power Step** — One direction and one commanded power level within a Basic Motor Test, measured as a simultaneous pair: both tracks are commanded at that power and each owns one encoder count.
+  _Avoid_: leg (one Test Leg holds ten Power Steps), speed (that names the commanded value, not the unit)
+- **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle covers all four; each simultaneous pair measures one Test Leg per track, so two are measured at a time.
   _Avoid_: leg (that names the Gap Analysis **Leg**), pass (that names the same Test Leg again)
 - **Breakaway** — The lowest Power Step of a Test Leg whose Measurement Window showed sustained motion above the motion threshold. Shown as `--` when the leg did not move at any power up to 100 %.
 - **Quiescence** — The confirmed state of a track that has produced no encoder pulses for a hold window. It is the precondition for attributing a count to a command; a brake or a coast alone does not establish it.
-- **Measurement Window** — The settle-excluded interval of a Power Step over which its encoder count is taken. It starts after the commanded motion has settled and ends before the coast-down.
-- **Basic Motor Test Readout** — The panel-only block inside the Basic Motor Test: the live running rows (the current Power Step with its power level, the live encoder count, the last completed Power Step with its count, the Breakaway, the correction applied at the current Power Step, and the step index within the forty-step cycle), and, in the Result Report, each Test Leg's Breakaway, its counts at 40, 60, 80 and 100 %, and the corrections applied at those steps. It is not part of Activity State and never reaches the Link Protocol.
+- **Measurement Window** — The settle-excluded interval of a Power Step over which both tracks' encoder counts are taken. It starts after the commanded motion has settled and ends before the coast-down.
+- **Basic Motor Test Readout** — The panel-only block inside the Basic Motor Test: the live running rows (the current pair's direction and power, both live encoder counts, the last completed pair with both counts, both Breakaways, the corrections applied to both tracks at the current pair, and the step index within the twenty-step cycle), and, in the Result Report, each Test Leg's Breakaway, its counts at 40, 60, 80 and 100 %, and the corrections applied at those steps. It is not part of Activity State and never reaches the Link Protocol.
 
 ## Development Practices
 

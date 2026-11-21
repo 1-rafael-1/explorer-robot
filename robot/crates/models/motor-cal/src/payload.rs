@@ -10,6 +10,14 @@
 //! are derived from). The derived per-point corrections are stored alongside them
 //! as a cache.
 //!
+//! Version 4 records are **pair-measured**: the sweep commands both tracks at the
+//! same Power Step and fills both legs from that one simultaneous window. The
+//! layout is unchanged — four legs of ten steps — but the same command now
+//! appears in the left and right leg of a step, which is what lets the curve
+//! compare the two tracks in the load condition normal driving uses. A version 3
+//! record was measured one track at a time and is rejected as "not calibrated";
+//! nothing is migrated.
+//!
 //! The raw measurements are the source of truth. [`MotorCalibrationRecord::decode`]
 //! recomputes the curve **and** the four Breakaways from them and **ignores both
 //! caches entirely**, so a changed curve model can re-derive a stored calibration
@@ -64,9 +72,12 @@ use crate::{
 
 /// The schema version this crate writes.
 ///
-/// A record with any other version is rejected rather than guessed at, so a
-/// firmware update can introduce a new layout without misreading an old record.
-pub const RECORD_FORMAT_VERSION: u8 = 3;
+/// Version 4 records are pair-measured (both tracks commanded at each Power
+/// Step). A record with any other version is rejected rather than guessed at, so
+/// a firmware update can introduce a new layout without misreading an old
+/// record; in particular a version 3 single-track record is "not calibrated"
+/// and is never migrated.
+pub const RECORD_FORMAT_VERSION: u8 = 4;
 
 /// The fixed encoded length of a Motor Calibration record, in bytes.
 ///
@@ -309,8 +320,10 @@ impl MotorCalibrationRecord {
     /// measurements, deriving the curve from those measurements.
     ///
     /// `legs` is in cycle order — left forward, left reverse, right forward,
-    /// right reverse — and each leg holds its ten Power Steps. `run_id` must be
-    /// monotonically increasing across saves; the record stores it unchanged.
+    /// right reverse — and each leg holds its ten Power Steps. A pair-measured
+    /// sweep fills the left and right leg of each direction at the same command,
+    /// so the same Power Step appears in both. `run_id` must be monotonically
+    /// increasing across saves; the record stores it unchanged.
     ///
     /// # Errors
     ///
