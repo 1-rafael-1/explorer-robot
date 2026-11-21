@@ -77,7 +77,10 @@ pub mod system_info;
 pub mod ui;
 pub mod widgets;
 
-pub use basic_motor::{BasicMotorReadout, Direction, StepIndex, TestLeg, Track};
+pub use basic_motor::{
+    BasicMotorReadout, BasicMotorSummary, BasicMotorSummaryBuilder, Correction, Direction, StepIndex, SummaryRow,
+    SummaryStatus, TestLeg, Track,
+};
 pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint};
 pub use embedded_graphics;
 pub use hit::{HeaderAction, Hit, LinkAction, PromptAction};

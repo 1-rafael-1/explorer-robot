@@ -13,7 +13,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 
-use crate::{rangefinder::ROWS as RANGEFINDER_ROWS, screens::ValueFlow};
+use crate::{basic_motor::SUMMARY_TABLE_ROWS, rangefinder::ROWS as RANGEFINDER_ROWS, screens::ValueFlow};
 
 /// Framebuffer width in pixels (landscape after the orientation transform).
 pub const FB_W: usize = 320;
@@ -112,6 +112,20 @@ pub const READOUT_MAX_PITCH: u32 = 26;
 /// The label sits on the left and the value follows it, so the two columns stay
 /// aligned down the block while the panel's inner width is 264 pixels.
 pub const BASIC_MOTOR_LABEL_W: u32 = 120;
+
+/// Width of the Basic Motor Test Result Report's label column, in pixels.
+///
+/// The rows name a table (`Counts`, `Corr`) or a Test Leg (`L fwd`), so eight
+/// glyphs of the six-pixel font leave the rest of the 264-pixel inner width for
+/// the value columns.
+pub const BASIC_MOTOR_SUMMARY_LABEL_W: u32 = 48;
+
+/// The number of rows the Basic Motor Test Result Report draws: the two tables,
+/// the Floor/Spread line and the optional saved/not-saved footer.
+///
+/// The footer row is reserved even when the summary carries no footer, so the
+/// Basic Motor Test and a Motor Calibration place their tables identically.
+pub const BASIC_MOTOR_SUMMARY_ROWS: usize = SUMMARY_TABLE_ROWS + 2;
 
 /// Vertical gap between the Basic Motor Test Readout and the progress bar, in
 /// pixels.
@@ -532,6 +546,57 @@ pub const fn basic_motor_value_rect(index: usize, rows: usize) -> Rectangle {
     Rectangle::new(
         Point::new(row.top_left.x + BASIC_MOTOR_LABEL_W as i32, row.top_left.y),
         Size::new(row.size.width - BASIC_MOTOR_LABEL_W, row.size.height),
+    )
+}
+
+/// The on-screen rectangle of the Basic Motor Test Result Report: the full
+/// readout area, with no progress bar reserved.
+///
+/// The Result Report is a finished view, so the bar it shared the panel with
+/// while running is gone and both tables may use the whole band.
+#[must_use]
+pub const fn basic_motor_summary_area() -> Rectangle {
+    readout_area()
+}
+
+/// The on-screen rectangle of Result Report row `index`.
+///
+/// The twelve rows share [`basic_motor_summary_area`] at an even pitch, and the
+/// block is centred, so every row fits between the panel's top and bottom edges
+/// and no two rows overlap. The 136-pixel band compresses the pitch to eleven
+/// pixels, which still clears the ten-pixel glyph.
+#[must_use]
+pub const fn basic_motor_summary_row_rect(index: usize) -> Rectangle {
+    row_rect_in(basic_motor_summary_area(), index, BASIC_MOTOR_SUMMARY_ROWS)
+}
+
+/// The on-screen rectangle of the label cell in Result Report row `index`.
+#[must_use]
+pub const fn basic_motor_summary_label_rect(index: usize) -> Rectangle {
+    let row = basic_motor_summary_row_rect(index);
+    Rectangle::new(row.top_left, Size::new(BASIC_MOTOR_SUMMARY_LABEL_W, row.size.height))
+}
+
+/// The on-screen rectangle of value cell `column` of `columns` in Result Report
+/// row `index`, starting after the label column.
+///
+/// The cells split the row's remaining width evenly, so the counts table's five
+/// columns and the corrections table's four never overlap, and the widest value
+/// still fits its own column.
+#[must_use]
+pub const fn basic_motor_summary_cell_rect(column: usize, columns: usize, index: usize) -> Rectangle {
+    let row = basic_motor_summary_row_rect(index);
+    let width = if columns == 0 {
+        0
+    } else {
+        (row.size.width - BASIC_MOTOR_SUMMARY_LABEL_W) / columns as u32
+    };
+    Rectangle::new(
+        Point::new(
+            row.top_left.x + BASIC_MOTOR_SUMMARY_LABEL_W as i32 + (column as u32 * width) as i32,
+            row.top_left.y,
+        ),
+        Size::new(width, row.size.height),
     )
 }
 

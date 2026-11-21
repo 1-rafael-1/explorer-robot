@@ -1,6 +1,7 @@
 //! Task modules for robot operation
 //!
 //! - `motor_driver` — TB6612FNG motor control (PWM + direct GPIO direction)
+//! - `motor_sweep` — one measured Power Step, shared by the test and the calibration
 //! - `drive` — drive command model, calibration, distance tracking
 //! - `orchestrate` — central event loop dispatching to behavior handlers
 //! - `battery_charge_read` — ADC battery voltage monitoring
@@ -26,6 +27,8 @@ pub mod indicators;
 pub mod initialization;
 pub mod io;
 pub mod motor_driver;
+/// One measured Power Step, shared by the Basic Motor Test and Motor Calibration.
+pub mod motor_sweep;
 pub mod orchestrate;
 /// The lifecycle the test modes and calibrations call.
 pub mod procedure;

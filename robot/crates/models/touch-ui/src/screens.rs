@@ -13,7 +13,12 @@
 //! The in-list Back entries are dropped: the header Back button is the only way
 //! back.
 
-use crate::{basic_motor::BasicMotorReadout, buffer::TextBuf, imu::ImuReadout, rangefinder::RangefinderTestReadout};
+use crate::{
+    basic_motor::{BasicMotorReadout, BasicMotorSummary},
+    buffer::TextBuf,
+    imu::ImuReadout,
+    rangefinder::RangefinderTestReadout,
+};
 
 /// One entry in a list screen.
 ///
@@ -539,7 +544,12 @@ impl Screen {
 /// A value-entry flow: the range, step, and preset for one distance setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueFlow {
-    /// Distance calibration: 0–200 cm in 1 cm steps.
+    /// Distance calibration: 0–500 cm in 1 cm steps.
+    ///
+    /// The upper bound is wide because a robot still on the retired
+    /// 960-counts-per-revolution scale can overshoot the 150 cm nominal leg
+    /// roughly threefold, and the operator must be able to enter what was
+    /// actually measured rather than a clamped value.
     DistanceCalibration,
     /// Attempt-straight-line distance: 10–5000 cm in 10 cm steps.
     AttemptStraight,
@@ -559,7 +569,7 @@ impl ValueFlow {
     #[must_use]
     pub const fn max(self) -> i32 {
         match self {
-            Self::DistanceCalibration => 200,
+            Self::DistanceCalibration => 500,
             Self::AttemptStraight => 5000,
         }
     }
@@ -596,15 +606,19 @@ impl ValueFlow {
 /// The IMU tests, the Rangefinder Test and the Basic Motor Test each fill the
 /// status panel with their own telemetry, so the view carries which readout it
 /// is rather than assuming one. A Procedure that shows no readout leaves
-/// [`StatusView::readout`] empty.
+/// [`StatusView::readout`] empty. The Basic Motor Test uses
+/// [`Readout::BasicMotor`] while it runs and [`Readout::BasicMotorSummary`] once
+/// it has completed, so the finished Result Report draws both tables.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Readout {
     /// An IMU Test Readout.
     Imu(ImuReadout),
     /// A Rangefinder Test Readout.
     Rangefinder(RangefinderTestReadout),
-    /// A Basic Motor Test Readout.
+    /// A Basic Motor Test Readout, drawn while the test runs.
     BasicMotor(BasicMotorReadout),
+    /// A completed Basic Motor Test's Result Report summary.
+    BasicMotorSummary(BasicMotorSummary),
 }
 
 /// The neutral content of a running/status screen.
@@ -725,9 +739,16 @@ impl StatusView {
     }
 
     /// Mark the view as a finished Result Report, whose header offers Back.
+    ///
+    /// A finished view carries no progress bar: the bar means "where am I" in a
+    /// run, and a run that has ended has no position left to carry.
     #[must_use]
     pub const fn finished(self) -> Self {
-        Self { finished: true, ..self }
+        Self {
+            finished: true,
+            progress: None,
+            ..self
+        }
     }
 }
 

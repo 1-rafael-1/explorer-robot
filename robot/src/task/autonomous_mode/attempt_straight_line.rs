@@ -34,7 +34,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 
 use crate::{
-    system::state::{calibration, perception},
+    system::state::perception,
     task::{
         autonomous_mode::gap_analysis,
         drive::{
@@ -180,9 +180,9 @@ pub async fn attempt_straight_line_task(target_distance_cm: u16) {
         ds.state_label = "Starting...";
     }
 
-    // Read distance calibration factor once — it doesn't change during operation.
-    let distance_factor = calibration::get_distance_factor().await;
-
+    // The drive path converts accumulated counts to actual sprocket revolutions
+    // using the measured (or nominal) counts/cm, so telemetry revolutions are
+    // physical revolutions: progress is simply revolutions × circumference.
     let mut robot_x_cm: f32 = 0.0;
     let mut robot_y_cm: f32 = 0.0;
     let mut robot_heading_deg: f32 = 0.0;
@@ -281,7 +281,7 @@ pub async fn attempt_straight_line_task(target_distance_cm: u16) {
                 };
 
                 // Extract partial progress from telemetry regardless of status.
-                let progress = extract_progress_cm(&completion, distance_factor);
+                let progress = extract_progress_cm(&completion);
                 total_progress_cm += progress;
 
                 // Update odometry: rotation first, then forward drive along new heading.
@@ -337,11 +337,11 @@ pub async fn attempt_straight_line_task(target_distance_cm: u16) {
 
 /// Extract forward progress in cm from a `DriveQueueCompletion`.
 ///
-/// `distance_factor` is the calibration factor read from `CALIBRATION_STATE`.
-/// It is applied *in reverse* so the cm reported here matches the cm originally
-/// requested by the drive command (which multiplies by the same factor when
-/// converting cm → target revolutions).
-fn extract_progress_cm(completion: &crate::task::drive::types::DriveQueueCompletion, distance_factor: f32) -> f32 {
+/// The telemetry revolutions are physical sprocket revolutions: the drive path
+/// divides the accumulated counts by the counts per revolution that the measured
+/// (or nominal) counts/cm implies. Progress is therefore revolutions × sprocket
+/// circumference, with no distance factor to undo.
+fn extract_progress_cm(completion: &crate::task::drive::types::DriveQueueCompletion) -> f32 {
     completion
         .last_step_completion
         .as_ref()
@@ -352,11 +352,7 @@ fn extract_progress_cm(completion: &crate::task::drive::types::DriveQueueComplet
                 ..
             } => {
                 let avg_revs = (achieved_left_revs + achieved_right_revs) / 2.0;
-                if distance_factor > 0.0 {
-                    avg_revs * SPROCKET_CIRCUMFERENCE_CM / distance_factor
-                } else {
-                    avg_revs * SPROCKET_CIRCUMFERENCE_CM
-                }
+                avg_revs * SPROCKET_CIRCUMFERENCE_CM
             }
             _ => 0.0,
         })

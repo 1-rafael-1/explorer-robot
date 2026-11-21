@@ -123,6 +123,8 @@ cargo test -p coin-d6 --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-async --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p lidar-cloud --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p dmp-cal --features std --target x86_64-unknown-linux-gnu --tests
+cargo test -p motor-cal --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p link-protocol --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p link-core --features std --target x86_64-unknown-linux-gnu --tests
 cargo test -p claim-slot --features std --target x86_64-unknown-linux-gnu --tests

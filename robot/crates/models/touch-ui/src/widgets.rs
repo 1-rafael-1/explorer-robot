@@ -16,16 +16,17 @@ use embedded_graphics::{
 use link_state::{ControlOutcome, ControlReply, ControlStatus, LinkPhase, SSID_CAPACITY, Snapshot, StationSsid};
 
 use crate::{
-    basic_motor::BasicMotorReadout,
+    basic_motor::{BasicMotorReadout, BasicMotorSummary, SUMMARY_TABLE_ROWS},
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
         BUTTON_BORDER_W, BUTTON_PAD, DIVIDER_H, FB_W, HEADER_H, LINK_INFO_ROWS, PANEL_BORDER, SCROLL_MIN_THUMB_H,
-        SCROLL_W, basic_motor_label_rect, basic_motor_readout_area, basic_motor_value_rect, footer_rect,
-        header_status_rect, header_title_rect, info_row_rect, link_action_rect, link_info_cell_rect,
-        link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height, nudge_minus_rect,
-        nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect, prompt_progress_rect,
-        prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area, readout_rect,
-        readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
+        SCROLL_W, basic_motor_label_rect, basic_motor_readout_area, basic_motor_summary_area,
+        basic_motor_summary_cell_rect, basic_motor_summary_label_rect, basic_motor_summary_row_rect,
+        basic_motor_value_rect, footer_rect, header_status_rect, header_title_rect, info_row_rect, link_action_rect,
+        link_info_cell_rect, link_info_row_rect, link_result_line_rect, link_result_rect, list_view_height,
+        nudge_minus_rect, nudge_plus_rect, panel_rect, progress_bar_rect, prompt_instruction_rect,
+        prompt_progress_rect, prompt_status_rect, rangefinder_column_rect, rangefinder_footer_rect, readout_area,
+        readout_rect, readout_row_rect, room_scan_caption_rect, save_button_rect, scroll_track_rect, slider_thumb_rect,
         slider_track_rect,
     },
     hit::{HeaderAction, Hit, LinkAction, PromptAction},
@@ -359,6 +360,7 @@ where
             Readout::Imu(readout) => draw_imu_readout(d, readout)?,
             Readout::Rangefinder(readout) => draw_rangefinder_readout(d, readout)?,
             Readout::BasicMotor(readout) => draw_basic_motor_readout(d, readout)?,
+            Readout::BasicMotorSummary(summary) => draw_basic_motor_summary(d, summary)?,
         }
     } else {
         // With a bar, the body sits in the space above it so the two cannot overlap.
@@ -539,6 +541,58 @@ where
         let value_rect = basic_motor_value_rect(index, rows.len());
         draw_readout_line(&mut clipped, label_rect, label.as_str(), style)?;
         draw_readout_line(&mut clipped, value_rect, value.as_str(), style)?;
+    }
+    Ok(())
+}
+
+/// Draw the Basic Motor Test Result Report: the counts table, the correction
+/// table, the unjudged Floor/Spread line and the optional saved/not-saved footer,
+/// in the full readout area.
+///
+/// Each table row draws its label in the label column and its value cells in the
+/// columns after it; the two tables' headers and legs come from the summary
+/// model, so labels and `--` placeholders stay in one place. The row below the
+/// tables is the Floor/Spread line across the panel, and the last row is the
+/// footer a Motor Calibration adds. A summary without a footer leaves the last
+/// row blank. Drawing is clipped to the readout area, so a hostile over-long
+/// value cannot paint over the panel border.
+///
+/// # Errors
+///
+/// Returns the draw target's error if the text fails to draw.
+pub fn draw_basic_motor_summary<D>(d: &mut D, summary: &BasicMotorSummary) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = basic_motor_summary_area();
+    let mut clipped = d.clipped(&area);
+    let style = MonoTextStyle::new(SMALL_FONT, TEXT);
+
+    for index in 0..SUMMARY_TABLE_ROWS {
+        let row = summary.row(index);
+        draw_readout_line(&mut clipped, basic_motor_summary_label_rect(index), row.label(), style)?;
+        let columns = row.cells().len();
+        for (column, cell) in row.cells().iter().enumerate() {
+            let rect = basic_motor_summary_cell_rect(column, columns, index);
+            draw_readout_line(&mut clipped, rect, cell.as_str(), style)?;
+        }
+    }
+
+    let floor = summary.floor_line();
+    draw_readout_line(
+        &mut clipped,
+        basic_motor_summary_row_rect(SUMMARY_TABLE_ROWS),
+        floor.as_str(),
+        style,
+    )?;
+
+    if let Some(footer) = summary.status_line() {
+        draw_readout_line(
+            &mut clipped,
+            basic_motor_summary_row_rect(SUMMARY_TABLE_ROWS + 1),
+            footer.as_str(),
+            style,
+        )?;
     }
     Ok(())
 }

@@ -10,19 +10,16 @@
 
 // ── Geometry constants (shared across modules) ────────────────────────────
 
-/// Number of encoder pulses per motor shaft revolution
-pub const PULSES_PER_REV: u32 = 8;
-/// Gear ratio from motor shaft to track sprocket
-pub const GEAR_RATIO_MOTOR_TO_SPROCKET: u32 = 120;
-/// Number of encoder pulses per track sprocket revolution
-pub const PULSES_PER_SPROCKET_REV: u32 = PULSES_PER_REV * GEAR_RATIO_MOTOR_TO_SPROCKET;
-/// Number of encoder pulses per track sprocket revolution (float).
-#[allow(clippy::cast_precision_loss)]
-pub const PULSES_PER_SPROCKET_REV_F32: f32 = PULSES_PER_SPROCKET_REV as f32;
+/// The effective drive-sprocket circumference with the track installed, in
+/// centimetres.
+///
+/// The geometry lives with the encoder scale in `motor-cal`, which derives the
+/// counts per revolution from a measured counts/cm. Re-exported here so drive
+/// code keeps one import path for its geometry.
+pub use motor_cal::scale::SPROCKET_CIRCUMFERENCE_CM;
+
 /// Distance between left/right track centerlines (cm).
 pub const TRACK_WIDTH_CM: f32 = 14.5;
-/// Effective drive sprocket circumference with track installed (cm).
-pub const SPROCKET_CIRCUMFERENCE_CM: f32 = 19.01;
 
 /// Combined motor control and sensor feedback commands
 ///
@@ -189,6 +186,10 @@ pub enum CompletionTelemetry {
         achieved_left_revs: f32,
         /// Achieved revolutions (right track sprocket).
         achieved_right_revs: f32,
+        /// Raw encoder counts accumulated on the left track.
+        achieved_left_counts: u32,
+        /// Raw encoder counts accumulated on the right track.
+        achieved_right_counts: u32,
         /// Target revolutions (left track sprocket).
         target_left_revs: f32,
         /// Target revolutions (right track sprocket).

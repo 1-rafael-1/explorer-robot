@@ -17,7 +17,6 @@ use crate::{
     system::state::{CalibrationStatus, calibration},
     task::{
         io::flash_storage::{self, CalibrationDataKind, CalibrationKind},
-        motor_driver::{self, MotorCommand},
         procedure::{self, Claim, ClaimKind, ClaimOrigin},
         sensors::imu,
         ui,
@@ -81,7 +80,7 @@ async fn publish_phase(detail: &'static str, percent: Option<u8>) {
 /// Handle calibration data loaded from flash storage.
 pub async fn handle_calibration_data_loaded(kind: CalibrationKind, data: Option<CalibrationDataKind>) {
     match kind {
-        CalibrationKind::Motor => load_motor_calibration(data).await,
+        CalibrationKind::Motor => report_motor_calibration(data).await,
         CalibrationKind::Distance => load_distance_calibration(data).await,
         CalibrationKind::DmpBias => {
             let words = data.and_then(|data| match data {
@@ -125,53 +124,36 @@ async fn load_dmp_calibration(words: Option<flash_storage::DmpBiasWords>) {
     calibration::set_dmp_cal_status(status).await;
 }
 
-/// Apply the motor calibration, or record that none was found.
-async fn load_motor_calibration(data: Option<CalibrationDataKind>) {
-    if let Some(CalibrationDataKind::Motor(motor_cal)) = data {
+/// Report the boot phase for the Motor Calibration Curve the flash task
+/// already decoded and published.
+///
+/// The flash task owns the record bytes and publishes the derived curve to the
+/// calibration state leaf in the same step, so there is no second copy of what
+/// is applied here. This function only names the phase: a valid record loaded,
+/// or the identity curve is in force.
+async fn report_motor_calibration(data: Option<CalibrationDataKind>) {
+    if let Some(CalibrationDataKind::Motor(summary)) = data {
         info!(
-            "Motor calibration loaded: left_factor={} right_factor={}",
-            motor_cal.left_factor, motor_cal.right_factor
+            "Motor calibration curve loaded: run={} floor={}%",
+            summary.run_id, summary.floor_percent
         );
-
-        {
-            let mut state = calibration::CALIBRATION_STATE.lock().await;
-            state.motor_cal_status = CalibrationStatus::Loaded;
-        }
-
-        motor_driver::send_motor_command(MotorCommand::LoadCalibration(motor_driver::MotorCalibration::new(
-            motor_cal.left_factor,
-            motor_cal.right_factor,
-        )))
-        .await;
-
         publish_phase("Calibration loaded", None).await;
     } else {
-        info!("No motor calibration found - using defaults");
-
-        {
-            let mut state = calibration::CALIBRATION_STATE.lock().await;
-            state.motor_cal_status = CalibrationStatus::NotAvailable;
-        }
-
+        info!("No motor calibration curve found - identity curve in force");
         publish_phase("Need calibration", None).await;
     }
 }
 
-/// Apply the distance calibration factor, or record that none was found.
+/// Report the Distance Calibration scale the flash task already published.
+///
+/// The scale lives in the one Motor Calibration record, so the flash task read it
+/// with the record and published it to the calibration leaf. This function only
+/// names the phase: a measured scale loaded, or the nominal fallback is in force.
 async fn load_distance_calibration(data: Option<CalibrationDataKind>) {
-    if let Some(CalibrationDataKind::Distance(factor)) = data {
-        info!("Distance calibration loaded: factor={}", factor);
-        {
-            let mut state = calibration::CALIBRATION_STATE.lock().await;
-            state.distance_cal_status = CalibrationStatus::Loaded;
-            state.distance_factor = factor;
-        }
+    if let Some(CalibrationDataKind::Distance(counts_per_cm)) = data {
+        info!("Distance calibration loaded: counts_per_cm={}", counts_per_cm);
     } else {
-        info!("No distance calibration found - using default 1.0");
-        {
-            let mut state = calibration::CALIBRATION_STATE.lock().await;
-            state.distance_cal_status = CalibrationStatus::NotAvailable;
-        }
+        info!("No distance calibration found - nominal scale in force");
         publish_phase("Need calibration", None).await;
     }
 }

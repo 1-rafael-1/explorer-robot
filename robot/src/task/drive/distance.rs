@@ -58,9 +58,11 @@
 //! Curve debug logs are rate-limited and compiled only when the `telemetry_logs`
 //! feature is enabled; otherwise no formatting/queueing cost is incurred.
 
+use defmt::info;
 use embassy_time::{Duration, Instant, Timer};
 use libm::roundf;
 use micromath::F32Ext;
+use motor_cal::DistanceScale;
 
 use crate::{
     system::state::{self, calibration, motion},
@@ -212,6 +214,13 @@ pub(super) struct DistanceDriveState {
     pub(super) accumulated_left_revs: f32,
     /// Accumulated right revolutions.
     pub(super) accumulated_right_revs: f32,
+    /// Raw encoder counts accumulated on the left track.
+    pub(super) accumulated_left_counts: u32,
+    /// Raw encoder counts accumulated on the right track.
+    pub(super) accumulated_right_counts: u32,
+    /// Encoder counts per sprocket revolution, from the measured counts/cm and
+    /// the sprocket circumference.
+    counts_per_rev: f32,
     /// Last IMU yaw sample for curve control (degrees).
     pub(super) curve_last_yaw_deg: Option<f32>,
     /// Accumulated curve yaw delta (degrees).
@@ -238,11 +247,20 @@ impl DistanceDriveState {
         kind: types::DriveDistanceKind,
         direction: types::DriveDirection,
         base_speed: u8,
-        calibration_factor: f32,
+        scale: DistanceScale,
     ) -> Self {
+        let counts_per_cm = scale.counts_per_cm();
+        // The target is `cm × counts/cm`; converting it to sprocket revolutions
+        // divides by the counts per revolution the same scale implies. The
+        // accumulated counts are divided by that same figure, so a wrong scale
+        // still moves the robot the wrong distance, and no hard-coded
+        // pulses-per-revolution constant remains in the drive path.
+        let counts_per_rev = counts_per_cm * types::SPROCKET_CIRCUMFERENCE_CM;
+        let to_revs = |cm: f32| cm * counts_per_cm / counts_per_rev;
+
         let (target_left_revs, target_right_revs, inner_left, target_inner_revs) = match kind {
             types::DriveDistanceKind::Straight { distance_cm } => {
-                let revolutions = (distance_cm / types::SPROCKET_CIRCUMFERENCE_CM) * calibration_factor;
+                let revolutions = to_revs(distance_cm);
                 (revolutions, revolutions, None, revolutions)
             }
             types::DriveDistanceKind::CurveArc {
@@ -260,8 +278,8 @@ impl DistanceDriveState {
                 let safe_radius = radius_cm.max(0.001);
                 let left_arc_cm = arc_length_cm * (left_radius / safe_radius);
                 let right_arc_cm = arc_length_cm * (right_radius / safe_radius);
-                let left_revs = (left_arc_cm / types::SPROCKET_CIRCUMFERENCE_CM) * calibration_factor;
-                let right_revs = (right_arc_cm / types::SPROCKET_CIRCUMFERENCE_CM) * calibration_factor;
+                let left_revs = to_revs(left_arc_cm);
+                let right_revs = to_revs(right_arc_cm);
                 let inner_revs = if inner_left { left_revs } else { right_revs };
                 (left_revs, right_revs, Some(inner_left), inner_revs)
             }
@@ -294,6 +312,9 @@ impl DistanceDriveState {
             right_ratio,
             accumulated_left_revs: 0.0,
             accumulated_right_revs: 0.0,
+            accumulated_left_counts: 0,
+            accumulated_right_counts: 0,
+            counts_per_rev,
             curve_last_yaw_deg: None,
             curve_accumulated_yaw_deg: 0.0,
             reference_yaw: None,
@@ -309,15 +330,15 @@ impl DistanceDriveState {
     /// Create a continuous drive state: the straight controller with no target.
     ///
     /// Built through [`Self::new`] so it shares the straight controller's geometry
-    /// and distance calibration factor. The nominal distance is zero because
+    /// and measured encoder scale. The nominal distance is zero because
     /// [`DistanceMode::Continuous`] never consults the target or the progress
     /// ratios: it holds the commanded speed until an interrupt arrives.
-    pub(super) fn new_continuous(direction: types::DriveDirection, base_speed: u8, calibration_factor: f32) -> Self {
+    pub(super) fn new_continuous(direction: types::DriveDirection, base_speed: u8, scale: DistanceScale) -> Self {
         let mut state = Self::new(
             types::DriveDistanceKind::Straight { distance_cm: 0.0 },
             direction,
             base_speed,
-            calibration_factor,
+            scale,
         );
         state.mode = DistanceMode::Continuous;
         state
@@ -325,10 +346,10 @@ impl DistanceDriveState {
 
     /// Initialise a distance drive intent.
     ///
-    /// Gets the calibration distance factor, constructs state, starts sensors,
-    /// captures a fresh IMU reference yaw, applies initial motor speeds, and
-    /// returns the `ActiveIntent`. Returns `None` for trivially short distances
-    /// (completion already sent).
+    /// Gets the encoder scale, constructs state, starts sensors, captures a fresh
+    /// IMU reference yaw, applies initial motor speeds, and returns the
+    /// `ActiveIntent`. Returns `None` for trivially short distances (completion
+    /// already sent).
     ///
     /// The dispatch gate (`ensure_imu_ready`) handles IMU startup + DMP
     /// stabilisation before this is called; this function drains the latest
@@ -339,8 +360,8 @@ impl DistanceDriveState {
         speed: u8,
         completion_requested: bool,
     ) -> Option<super::state::ActiveIntent> {
-        let distance_factor = calibration::get_distance_factor().await;
-        let mut state = Self::new(kind, direction, speed, distance_factor);
+        let distance_scale = drive_scale().await;
+        let mut state = Self::new(kind, direction, speed, distance_scale);
 
         // Early exit for trivially short distances.
         if state.target_inner_revs <= TOLERANCE_REVS {
@@ -351,6 +372,8 @@ impl DistanceDriveState {
                     telemetry: types::CompletionTelemetry::DriveDistance {
                         achieved_left_revs: 0.0,
                         achieved_right_revs: 0.0,
+                        achieved_left_counts: 0,
+                        achieved_right_counts: 0,
                         target_left_revs: state.target_left_revs,
                         target_right_revs: state.target_right_revs,
                         duration_ms: 0,
@@ -379,8 +402,8 @@ impl DistanceDriveState {
         speed: u8,
         completion_requested: bool,
     ) -> super::state::ActiveIntent {
-        let distance_factor = calibration::get_distance_factor().await;
-        let mut state = Self::new_continuous(direction, speed, distance_factor);
+        let distance_scale = drive_scale().await;
+        let mut state = Self::new_continuous(direction, speed, distance_scale);
 
         start_straight_controller(&mut state).await;
 
@@ -392,6 +415,22 @@ impl DistanceDriveState {
 }
 
 // ── Shared straight-controller startup ─────────────────────────────────────────
+
+/// The encoder scale a new distance drive uses.
+///
+/// A measured scale published to the calibration leaf wins; without one, the
+/// drive uses the inferred nominal counts/cm so a fresh robot still drives the
+/// distance it was asked for. The log names the fallback once per drive.
+async fn drive_scale() -> DistanceScale {
+    calibration::get_distance_scale().await.unwrap_or_else(|| {
+        let scale = DistanceScale::nominal();
+        info!(
+            "Distance drive: no measured scale - using nominal {=f32} counts/cm",
+            scale.counts_per_cm()
+        );
+        scale
+    })
+}
 
 /// Start the straight controller's sensors and apply the initial track speeds.
 ///
@@ -592,8 +631,10 @@ async fn read_encoder(state: &mut DistanceDriveState, now_ms: u64) -> Result<Tra
     // Accumulate progress.
     state.last_progress_ms = now_ms;
     state.zero_progress_samples = 0;
-    state.accumulated_left_revs += data.left_track_avg / types::PULSES_PER_SPROCKET_REV_F32;
-    state.accumulated_right_revs += data.right_track_avg / types::PULSES_PER_SPROCKET_REV_F32;
+    state.accumulated_left_revs += data.left_track_avg / state.counts_per_rev;
+    state.accumulated_right_revs += data.right_track_avg / state.counts_per_rev;
+    state.accumulated_left_counts = state.accumulated_left_counts.saturating_add(u32::from(data.left));
+    state.accumulated_right_counts = state.accumulated_right_counts.saturating_add(u32::from(data.right));
 
     Ok(data)
 }
@@ -728,6 +769,8 @@ impl DistanceDriveState {
             DistanceMode::Target => types::CompletionTelemetry::DriveDistance {
                 achieved_left_revs: self.accumulated_left_revs,
                 achieved_right_revs: self.accumulated_right_revs,
+                achieved_left_counts: self.accumulated_left_counts,
+                achieved_right_counts: self.accumulated_right_counts,
                 target_left_revs: self.target_left_revs,
                 target_right_revs: self.target_right_revs,
                 duration_ms: now_ms.saturating_sub(self.started_at_ms),

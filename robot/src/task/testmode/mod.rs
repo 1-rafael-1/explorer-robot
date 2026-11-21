@@ -98,7 +98,7 @@ pub async fn start(claim: Claim, procedure: Procedure) {
         crate::system::state::rangefinder_test::clear().await;
     }
     if matches!(command, TestCommand::BasicMotor) {
-        crate::system::state::basic_motor_test::clear().await;
+        crate::system::state::motor_readout::clear().await;
     }
 
     TESTMODE_COMMAND.send((command, claim)).await;

@@ -1,0 +1,31 @@
+[package]
+name = "motor-cal"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "HAL-free motor Power Step measurement engine: Quiescence, reset confirmation, settle and the Measurement Window"
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+
+[[test]]
+name = "measurement"
+required-features = ["std"]
+
+[[test]]
+name = "curve"
+required-features = ["std"]
+
+[[test]]
+name = "scale"
+required-features = ["std"]
+
+[[test]]
+name = "payload"
+required-features = ["std"]

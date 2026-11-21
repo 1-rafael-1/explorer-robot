@@ -1,249 +1,399 @@
-//! Motor calibration procedure (v3 — 2-motor).
+//! Motor calibration procedure.
 //!
-//! Runs each track at a fixed PWM, measures encoder pulses, and computes
-//! per-track calibration factors that balance the two tracks.
+//! This is the writer of the measured **Motor Calibration Curve**. It runs the
+//! same one-cycle sweep the Basic Motor Test displays — four Test Legs of ten
+//! Power Steps, each driven end to end by
+//! [`motor_cal::MeasurementEngine`] through
+//! [`crate::task::motor_sweep::run_sweep`] — and derives, stores and publishes
+//! the curve from those measurements.
+//! publishes the curve from those measurements.
 //!
-//! # Procedure
+//! # Lifecycle
 //!
-//! 1. Enable motor drivers and start encoder sampling.
-//! 2. Run left track alone, measure encoder pulses.
-//! 3. Run right track alone, measure encoder pulses.
-//! 4. Compute factors: `target = max(left_pulses, right_pulses)`,
-//!    `left_factor = target / left_pulses`, `right_factor = target / right_pulses`.
-//!    The faster track becomes the reference (factor = 1.0); the slower track is attenuated.
-//! 5. Apply calibration via `UpdateAllCalibration`.
-//! 6. Save to flash storage.
-//! 7. Disable motor drivers.
+//! 1. Clear the panel leaf, arm the Floor-Drop Gate, and require a motor rail
+//!    sample at or above the driver's 6 V compensation target. A missing sample
+//!    after a short wait, or a low rail, refuses the run before any motion.
+//! 2. Enable the drivers, start the encoder sampler at the sweep's 20 ms
+//!    interval, and run the forty Power Steps. Each step publishes its Test Leg
+//!    and cycle position so the running screen shows where the run is.
+//! 3. A structural problem — low rail, a dead encoder task, a floor drop — aborts
+//!    immediately. The rail is checked before the run and again after every
+//!    measured step, so a sag mid-sweep aborts rather than entering the curve.
+//!    A Stop aborts without saving. A measurement problem finishes the whole
+//!    sweep and then fails, so the operator sees the pattern.
+//! 4. On a complete, valid sweep the run derives the curve, saves the versioned
+//!    record, and waits for the flash task's reply. Only then does it publish the
+//!    Result Report summary and complete. A failed save leaves the previous curve
+//!    in force.
 //!
-//! Any residual mismatch is corrected at runtime by the IMU-based heading correction.
+//! Nothing is written flash-side unless the whole sweep measured cleanly, and a
+//! failed run always leaves the previous curve in force. A Stop is honoured up to
+//! the instant the save is dispatched; the write is one atomic `store_item` that
+//! cannot be recalled after that.
 //!
-//! The running screen reads the current step and its percent from the activity
-//! state; the measured pulse counts and the computed factors go to the log. A
-//! procedure that cannot proceed — both tracks silent — records the reason in the
-//! activity state instead of drawing it. The operator's Stop is honoured at every
-//! step boundary: the caller's `Claim` is already held and published, and the
-//! procedure reports its phases and terminal outcome through it.
+//! # The panel leaf
+//!
+//! The live six-row readout is not used here: the running screen carries the
+//! Procedure's phase and progress. The Result Report reuses the panel-only
+//! [`crate::system::state::motor_readout`] leaf that the Basic Motor Test also
+//! publishes, because it is already the panel-only motor readout leaf and both
+//! Procedures end in the same two tables. The leaf is cleared at the start and on
+//! a Stop or structural abort, and carries the calibration's saved/not-saved
+//! footer on a measurement or save failure.
 
-use defmt::info;
-use embassy_time::{Duration, Timer};
+use defmt::{info, warn};
+use embassy_time::{Duration, Instant};
+use motor_cal::{
+    Curve, DistanceScale, InvalidReason, LEG_ORDER, MotorCalibrationRecord, POWER_STEPS, PointResult, StepMeasurement,
+    TEST_LEGS, TestLeg,
+};
+use touch_ui::{BasicMotorSummary, BasicMotorSummaryBuilder, SummaryStatus};
 
 use crate::{
-    system::state::activity,
+    system::state::{calibration, motor_readout, power},
     task::{
-        drive::sensors::data::{clear_encoder_measurement, wait_for_encoder_event_timeout},
         io::flash_storage,
-        motor_driver::{self, MotorCalibration, MotorCommand},
+        motor_driver::{self, MotorCommand, TARGET_MOTOR_VOLTAGE},
+        motor_sweep::{self, STEP_POWERS, StepAction, StepObserver, StepOutcome, StepRef, SweepEnd, SweepSink},
         procedure::Claim,
-        sensors::encoders as encoder_read,
+        sensors::rangefinder,
     },
 };
 
-/// Coast duration between calibration runs (milliseconds).
-const CALIBRATION_COAST_DURATION_MS: u64 = 500;
-/// Encoder sample duration for calibration (milliseconds).
-const CALIBRATION_SAMPLE_DURATION_MS: u64 = 1000;
-/// Motor speed for calibration (0-100).
-const CALIBRATION_SPEED: i8 = 60;
-/// Steps the progress percent divides the procedure into.
-const STEPS: usize = 4;
+/// The reason a low rail refuses the run, or aborts it mid-sweep.
+const LOW_RAIL_REASON: &str = "Motor rail below 6.0 V";
 
-/// The track under calibration.
-#[derive(Clone, Copy)]
-enum Side {
-    /// The left track.
-    Left,
-    /// The right track.
-    Right,
-}
+/// The reason no rail sample was available to judge.
+const NO_RAIL_REASON: &str = "Motor rail unavailable";
 
-/// Run the 2-motor calibration procedure.
+/// How long to wait for a first rail sample, in milliseconds.
+const RAIL_WAIT_TIMEOUT_MS: u64 = 1_000;
+
+/// Poll interval while waiting for the rail sample, in milliseconds.
+const RAIL_POLL_MS: u64 = 20;
+
+/// Run the Motor Calibration Procedure under `claim`.
 ///
-/// Coordinates encoder measurements with motor commands to calculate
-/// per-track calibration factors. The faster track is the reference;
-/// the slower track is attenuated.
-///
-/// `claim` is the one Active Claim the Panel took before routing here, so it is
-/// already published: the procedure reports phases and the terminal outcome
-/// through it and never claims again.
-#[allow(clippy::too_many_lines)]
+/// The menu entry, the Procedure identity and the landing screen are unchanged;
+/// this body replaces the retired per-track multiplier with the measured curve.
+/// The claim is already held and published, so the terminal call is made here on
+/// every path.
 pub async fn run_motor_calibration(claim: &Claim) {
-    info!("=== Starting Motor Calibration (2-motor) ===");
+    info!("=== Motor Calibration starting ===");
 
-    claim.phase("Enabling drivers", None).await;
+    // A new run never shows the previous run's numbers.
+    motor_readout::clear().await;
 
-    // Enable motor drivers (take out of standby).
-    info!("Enabling motor driver");
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
-    Timer::after(Duration::from_millis(10)).await;
-
-    // Start encoder readings at 50 Hz for calibration.
-    encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
-    Timer::after(Duration::from_millis(100)).await;
-
-    // Track calibration factors (defaults to 1.0).
-    let mut calibration = MotorCalibration::default();
-    info!("Starting calibration with default factors: {:?}", calibration);
-
-    let Some(left_pulses) = measure_track(claim, Side::Left, 1).await else {
-        finish_stopped(claim).await;
-        return;
-    };
-    let Some(right_pulses) = measure_track(claim, Side::Right, 2).await else {
-        finish_stopped(claim).await;
-        return;
-    };
-
-    // ── Step 3: Compute calibration factors ──────────────────────────────────
-    info!("Step 3: Computing calibration factors");
-    claim
-        .phase("Compute factors", Some(activity::percent_done(3, STEPS)))
-        .await;
-
-    if left_pulses == 0 && right_pulses == 0 {
-        info!("  ERROR: Both tracks show zero counts — calibration cannot proceed");
-        fail_and_stop(claim, "Zero encoder — check wiring").await;
+    // This Procedure drives the motor driver directly, so it must run the same
+    // Floor-Drop Gate the drive dispatch applies before a motor command.
+    if let Err(refusal) = rangefinder::arm_for_motion().await {
+        release_idle().await;
+        claim.fail(refusal.reason()).await;
         return;
     }
 
-    // The faster track becomes the reference (factor = 1.0).
-    // The slower track gets attenuated.
-    let target_pulses = left_pulses.max(right_pulses);
-    let target_f32 = f32::from(target_pulses);
-
-    let left_factor = if left_pulses > 0 {
-        (target_f32 / f32::from(left_pulses)).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-    let right_factor = if right_pulses > 0 {
-        (target_f32 / f32::from(right_pulses)).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-
-    info!("  Track pulses: Left={}, Right={}", left_pulses, right_pulses);
-    info!("  Computed factors: left={}, right={}", left_factor, right_factor);
-
-    calibration.left_factor = left_factor;
-    calibration.right_factor = right_factor;
-
-    // Apply calibration to motor driver.
-    motor_driver::send_motor_command(MotorCommand::UpdateAllCalibration {
-        left_factor,
-        right_factor,
-    })
-    .await;
-
-    // ── Step 4: Save calibration ────────────────────────────────────────────
-    info!("Step 4: Saving calibration");
-    claim
-        .phase("Save to flash", Some(activity::percent_done(4, STEPS)))
-        .await;
-
-    // Validate factors.
-    let all_valid = left_factor > 0.0 && left_factor <= 1.0 && right_factor > 0.0 && right_factor <= 1.0;
-
-    if all_valid {
-        flash_storage::send_flash_command(flash_storage::FlashCommand::SaveData(
-            flash_storage::CalibrationDataKind::Motor(calibration),
-        ))
-        .await;
-        info!("✓ Calibration saved successfully");
-    } else {
-        info!("✗ ERROR: Calibration factors invalid - NOT saving to flash");
-        info!("  Check encoder wiring and ensure motors are running during calibration");
-        fail_and_stop(claim, "Invalid factors — check encoders").await;
-        return;
+    // Refuse to bake a sagging battery into the curve. This is a structural
+    // refusal before any motion, so it fails without a Result Report summary.
+    match wait_for_rail(claim).await {
+        RailCheck::Ready => {}
+        RailCheck::Low(volts) => {
+            warn!("Motor Calibration refused: rail {} V is below the 6.0 V target", volts);
+            release_idle().await;
+            claim.fail(LOW_RAIL_REASON).await;
+            return;
+        }
+        RailCheck::Missing => {
+            warn!("Motor Calibration refused: no motor rail sample");
+            release_idle().await;
+            claim.fail(NO_RAIL_REASON).await;
+            return;
+        }
+        RailCheck::Stopped => {
+            release_idle().await;
+            claim.finish().await;
+            return;
+        }
     }
 
-    // Stop encoder readings.
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
+    // The curve in force for the correction column if the run fails: one read, so
+    // the operator compares the sweep against what the robot is applying now.
+    let previous_curve = calibration::get_motor_curve().await;
 
-    // Disable motor drivers (return to standby).
-    info!("Disabling motor driver");
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+    // The measured scale comes from Distance Calibration. A robot without one
+    // measures against the inferred nominal fallback rather than refusing.
+    let scale = calibration::get_distance_scale().await.unwrap_or_else(|| {
+        info!("Motor Calibration: no measured distance scale; using the inferred nominal scale");
+        DistanceScale::nominal()
+    });
 
-    info!("=== Calibration Complete ===");
-    info!(
-        "motor calibration factors: left={=f32} right={=f32}",
-        calibration.left_factor, calibration.right_factor
-    );
-    claim.complete("Calibration saved").await;
+    let mut results = [[PointResult::Invalid(InvalidReason::NoWindow); POWER_STEPS]; TEST_LEGS];
+    let mut measurements = [[StepMeasurement::new(0, 0, 0, 0.0, 1.0, false); POWER_STEPS]; TEST_LEGS];
+
+    // The sweep owns the schedule, the stop and floor-drop checks and the encoder
+    // sampler; this sink is the calibration's half: it keeps every measured point
+    // and aborts the run if the rail sags below the compensation target.
+    let end = {
+        let mut sink = CalibrationSink {
+            results: &mut results,
+            measurements: &mut measurements,
+        };
+        motor_sweep::run_sweep(claim, &mut sink).await
+    };
+
+    match end {
+        SweepEnd::Stopped => stop(claim).await,
+        SweepEnd::Aborted(reason) => abort(claim, reason).await,
+        SweepEnd::Complete => finish(claim, &results, &measurements, previous_curve.as_ref(), scale).await,
+    }
 }
 
-/// Measure one track alone, returning its pulse count, or `None` if the operator
-/// stopped the procedure.
-async fn measure_track(claim: &Claim, side: Side, step: usize) -> Option<u16> {
-    let (phase, left_speed, right_speed) = match side {
-        Side::Left => ("Test left track", CALIBRATION_SPEED, 0),
-        Side::Right => ("Test right track", 0, CALIBRATION_SPEED),
-    };
+/// Stores the calibration's own half of a sweep: the raw measurements.
+///
+/// The calibration shows no live six-row readout — the running screen carries the
+/// Procedure's phases and progress — so it answers the sample hook with nothing.
+struct CalibrationSink<'a> {
+    /// The engine's verdict for every Power Step, in cycle order.
+    results: &'a mut [[PointResult; POWER_STEPS]; TEST_LEGS],
+    /// The stored measurement for every Power Step, in cycle order.
+    measurements: &'a mut [[StepMeasurement; POWER_STEPS]; TEST_LEGS],
+}
 
-    info!("{}", phase);
-    claim.phase(phase, Some(activity::percent_done(step - 1, STEPS))).await;
+impl StepObserver for CalibrationSink<'_> {
+    async fn sample(&mut self, _count: u16) {}
+}
 
-    // Stop, reset, clear, then restart for clean measurement.
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
-    Timer::after(Duration::from_millis(200)).await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Reset).await;
-    Timer::after(Duration::from_millis(100)).await;
-    clear_encoder_measurement().await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Start { interval_ms: 20 }).await;
-    Timer::after(Duration::from_millis(200)).await;
+impl SweepSink for CalibrationSink<'_> {
+    async fn step_started(&mut self, _step: StepRef) {}
 
-    if claim.is_stop_requested() {
-        return None;
+    // The trait method is async for the sink that does await work; this sink only
+    // records the outcome, so there is nothing to await here.
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn step_measured(&mut self, step: StepRef, outcome: StepOutcome) -> StepAction {
+        self.results[step.leg_index][step.step_index] = outcome.result;
+        self.measurements[step.leg_index][step.step_index] = step_measurement(step.power, outcome);
+        log_step(step.leg, step.power, outcome.result, outcome.rail_volts);
+        // A rail that sags below the compensation target mid-run would bake a
+        // sagging battery into the curve, so this is a structural abort, not a
+        // measurement verdict.
+        if outcome.rail_volts.is_some_and(|volts| volts < TARGET_MOTOR_VOLTAGE) {
+            warn!("Motor Calibration aborted: rail fell below the 6.0 V target mid-run");
+            StepAction::Abort(LOW_RAIL_REASON)
+        } else {
+            StepAction::Continue
+        }
     }
+}
 
-    // Run the track under test only, at calibration speed.
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed,
-        right_speed,
-    })
-    .await;
+/// The result of the pre-run rail check.
+enum RailCheck {
+    /// The rail is at or above the compensation target.
+    Ready,
+    /// The rail is measured but below the target, with the measured volts.
+    Low(f32),
+    /// No sample arrived within the short wait.
+    Missing,
+    /// The operator pressed Stop while the check waited.
+    Stopped,
+}
 
-    if claim.wait_or_stop(CALIBRATION_SAMPLE_DURATION_MS).await {
-        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        return None;
-    }
-
-    let pulses = wait_for_encoder_event_timeout(500).await.map_or_else(
-        || {
-            info!("    Warning: No encoder event received for {=str}", phase);
-            0u16
-        },
-        |measurement| {
-            let pulses = match side {
-                Side::Left => measurement.left,
-                Side::Right => measurement.right,
+/// Wait for a motor rail sample and judge it against the 6 V target.
+async fn wait_for_rail(claim: &Claim) -> RailCheck {
+    let deadline = Instant::now() + Duration::from_millis(RAIL_WAIT_TIMEOUT_MS);
+    loop {
+        if claim.is_stop_requested() {
+            return RailCheck::Stopped;
+        }
+        if let Some((volts, _)) = power::try_get_rail_sample() {
+            return if volts < TARGET_MOTOR_VOLTAGE {
+                RailCheck::Low(volts)
+            } else {
+                RailCheck::Ready
             };
-            info!("    ✓ {=str} encoder count: {=u16}", phase, pulses);
-            pulses
-        },
-    );
-
-    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    if claim.wait_or_stop(CALIBRATION_COAST_DURATION_MS).await {
-        return None;
+        }
+        if Instant::now() >= deadline {
+            return RailCheck::Missing;
+        }
+        if claim.wait_or_stop(RAIL_POLL_MS).await {
+            return RailCheck::Stopped;
+        }
     }
-
-    Some(pulses)
 }
 
-/// Stop the procedure cleanly after the operator's Stop: release the motors and
-/// the encoder sampler, then record the latched stop outcome on the claim.
-async fn finish_stopped(claim: &Claim) {
-    info!("Motor calibration stopped by the operator");
+/// Stop the sampler, coast both tracks and put the drivers in standby.
+async fn release_idle() {
+    motor_sweep::stop_encoders().await;
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+}
+
+/// End a stopped run: no Result Report and nothing of this run left on the panel.
+async fn stop(claim: &Claim) {
+    motor_readout::clear().await;
+    release_idle().await;
     claim.finish().await;
 }
 
-/// Release the hardware and record why the procedure could not continue.
-async fn fail_and_stop(claim: &Claim, reason: &'static str) {
-    motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-    encoder_read::send_command(encoder_read::EncoderCommand::Stop).await;
-    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+/// End a structurally aborted run: brake, then fail with the reason.
+///
+/// This is the Basic Motor Test's fault path: the brake stays latched and the
+/// drivers stay enabled until the next activity manages them. The leaf is
+/// cleared so the reason is the result rather than an empty table.
+async fn abort(claim: &Claim, reason: &'static str) {
+    motor_readout::clear().await;
+    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
     claim.fail(reason).await;
+}
+
+/// Derive, save and complete the calibration from a finished sweep.
+async fn finish(
+    claim: &Claim,
+    results: &[[PointResult; POWER_STEPS]; TEST_LEGS],
+    measurements: &[[StepMeasurement; POWER_STEPS]; TEST_LEGS],
+    previous_curve: Option<&Curve>,
+    scale: DistanceScale,
+) {
+    // A Stop that landed after the last Power Step but before any reporting must
+    // still abort without writing.
+    if claim.is_stop_requested() {
+        stop(claim).await;
+        return;
+    }
+
+    // An invalid point is a measurement problem: the sweep finished, so the
+    // operator can see the pattern, but nothing is saved and the reason stays.
+    if let Some(reason) = first_invalid(results) {
+        warn!("Motor Calibration measurement problem: {}", reason.label());
+        let summary = build_summary(results, previous_curve).with_status(SummaryStatus::NotSaved(reason.label()));
+        fail_with_summary(claim, summary, reason.label()).await;
+        return;
+    }
+
+    let run_id = next_run_id(calibration::get_motor_run_id().await);
+    let record = match MotorCalibrationRecord::new(run_id, scale, *measurements) {
+        Ok(record) => record,
+        Err(error) => {
+            // A derivation failure is also a measurement problem: save nothing and
+            // leave the previous curve in force.
+            warn!("Motor Calibration curve derivation failed: {}", error.label());
+            let summary = build_summary(results, previous_curve).with_status(SummaryStatus::NotSaved(error.label()));
+            fail_with_summary(claim, summary, error.label()).await;
+            return;
+        }
+    };
+
+    // The Result Report shows the corrections of the curve this run just derived.
+    let derived_curve = record.curve().copied();
+
+    // The flash write is one atomic `store_item` and cannot be interrupted once
+    // it is dispatched, so this is the last moment a Stop can be honoured. A Stop
+    // that lands in the microseconds after the dispatch is not covered by the
+    // "saves nothing" guarantee; the reply below reports what flash actually
+    // did.
+    if claim.is_stop_requested() {
+        stop(claim).await;
+        return;
+    }
+
+    match flash_storage::save_motor_curve(record).await {
+        Ok(()) => {
+            let summary = build_summary(results, derived_curve.as_ref()).with_status(SummaryStatus::Saved);
+            motor_readout::publish_summary(summary).await;
+            release_idle().await;
+            claim.complete("Calibration saved").await;
+        }
+        Err(reason) => {
+            // The write did not confirm: the previous curve is still the one in
+            // force, and the footer names the reason flash reported.
+            warn!("Motor Calibration save failed: {}", reason);
+            let summary = build_summary(results, previous_curve).with_status(SummaryStatus::NotSaved(reason));
+            fail_with_summary(claim, summary, reason).await;
+        }
+    }
+}
+
+/// Publish the Result Report summary, then fail with `reason`.
+async fn fail_with_summary(claim: &Claim, summary: BasicMotorSummary, reason: &'static str) {
+    motor_readout::publish_summary(summary).await;
+    release_idle().await;
+    claim.fail(reason).await;
+}
+
+/// The next run id: one more than `current`, never zero.
+const fn next_run_id(current: u32) -> u32 {
+    let next = current.wrapping_add(1);
+    if next == 0 { 1 } else { next }
+}
+
+/// The first invalid Power Step's reason, in cycle order, if any.
+fn first_invalid(results: &[[PointResult; POWER_STEPS]; TEST_LEGS]) -> Option<InvalidReason> {
+    for leg in results {
+        for result in leg {
+            if let PointResult::Invalid(reason) = *result {
+                return Some(reason);
+            }
+        }
+    }
+    None
+}
+
+/// Build the stored measurement for one Power Step.
+///
+/// An invalid point carries no count and no window; the sweep is failed before
+/// the record is built, so those zeros can never be saved as a curve.
+fn step_measurement(power: u8, outcome: StepOutcome) -> StepMeasurement {
+    let (count, window_ms, moved) = match outcome.result {
+        PointResult::Valid(measurement) => (
+            measurement.count(),
+            u32::try_from(measurement.window_ms()).unwrap_or(u32::MAX),
+            measurement.sustained_motion(),
+        ),
+        PointResult::Invalid(_) => (0, 0, false),
+    };
+    StepMeasurement::new(
+        power,
+        count,
+        window_ms,
+        outcome.rail_volts.unwrap_or(0.0),
+        outcome.compensation.unwrap_or(1.0),
+        moved,
+    )
+}
+
+/// Build the Result Report summary from the sweep's outcomes and `curve`.
+///
+/// `curve` is the newly derived curve on success and the curve in force on a
+/// failure, so the correction column always names what the robot is applying.
+fn build_summary(results: &[[PointResult; POWER_STEPS]; TEST_LEGS], curve: Option<&Curve>) -> BasicMotorSummary {
+    let mut builder = BasicMotorSummaryBuilder::new();
+    for (leg_index, leg) in LEG_ORDER.iter().copied().enumerate() {
+        let ui = motor_sweep::ui_leg(leg);
+        for (step_index, power) in STEP_POWERS.iter().copied().enumerate() {
+            let measurement = results[leg_index][step_index].measurement();
+            let count = measurement.map(|measurement| measurement.count());
+            let moved = measurement.is_some_and(|measurement| measurement.sustained_motion());
+            builder.record(ui, power, count, moved, motor_sweep::correction(curve, leg, power));
+        }
+    }
+    builder.build()
+}
+
+/// Log one Power Step's verdict at info, so a bench log stays readable.
+fn log_step(leg: TestLeg, power: u8, result: PointResult, rail_volts: Option<f32>) {
+    match result {
+        PointResult::Valid(measurement) => info!(
+            "motor-cal: {=str} {=u8}% count={=u16} speed={=u32}/s window={=u64}ms rail={=bool}",
+            motor_sweep::leg_label(leg),
+            power,
+            measurement.count(),
+            measurement.speed_counts_per_s(),
+            measurement.window_ms(),
+            rail_volts.is_some()
+        ),
+        PointResult::Invalid(reason) => warn!(
+            "motor-cal: {=str} {=u8}% invalid: {=str}",
+            motor_sweep::leg_label(leg),
+            power,
+            reason.label()
+        ),
+    }
 }

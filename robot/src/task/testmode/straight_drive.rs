@@ -172,6 +172,7 @@ fn report_leg(completion: &DriveQueueCompletion) {
         target_left_revs,
         target_right_revs,
         duration_ms,
+        ..
     } = step.telemetry
     {
         info!(

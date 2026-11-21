@@ -22,3 +22,7 @@ std = []
 [[test]]
 name = "ui"
 required-features = ["std"]
+
+[[test]]
+name = "distance_entry"
+required-features = ["std"]
