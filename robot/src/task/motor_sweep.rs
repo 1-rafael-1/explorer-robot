@@ -53,7 +53,7 @@ use crate::{
         drive::{clear_encoder_measurement, get_latest_encoder_measurement},
         motor_driver::{self, MotorCommand},
         procedure::Claim,
-        sensors::encoders::{self, EncoderCommand},
+        sensors::encoders::{self, EncoderCommand, EncoderMeasurement},
     },
 };
 
@@ -241,6 +241,52 @@ pub enum SweepEnd {
     Aborted(&'static str),
 }
 
+/// A waiter for fresh encoder samples, polled once per pass of a measuring loop.
+///
+/// The encoder task republishes the latest measurement every
+/// [`SAMPLE_INTERVAL_MS`], so a loop must ignore a sample it has already seen and
+/// must notice when the task stops publishing altogether. Both rules live here so
+/// the sweep and the bench regression cannot disagree about what "fresh" means.
+pub struct SampleStream {
+    /// The timestamp of the last sample handed out, so a repeated publish is not
+    /// consumed twice.
+    last_timestamp: Option<u64>,
+    /// The wall-clock instant the last fresh sample arrived, for [`dead`](Self::dead).
+    last_fresh_ms: u64,
+}
+
+impl SampleStream {
+    /// Start a stream whose freshness clock reads `now_ms`.
+    pub const fn new(now_ms: u64) -> Self {
+        Self {
+            last_timestamp: None,
+            last_fresh_ms: now_ms,
+        }
+    }
+
+    /// The next fresh sample, or `None` when the latest is absent or a duplicate.
+    ///
+    /// A missing sample is not a zero count, and a repeated sample cannot advance
+    /// any window, so neither is handed out: the caller simply polls again.
+    pub async fn next(&mut self) -> Option<EncoderMeasurement> {
+        let measurement = get_latest_encoder_measurement().await?;
+        if self.last_timestamp == Some(measurement.timestamp_ms) {
+            return None;
+        }
+        self.last_timestamp = Some(measurement.timestamp_ms);
+        self.last_fresh_ms = now_ms();
+        Some(measurement)
+    }
+
+    /// True when no fresh sample has arrived for `timeout_ms`.
+    ///
+    /// A dead encoder task would otherwise leave a loop waiting forever, because
+    /// the engines only advance when samples arrive.
+    pub const fn dead(&self, now_ms: u64, timeout_ms: u64) -> bool {
+        now_ms.saturating_sub(self.last_fresh_ms) >= timeout_ms
+    }
+}
+
 /// Drive and measure one simultaneous pair step in `direction` at `power`.
 ///
 /// Performs every caller action the engines ask for, feeds each engine its own
@@ -268,8 +314,7 @@ where
     // coast alone does not establish it: brake both tracks first.
     motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
 
-    let mut last_timestamp: Option<u64> = None;
-    let mut last_fresh_ms = started_ms;
+    let mut stream = SampleStream::new(started_ms);
 
     // The rail and compensation read at the instant the command is made. A
     // sample taken at the end of the window is one the driver never used.
@@ -286,7 +331,7 @@ where
         // The engines only advance on samples, so they cannot notice that the
         // encoder task stopped producing them. A wall-clock bound turns that
         // silence into a structural abort instead of an endless step.
-        if now_ms().saturating_sub(last_fresh_ms) >= NO_SAMPLE_TIMEOUT_MS {
+        if stream.dead(now_ms(), NO_SAMPLE_TIMEOUT_MS) {
             return StepEnd::Aborted(NO_SAMPLE_REASON);
         }
 
@@ -304,9 +349,7 @@ where
 
         // Perform the action both engines need, so their rules stay their own.
         if matches!(left.phase(), Phase::Quiescent) && matches!(right.phase(), Phase::Quiescent) {
-            if let Some(end) =
-                reset_and_confirm(claim, &mut left, &mut right, &mut last_timestamp, &mut last_fresh_ms).await
-            {
+            if let Some(end) = reset_and_confirm(claim, &mut left, &mut right, &mut stream).await {
                 return end;
             }
         } else if matches!(left.phase(), Phase::ReadyToCommand) && matches!(right.phase(), Phase::ReadyToCommand) {
@@ -327,14 +370,9 @@ where
         // A missing sample is not a zero count: leave the engines alone rather
         // than credit pulses that did not happen. A repeated sample cannot
         // advance any window, so it is not fed twice.
-        let Some(measurement) = get_latest_encoder_measurement().await else {
+        let Some(measurement) = stream.next().await else {
             continue;
         };
-        if last_timestamp == Some(measurement.timestamp_ms) {
-            continue;
-        }
-        last_timestamp = Some(measurement.timestamp_ms);
-        last_fresh_ms = now_ms();
 
         observer.sample(measurement.left, measurement.right).await;
 
@@ -389,8 +427,7 @@ async fn reset_and_confirm(
     claim: &Claim,
     left: &mut MeasurementEngine,
     right: &mut MeasurementEngine,
-    last_timestamp: &mut Option<u64>,
-    last_fresh_ms: &mut u64,
+    stream: &mut SampleStream,
 ) -> Option<StepEnd> {
     encoders::send_command(EncoderCommand::Reset).await;
     let deadline = now_ms().saturating_add(RESET_CONFIRM_TIMEOUT_MS);
@@ -401,20 +438,15 @@ async fn reset_and_confirm(
         if perception::is_floor_drop_detected() {
             return Some(StepEnd::Fault);
         }
-        if now_ms().saturating_sub(*last_fresh_ms) >= NO_SAMPLE_TIMEOUT_MS {
+        if stream.dead(now_ms(), NO_SAMPLE_TIMEOUT_MS) {
             return Some(StepEnd::Aborted(NO_SAMPLE_REASON));
         }
         if now_ms() >= deadline {
             return Some(StepEnd::Aborted(RESET_CONFIRM_REASON));
         }
-        let Some(measurement) = get_latest_encoder_measurement().await else {
+        let Some(measurement) = stream.next().await else {
             continue;
         };
-        if *last_timestamp == Some(measurement.timestamp_ms) {
-            continue;
-        }
-        *last_timestamp = Some(measurement.timestamp_ms);
-        *last_fresh_ms = now_ms();
         if measurement.left == 0 && measurement.right == 0 {
             let reset_ms = measurement.timestamp_ms;
             left.reset_now(reset_ms);

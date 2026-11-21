@@ -99,7 +99,7 @@ regression starts; without that record the corrected divergence is meaningless.
 
 ## 2. The permanent bench features
 
-`robot/src/bench_precision.rs` is compiled when either of the two non-default
+`robot/src/bench_precision/` is compiled when either of the two non-default
 features is enabled. If both are enabled (e.g. `--all-features`), the calibrate
 phase takes precedence and the measure phase is not compiled; enable exactly one
 for a bench run. Both are off by default, so the production firmware is unchanged.
@@ -319,13 +319,13 @@ boot loads the v4 curve saved by phase 1, so `SetTracks` uses it. Run it on a
 charged pack; voltage compensation and the loaded rail affect both tracks
 together but a sagging pack makes the point noisy.
 
-### Full-power variant
+### Full-power measurement variant
 
-The regression stops at 90 %. The pair **100 % step commands both tracks at
-once** and needs a supply rated for **≥ 2 A**; on the 2026-11-21 pass it faulted
-the 1000 mA supply. Add `100` to `BENCH_POWERS` in `robot/src/bench_precision.rs`
-only with a ≥ 2 A supply. The earlier one-track sweep completed at 1000 mA, but
-that result does not apply to the pair sweep's 100 % step.
+The regression measures 20–90 % (the gate is 30–90 %); the discarded warm-up
+already runs the pair 100 % step, so the whole bench needs a supply rated for
+**≥ 2 A**. To also *measure* 100 %, add `100` to `BENCH_POWERS` in
+`robot/src/bench_precision/measure.rs`. The earlier one-track sweep completed at
+1000 mA, but that result does not apply to the pair sweep's 100 % step.
 
 ## 8. Stop, floor-drop, brake
 

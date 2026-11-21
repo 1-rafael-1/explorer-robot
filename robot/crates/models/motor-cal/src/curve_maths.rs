@@ -294,9 +294,7 @@ impl Curve {
         if command_percent < self.floor_percent {
             return None;
         }
-        let target = self.target_speed(direction, command_percent)?;
-        let leg_index = TestLeg::new(track, direction).index();
-        let command = inverse_command(&self.speeds[leg_index], target);
+        let command = self.command_for(track, direction, command_percent)?;
         let factor = command / f32::from(command_percent);
         // The target is at most this leg's measured speed, so the inverse is at
         // most the requested command; the clamp only absorbs f32 rounding.
@@ -320,16 +318,25 @@ impl Curve {
         if magnitude == 0 || magnitude < self.floor_percent {
             return CurveCommand::Raw(raw);
         }
-        let Some(target) = self.target_speed(direction, magnitude) else {
+        let Some(command) = self.command_for(track, direction, magnitude) else {
             return CurveCommand::Raw(raw);
         };
-        let leg_index = TestLeg::new(track, direction).index();
-        let command = inverse_command(&self.speeds[leg_index], target);
         CurveCommand::Corrected(
             round_permille(command)
                 .min(raw)
                 .min(u16::from(LAST_POWER_STEP_PERCENT) * 10),
         )
+    }
+
+    /// The un-rounded command in percent that produces the Target Speed for
+    /// `track` and `direction` at `magnitude`.
+    ///
+    /// `None` means the direction has no target at `magnitude`; callers treat
+    /// that as "no command" and fall back to their respective defaults.
+    fn command_for(&self, track: Track, direction: Direction, magnitude: u8) -> Option<f32> {
+        let target = self.target_speed(direction, magnitude)?;
+        let leg_index = TestLeg::new(track, direction).index();
+        Some(inverse_command(&self.speeds[leg_index], target))
     }
 
     /// The Target Speed for `direction` at `magnitude`, interpolated linearly
