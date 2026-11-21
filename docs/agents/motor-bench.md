@@ -137,6 +137,28 @@ two tracks' measured counts, or run the same Step through a temporary
 corrected-command harness. Target: **< 5 %** left/right divergence after
 correction.
 
+### Measurement-condition caveat
+
+The sweep measures one track at a time with the other commanded zero. Normal
+driving commands both tracks simultaneously, which changes the supply/load
+condition. On 2026-11-21 a single-track calibration over-corrected the forward
+left track when applied to simultaneous driving: corrected left/right
+divergence was 17.6 % at 20 %, 13.6 % at 30 %, 8.7 % at 40 %, 5.6 % at 50 %,
+5.1 % at 60 %, then 3.2 % at 70 %, 0.95 % at 80 % and 0.46 % at 90 %. The raw
+simultaneous ratios were much smaller (1.2–3.4 % forward, 1.9–6.6 % reverse), so
+a calibration derived from **simultaneous pair** counts would be expected to
+meet the target; the current single-track method does not at low power. Until
+that spec decision is made, measure the corrected **simultaneous** condition
+(section 6) before claiming < 5 %.
+
+The Result Report's `Spread` line is `(max − min) / min` over the four legs at
+100 %; it includes forward-vs-reverse, which the per-direction target does not
+equalise. A `Spread 12 %` is not the left/right calibration error.
+
+`100 %` with **both** tracks commanded at once exceeded the 1000 mA bench
+supply and faulted. The one-track sweep completes at 1000 mA; use **≥ 2000 mA**
+for a two-track full-power harness.
+
 ## 5. Motor Calibration
 
 The Procedure needs a rail sample ≥ 6.0 V and arms the floor-drop gate. It runs
