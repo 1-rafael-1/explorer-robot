@@ -382,7 +382,9 @@ where
 /// sample; it is ignored while the wait continues.
 ///
 /// Returns `None` once the reset is confirmed, or the [`StepEnd`] that cuts the
-/// step short: stopped, floor drop, or [`RESET_CONFIRM_REASON`] on timeout.
+/// step short: stopped, floor drop, [`NO_SAMPLE_REASON`] when no fresh sample
+/// arrives at all (a dead encoder task), or [`RESET_CONFIRM_REASON`] when fresh
+/// samples keep arriving but never read zero.
 async fn reset_and_confirm(
     claim: &Claim,
     left: &mut MeasurementEngine,
@@ -398,6 +400,9 @@ async fn reset_and_confirm(
         }
         if perception::is_floor_drop_detected() {
             return Some(StepEnd::Fault);
+        }
+        if now_ms().saturating_sub(*last_fresh_ms) >= NO_SAMPLE_TIMEOUT_MS {
+            return Some(StepEnd::Aborted(NO_SAMPLE_REASON));
         }
         if now_ms() >= deadline {
             return Some(StepEnd::Aborted(RESET_CONFIRM_REASON));
@@ -457,7 +462,7 @@ where
                     break 'cycle SweepEnd::Aborted(FLOOR_DROP_REASON);
                 }
 
-                let cycle_index = direction_index(direction) * motor_cal::POWER_STEPS + step_index;
+                let cycle_index = direction.index() * motor_cal::POWER_STEPS + step_index;
                 let index = u8::try_from(cycle_index).unwrap_or(u8::MAX);
                 let step = StepRef {
                     direction,
@@ -528,20 +533,6 @@ pub const fn legs(direction: Direction) -> [TestLeg; 2] {
     ]
 }
 
-/// The index of `leg` in [`motor_cal::LEG_ORDER`].
-///
-/// The model keeps its own leg order private; this is the one translation the
-/// calibration needs to store a pair's two legs in cycle order.
-#[must_use]
-pub const fn leg_index(leg: TestLeg) -> usize {
-    match (leg.track, leg.direction) {
-        (Track::Left, Direction::Forward) => 0,
-        (Track::Left, Direction::Reverse) => 1,
-        (Track::Right, Direction::Forward) => 2,
-        (Track::Right, Direction::Reverse) => 3,
-    }
-}
-
 /// The curve in force for `track` and `direction` at `power`, as the panel shows
 /// it.
 ///
@@ -563,14 +554,6 @@ pub const fn direction_label(direction: Direction) -> &'static str {
     match direction {
         Direction::Forward => "Forward",
         Direction::Reverse => "Reverse",
-    }
-}
-
-/// The zero-based cycle position of `direction`'s first pair step.
-const fn direction_index(direction: Direction) -> usize {
-    match direction {
-        Direction::Forward => 0,
-        Direction::Reverse => 1,
     }
 }
 

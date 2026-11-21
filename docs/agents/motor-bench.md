@@ -20,9 +20,11 @@ do not start a precision pass while a calibration report is on screen.
 
 ## Safety and setup
 
-- Supply current limit **≥ 1000 mA** for the corrected-divergence regression,
-  which stops at 90 %. At 600 mA the board hit intermittent exceptions at 100 %
-  Power Steps. A weak supply looks like a firmware fault.
+- Supply current limit **≥ 2 A (2000 mA)** for both phases. The
+  corrected-divergence regression's measured points stop at 90 %, but every boot
+  first runs the discarded warm-up, which includes the pair 100 % step, so the
+  measure phase needs ≥ 2 A too. At 600 mA the board hit intermittent exceptions
+  at 100 % Power Steps. A weak supply looks like a firmware fault.
 - The **20-step pair sweep** (forward and reverse, 10–100 %) commands both
   tracks together at every step, including the **pair 100 % step**. That step
   needs a supply rated for **≥ 2 A** (2000 mA). The 2026-11-21 pass faulted at
@@ -97,10 +99,12 @@ regression starts; without that record the corrected divergence is meaningless.
 
 ## 2. The permanent bench features
 
-`robot/src/bench_precision.rs` is compiled only when exactly one of the two
-non-default features is enabled; enabling both is a compile error. Both are off
-by default, so the production firmware is unchanged. Do not add a Procedure or a
-panel screen for them: they are bench diagnostics, not normal Activities.
+`robot/src/bench_precision.rs` is compiled when either of the two non-default
+features is enabled. If both are enabled (e.g. `--all-features`), the calibrate
+phase takes precedence and the measure phase is not compiled; enable exactly one
+for a bench run. Both are off by default, so the production firmware is unchanged.
+Do not add a Procedure or a panel screen for them: they are bench diagnostics,
+not normal Activities.
 
 **`bench_motor_calibrate`** waits for `calibration::is_initialized()`, then:
 
@@ -197,8 +201,9 @@ visible.
 
 The Basic Motor Test and the Motor Calibration run the identical sweep. Its
 100 % pair step commands both tracks at once, so a full 10–100 % run needs the
-≥ 2 A supply noted above; the corrected-divergence regression skips 100 % by
-default and needs only the 1000 mA supply.
+≥ 2 A supply noted above. The corrected-divergence regression measures only
+20–90 % (gate 30–90 %), but every boot's warm-up still hits the pair 100 % step,
+so its measure phase also needs ≥ 2 A.
 
 ## 4. Reading the motor logs
 

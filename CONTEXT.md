@@ -304,6 +304,7 @@ Lock order (documented in each module): **power → calibration → perception �
   _Avoid_: motor check, bench spin
 - **Power Step** — One direction and one commanded power level within a Basic Motor Test, measured as a simultaneous pair: both tracks are commanded at the same requested power and both encoder deltas are taken over the same **Measurement Window**.
   _Avoid_: leg (one Test Leg holds ten Power Steps), speed (that names the commanded value, not the unit)
+- **Pair** — The left and right tracks measured together in one Power Step. A **pair step** is one such simultaneous measurement; a Basic Motor Test cycle has twenty.
 - **Test Leg** — One track and one direction within a Basic Motor Test — left forward, left reverse, right forward or right reverse — a group of ten Power Steps from 10 % to 100 %. A cycle covers all four; each simultaneous pair measures one Test Leg per track, so two are measured at a time.
   _Avoid_: leg (that names the Gap Analysis **Leg**), pass (that names the same Test Leg again)
 - **Breakaway** — The lowest Power Step of a Test Leg whose Measurement Window showed sustained motion above the motion threshold. Shown as `--` when the leg did not move at any power up to 100 %.

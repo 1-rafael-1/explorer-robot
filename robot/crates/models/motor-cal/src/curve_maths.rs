@@ -91,7 +91,8 @@ pub enum Direction {
 
 impl Direction {
     /// The index of this direction in the per-direction series.
-    const fn index(self) -> usize {
+    #[must_use]
+    pub const fn index(self) -> usize {
         match self {
             Self::Forward => 0,
             Self::Reverse => 1,
@@ -116,7 +117,8 @@ impl TestLeg {
     }
 
     /// The index of this leg in the fixed four-leg order.
-    pub(crate) const fn index(self) -> usize {
+    #[must_use]
+    pub const fn index(self) -> usize {
         match (self.track, self.direction) {
             (Track::Left, Direction::Forward) => 0,
             (Track::Left, Direction::Reverse) => 1,
@@ -334,7 +336,8 @@ impl Curve {
     /// between the measured Power Steps.
     ///
     /// Zero maps to zero, and a magnitude above the highest measured Power Step
-    /// holds that point's target. `None` means no direction had a target at all.
+    /// holds that point's target. `None` means this direction had no target at
+    /// any Power Step.
     #[allow(clippy::cast_precision_loss)]
     fn target_speed(&self, direction: Direction, magnitude: u8) -> Option<f32> {
         if magnitude == 0 {

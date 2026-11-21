@@ -2088,10 +2088,10 @@ fn the_rangefinder_columns_and_footer_fit_inside_the_status_panel() {
     assert!(bottom_right(footer).y < bottom_right(panel).y);
 }
 
-/// A step position at `position` of the forty-step cycle, as the task reports
+/// A step position at `position` of the twenty-step cycle, as the task reports
 /// it.
 const fn step(position: u8) -> StepIndex {
-    StepIndex { position, total: 40 }
+    StepIndex { position, total: 20 }
 }
 
 /// A running Basic Motor Test Readout: forward at 60 % with both live counts
@@ -2137,7 +2137,7 @@ fn a_running_basic_motor_readout_names_the_pair_and_counts() {
     assert_eq!(rows[1].1.as_str(), "L 583 R 568");
     assert_eq!(rows[4].0.as_str(), "Correction");
     assert_eq!(rows[4].1.as_str(), "L 0.93 R 1.00");
-    assert_eq!(rows[5].1.as_str(), "12/40");
+    assert_eq!(rows[5].1.as_str(), "12/20");
 }
 
 /// Test that the correction row names each track's curve in force: interpolated
@@ -2316,7 +2316,7 @@ fn an_invalid_side_shows_no_count_and_no_breakaway() {
     readout.start_pair(
         Direction::Forward,
         40,
-        step(24),
+        step(4),
         Correction::Identity,
         Correction::Identity,
     );
@@ -2337,7 +2337,7 @@ fn both_invalid_sides_show_no_counts_and_no_breakaways() {
     readout.start_pair(
         Direction::Reverse,
         40,
-        step(30),
+        step(10),
         Correction::Identity,
         Correction::Identity,
     );
@@ -2357,7 +2357,7 @@ fn the_last_rows_widest_value_fits_the_value_column() {
     readout.start_pair(
         Direction::Forward,
         100,
-        step(30),
+        step(10),
         Correction::Identity,
         Correction::Identity,
     );
@@ -2520,7 +2520,7 @@ fn the_breakaway_latches_per_side_and_clears_when_the_direction_changes() {
 fn a_direction_that_never_moved_leaves_the_breakaways_at_a_placeholder() {
     let mut readout = BasicMotorReadout::waiting();
 
-    for (power, index) in [(10u8, 1u8), (20, 2), (100, 40)] {
+    for (power, index) in [(10u8, 1u8), (20, 2), (100, 20)] {
         readout.start_pair(
             Direction::Forward,
             power,
@@ -2535,10 +2535,10 @@ fn a_direction_that_never_moved_leaves_the_breakaways_at_a_placeholder() {
     let rows = readout.rows();
     assert_eq!(rows[1].1.as_str(), "L 0 R 0", "a zero count is shown as zero");
     assert_eq!(rows[3].1.as_str(), "L -- R --");
-    assert_eq!(rows[5].1.as_str(), "40/40");
+    assert_eq!(rows[5].1.as_str(), "20/20");
 }
 
-/// Test that the `Index` row reads the one-based position of the forty-step
+/// Test that the `Index` row reads the one-based position of the twenty-step
 /// cycle and restarts at one when a new cycle begins.
 #[test]
 fn the_index_row_reads_the_position_and_restarts_with_a_new_cycle() {
@@ -2554,7 +2554,7 @@ fn the_index_row_reads_the_position_and_restarts_with_a_new_cycle() {
     readout.sample(0, 0);
     readout.complete(Some(0), Some(0), false, false);
     assert_eq!(readout.rows()[5].0.as_str(), "Index");
-    assert_eq!(readout.rows()[5].1.as_str(), "1/40");
+    assert_eq!(readout.rows()[5].1.as_str(), "1/20");
 
     readout.start_pair(
         Direction::Forward,
@@ -2563,16 +2563,16 @@ fn the_index_row_reads_the_position_and_restarts_with_a_new_cycle() {
         Correction::Identity,
         Correction::Identity,
     );
-    assert_eq!(readout.rows()[5].1.as_str(), "2/40");
+    assert_eq!(readout.rows()[5].1.as_str(), "2/20");
 
     readout.start_pair(
         Direction::Forward,
         100,
-        step(40),
+        step(20),
         Correction::Identity,
         Correction::Identity,
     );
-    assert_eq!(readout.rows()[5].1.as_str(), "40/40");
+    assert_eq!(readout.rows()[5].1.as_str(), "20/20");
 
     // The next cycle starts at one again.
     readout.start_pair(
@@ -2582,12 +2582,12 @@ fn the_index_row_reads_the_position_and_restarts_with_a_new_cycle() {
         Correction::Identity,
         Correction::Identity,
     );
-    assert_eq!(readout.rows()[5].1.as_str(), "1/40");
+    assert_eq!(readout.rows()[5].1.as_str(), "1/20");
 }
 
 /// Test that every label and value fits its own column at the 6 px glyph, over
 /// the widest cells the readout can produce: both directions, both full-range
-/// counts, a `100%` Breakaway, a factor correction and a `40/40` step index.
+/// counts, a `100%` Breakaway, a factor correction and a `20/20` step index.
 #[test]
 fn every_basic_motor_row_fits_its_label_and_value_columns() {
     let mut readout = BasicMotorReadout::waiting();
@@ -2596,7 +2596,7 @@ fn every_basic_motor_row_fits_its_label_and_value_columns() {
     readout.start_pair(
         Direction::Forward,
         100,
-        step(39),
+        step(19),
         Correction::Factor(875),
         Correction::Factor(875),
     );
@@ -2606,7 +2606,7 @@ fn every_basic_motor_row_fits_its_label_and_value_columns() {
     readout.start_pair(
         Direction::Forward,
         100,
-        step(40),
+        step(20),
         Correction::Factor(875),
         Correction::Factor(875),
     );
@@ -2619,7 +2619,7 @@ fn every_basic_motor_row_fits_its_label_and_value_columns() {
     assert_eq!(rows[2].1.as_str(), "Fwd 100% L 65535 R 65535");
     assert_eq!(rows[3].1.as_str(), "L 100% R 100%");
     assert_eq!(rows[4].1.as_str(), "L 0.88 R 0.88");
-    assert_eq!(rows[5].1.as_str(), "40/40");
+    assert_eq!(rows[5].1.as_str(), "20/20");
 
     for (index, (label, value)) in rows.iter().enumerate() {
         let label_rect = basic_motor_label_rect(index, rows.len());
@@ -2712,7 +2712,7 @@ fn the_readout_survives_completion_and_a_new_run_starts_blank() {
     readout.start_pair(
         Direction::Forward,
         100,
-        step(40),
+        step(20),
         Correction::Factor(930),
         Correction::Factor(930),
     );
@@ -2720,7 +2720,7 @@ fn the_readout_survives_completion_and_a_new_run_starts_blank() {
     readout.complete(Some(2650), Some(2640), true, true);
 
     assert_eq!(readout.rows()[2].1.as_str(), "Fwd 100% L 2650 R 2640");
-    assert_eq!(readout.rows()[5].1.as_str(), "40/40");
+    assert_eq!(readout.rows()[5].1.as_str(), "20/20");
 
     let fresh = BasicMotorReadout::waiting();
     assert!(fresh.rows().iter().all(|(_, value)| value.as_str() == "--"));

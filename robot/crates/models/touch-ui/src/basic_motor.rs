@@ -42,7 +42,7 @@
 //! readout: for each of the four Test Legs its Breakaway and the counts at 40,
 //! 60, 80 and 100 %, the correction in force at those points, and one unjudged
 //! line carrying the Calibration Floor and the spread at 100 %. The summary is
-//! built once from the forty Power Step outcomes the task recorded, so the live
+//! built once from the twenty Power Step outcomes the task recorded, so the live
 //! publish path never copies the whole table. A point that did not show
 //! sustained motion renders `--`, never `0`, and a Test Leg that never moved
 //! renders `--` in its Breakaway and every count cell.
@@ -469,7 +469,7 @@ fn correction_value(correction: Correction) -> TextBuf {
     value
 }
 
-/// Format a position within the cycle as `n/total`, e.g. `12/40`.
+/// Format a position within the cycle as `n/total`, e.g. `12/20`.
 fn step_index_value(index: StepIndex) -> TextBuf {
     let StepIndex { position, total } = index;
     let mut value = TextBuf::new();
@@ -612,7 +612,7 @@ impl SummaryRow {
     }
 }
 
-/// Collects the forty Power Step outcomes of a Basic Motor Test and builds the
+/// Collects the twenty Power Step outcomes of a Basic Motor Test and builds the
 /// [`BasicMotorSummary`] the Result Report draws.
 ///
 /// The task records every Power Step as it completes, so the builder only ever

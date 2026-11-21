@@ -172,8 +172,8 @@ impl SweepSink for CalibrationSink<'_> {
         // same power, so the curve is derived from simultaneous measurements.
         let [left_leg, right_leg] = motor_sweep::legs(step.direction);
         let step_index = step.step_index();
-        let left_index = motor_sweep::leg_index(left_leg);
-        let right_index = motor_sweep::leg_index(right_leg);
+        let left_index = left_leg.index();
+        let right_index = right_leg.index();
 
         self.results[left_index][step_index] = outcome.left;
         self.results[right_index][step_index] = outcome.right;
