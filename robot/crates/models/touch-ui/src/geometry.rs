@@ -109,11 +109,11 @@ pub const READOUT_MAX_PITCH: u32 = 26;
 
 /// Width of the Basic Motor Test Readout's label column, in pixels.
 ///
-/// The longest label is `Correction` (ten glyphs, 60 px), so 96 px holds it
-/// with room to breathe and leaves 168 px of the panel's 264-pixel inner width
+/// The longest label is `Correction` (ten glyphs, 60 px), so 88 px holds it
+/// with room to breathe and leaves 176 px of the panel's 264-pixel inner width
 /// for the value column. That fits the widest live rows, including a corrected
-/// `Last` row such as `Corr Fwd 100% L 65535 R 65535`.
-pub const BASIC_MOTOR_LABEL_W: u32 = 96;
+/// `Last` row such as `Corr Fwd 100% L 65535 R 65535` (29 glyphs, 174 px).
+pub const BASIC_MOTOR_LABEL_W: u32 = 88;
 
 /// Width of the Basic Motor Test Result Report's label column, in pixels.
 ///

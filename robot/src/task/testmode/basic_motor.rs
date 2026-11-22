@@ -168,7 +168,11 @@ async fn basic_motor_test_task(claim: Claim) {
     // A normal Procedure outcome: the summary and the readout stay published for
     // the Result Report, which holds until the operator's Back. The summary goes
     // first so the finished view has its tables on the very first draw.
-    motor_readout::publish_summary(summary.build().with_corrected_check(corrected)).await;
+    let summary = summary
+        .with_curve_floor(curve.map(|c| c.floor_percent()))
+        .build()
+        .with_corrected_check(corrected);
+    motor_readout::publish_summary(summary).await;
     motor_driver::send_motor_command(MotorCommand::CoastAll).await;
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
     claim.complete("Basic motor test complete").await;

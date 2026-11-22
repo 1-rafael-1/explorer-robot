@@ -321,14 +321,14 @@ impl Procedure {
     ///
     /// The flag is entry data: a run-to-completion test finishes on its own, while
     /// an interactive one and coast-and-avoid run until the operator stops them.
-    /// The basic-motor, six-axis, nine-axis and Rangefinder tests and
-    /// coast-and-avoid are interactive; the calibrations, the remaining tests and
-    /// the deferred attempt-straight are not.
+    /// The six-axis, nine-axis and Rangefinder tests and coast-and-avoid are
+    /// interactive; the basic-motor test runs to completion, and the calibrations,
+    /// the remaining tests and the deferred attempt-straight are not.
     #[must_use]
     pub const fn interactive(self) -> bool {
         matches!(
             self,
-            Self::CoastAndAvoid | Self::BasicMotor | Self::Imu6Axis | Self::Imu9Axis | Self::RangefinderTest
+            Self::CoastAndAvoid | Self::Imu6Axis | Self::Imu9Axis | Self::RangefinderTest
         )
     }
 }

@@ -434,13 +434,13 @@ fn a_caller_shows_a_screen_by_naming_it() {
 }
 
 /// Test that the interactive flag matches the producers: the Procedures that end
-/// only on an explicit stop are interactive, the calibrations and the deferred
-/// attempt-straight are not, and a non-Procedure entry never is.
+/// only on an explicit stop are interactive, the run-to-completion Basic Motor
+/// Test, the calibrations and the deferred attempt-straight are not, and a
+/// non-Procedure entry never is.
 #[test]
 fn interactive_procedures_match_their_producers() {
     for procedure in [
         Procedure::CoastAndAvoid,
-        Procedure::BasicMotor,
         Procedure::Imu6Axis,
         Procedure::Imu9Axis,
         Procedure::RangefinderTest,
@@ -452,6 +452,7 @@ fn interactive_procedures_match_their_producers() {
         Procedure::MotorCalibration,
         Procedure::DmpCompassCalibration,
         Procedure::DistanceCalibration,
+        Procedure::BasicMotor,
         Procedure::AttemptStraight,
         Procedure::Turns,
         Procedure::StraightDrive,
@@ -2408,6 +2409,33 @@ fn the_last_rows_widest_value_fits_the_value_column() {
     );
 }
 
+/// Test that the widest corrected `Last` value, a 100 % pair with full-range
+/// counts, fits the value column without clipping.
+#[test]
+fn the_corrected_last_rows_widest_value_fits_the_value_column() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_corrected_pair(
+        Direction::Forward,
+        100,
+        step(10),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.sample(65535, 65535);
+    readout.complete(Some(65535), Some(65535), true, true);
+
+    let rows = readout.rows();
+    let value = rows[2].1.as_str();
+    assert_eq!(value, "Corr Fwd 100% L 65535 R 65535");
+    let width = u32::try_from(value.len()).unwrap_or(u32::MAX) * SMALL_FONT.character_size.width;
+    let column = basic_motor_value_rect(2, rows.len());
+    assert!(
+        width <= column.size.width,
+        "{value} needs {width} px of {} px",
+        column.size.width
+    );
+}
+
 /// Test that every Basic Motor Test Readout row sits between the panel's top
 /// edge and the progress bar's top edge, that the six rows never overlap, so the
 /// block never covers the bar.
@@ -2912,10 +2940,14 @@ const SUMMARY_LEG_ORDER: [TestLeg; 4] = [
 /// The ten Power Steps of one Test Leg.
 const TEN_POWERS: [u8; 10] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 
-/// Build a summary from four legs' Breakaways, counts at the four tabulated
-/// points, and corrections. A leg moves at and above its Breakaway; `255` means
-/// it never moved.
-fn summary_from(breakaways: [u8; 4], counts: [[Option<u16>; 4]; 4], corrections: [Correction; 4]) -> BasicMotorSummary {
+/// Build a summary builder from four legs' Breakaways, counts at the four
+/// tabulated points, and corrections. A leg moves at and above its Breakaway;
+/// `255` means it never moved.
+fn summary_builder(
+    breakaways: [u8; 4],
+    counts: [[Option<u16>; 4]; 4],
+    corrections: [Correction; 4],
+) -> BasicMotorSummaryBuilder {
     let mut builder = BasicMotorSummaryBuilder::new();
     for (index, leg) in SUMMARY_LEG_ORDER.iter().copied().enumerate() {
         for power in TEN_POWERS {
@@ -2925,7 +2957,14 @@ fn summary_from(breakaways: [u8; 4], counts: [[Option<u16>; 4]; 4], corrections:
             builder.record(leg, power, count, moved, corrections[index]);
         }
     }
-    builder.build()
+    builder
+}
+
+/// Build a summary from four legs' Breakaways, counts at the four tabulated
+/// points, and corrections. A leg moves at and above its Breakaway; `255` means
+/// it never moved.
+fn summary_from(breakaways: [u8; 4], counts: [[Option<u16>; 4]; 4], corrections: [Correction; 4]) -> BasicMotorSummary {
+    summary_builder(breakaways, counts, corrections).build()
 }
 
 /// A healthy sweep: Breakaways 20/30/40/10 %, 100 % counts 250/260/270/280
@@ -3039,6 +3078,43 @@ fn the_floor_and_raw_spread_are_computed_from_the_sweep() {
     assert_eq!(rounded.floor_line().as_str(), "Floor 10%  Raw spread 3%");
 }
 
+/// Test that the Floor line names the loaded curve's floor: it shows even when a
+/// missing 100 % count leaves the spread unjudged, and it wins over the raw
+/// Breakaways.
+#[test]
+fn the_floor_line_names_the_loaded_curves_floor() {
+    // A missing 100 % count leaves the spread unjudged, but the curve's floor is
+    // still the one the corrections were applied against.
+    let incomplete = summary_builder(
+        [20, 30, 40, 10],
+        [
+            [Some(120), Some(180), Some(240), Some(250)],
+            [Some(130), Some(190), Some(250), Some(260)],
+            [Some(140), Some(200), Some(260), Some(270)],
+            [Some(150), Some(210), Some(270), None],
+        ],
+        [Correction::Identity; 4],
+    )
+    .with_curve_floor(Some(20))
+    .build();
+    assert_eq!(incomplete.floor_line().as_str(), "Floor 20%  Raw spread --");
+
+    // The override wins over the raw Breakaways' 40 %.
+    let complete = summary_builder(
+        [20, 30, 40, 10],
+        [
+            [Some(120), Some(180), Some(240), Some(250)],
+            [Some(130), Some(190), Some(250), Some(260)],
+            [Some(140), Some(200), Some(260), Some(270)],
+            [Some(150), Some(210), Some(270), Some(280)],
+        ],
+        [Correction::Identity; 4],
+    )
+    .with_curve_floor(Some(20))
+    .build();
+    assert_eq!(complete.floor_line().as_str(), "Floor 20%  Raw spread 12%");
+}
+
 /// Test that an invalid point renders `--` and never `0`, and that a missing
 /// 100 % count leaves the Floor and raw spread unjudged.
 #[test]
@@ -3091,7 +3167,7 @@ fn a_leg_that_never_moved_renders_placeholders_across_its_row() {
 }
 
 /// Test that the optional footer is absent by default, says `Saved` on a saved
-/// calibration and names the reason on a failed one.
+/// calibration, names the reason on a failed one, and names an unconfirmed write.
 #[test]
 fn the_summary_status_footer_reports_saved_or_the_reason() {
     let summary = healthy_summary();
@@ -3113,6 +3189,16 @@ fn the_summary_status_footer_reports_saved_or_the_reason() {
     assert_eq!(
         not_saved.status_line().map(|line| line.as_str().to_owned()),
         Some("Not saved: implausible correction".to_owned())
+    );
+
+    let unconfirmed = summary.with_status(SummaryStatus::Unconfirmed("write interrupted"));
+    assert_eq!(
+        unconfirmed.status(),
+        Some(SummaryStatus::Unconfirmed("write interrupted"))
+    );
+    assert_eq!(
+        unconfirmed.status_line().map(|line| line.as_str().to_owned()),
+        Some("Unconfirmed: write interrupted".to_owned())
     );
 }
 

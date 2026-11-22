@@ -147,6 +147,8 @@ pub enum SummaryStatus {
     Saved,
     /// The run was not saved, with the reason the operator needs to see.
     NotSaved(&'static str),
+    /// The write may or may not have landed; the applied curve was left unchanged.
+    Unconfirmed(&'static str),
 }
 
 /// Where the Basic Motor Test's curve-applied verification cycle found its worst
@@ -777,6 +779,10 @@ impl SummaryRow {
 pub struct BasicMotorSummaryBuilder {
     /// The four Test Legs, in cycle order, as their Result Report rows.
     legs: [LegSummary; SUMMARY_LEGS],
+    /// The loaded curve's Calibration Floor, when the task knows it. It wins over
+    /// the raw Breakaways so the Floor line names the floor the `Corr` column was
+    /// applied against.
+    curve_floor: Option<u8>,
 }
 
 impl BasicMotorSummaryBuilder {
@@ -785,7 +791,19 @@ impl BasicMotorSummaryBuilder {
     pub const fn new() -> Self {
         Self {
             legs: [LegSummary::EMPTY; SUMMARY_LEGS],
+            curve_floor: None,
         }
+    }
+
+    /// The same builder with the loaded curve's Calibration Floor.
+    ///
+    /// The Result Report names this floor when it is known, even while the run is
+    /// incomplete, because the corrections were applied against it. It takes
+    /// precedence over the highest raw Breakaway.
+    #[must_use]
+    pub const fn with_curve_floor(mut self, floor: Option<u8>) -> Self {
+        self.curve_floor = floor;
+        self
     }
 
     /// Record one Power Step of `leg` at `power` percent.
@@ -812,19 +830,20 @@ impl BasicMotorSummaryBuilder {
 
     /// Build the summary.
     ///
-    /// The Floor and the Spread are left unjudged unless every leg moved and
-    /// every 100 % count is present.
+    /// The Floor is the loaded curve's floor when the task supplied one, else the
+    /// highest Breakaway once every leg moved and every 100 % count is present.
+    /// The Spread stays unjudged unless every leg moved and every 100 % count is
+    /// present.
     #[must_use]
     pub fn build(&self) -> BasicMotorSummary {
         let legs = self.legs;
         let complete = legs
             .iter()
             .all(|leg| leg.breakaway.is_some() && leg.counts[SUMMARY_POINTS - 1].is_some());
-        let floor_percent = if complete {
-            legs.iter().filter_map(|leg| leg.breakaway).max()
-        } else {
-            None
-        };
+        let raw_floor = complete
+            .then(|| legs.iter().filter_map(|leg| leg.breakaway).max())
+            .flatten();
+        let floor_percent = self.curve_floor.or(raw_floor);
         let spread_percent = if complete { raw_spread_percent(&legs) } else { None };
 
         BasicMotorSummary {
@@ -847,16 +866,17 @@ impl Default for BasicMotorSummaryBuilder {
 ///
 /// It carries, for each Test Leg, the Breakaway, the raw counts at 40, 60, 80 and
 /// 100 % and the correction in force at those points, plus the Calibration Floor
-/// (the highest Breakaway) and the raw spread at 100 %. A Motor Calibration adds
-/// the optional [`SummaryStatus`] footer; the Basic Motor Test adds the optional
+/// (the loaded curve's floor when the task knows it, else the highest Breakaway)
+/// and the raw spread at 100 %. A Motor Calibration adds the optional
+/// [`SummaryStatus`] footer; the Basic Motor Test adds the optional
 /// [`CorrectedCheck`] footer instead. Every value is `Copy + Eq`, so the finished
 /// status view's redraw comparison stays exact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BasicMotorSummary {
     /// The four Test Legs, in cycle order.
     legs: [LegSummary; SUMMARY_LEGS],
-    /// The highest Breakaway among the four legs, or `None` while the line is
-    /// unjudged.
+    /// The loaded curve's Calibration Floor, or else the highest Breakaway among
+    /// the four legs, or `None` while the line is unjudged.
     floor_percent: Option<u8>,
     /// The raw spread at 100 % as a whole percent, or `None` while the line is
     /// unjudged.
@@ -968,16 +988,18 @@ impl BasicMotorSummary {
         )
     }
 
-    /// The one unjudged line carrying the Calibration Floor and the raw spread
-    /// at 100 %, e.g. `Floor 40%  Raw spread 12%`.
+    /// The line carrying the Calibration Floor and the raw spread at 100 %,
+    /// e.g. `Floor 40%  Raw spread 12%`.
     ///
-    /// The spread is over the four **raw** 100 % counts, so it includes
-    /// forward-versus-reverse as well as left-versus-right. It is not the
-    /// calibration error; the corrected verification is.
+    /// The Floor is the loaded curve's floor when the task supplied one, even if
+    /// the run is incomplete; otherwise it is the highest Breakaway. The spread is
+    /// over the four **raw** 100 % counts, so it includes forward-versus-reverse as
+    /// well as left-versus-right. It is not the calibration error; the corrected
+    /// verification is.
     ///
-    /// Both values render `--` together while the line is unjudged: a leg that
-    /// did not move, or a missing 100 % count, means the robot has no verdict to
-    /// offer rather than a passing one.
+    /// Each value renders `--` while it is unjudged: a leg that did not move, or a
+    /// missing 100 % count, means the robot has no verdict to offer rather than a
+    /// passing one.
     #[must_use]
     pub fn floor_line(&self) -> TextBuf {
         let floor = self
@@ -1033,6 +1055,7 @@ impl BasicMotorSummary {
             match status {
                 SummaryStatus::Saved => line.fill(format_args!("Saved")),
                 SummaryStatus::NotSaved(reason) => line.fill(format_args!("Not saved: {reason}")),
+                SummaryStatus::Unconfirmed(reason) => line.fill(format_args!("Unconfirmed: {reason}")),
             }
             line
         })
