@@ -2126,6 +2126,37 @@ fn a_waiting_basic_motor_readout_shows_placeholders() {
     assert_eq!(rows[5].0.as_str(), "Index");
 }
 
+/// Test that the discarded warm-up stage names itself on the `Step` row and
+/// leaves every other row blank, and that the first measured pair replaces it.
+#[test]
+fn the_warm_up_stage_is_visible_and_the_first_measured_pair_ends_it() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.warming_up();
+
+    let rows = readout.rows();
+    assert_eq!(rows[0].0.as_str(), "Step");
+    assert_eq!(rows[0].1.as_str(), "Warming up");
+    for (index, (_, value)) in rows.iter().enumerate().skip(1) {
+        assert_eq!(value.as_str(), "--", "row {index} shows no warm-up data");
+    }
+
+    // The measured sweep's first pair ends the warm-up and names itself.
+    readout.start_pair(
+        Direction::Forward,
+        60,
+        step(1),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    let rows = readout.rows();
+    assert_eq!(rows[0].1.as_str(), "Fwd 60%");
+    assert_eq!(rows[1].1.as_str(), "L -- R --");
+    assert_eq!(rows[2].1.as_str(), "--");
+    assert_eq!(rows[3].1.as_str(), "L -- R --");
+    assert_eq!(rows[4].1.as_str(), "L 1.00 R 1.00");
+    assert_eq!(rows[5].1.as_str(), "1/20");
+}
+
 /// Test that a running readout names the current pair with its direction and
 /// power and shows both live encoder counts and both corrections.
 #[test]

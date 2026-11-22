@@ -18,7 +18,8 @@
 //! Before the measured cycle the task runs a discarded 20-step raw pair warm-up
 //! ([`crate::task::motor_sweep::run_warm_up`]), so cold low-duty friction does not
 //! bias the pair. Its results are thrown away; a Stop or floor drop during it ends
-//! the run exactly as the measured sweep would.
+//! the run exactly as the measured sweep would. The panel says `Warming up` for its
+//! duration, because none of those numbers are results.
 //!
 //! This task supplies only the test's half of the sweep: it draws the live Basic
 //! Motor Test Readout and records the Result Report summary. The panel's readout
@@ -76,6 +77,20 @@ async fn basic_motor_test_task(claim: Claim) {
         return;
     }
 
+    // One readout follows the whole run. It names the pair it is commanding and
+    // holds the live counts across the encoder reset between steps; the task only
+    // drives its transitions and publishes copies.
+    let mut readout = BasicMotorReadout::waiting();
+    // The Result Report summary collects the same outcomes the readout sees, then
+    // is built once on success and published for the finished view.
+    let mut summary = BasicMotorSummaryBuilder::new();
+
+    // Publish the readout before the warm-up so the panel says "Warming up" while
+    // the progress bar advances instead of showing a blank readout. The measured
+    // sweep's first `start_pair` ends the warm-up state.
+    readout.warming_up();
+    motor_readout::publish(readout).await;
+
     // Warm the drivetrain with a discarded raw pair sweep before measuring, so
     // cold low-duty friction does not bias the pair. A Stop or structural abort
     // here ends the run through the same terminal paths as the measured sweep.
@@ -87,14 +102,6 @@ async fn basic_motor_test_task(claim: Claim) {
     // names what the robot is actually applying at each Power Step. A missing
     // curve is identity rather than an error (user story 24).
     let curve = calibration::get_motor_curve().await;
-
-    // One readout follows the whole run. It names the pair it is commanding and
-    // holds the live counts across the encoder reset between steps; the task only
-    // drives its transitions and publishes copies.
-    let mut readout = BasicMotorReadout::waiting();
-    // The Result Report summary collects the same outcomes the readout sees, then
-    // is built once on success and published for the finished view.
-    let mut summary = BasicMotorSummaryBuilder::new();
 
     let end = {
         let mut sink = ReadoutSink {

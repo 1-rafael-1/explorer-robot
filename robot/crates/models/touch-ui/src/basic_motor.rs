@@ -8,8 +8,12 @@
 //! `ACTIVITY` stream cannot drift apart.
 //!
 //! The readout also owns the rules the task would otherwise spread through its
-//! loops. It accepts three transitions — start a pair, sample both counts, and
-//! complete a pair — and derives every row from them. A pair commands both
+//! loops. It accepts four transitions — enter the discarded warm-up, start a
+//! pair, sample both counts, and complete a pair — and derives every row from
+//! them. [`BasicMotorReadout::waiting`] is the state before the run begins;
+//! [`BasicMotorReadout::warming_up`] names the discarded raw warm-up sweep that
+//! precedes the measured cycle, and the first [`BasicMotorReadout::start_pair`]
+//! ends it. A pair commands both
 //! tracks at the same direction and power and measures them over the same
 //! window, so the live rows carry a value for each side. Starting a pair does
 //! not clear the displayed counts: the encoder reset that precedes a pair empties
@@ -191,9 +195,12 @@ struct CorrectionPair {
 /// counts, the last completed pair, both Breakaways, both corrections and the
 /// step index.
 ///
-/// [`BasicMotorReadout::waiting`] is the state before the first pair. The
-/// firmware holds one locally, publishes a copy at the sampling rate, and drives
-/// it with [`BasicMotorReadout::start_pair`], [`BasicMotorReadout::sample`] and
+/// [`BasicMotorReadout::waiting`] is the state before the run begins and
+/// [`BasicMotorReadout::warming_up`] is the discarded warm-up stage that
+/// precedes the first measured pair, which [`BasicMotorReadout::start_pair`]
+/// ends. The firmware holds one locally, publishes a copy at the sampling rate,
+/// and drives it with [`BasicMotorReadout::warming_up`],
+/// [`BasicMotorReadout::start_pair`], [`BasicMotorReadout::sample`] and
 /// [`BasicMotorReadout::complete`]; the model decides what each row says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BasicMotorReadout {
@@ -225,6 +232,10 @@ pub struct BasicMotorReadout {
     /// The position within the cycle of the current or most recently completed
     /// pair, or `None` before the first pair.
     index: Option<StepIndex>,
+    /// Whether the discarded warm-up stage is running. While it is, the `Step`
+    /// row says `Warming up` and every other row is a placeholder, because none
+    /// of the warm-up's numbers are results.
+    warming: bool,
 }
 
 impl BasicMotorReadout {
@@ -241,7 +252,27 @@ impl BasicMotorReadout {
             breakaway_right: None,
             correction: None,
             index: None,
+            warming: false,
         }
+    }
+
+    /// Show the discarded warm-up stage on the panel.
+    ///
+    /// The Basic Motor Test drives a discarded raw pair sweep before it measures,
+    /// so the panel says `Warming up` while the progress bar advances and every
+    /// other row reads `--`: none of the warm-up's numbers are results. The first
+    /// [`start_pair`](Self::start_pair) of the measured sweep ends the stage.
+    pub const fn warming_up(&mut self) {
+        self.warming = true;
+        self.step = None;
+        self.commanding = false;
+        self.count_left = None;
+        self.count_right = None;
+        self.last = None;
+        self.breakaway_left = None;
+        self.breakaway_right = None;
+        self.correction = None;
+        self.index = None;
     }
 
     /// Begin a pair on `direction` at `power` percent, at `index` within the
@@ -250,7 +281,8 @@ impl BasicMotorReadout {
     /// The displayed counts are deliberately left alone: the encoder reset has
     /// already happened, and the operator's last reading must not flicker to a
     /// placeholder while the new command settles. A direction change clears both
-    /// Breakaways, so each direction reports its own.
+    /// Breakaways, so each direction reports its own. This first measured pair
+    /// also ends the discarded warm-up stage.
     pub const fn start_pair(
         &mut self,
         direction: Direction,
@@ -274,6 +306,8 @@ impl BasicMotorReadout {
             right: correction_right,
         });
         self.commanding = true;
+        // The measured sweep begins, so the discarded warm-up stage ends.
+        self.warming = false;
     }
 
     /// Replace both live encoder counts with the latest raw samples.
@@ -324,14 +358,20 @@ impl BasicMotorReadout {
     /// corrections and the position within the cycle.
     ///
     /// A pair row renders its `L ... R ...` form once the run has named a pair;
-    /// before the first pair every value is a bare `--`.
+    /// before the first pair every value is a bare `--`. During the discarded
+    /// warm-up the `Step` row says `Warming up` and every other row is a bare
+    /// `--`, because none of the warm-up's numbers are results.
     #[must_use]
     pub fn rows(&self) -> [(TextBuf, TextBuf); ROWS] {
-        let active = self.step.is_some();
+        let warming = self.warming;
+        let active = self.step.is_some() && !warming;
 
-        let step_cell = self
-            .step
-            .map_or_else(placeholder, |step| pair_step_value(step.direction, step.power));
+        let step_cell = if warming {
+            labelled("Warming up")
+        } else {
+            self.step
+                .map_or_else(placeholder, |step| pair_step_value(step.direction, step.power))
+        };
 
         let count_value = if active {
             side_counts(self.count_left, self.count_right)
@@ -339,7 +379,11 @@ impl BasicMotorReadout {
             placeholder()
         };
 
-        let last_value = self.last.map_or_else(placeholder, completed_pair_value);
+        let last_value = if warming {
+            placeholder()
+        } else {
+            self.last.map_or_else(placeholder, completed_pair_value)
+        };
 
         let breakaway_value = if active {
             side_powers(self.breakaway_left, self.breakaway_right)
@@ -347,9 +391,17 @@ impl BasicMotorReadout {
             placeholder()
         };
 
-        let correction_cell = self.correction.map_or_else(placeholder, correction_pair_value);
+        let correction_cell = if warming {
+            placeholder()
+        } else {
+            self.correction.map_or_else(placeholder, correction_pair_value)
+        };
 
-        let index_value = self.index.map_or_else(placeholder, step_index_value);
+        let index_value = if warming {
+            placeholder()
+        } else {
+            self.index.map_or_else(placeholder, step_index_value)
+        };
 
         [
             (labelled("Step"), step_cell),
