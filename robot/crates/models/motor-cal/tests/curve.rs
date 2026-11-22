@@ -238,7 +238,14 @@ fn the_slower_track_is_the_target_and_the_faster_is_attenuated() {
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
-        for percent in PERCENTS {
+        // At the 10 % Calibration Floor the faster leg's ideal 8 % command would be
+        // below the floor, so the applied command is floored and the correction in
+        // force is the identity. Above the floor it is attenuated to 0.8.
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 10), 1.0);
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 10), 1.0);
+        assert_correction(curve.correction(Track::Left, Direction::Reverse, 10), 1.0);
+        assert_correction(curve.correction(Track::Right, Direction::Reverse, 10), 1.0);
+        for percent in PERCENTS.iter().copied().skip(1) {
             assert_correction(curve.correction(Track::Left, Direction::Forward, percent), 0.8);
             assert_correction(curve.correction(Track::Right, Direction::Forward, percent), 1.0);
             assert_correction(curve.correction(Track::Left, Direction::Reverse, percent), 1.0);
@@ -374,14 +381,17 @@ fn the_measured_speed_series_is_made_monotone_before_inversion() {
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
         assert_correction(curve.correction(Track::Left, Direction::Forward, 20), 1.0);
-        // The dip at 30 % is replaced by the running maximum of 200 counts/s, so
-        // both legs invert to command 20 there: 20 / 30.
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 2.0 / 3.0);
+        // The dip at 30 % is replaced by the running maximum of 200 counts/s,
+        // which is also the target. The left leg is on a plateau from 20 % to
+        // 30 %, so it inverts to the highest command that still produces 200:
+        // 30 % is the identity. The right leg's 30 % speed (250 counts/s) is above
+        // the target, so it still inverts to 20 %.
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 1.0);
         assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 2.0 / 3.0);
         assert_correction(curve.correction(Track::Left, Direction::Forward, 40), 1.0);
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 30),
-            CurveCommand::Corrected(200)
+            CurveCommand::Corrected(300)
         );
     }
 }
@@ -527,7 +537,8 @@ fn a_leg_that_does_not_move_at_one_hundred_percent_fails() {
 fn a_target_below_the_first_moved_point_uses_the_zero_anchor() {
     // The left leg produces 200 counts/s at its first moved point (10 %), while
     // the target there is 100 counts/s. The inverse curve needs the (0, 0)
-    // anchor to reach a command below 10 %.
+    // anchor to reach a command below 10 %: it interpolates to 5 %, an ideal
+    // correction of 0.50 at the plausibility band, so the curve is accepted.
     let left_forward = moving_leg(FAST);
     let left_reverse = moving_leg(LINEAR);
     let right_forward = moving_leg(LINEAR);
@@ -537,11 +548,13 @@ fn a_target_below_the_first_moved_point_uses_the_zero_anchor() {
 
     assert!(curve.is_ok());
     if let Ok(curve) = curve {
+        // The applied command is never below the 10 % Calibration Floor, so the
+        // 5 % ideal is lifted to 10 %: the correction in force is the identity.
         assert_eq!(
             curve.resolve(Track::Left, Direction::Forward, 10),
-            CurveCommand::Corrected(50)
+            CurveCommand::Corrected(100)
         );
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 10), 0.5);
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 10), 1.0);
     }
 }
 
@@ -718,7 +731,159 @@ fn the_simultaneous_pair_at_forty_percent() {
             curve.resolve(Track::Right, Direction::Forward, 40),
             CurveCommand::Corrected(400)
         );
-        assert_correction(curve.correction(Track::Left, Direction::Forward, 40), 0.974662);
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 40), 0.974_662);
         assert_correction(curve.correction(Track::Right, Direction::Forward, 40), 1.0);
+    }
+}
+
+#[test]
+fn a_low_speed_plateau_inverts_to_its_highest_command() {
+    // Speeds of 20 counts/s at the first three Power Steps (40 and 41 counts over
+    // the 2 000 ms window both report 20) form a plateau. Identical legs make
+    // 20 counts/s the target at 30 %, and the inverse must keep the highest
+    // command that still produces it rather than the lowest.
+    let plateau = [20, 20, 20, 40, 60, 80, 100, 120, 140, 160];
+    let left_forward = moving_leg(plateau);
+    let left_reverse = moving_leg(plateau);
+    let right_forward = moving_leg(plateau);
+    let right_reverse = moving_leg(plateau);
+
+    let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
+
+    // The old lowest-command inversion produced 1/3 at 30 % and failed.
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 1.0);
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 1.0);
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(300)
+        );
+    }
+}
+
+#[test]
+fn a_target_below_the_faster_legs_first_point_is_floored_to_the_floor() {
+    // The floor is 30 %: neither forward leg moves at 10 % or 20 %. At 30 % the
+    // slow leg produces 170 counts/s and the fast leg 340 counts/s, so the target
+    // is 170 and the fast leg's ideal inverse (from the zero anchor) is 15 %,
+    // below its own breakaway. The applied command is lifted to the floor.
+    let slow = leg_from([
+        (0, false),
+        (0, false),
+        (170, true),
+        (340, true),
+        (425, true),
+        (510, true),
+        (595, true),
+        (680, true),
+        (765, true),
+        (850, true),
+    ]);
+    let fast = leg_from([
+        (0, false),
+        (0, false),
+        (340, true),
+        (400, true),
+        (480, true),
+        (560, true),
+        (640, true),
+        (720, true),
+        (800, true),
+        (880, true),
+    ]);
+    let left_reverse = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
+
+    let curve = derive_curve(sweep(&slow, &left_reverse, &fast, &right_reverse));
+
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        assert_eq!(curve.floor_percent(), 30);
+        // The unclamped inverse is 15 % = 150 per-mille; the floor lifts it to 30 %.
+        assert_eq!(
+            curve.resolve(Track::Right, Direction::Forward, 30),
+            CurveCommand::Corrected(300)
+        );
+        assert_ne!(
+            curve.resolve(Track::Right, Direction::Forward, 30),
+            CurveCommand::Corrected(150)
+        );
+        // The correction in force reports the applied (floored) command.
+        assert_correction(curve.correction(Track::Right, Direction::Forward, 30), 1.0);
+        // The slow leg is the target, so its own command is unchanged.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(300)
+        );
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 30), 1.0);
+    }
+}
+
+#[test]
+fn a_floored_command_does_not_hide_an_implausible_ideal_correction() {
+    // The floor keeps the applied command at 30 %, but the measurement implies a
+    // 10 % ideal command: the fast leg produces three times the slow leg's speed
+    // at the first moved Power Step, so its ideal correction is 1/3, below the
+    // plausibility band. Calibration must still fail.
+    let slow = leg_from([
+        (0, false),
+        (0, false),
+        (170, true),
+        (340, true),
+        (425, true),
+        (510, true),
+        (595, true),
+        (680, true),
+        (765, true),
+        (850, true),
+    ]);
+    let fast = leg_from([
+        (0, false),
+        (0, false),
+        (510, true),
+        (600, true),
+        (700, true),
+        (800, true),
+        (900, true),
+        (1000, true),
+        (1100, true),
+        (1200, true),
+    ]);
+    let left_reverse = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
+
+    assert_eq!(
+        derive_curve(sweep(&slow, &left_reverse, &fast, &right_reverse)),
+        Err(CurveError::ImplausibleCorrection {
+            leg: TestLeg::new(Track::Right, Direction::Forward),
+            command_percent: 30,
+            correction: 10.0 / 30.0,
+        })
+    );
+}
+
+#[test]
+fn exact_and_between_point_inversions_stay_identity() {
+    let left_forward = moving_leg(LINEAR);
+    let left_reverse = moving_leg(LINEAR);
+    let right_forward = moving_leg(LINEAR);
+    let right_reverse = moving_leg(LINEAR);
+
+    let curve = derive_curve(sweep(&left_forward, &left_reverse, &right_forward, &right_reverse));
+
+    assert!(curve.is_ok());
+    if let Ok(curve) = curve {
+        // An exact measured point is the identity.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 30),
+            CurveCommand::Corrected(300)
+        );
+        // A between-point request interpolates linearly and is also the identity.
+        assert_eq!(
+            curve.resolve(Track::Left, Direction::Forward, 45),
+            CurveCommand::Corrected(450)
+        );
+        assert_correction(curve.correction(Track::Left, Direction::Forward, 45), 1.0);
     }
 }

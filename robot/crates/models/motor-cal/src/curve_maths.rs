@@ -286,15 +286,20 @@ impl Curve {
     ///
     /// The factor is the inverse-interpolated command that produces the
     /// interpolated Target Speed at `command_percent`, divided by
-    /// `command_percent`, and clamped to `1.00`. Between measured Power Steps the
-    /// Target Speed is interpolated linearly; at or above 100 % the top point
-    /// holds.
+    /// `command_percent`, and clamped to `1.00`. The command is also clamped to at
+    /// least the Calibration Floor, so the reported factor is the one actually in
+    /// force: a target below a leg's first measured point would otherwise invert
+    /// to a command beneath its breakaway, which is never commanded. Between
+    /// measured Power Steps the Target Speed is interpolated linearly; at or
+    /// above 100 % the top point holds.
     #[must_use]
     pub fn correction(&self, track: Track, direction: Direction, command_percent: u8) -> Option<f32> {
         if command_percent < self.floor_percent {
             return None;
         }
         let command = self.command_for(track, direction, command_percent)?;
+        // Match the command `resolve` applies: never below the Calibration Floor.
+        let command = command.max(f32::from(self.floor_percent));
         let factor = command / f32::from(command_percent);
         // The target is at most this leg's measured speed, so the inverse is at
         // most the requested command; the clamp only absorbs f32 rounding.
@@ -310,8 +315,9 @@ impl Curve {
     /// A zero request resolves to zero, a request below the Calibration Floor is
     /// returned unchanged (as `magnitude * 10` per-mille), and any other request
     /// is resolved to the command that produces the interpolated Target Speed,
-    /// rounded once to the nearest per-mille and clamped to `0..=magnitude * 10`
-    /// and `0..=1000`.
+    /// rounded once to the nearest per-mille and clamped to the Calibration Floor,
+    /// `0..=magnitude * 10` and `0..=1000`. The corrected path is only taken at
+    /// or above the floor, so the floor never lifts the result above the request.
     #[must_use]
     pub fn resolve(&self, track: Track, direction: Direction, magnitude: u8) -> CurveCommand {
         let raw = u16::from(magnitude) * 10;
@@ -323,6 +329,7 @@ impl Curve {
         };
         CurveCommand::Corrected(
             round_permille(command)
+                .max(u16::from(self.floor_percent) * 10)
                 .min(raw)
                 .min(u16::from(LAST_POWER_STEP_PERCENT) * 10),
         )
@@ -337,6 +344,20 @@ impl Curve {
         let target = self.target_speed(direction, magnitude)?;
         let leg_index = TestLeg::new(track, direction).index();
         Some(inverse_command(&self.speeds[leg_index], target))
+    }
+
+    /// The **un-floored** correction implied by the measurement for `track` and
+    /// `direction` at `magnitude`.
+    ///
+    /// This is the ideal inverse divided by the requested magnitude, without the
+    /// Calibration Floor clamp that [`Curve::correction`] applies. The
+    /// plausibility check in [`derive_curve`] uses it so that the floor cannot
+    /// hide a measurement that genuinely implies an implausible correction.
+    ///
+    /// `None` means the direction has no target at `magnitude`.
+    fn ideal_correction(&self, track: Track, direction: Direction, magnitude: u8) -> Option<f32> {
+        let command = self.command_for(track, direction, magnitude)?;
+        Some(command / f32::from(magnitude))
     }
 
     /// The Target Speed for `direction` at `magnitude`, interpolated linearly
@@ -550,7 +571,11 @@ pub fn derive_curve(sweep: Sweep<'_>) -> Result<Curve, CurveError> {
             TestLeg::new(Track::Right, direction),
         ] {
             for &command_percent in POWER_STEP_PERCENTS.iter().skip(floor_index) {
-                if let Some(correction) = curve.correction(leg.track, leg.direction, command_percent)
+                // Judge the un-floored ideal, not the correction the panel shows:
+                // the floor clamp in `correction` must not hide an implausible
+                // measurement.
+                let ideal = curve.ideal_correction(leg.track, leg.direction, command_percent);
+                if let Some(correction) = ideal
                     && correction < MIN_PLAUSIBLE_CORRECTION
                 {
                     return Err(CurveError::ImplausibleCorrection {
@@ -605,9 +630,15 @@ fn monotone_speeds(
 /// Invert a leg's measured (command, speed) points at `target`.
 ///
 /// The points include the `(0, 0)` anchor and every moved Power Step in command
-/// order; `speed == 0` marks an excluded point. A target at or above the leg's
-/// top speed resolves to the top command (100 %). The result is the un-rounded
-/// command in percent, so the caller rounds it to per-mille exactly once.
+/// order; `speed == 0` marks an excluded point. The speed series is monotone
+/// non-decreasing, so the inverse is bracketed by the **last** point at or below
+/// `target` and the **first** point above it; the result interpolates between
+/// them. That makes a plateau (equal speeds at successive steps) an identity: when
+/// the lower point's speed equals `target`, the fraction is zero and the highest
+/// command that still produces the target is returned, not the lowest. A target
+/// at or above the leg's top speed resolves to the top command (100 %). The
+/// result is the un-rounded command in percent, so the caller rounds it to
+/// per-mille exactly once.
 #[allow(clippy::cast_precision_loss)]
 fn inverse_command(speeds: &[u32; POWER_STEPS], target: f32) -> f32 {
     let mut lower_percent = 0.0_f32;
@@ -618,10 +649,7 @@ fn inverse_command(speeds: &[u32; POWER_STEPS], target: f32) -> f32 {
         }
         let percent = f32::from(POWER_STEP_PERCENTS[index]);
         let speed = speed as f32;
-        if target <= speed {
-            if speed <= lower_speed {
-                return percent;
-            }
+        if speed > target {
             let fraction = (target - lower_speed) / (speed - lower_speed);
             return lower_percent + (percent - lower_percent) * fraction;
         }
