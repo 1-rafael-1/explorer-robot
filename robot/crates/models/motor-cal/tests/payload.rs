@@ -53,6 +53,9 @@ const CORRECTIONS_OFFSET: usize = 654;
 /// derivable curve.
 const RECORD_HAS_CURVE_FLAG: u8 = 0b0000_0001;
 
+/// The header flag that says the record's scale came from Distance Calibration.
+const RECORD_SCALE_MEASURED_FLAG: u8 = 0b0000_0010;
+
 /// The counts of a Test Leg that moves from its first Power Step.
 const BASE_COUNTS: [u16; POWER_STEPS] = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
 
@@ -103,8 +106,11 @@ fn scale() -> DistanceScale {
 }
 
 /// A valid record of the worked-example sweep under run id 7.
+///
+/// The worked-example scale stands in for a nominal fallback, so the record is
+/// unmeasured unless a test says otherwise.
 fn sample_record() -> MotorCalibrationRecord {
-    match MotorCalibrationRecord::new(7, scale(), sample_legs()) {
+    match MotorCalibrationRecord::new(7, scale(), sample_legs(), false) {
         Ok(record) => record,
         Err(error) => unreachable!("the worked-example sweep derives a curve: {error:?}"),
     }
@@ -210,6 +216,10 @@ fn a_record_round_trips_through_its_encoded_bytes() {
 
     assert_eq!(record.run_id(), 7);
     assert_eq!(record.scale(), scale());
+    assert!(
+        !record.scale_measured(),
+        "the worked example treats the scale as inferred"
+    );
 
     for (leg_index, leg) in ALL_LEGS.iter().enumerate() {
         assert_eq!(record.leg(*leg), &expected_legs[leg_index]);
@@ -238,7 +248,7 @@ fn the_breakaway_is_the_lowest_power_step_that_showed_sustained_motion() {
         leg_with_breakaway(SLOW_COUNTS, 50),
         leg_with_breakaway(BASE_COUNTS, 20),
     ];
-    let record = match MotorCalibrationRecord::new(7, scale(), legs) {
+    let record = match MotorCalibrationRecord::new(7, scale(), legs, false) {
         Ok(record) => record,
         Err(error) => unreachable!("the legs derive a curve: {error:?}"),
     };
@@ -297,11 +307,15 @@ fn a_scale_only_record_round_trips_with_its_scale_and_no_curve() {
     let record = MotorCalibrationRecord::scale_only(9, scale());
     let bytes = encoded(&record);
 
-    assert_eq!(bytes[1], 0, "a scale-only record clears the has-curve flag");
+    assert_eq!(
+        bytes[1], RECORD_SCALE_MEASURED_FLAG,
+        "a scale-only record clears the has-curve flag but marks the scale measured"
+    );
 
     let record = decoded(&bytes);
     assert_eq!(record.run_id(), 9);
     assert_eq!(record.scale(), scale());
+    assert!(record.scale_measured());
     assert_eq!(record.curve(), None);
 }
 
@@ -344,7 +358,56 @@ fn a_full_record_takes_a_new_scale_without_losing_its_measurements() {
     let record = decoded(&encoded(&record));
 
     assert_eq!(record.scale(), new_scale);
+    assert!(record.scale_measured(), "a new Distance Calibration scale is measured");
     assert_eq!(record.curve(), Some(&expected_curve(&sample_legs())));
+}
+
+#[test]
+fn a_measured_scale_round_trips_as_measured() {
+    let record = match MotorCalibrationRecord::new(7, scale(), sample_legs(), true) {
+        Ok(record) => record,
+        Err(error) => unreachable!("the worked-example sweep derives a curve: {error:?}"),
+    };
+    let bytes = encoded(&record);
+
+    assert_eq!(bytes[1], RECORD_HAS_CURVE_FLAG | RECORD_SCALE_MEASURED_FLAG);
+    assert!(decoded(&bytes).scale_measured());
+}
+
+#[test]
+fn an_unmeasured_scale_round_trips_as_unmeasured() {
+    let record = match MotorCalibrationRecord::new(7, scale(), sample_legs(), false) {
+        Ok(record) => record,
+        Err(error) => unreachable!("the worked-example sweep derives a curve: {error:?}"),
+    };
+    let bytes = encoded(&record);
+
+    assert_eq!(bytes[1], RECORD_HAS_CURVE_FLAG);
+    assert!(!decoded(&bytes).scale_measured());
+}
+
+#[test]
+fn a_scale_only_record_marks_its_scale_as_measured() {
+    let record = MotorCalibrationRecord::scale_only(9, scale());
+    assert!(record.scale_measured());
+
+    let bytes = encoded(&record);
+    assert_eq!(bytes[1], RECORD_SCALE_MEASURED_FLAG);
+    assert!(decoded(&bytes).scale_measured());
+}
+
+#[test]
+fn taking_a_new_scale_marks_it_as_measured() {
+    let unmeasured = match MotorCalibrationRecord::new(7, scale(), sample_legs(), false) {
+        Ok(record) => record,
+        Err(error) => unreachable!("the worked-example sweep derives a curve: {error:?}"),
+    };
+    assert!(!unmeasured.scale_measured());
+
+    assert!(
+        unmeasured.with_scale(scale()).scale_measured(),
+        "Distance Calibration always supplies a measured scale"
+    );
 }
 
 #[test]

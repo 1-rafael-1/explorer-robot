@@ -57,7 +57,10 @@ pub struct CalibrationState {
     /// Stored beside the curve because the record is one unit. The drive path
     /// reads this leaf for every distance drive and falls back to the inferred
     /// nominal scale when it is `None`, so a missing calibration never blocks
-    /// driving.
+    /// driving. `None` also covers a record that carries only that inferred
+    /// nominal scale: a motor sweep substitutes the fallback to measure, and boot
+    /// leaves it here rather than reporting a scale Distance Calibration never
+    /// produced.
     pub distance_scale: Option<DistanceScale>,
     /// The monotonic id of the run that produced the applied motor record.
     ///
@@ -107,7 +110,8 @@ pub async fn get_motor_curve() -> Option<Curve> {
 /// Read the encoder scale stored with the applied Motor Calibration record.
 ///
 /// `None` means Distance Calibration has not run (or its record was absent,
-/// corrupt or from another schema version); the drive path then uses
+/// corrupt or from another schema version), or the record carries only the
+/// inferred nominal scale a motor sweep substituted; the drive path then uses
 /// [`DistanceScale::nominal`](motor_cal::DistanceScale::nominal). The returned
 /// value is a copy, so no lock outlives this call.
 pub async fn get_distance_scale() -> Option<DistanceScale> {

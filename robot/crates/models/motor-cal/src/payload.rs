@@ -113,8 +113,14 @@ const BREAKAWAYS_OFFSET: usize = 10;
 /// derivable curve.
 const RECORD_HAS_CURVE_FLAG: u8 = 0b0000_0001;
 
+/// The header flag that says the record's scale came from Distance Calibration.
+///
+/// When clear, the scale is only the inferred nominal fallback a motor sweep
+/// substituted so it could still be measured.
+const RECORD_SCALE_MEASURED_FLAG: u8 = 0b0000_0010;
+
 /// The header flag bits this version understands; every other bit is a rejection.
-const RECORD_KNOWN_FLAGS: u8 = RECORD_HAS_CURVE_FLAG;
+const RECORD_KNOWN_FLAGS: u8 = RECORD_HAS_CURVE_FLAG | RECORD_SCALE_MEASURED_FLAG;
 
 /// The offset of the first Power Step.
 const STEPS_OFFSET: usize = HEADER_ENCODED_LEN;
@@ -300,12 +306,24 @@ impl StepMeasurement {
 /// measured scale but no sweep. The per-point corrections and the four Breakaways
 /// are caches; [`decode`](Self::decode) recomputes them from the raw measurements
 /// and never trusts the stored copies.
+///
+/// The record's scale is the encoder scale it carries. Only when
+/// [`scale_measured`](Self::scale_measured) is true does that scale come from
+/// Distance Calibration; otherwise it is the inferred nominal fallback a sweep
+/// substituted so it could still be measured. A record written by an older build
+/// has the flag clear, so its scale is treated as unmeasured too.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MotorCalibrationRecord {
     /// The monotonic id of the run that produced this record.
     run_id: u32,
-    /// The measured encoder scale.
+    /// The encoder scale carried by the record.
     scale: DistanceScale,
+    /// Whether [`scale`](Self::scale) came from Distance Calibration.
+    ///
+    /// `false` means the record carries the inferred nominal fallback (or came
+    /// from a build that did not write the flag), so boot must not report a
+    /// measured scale.
+    scale_measured: bool,
     /// The raw measurements, indexed in [`LEG_ORDER`] order.
     legs: [[StepMeasurement; POWER_STEPS]; TEST_LEGS],
     /// Each leg's Breakaway, indexed in [`LEG_ORDER`] order. `[0; TEST_LEGS]` for
@@ -316,7 +334,7 @@ pub struct MotorCalibrationRecord {
 }
 
 impl MotorCalibrationRecord {
-    /// Build a record from the measured scale and the four Test Legs' raw
+    /// Build a record from the encoder scale and the four Test Legs' raw
     /// measurements, deriving the curve from those measurements.
     ///
     /// `legs` is in cycle order — left forward, left reverse, right forward,
@@ -324,6 +342,11 @@ impl MotorCalibrationRecord {
     /// sweep fills the left and right leg of each direction at the same command,
     /// so the same Power Step appears in both. `run_id` must be monotonically
     /// increasing across saves; the record stores it unchanged.
+    ///
+    /// `scale_measured` says whether `scale` came from Distance Calibration. It is
+    /// `false` when the caller substituted the inferred nominal fallback so the
+    /// sweep could still run; the flag travels in the record so boot can tell a
+    /// measured scale from a placeholder.
     ///
     /// # Errors
     ///
@@ -335,12 +358,14 @@ impl MotorCalibrationRecord {
         run_id: u32,
         scale: DistanceScale,
         legs: [[StepMeasurement; POWER_STEPS]; TEST_LEGS],
+        scale_measured: bool,
     ) -> Result<Self, crate::CurveError> {
         let breakaways = breakaways_from(&legs);
         let curve = derive_from(&legs)?;
         Ok(Self {
             run_id,
             scale,
+            scale_measured,
             legs,
             breakaways,
             curve: Some(curve),
@@ -358,6 +383,7 @@ impl MotorCalibrationRecord {
         Self {
             run_id,
             scale,
+            scale_measured: true,
             legs: [[StepMeasurement::EMPTY; POWER_STEPS]; TEST_LEGS],
             breakaways: [0; TEST_LEGS],
             curve: None,
@@ -369,10 +395,16 @@ impl MotorCalibrationRecord {
     /// Storage uses this to update one record in place: a later Distance
     /// Calibration must not discard the curve a motor sweep already measured. The
     /// run id names the sweep that produced the measurements, so it is unchanged;
-    /// only a new sweep starts a new id.
+    /// only a new sweep starts a new id. The new scale always comes from Distance
+    /// Calibration, so the record is marked measured even if the old fallback
+    /// scale was not.
     #[must_use]
     pub const fn with_scale(self, scale: DistanceScale) -> Self {
-        Self { scale, ..self }
+        Self {
+            scale,
+            scale_measured: true,
+            ..self
+        }
     }
 
     /// The monotonic id of the run that produced this record.
@@ -381,10 +413,22 @@ impl MotorCalibrationRecord {
         self.run_id
     }
 
-    /// The measured encoder scale.
+    /// The encoder scale carried by the record.
+    ///
+    /// It is only a measured Distance Calibration scale when
+    /// [`scale_measured`](Self::scale_measured) is true.
     #[must_use]
     pub const fn scale(&self) -> DistanceScale {
         self.scale
+    }
+
+    /// Whether the record's scale came from Distance Calibration.
+    ///
+    /// `false` means it is the inferred nominal fallback (or a flag an older
+    /// build never wrote), so boot must not report distance as calibrated.
+    #[must_use]
+    pub const fn scale_measured(&self) -> bool {
+        self.scale_measured
     }
 
     /// The raw measurements of `leg`, in Power Step order.
@@ -427,7 +471,14 @@ impl MotorCalibrationRecord {
         }
 
         buffer[VERSION_OFFSET] = RECORD_FORMAT_VERSION;
-        buffer[FLAGS_OFFSET] = if self.curve.is_some() { RECORD_HAS_CURVE_FLAG } else { 0 };
+        let mut flags = 0;
+        if self.curve.is_some() {
+            flags |= RECORD_HAS_CURVE_FLAG;
+        }
+        if self.scale_measured {
+            flags |= RECORD_SCALE_MEASURED_FLAG;
+        }
+        buffer[FLAGS_OFFSET] = flags;
         buffer[RUN_ID_OFFSET..RUN_ID_OFFSET + 4].copy_from_slice(&self.run_id.to_le_bytes());
         buffer[SCALE_OFFSET..SCALE_OFFSET + 4].copy_from_slice(&self.scale.counts_per_cm().to_bits().to_le_bytes());
         buffer[BREAKAWAYS_OFFSET..BREAKAWAYS_OFFSET + TEST_LEGS].copy_from_slice(&self.breakaways);
@@ -466,7 +517,8 @@ impl MotorCalibrationRecord {
     /// a stored correction or Breakaway can never override them. A scale-only
     /// record decodes with [`curve`](Self::curve) `None`, no Breakaway, and no
     /// claim on its unused step and cache regions, whether they are zero or
-    /// garbage.
+    /// garbage. The decoded [`scale_measured`](Self::scale_measured) flag is
+    /// preserved as written, for a scale-only and a full record alike.
     ///
     /// # Errors
     ///
@@ -500,9 +552,17 @@ impl MotorCalibrationRecord {
 
         let run_id = u32_at(bytes, RUN_ID_OFFSET);
         let scale = DistanceScale::from_stored(f32_at(bytes, SCALE_OFFSET));
+        let scale_measured = flags & RECORD_SCALE_MEASURED_FLAG != 0;
 
         if flags & RECORD_HAS_CURVE_FLAG == 0 {
-            return Ok(Self::scale_only(run_id, scale));
+            return Ok(Self {
+                run_id,
+                scale,
+                scale_measured,
+                legs: [[StepMeasurement::EMPTY; POWER_STEPS]; TEST_LEGS],
+                breakaways: [0; TEST_LEGS],
+                curve: None,
+            });
         }
 
         // The stored Breakaway bytes at `BREAKAWAYS_OFFSET` are deliberately
@@ -531,6 +591,7 @@ impl MotorCalibrationRecord {
         Ok(Self {
             run_id,
             scale,
+            scale_measured,
             legs,
             breakaways,
             curve: Some(curve),

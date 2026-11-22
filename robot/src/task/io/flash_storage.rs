@@ -7,6 +7,8 @@
 //! The data is stored in the `FLASH_STORAGE` section of flash memory defined in
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use defmt::{debug, error, info, warn};
 use dmp_cal::{DMP_BIAS_ENCODED_LEN, DmpBiasSnapshot};
 use embassy_futures::select::{Either, select};
@@ -15,7 +17,7 @@ use embassy_rp::{
     mode::Async,
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use motor_cal::{DistanceScale, MotorCalibrationRecord, RECORD_ENCODED_LEN};
 use sequential_storage::{
     cache::NoCache,
@@ -52,8 +54,19 @@ static DMP_BIAS_SAVE_REPLY: Channel<CriticalSectionRawMutex, bool, 1> = Channel:
 ///
 /// Capacity one and one writer match the DMP bias reply: a late answer to a
 /// timed-out request is dropped, and the next save drains it before dispatching
-/// its own command.
-static MOTOR_CURVE_SAVE_REPLY: Channel<CriticalSectionRawMutex, Result<(), &'static str>, 1> = Channel::new();
+/// its own command. Each reply carries the save's sequence number so a stale
+/// answer can never be mistaken for the current request.
+static MOTOR_CURVE_SAVE_REPLY: Channel<CriticalSectionRawMutex, (u32, Result<(), &'static str>), 1> = Channel::new();
+
+/// The sequence number of the most recent Motor Calibration Curve save.
+static MOTOR_CURVE_SAVE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// The sequence of the save whose caller is still waiting, or `0` for none.
+///
+/// The flash task publishes an applied curve only when this still matches the
+/// command's sequence, so a save that completed after its caller timed out does
+/// not change the leaf behind the caller's back.
+static MOTOR_CURVE_SAVE_ACTIVE: AtomicU32 = AtomicU32::new(0);
 
 /// How long [`save_dmp_bias`] waits for the flash task before reporting failure.
 ///
@@ -127,10 +140,15 @@ pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
 ///
 /// [`send_flash_command`] only enqueues the write, so a caller that returns on
 /// the enqueue reports success before persistence has happened. This waits for
-/// the task's answer: `Ok(())` once `store_item` succeeded, and `Err(label)` when
-/// the write failed, the command could not be enqueued, or the task did not
-/// answer within [`MOTOR_CURVE_SAVE_TIMEOUT_MS`]. The caller must treat `Err` as
-/// "the previous record is still the durable one".
+/// the task's answer, matching it to this save's sequence number: `Ok(())` once
+/// `store_item` succeeded, and an error when the write failed, the command could
+/// not be enqueued, or the task did not answer within
+/// [`MOTOR_CURVE_SAVE_TIMEOUT_MS`].
+///
+/// A timeout is deliberately ambiguous: the task never published the record, so
+/// the applied curve is unchanged, but the write may still complete after the
+/// deadline, so a reboot may load it. Only [`MotorCurveSaveError::QueueFull`] and
+/// [`MotorCurveSaveError::WriteFailed`] prove nothing was written.
 ///
 /// The write is one atomic `store_item` once dispatched: it cannot be
 /// interrupted, so a caller that wants to honour a Stop must check for it before
@@ -138,30 +156,72 @@ pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
 ///
 /// # Errors
 ///
-/// Returns the task's static failure label (`"flash write failed"`), the
-/// enqueue failure (`"flash command queue full"`), or `"save timeout"`.
-pub async fn save_motor_curve(record: MotorCalibrationRecord) -> Result<(), &'static str> {
-    // A late answer to a timed-out request must not be mistaken for this one.
+/// Returns [`MotorCurveSaveError::WriteFailed`] when the task reports a failed
+/// write, [`MotorCurveSaveError::QueueFull`] when the command could not be
+/// enqueued, or [`MotorCurveSaveError::TimedOut`] when the deadline passes first.
+pub async fn save_motor_curve(record: MotorCalibrationRecord) -> Result<(), MotorCurveSaveError> {
+    // Allocate a sequence no earlier reply can carry, avoiding zero (the "none"
+    // sentinel for the active slot).
+    let seq = MOTOR_CURVE_SAVE_SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let seq = if seq == 0 {
+        MOTOR_CURVE_SAVE_SEQ.store(1, Ordering::Relaxed);
+        1
+    } else {
+        seq
+    };
+    MOTOR_CURVE_SAVE_ACTIVE.store(seq, Ordering::Relaxed);
+
+    // A late answer to an earlier request must not be mistaken for this one.
     while MOTOR_CURVE_SAVE_REPLY.try_receive().is_ok() {}
 
     if FLASH_COMMAND_CHANNEL
-        .try_send(FlashCommand::SaveMotorCurve(MotorCalibrationPayload(record)))
+        .try_send(FlashCommand::SaveMotorCurve(MotorCalibrationPayload(record), seq))
         .is_err()
     {
+        MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
         warn!("Motor curve save dropped — flash command queue full");
-        return Err("flash command queue full");
+        return Err(MotorCurveSaveError::QueueFull);
     }
 
-    match select(
-        MOTOR_CURVE_SAVE_REPLY.receive(),
-        Timer::after(Duration::from_millis(MOTOR_CURVE_SAVE_TIMEOUT_MS)),
-    )
-    .await
-    {
-        Either::First(result) => result,
-        Either::Second(()) => {
-            warn!("Motor curve save timed out after {}ms", MOTOR_CURVE_SAVE_TIMEOUT_MS);
-            Err("save timeout")
+    let deadline = Instant::now() + Duration::from_millis(MOTOR_CURVE_SAVE_TIMEOUT_MS);
+    loop {
+        match select(MOTOR_CURVE_SAVE_REPLY.receive(), Timer::at(deadline)).await {
+            Either::First((reply_seq, result)) => {
+                if reply_seq != seq {
+                    // A stale answer: discard it and keep waiting for ours.
+                    continue;
+                }
+                MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
+                return result.map_err(|_| MotorCurveSaveError::WriteFailed);
+            }
+            Either::Second(()) => {
+                MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
+                warn!("Motor curve save timed out after {}ms", MOTOR_CURVE_SAVE_TIMEOUT_MS);
+                return Err(MotorCurveSaveError::TimedOut);
+            }
+        }
+    }
+}
+
+/// Why [`save_motor_curve`] did not confirm the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum MotorCurveSaveError {
+    /// The command could not be enqueued: the flash command queue was full.
+    QueueFull,
+    /// The flash task reported that `store_item` failed.
+    WriteFailed,
+    /// The task did not answer before [`MOTOR_CURVE_SAVE_TIMEOUT_MS`].
+    TimedOut,
+}
+
+impl MotorCurveSaveError {
+    /// A short, operator-facing reason for the log and Result Report footer.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::QueueFull => "flash command queue full",
+            Self::WriteFailed => "flash write failed",
+            Self::TimedOut => "save timed out",
         }
     }
 }
@@ -229,11 +289,11 @@ pub enum FlashCommand {
     ///
     /// The Motor Calibration Procedure is the only writer; the storage plumbing
     /// lives here so the record and the key are versioned and checksummed in one
-    /// place. On success the task publishes the record's curve, scale and run id,
-    /// and answers [`save_motor_curve`] with `Ok(())`; the reply is the save
-    /// confirmation, and the run id is still stored and published so the leaf
-    /// matches the durable record.
-    SaveMotorCurve(MotorCalibrationPayload),
+    /// place. `u32` is the save's sequence: the task publishes the record's curve,
+    /// scale and run id only while that sequence is still the active one, and
+    /// answers [`save_motor_curve`] with `Ok(())` only after `store_item`
+    /// succeeded.
+    SaveMotorCurve(MotorCalibrationPayload, u32),
 
     /// Save a measured Distance Calibration scale.
     ///
@@ -251,7 +311,7 @@ impl FlashCommand {
     const fn label(&self) -> &'static str {
         match self {
             Self::SaveDmpBias(_) => "SaveDmpBias",
-            Self::SaveMotorCurve(_) => "SaveMotorCurve",
+            Self::SaveMotorCurve(..) => "SaveMotorCurve",
             Self::SaveDistanceScale(_) => "SaveDistanceScale",
             Self::GetData(_) => "GetData",
         }
@@ -480,6 +540,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     match fetch_motor_record(&mut storage, &mut data_buffer).await {
                         Ok(Some(record)) => {
                             let scale = record.scale();
+                            let measured_scale = record.scale_measured().then_some(scale);
 
                             if let Some(curve) = record.curve() {
                                 info!(
@@ -491,7 +552,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
 
                                 // Publish the derived curve to the one calibration
                                 // leaf; the driver reads it from there on SetTracks.
-                                calibration::set_motor_calibration(Some(curve), Some(scale)).await;
+                                calibration::set_motor_calibration(Some(curve), measured_scale).await;
                                 calibration::set_motor_run_id(record.run_id()).await;
 
                                 raise_event(Events::CalibrationDataLoaded(
@@ -510,7 +571,8 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                                     "Motor calibration record has no curve; counts_per_cm={}",
                                     scale.counts_per_cm()
                                 );
-                                calibration::set_motor_calibration(None, Some(scale)).await;
+                                calibration::set_motor_calibration(None, record.scale_measured().then_some(scale))
+                                    .await;
                                 calibration::set_motor_run_id(0).await;
                                 raise_event(Events::CalibrationDataLoaded(CalibrationKind::Motor, None)).await;
                             }
@@ -538,8 +600,14 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     match fetch_motor_record(&mut storage, &mut data_buffer).await {
                         Ok(Some(record)) => {
                             let scale = record.scale();
-                            info!("Distance calibration loaded: counts_per_cm={}", scale.counts_per_cm());
-                            publish_distance_scale(Some(scale)).await;
+                            if record.scale_measured() {
+                                info!("Distance calibration loaded: counts_per_cm={}", scale.counts_per_cm());
+                            } else {
+                                info!(
+                                    "Motor calibration record carries an unmeasured scale; distance remains uncalibrated"
+                                );
+                            }
+                            publish_distance_scale(record.scale_measured().then_some(scale)).await;
                         }
                         Ok(None) => {
                             info!("No distance calibration found in flash - nominal scale in force");
@@ -608,7 +676,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                 }
             }
 
-            FlashCommand::SaveMotorCurve(payload) => {
+            FlashCommand::SaveMotorCurve(payload, seq) => {
                 let record = &payload.0;
                 info!("Saving motor calibration curve to flash (run {})...", record.run_id());
 
@@ -617,24 +685,39 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     .await
                 {
                     Ok(()) => {
-                        // Publish only once flash holds the record, so a failed
-                        // write leaves the previous curve in force. This is the one
-                        // leaf the driver and panel read. The reply below is the
+                        // Publish only once flash holds the record and the caller is
+                        // still waiting, so a timed-out caller's late write cannot
+                        // change the leaf behind its back. The reply below is the
                         // save confirmation; the run id is still published so the
                         // leaf names the durable record, but it is not the
                         // confirmation.
-                        calibration::set_motor_calibration(record.curve(), Some(record.scale())).await;
-                        calibration::set_motor_run_id(record.run_id()).await;
-                        info!("Motor calibration curve saved successfully");
-                        if MOTOR_CURVE_SAVE_REPLY.try_send(Ok(())).is_err() {
+                        if MOTOR_CURVE_SAVE_ACTIVE.load(Ordering::Relaxed) == seq {
+                            calibration::set_motor_calibration(
+                                record.curve(),
+                                record.scale_measured().then_some(record.scale()),
+                            )
+                            .await;
+                            calibration::set_motor_run_id(record.run_id()).await;
+                            info!("Motor calibration curve saved successfully");
+                        } else {
+                            info!(
+                                "Motor calibration curve saved to flash but the caller is gone; applied curve unchanged"
+                            );
+                        }
+                        if MOTOR_CURVE_SAVE_REPLY.try_send((seq, Ok(()))).is_err() {
                             warn!("Motor curve save result dropped — no waiter");
                         }
                     }
                     Err(e) => {
                         error!("Failed to save motor calibration curve: {}", defmt::Debug2Format(&e));
-                        // A full reply slot drops the answer rather than wedging the
-                        // task; the caller then reports its bounded timeout.
-                        if MOTOR_CURVE_SAVE_REPLY.try_send(Err("flash write failed")).is_err() {
+                        // Do not publish: the previous record is still the durable
+                        // one. A full reply slot drops the answer rather than
+                        // wedging the task; the caller then reports its bounded
+                        // timeout.
+                        if MOTOR_CURVE_SAVE_REPLY
+                            .try_send((seq, Err("flash write failed")))
+                            .is_err()
+                        {
                             warn!("Motor curve save result dropped — no waiter");
                         }
                     }

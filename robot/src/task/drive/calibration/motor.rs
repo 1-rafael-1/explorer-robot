@@ -22,13 +22,13 @@
 //!    sweep and then fails, so the operator sees the pattern.
 //! 4. On a complete, valid sweep the run derives the curve, saves the versioned
 //!    record, and waits for the flash task's reply. Only then does it publish the
-//!    Result Report summary and complete. A failed save leaves the previous curve
-//!    in force.
+//!    Result Report summary and complete. A confirmed failed save leaves the
+//!    previous curve in force; a timed-out save leaves the applied curve in force
+//!    but may still have written the record, so a reboot can load it.
 //!
-//! Nothing is written flash-side unless the whole sweep measured cleanly, and a
-//! failed run always leaves the previous curve in force. A Stop is honoured up to
-//! the instant the save is dispatched; the write is one atomic `store_item` that
-//! cannot be recalled after that.
+//! Nothing is written flash-side unless the whole sweep measured cleanly. A Stop
+//! is honoured up to the instant the save is dispatched; the write is one atomic
+//! `store_item` that cannot be recalled after that.
 //!
 //! # The panel leaf
 //!
@@ -134,11 +134,13 @@ pub async fn run_motor_calibration(claim: &Claim) {
     let previous_curve = calibration::get_motor_curve().await;
 
     // The measured scale comes from Distance Calibration. A robot without one
-    // measures against the inferred nominal fallback rather than refusing.
-    let scale = calibration::get_distance_scale().await.unwrap_or_else(|| {
+    // measures against the inferred nominal fallback rather than refusing, and
+    // the record marks that scale unmeasured so boot does not report it as a
+    // Distance Calibration.
+    let measured_scale = calibration::get_distance_scale().await;
+    if measured_scale.is_none() {
         info!("Motor Calibration: no measured distance scale; using the inferred nominal scale");
-        DistanceScale::nominal()
-    });
+    }
 
     let mut results = [[PointResult::Invalid(InvalidReason::NoWindow); POWER_STEPS]; TEST_LEGS];
     let mut measurements = [[StepMeasurement::new(0, 0, 0, 0.0, 1.0, false); POWER_STEPS]; TEST_LEGS];
@@ -163,7 +165,7 @@ pub async fn run_motor_calibration(claim: &Claim) {
     match end {
         SweepEnd::Stopped => stop(claim).await,
         SweepEnd::Aborted(reason) => abort(claim, reason).await,
-        SweepEnd::Complete => finish(claim, &results, &measurements, previous_curve.as_ref(), scale).await,
+        SweepEnd::Complete => finish(claim, &results, &measurements, previous_curve.as_ref(), measured_scale).await,
     }
 }
 
@@ -283,7 +285,7 @@ async fn finish(
     results: &[[PointResult; POWER_STEPS]; TEST_LEGS],
     measurements: &[[StepMeasurement; POWER_STEPS]; TEST_LEGS],
     previous_curve: Option<&Curve>,
-    scale: DistanceScale,
+    measured_scale: Option<DistanceScale>,
 ) {
     // A Stop that landed after the last Power Step but before any reporting must
     // still abort without writing.
@@ -302,7 +304,12 @@ async fn finish(
     }
 
     let run_id = next_run_id(calibration::get_motor_run_id().await);
-    let record = match MotorCalibrationRecord::new(run_id, scale, *measurements) {
+    // The stored scale is the measured one when it exists; otherwise the record
+    // stores the nominal fallback but marks it unmeasured, so boot does not
+    // report a Distance Calibration.
+    let scale_measured = measured_scale.is_some();
+    let scale = measured_scale.unwrap_or_else(DistanceScale::nominal);
+    let record = match MotorCalibrationRecord::new(run_id, scale, *measurements, scale_measured) {
         Ok(record) => record,
         Err(error) => {
             // A derivation failure is also a measurement problem: save nothing and
@@ -336,12 +343,23 @@ async fn finish(
             motor_readout::publish_summary(summary).await;
             claim.complete("Calibration saved").await;
         }
-        Err(reason) => {
-            // The write did not confirm: the previous curve is still the one in
-            // force, and the footer names the reason flash reported.
-            warn!("Motor Calibration save failed: {}", reason);
-            let summary = build_summary(results, previous_curve).with_status(SummaryStatus::NotSaved(reason));
-            fail_with_summary(claim, summary, reason).await;
+        Err(flash_storage::MotorCurveSaveError::TimedOut) => {
+            // The flash task never answered: it did not publish, so the applied
+            // leaf is unchanged, but the write may still complete after the
+            // deadline, so a reboot may load this run's record. Report that as
+            // unconfirmed rather than claiming the previous record is durable.
+            warn!("Motor Calibration save timed out");
+            let summary =
+                build_summary(results, previous_curve).with_status(SummaryStatus::Unconfirmed("save timed out"));
+            fail_with_summary(claim, summary, "save timed out").await;
+        }
+        Err(error) => {
+            // The task answered with a failure, so nothing was written: the
+            // previous record is still the durable one and the previous curve is
+            // still the one in force. The footer names the reason flash reported.
+            warn!("Motor Calibration save failed: {}", error.label());
+            let summary = build_summary(results, previous_curve).with_status(SummaryStatus::NotSaved(error.label()));
+            fail_with_summary(claim, summary, error.label()).await;
         }
     }
 }
@@ -422,7 +440,7 @@ fn build_summary(results: &[[PointResult; POWER_STEPS]; TEST_LEGS], curve: Optio
             );
         }
     }
-    builder.build()
+    builder.with_curve_floor(curve.map(Curve::floor_percent)).build()
 }
 
 /// Log one Power Step's verdict at info, so a bench log stays readable.
