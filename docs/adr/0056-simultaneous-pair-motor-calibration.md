@@ -62,6 +62,10 @@ the rounding floor.
 - A cycle is 2 directions × 10 Power Steps = 20 pair steps. The four **Test Legs**
   are still reported, two at a time; the Result Report summary remains per Test
   Leg.
+- Both the Motor Calibration and the Basic Motor Test start with a discarded
+  20-step raw pair warm-up (~50 s) before measuring, so cold low-duty friction does
+  not bias the pair. The warm-up is product behaviour, and the bench measure phase
+  reuses the same shared warm-up.
 - The **Target Speed** at a Power Step is the slower of the two tracks in that
   direction, taken from the simultaneous counts, so no correction exceeds `1.0`.
 - Each leg's command is resolved by inverse piecewise-linear interpolation of that
@@ -83,9 +87,10 @@ the rounding floor.
   twenty-step cycle. The summary tables stay per Test Leg.
 - The HIL regression is `scripts/motor-bench-precision.sh` with the
   `bench_motor_calibrate` and `bench_motor_measure` features: it runs calibration
-  and measurement in two separate boots, each preceded by a discarded 20-step raw
-  warm-up, and asserts corrected divergence below 5 % at 30–90 %, with 20 %
-  measured for information because it is the stiction band. It checks speed
+  and measurement in two separate boots. The calibrate boot relies on the
+  Procedure's own warm-up, not a pre-dispatch one, and the measure boot reuses the
+  same shared warm-up. It asserts corrected divergence below 5 % at 30–90 %, with
+  20 % measured for information because it is the stiction band. It checks speed
   symmetry (`|Δcounts|`), not rotation direction; direction is verified by the
   Basic Motor Test / physical observation. A two-track
   100 % run needs a bench supply of at least 2 A.
@@ -93,7 +98,8 @@ the rounding floor.
 **Consequences**
 
 - One cycle drops from roughly 2.1–2.3 minutes to about 1.1 minutes, because both
-  tracks are measured in the time one took.
+  tracks are measured in the time one took. The warm-up brings a full run to
+  roughly 1.8–2 minutes; the accuracy benefit justifies it.
 - The curve is measured in the same load and supply condition normal driving uses,
   so the correction transfers. Voltage compensation is still applied after the
   curve, as before.

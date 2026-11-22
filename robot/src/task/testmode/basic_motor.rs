@@ -15,6 +15,11 @@
 //! not the loaded curve — while the readout still shows the correction in force
 //! for each track as information.
 //!
+//! Before the measured cycle the task runs a discarded 20-step raw pair warm-up
+//! ([`crate::task::motor_sweep::run_warm_up`]), so cold low-duty friction does not
+//! bias the pair. Its results are thrown away; a Stop or floor drop during it ends
+//! the run exactly as the measured sweep would.
+//!
 //! This task supplies only the test's half of the sweep: it draws the live Basic
 //! Motor Test Readout and records the Result Report summary. The panel's readout
 //! travels in the shared panel-only `motor_readout` leaf: the task publishes the
@@ -71,6 +76,13 @@ async fn basic_motor_test_task(claim: Claim) {
         return;
     }
 
+    // Warm the drivetrain with a discarded raw pair sweep before measuring, so
+    // cold low-duty friction does not bias the pair. A Stop or structural abort
+    // here ends the run through the same terminal paths as the measured sweep.
+    if abandon(motor_sweep::run_warm_up(Some(&claim)).await, &claim).await {
+        return;
+    }
+
     // The curve in force for the whole run: one read, so the correction row
     // names what the robot is actually applying at each Power Step. A missing
     // curve is identity rather than an error (user story 24).
@@ -124,6 +136,36 @@ async fn basic_motor_test_task(claim: Claim) {
             claim.fail(reason).await;
         }
     }
+}
+
+/// End the run when a warm-up did not complete, and report whether it did.
+///
+/// The two arms match the measured sweep's Stopped and Aborted terminal paths:
+/// a Stop coasts and clears the readout, while a structural abort keeps the brake
+/// latched. `Complete` returns `false` so the caller proceeds into the measured
+/// cycle unchanged.
+async fn abandon(end: SweepEnd, claim: &Claim) -> bool {
+    match end {
+        SweepEnd::Complete => return false,
+        SweepEnd::Stopped => {
+            // An operator Stop ends the run with no Result Report, so nothing of
+            // this run may linger on the panel.
+            motor_readout::clear().await;
+            motor_driver::send_motor_command(MotorCommand::CoastAll).await;
+            motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: false }).await;
+            claim.finish().await;
+        }
+        SweepEnd::Aborted(reason) => {
+            // The floor-drop EmergencyBrake (or the structural abort that took its
+            // path) owns this stop: keep the brake latched and leave the drivers
+            // enabled until the next activity manages them. The numbers go,
+            // because the reason is the result.
+            motor_readout::clear().await;
+            motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+            claim.fail(reason).await;
+        }
+    }
+    true
 }
 
 /// Draws the live readout and collects the Result Report while the sweep runs.

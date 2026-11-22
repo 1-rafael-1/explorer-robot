@@ -6,7 +6,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer};
 use touch_ui::Procedure;
 
-use super::shared::{hold, settle_at_menu, wait_for_initialization, warm_up};
+use super::shared::{hold, settle_at_menu, wait_for_initialization};
 use crate::{
     system::state::activity::{self, Stage},
     task::procedure::{self, ClaimOrigin, StartOutcome},
@@ -32,7 +32,6 @@ const PROCEDURE_TIMEOUT_MS: u64 = 240_000;
 async fn bench_calibrate_task() {
     wait_for_initialization().await;
     settle_at_menu().await;
-    warm_up().await;
 
     info!(
         "bench-calibrate: dispatching {=str}",

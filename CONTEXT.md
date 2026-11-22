@@ -267,7 +267,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Calibration
 
-- **Motor Calibration** — The bench Procedure that measures and saves the **Motor Calibration Curve**. It uses the same measurement the Basic Motor Test displays: for each direction, ten Power Steps measured as simultaneous pairs, each starting from **Quiescence** and counted over a **Measurement Window**.
+- **Motor Calibration** — The bench Procedure that measures and saves the **Motor Calibration Curve**. It uses the same measurement the Basic Motor Test displays: for each direction, ten Power Steps measured as simultaneous pairs, each starting from **Quiescence** and counted over a **Measurement Window**. Like the Basic Motor Test, it begins with a discarded 20-step raw pair warm-up so cold low-duty friction does not bias the pair.
 - **Motor Calibration Curve** — The per-track, per-direction mapping from a requested speed to the raw command that produces the **Target Speed**, derived by inverting the leg's measured (command, speed) points with piecewise-linear interpolation between them and a zero anchor. It is stored as the raw measurements plus the derived corrections; the speed-versus-command response is nonlinear at low duty, so a linear speed-to-command ratio is not used.
   _Avoid_: linear correction, speed multiplier
 - **Calibration Run Id** — The monotonic id of a Motor Calibration sweep, stored in the Motor Calibration record and in the Calibration State leaf (the code's `motor_run_id`). `0` means no sweep has produced the record (nothing loaded, or a scale-only record); a calibration adds one without wrapping to `0`, and the flash task publishes the stored id only after the record is durable, so it names the applied save rather than the save confirmation. It distinguishes a new record from the previous one.
@@ -300,7 +300,7 @@ Lock order (documented in each module): **power → calibration → perception �
 
 ## Motor Test
 
-- **Basic Motor Test** — A bench Procedure that runs one cycle — twenty simultaneous-pair Power Steps covering four Test Legs — and ends in a Result Report carrying the **Basic Motor Test Readout**. An operator Stop ends it early with no Result Report, and it does not cycle.
+- **Basic Motor Test** — A bench Procedure that runs one cycle — twenty simultaneous-pair Power Steps covering four Test Legs — and ends in a Result Report carrying the **Basic Motor Test Readout**. It begins with a discarded 20-step raw pair warm-up so cold low-duty friction does not bias the pair. An operator Stop ends it early with no Result Report, and it does not cycle.
   _Avoid_: motor check, bench spin
 - **Power Step** — One direction and one commanded power level within a Basic Motor Test, measured as a simultaneous pair: both tracks are commanded at the same requested power and both encoder deltas are taken over the same **Measurement Window**.
   _Avoid_: leg (one Test Leg holds ten Power Steps), speed (that names the commanded value, not the unit)

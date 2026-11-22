@@ -40,7 +40,7 @@
 //! reports its Measurement Window delta, and an invalid point carries its
 //! [`InvalidReason`] so the panel can show `--` instead of a silent zero.
 
-use defmt::{debug, warn};
+use defmt::{debug, info, warn};
 use embassy_time::{Duration, Instant, Timer};
 use motor_cal::{
     Curve, Direction, EncoderSample, InvalidReason, MeasurementEngine, Phase, PointResult, TestLeg, Track,
@@ -94,6 +94,9 @@ pub const STEP_POWERS: [u8; motor_cal::POWER_STEPS] = motor_cal::POWER_STEP_PERC
 /// The pair steps in a full one-cycle sweep: both directions over every Power
 /// Step.
 pub const TOTAL_STEPS: usize = DIRECTIONS.len() * motor_cal::POWER_STEPS;
+
+/// How long each warm-up step dwells before the next, in milliseconds.
+pub const WARMUP_DWELL_MS: u64 = 2500;
 
 /// Enable both drivers and (re)start the encoder sampler at [`SAMPLE_INTERVAL_MS`].
 ///
@@ -525,6 +528,68 @@ where
 
     stop_encoders().await;
     end
+}
+
+/// Run a discarded 20-step raw pair sweep that warms the motors before measuring.
+///
+/// This mirrors the load of the measured sweep (forward and reverse, 10 to 100 %)
+/// for [`WARMUP_DWELL_MS`] × 20 ≈ 50 s, but it is discarded: nothing here feeds the
+/// calibration or the test. It commands raw `SetTracksRaw` on purpose, so no curve
+/// is applied — the point is to load the drivetrain, not to hit a corrected speed.
+/// The encoder sampler is not started; the measured sweep does that.
+///
+/// `claim` is `Some` inside a Procedure, where the Stop latch, the floor-drop gate
+/// and the phase/progress updates apply; it is `None` for the bench regression,
+/// which runs outside a Procedure. A Stop is reported as [`SweepEnd::Stopped`]
+/// without braking here — the Procedure's stop path handles the terminal motion.
+pub async fn run_warm_up(claim: Option<&Claim>) -> SweepEnd {
+    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
+
+    let mut step_index = 0usize;
+    for direction in DIRECTIONS {
+        for power in STEP_POWERS {
+            if let Some(claim) = claim {
+                if claim.is_stop_requested() {
+                    return SweepEnd::Stopped;
+                }
+                if perception::is_floor_drop_detected() {
+                    return SweepEnd::Aborted(FLOOR_DROP_REASON);
+                }
+                let percent = activity::percent_done(step_index + 1, TOTAL_STEPS);
+                claim.phase(warm_up_label(direction), Some(percent)).await;
+            }
+
+            let signed = signed_speed(direction, power);
+            motor_driver::send_motor_command(MotorCommand::SetTracksRaw {
+                left_speed: signed,
+                right_speed: signed,
+            })
+            .await;
+            info!("motor-warmup: {=str} {=u8}%", direction_label(direction), power);
+
+            match claim {
+                Some(claim) => {
+                    if claim.wait_or_stop(WARMUP_DWELL_MS).await {
+                        return SweepEnd::Stopped;
+                    }
+                }
+                None => Timer::after(Duration::from_millis(WARMUP_DWELL_MS)).await,
+            }
+            step_index += 1;
+        }
+    }
+
+    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+    info!("motor-warmup: complete");
+    SweepEnd::Complete
+}
+
+/// The operator-facing phase label for a warm-up step.
+const fn warm_up_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Forward => "Warm-up forward",
+        Direction::Reverse => "Warm-up reverse",
+    }
 }
 
 /// The motor rail and the compensation the driver's rule derives at it, read

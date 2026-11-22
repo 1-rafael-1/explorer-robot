@@ -114,6 +114,21 @@ pub async fn run_motor_calibration(claim: &Claim) {
         }
     }
 
+    // Warm the drivetrain with a discarded raw pair sweep before measuring, so
+    // cold low-duty friction does not bias the pair. A Stop or structural abort
+    // here ends the run through the same helpers as the measured sweep.
+    match motor_sweep::run_warm_up(Some(claim)).await {
+        SweepEnd::Complete => {}
+        SweepEnd::Stopped => {
+            stop(claim).await;
+            return;
+        }
+        SweepEnd::Aborted(reason) => {
+            abort(claim, reason).await;
+            return;
+        }
+    }
+
     // The curve in force for the correction column if the run fails: one read, so
     // the operator compares the sweep against what the robot is applying now.
     let previous_curve = calibration::get_motor_curve().await;

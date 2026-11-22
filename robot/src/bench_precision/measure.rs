@@ -5,7 +5,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use motor_cal::{Direction, MEASUREMENT_WINDOW_MS, QUIESCENCE_HOLD_MS, QUIESCENCE_TIMEOUT_MS, SETTLE_MS};
 
-use super::shared::{hold, settle_at_menu, wait_for_initialization, warm_up};
+use super::shared::{hold, settle_at_menu, wait_for_initialization};
 use crate::task::{
     drive::clear_encoder_measurement,
     motor_driver::{self, MotorCommand},
@@ -61,7 +61,7 @@ const PASS_MIN_POWER: u8 = 30;
 async fn bench_measure_task() {
     wait_for_initialization().await;
     settle_at_menu().await;
-    warm_up().await;
+    let _ = motor_sweep::run_warm_up(None).await;
 
     info!("bench-precision: starting corrected-divergence regression");
     run_regression().await;

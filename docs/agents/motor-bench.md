@@ -108,7 +108,8 @@ not normal Activities.
 
 **`bench_motor_calibrate`** waits for `calibration::is_initialized()`, then:
 
-1. dispatches `Procedure::MotorCalibration` from the panel origin;
+1. dispatches `Procedure::MotorCalibration` from the panel origin; the Procedure
+   runs its own discarded warm-up before measuring;
 2. waits for Activity State to reach `Complete`/`Failed`;
 3. logs `bench-calibrate: calibration saved` (or
    `bench-calibrate: calibration failed: <reason>`), then holds without starting
@@ -123,24 +124,30 @@ waits for initialization (the saved v4 record loads on this boot), then runs the
 corrected-divergence regression. It logs `bench-precision: ...` and one final
 `bench-precision: max=<pct> PASS|FAIL`, then holds.
 
-### Motor warm-up (both phases)
+### Motor warm-up (both Procedures)
 
-After `settle_at_menu()` and before measuring, **both** boot phases run the same
-discarded warm-up: a 20-step **raw** pair sweep (forward and reverse, 10–100 %)
-that dwells `WARMUP_DWELL_MS` (2 500 ms) per step — `2 500 ms × 20 ≈ 50 s`. It
-logs each step as `bench-warmup: dir=<Forward|Reverse> p=<power>` and then
-`bench-warmup: complete`; grep for `bench-warmup:` to confirm it ran. The results
-are thrown away: the warm-up feeds neither the calibration nor the regression.
+The warm-up is product behaviour, not a bench-only step: **both** the Motor
+Calibration and the Basic Motor Test begin with a discarded 20-step **raw** pair
+sweep (forward and reverse, 10–100 %) that dwells `motor_sweep::WARMUP_DWELL_MS`
+(2 500 ms) per step — `2 500 ms × 20 ≈ 50 s`. It logs each step as
+`motor-warmup: dir=<Forward|Reverse> p=<power>` and then `motor-warmup: complete`;
+grep for `motor-warmup:` to confirm it ran. The results are thrown away: the
+warm-up feeds neither the calibration nor the test or the regression.
 
-Its purpose is to test the hypothesis that a cold motor skews the low-duty
-left/right balance. Because it runs in both boots, the calibration and the
-corrected-divergence regression are measured with the motors in the same warm
-state.
+Its purpose is to remove the cold low-duty imbalance from the measurement: the
+HIL pass showed cold friction, not rounding, was the dominant low-power effect.
+Because both Procedures run it, the calibration and the corrected-divergence
+regression are measured with the motors in the same warm state.
+
+The calibrate boot relies on the Procedure's own warm-up — there is no separate
+pre-dispatch warm-up. The measure boot runs outside a Procedure, so it calls
+`motor_sweep::run_warm_up(None)` before the regression; that is the same shared
+implementation, with no claim (so no Stop or floor-drop checks).
 
 It commands raw `SetTracksRaw` so no curve is applied (the point is load, not a
 corrected speed), and it includes the **pair 100 % step**, so like the full sweep
 it needs the **≥ 2 A** supply. The two-boot split and its safety rules are
-unchanged: the warm-up runs before the Procedure is dispatched in phase 1 and
+unchanged: the warm-up runs as part of the dispatched Procedure in phase 1 and
 before the regression in phase 2, never while a report is on screen.
 
 Do not combine a report and motor motion in one boot: that is the failure the
@@ -199,11 +206,11 @@ aborts the sweep; an operator Stop ends it with no Result Report. A measurement
 problem finishes the sweep and then fails the calibration, so the pattern is
 visible.
 
-The Basic Motor Test and the Motor Calibration run the identical sweep. Its
-100 % pair step commands both tracks at once, so a full 10–100 % run needs the
-≥ 2 A supply noted above. The corrected-divergence regression measures only
-20–90 % (gate 30–90 %), but every boot's warm-up still hits the pair 100 % step,
-so its measure phase also needs ≥ 2 A.
+The Basic Motor Test and the Motor Calibration run the identical sweep, after the
+identical discarded warm-up. Its 100 % pair step commands both tracks at once, so a
+full 10–100 % run needs the ≥ 2 A supply noted above. The corrected-divergence
+regression measures only 20–90 % (gate 30–90 %), but both Procedures' warm-up still
+hits the pair 100 % step, so its measure phase also needs ≥ 2 A.
 
 ## 4. Reading the motor logs
 
@@ -251,10 +258,11 @@ re-run.
 
 ## 5. What the Basic Motor Test measures
 
-The sweep commands **raw** `SetTracksRaw` on purpose: it measures the drivetrain,
-not the curve. Both tracks run simultaneously, so the raw counts already show the
-same condition normal driving uses. The `Correction` row and the Result Report's
-correction table show the curve in force for each track.
+Before the measured cycle, the test runs the discarded 20-step raw pair warm-up
+described above. Then the sweep commands **raw** `SetTracksRaw` on purpose: it
+measures the drivetrain, not the curve. Both tracks run simultaneously, so the raw
+counts already show the same condition normal driving uses. The `Correction` row and
+the Result Report's correction table show the curve in force for each track.
 
 **Do not use the raw counts to judge calibration accuracy.** To judge the curve,
 command a corrected speed (normal `SetTracks`, curve applied) and compare the two
@@ -267,13 +275,14 @@ equalise. A `Spread 12 %` is not the left/right calibration error.
 
 ## 6. Motor Calibration
 
-The Procedure needs a rail sample ≥ 6.0 V and arms the floor-drop gate. It runs
-the same 20-step pair sweep, derives the per-track/per-direction curve by inverse
-interpolation over the simultaneous measurements, and saves it under the version
-4 record. The storage task publishes the saved curve as soon as flash confirms
-the write, and the record is loaded again on the next boot. Two runs on the same
-robot should have the same floor and target legs; per-point corrections may move
-a few percent because the motors/encoders are not perfectly repeatable.
+The Procedure needs a rail sample ≥ 6.0 V and arms the floor-drop gate. It runs the
+same discarded 20-step raw pair warm-up, then the same 20-step pair sweep, derives
+the per-track/per-direction curve by inverse interpolation over the simultaneous
+measurements, and saves it under the version 4 record. The storage task publishes
+the saved curve as soon as flash confirms the write, and the record is loaded again
+on the next boot. Two runs on the same robot should have the same floor and target
+legs; per-point corrections may move a few percent because the motors/encoders are
+not perfectly repeatable.
 
 A successful run holds the Result Report; Back is a panel action. A failed run
 leaves the previous curve in force. `bench_motor_calibrate` logs
