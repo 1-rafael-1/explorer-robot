@@ -174,7 +174,7 @@ async fn measure_point(direction: Direction, power: u8) -> Option<PointReading> 
     Some(PointReading {
         left,
         right,
-        divergence: divergence_percent(left, right),
+        divergence: motor_sweep::divergence_percent(left, right).unwrap_or(FAILING_DIVERGENCE_PERCENT),
     })
 }
 
@@ -231,17 +231,4 @@ async fn wait_sample_at_or_after(threshold_ms: u64) -> Option<EncoderMeasurement
             return Some(measurement);
         }
     }
-}
-
-/// `|left − right| / min(left, right)`, in percent.
-///
-/// A pair with no counts cannot be compared; it reports
-/// [`FAILING_DIVERGENCE_PERCENT`] so the run fails visibly rather than passing on
-/// missing data.
-fn divergence_percent(left: u16, right: u16) -> f32 {
-    let min = left.min(right);
-    if min == 0 {
-        return FAILING_DIVERGENCE_PERCENT;
-    }
-    (f32::from(left.abs_diff(right)) / f32::from(min)) * 100.0
 }

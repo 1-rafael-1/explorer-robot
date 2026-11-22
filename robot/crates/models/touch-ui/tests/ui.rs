@@ -16,10 +16,11 @@ use link_state::{
     Presence, STALE_AFTER_MS, SetupCredentials, Station, StationSsid,
 };
 use touch_ui::{
-    BasicMotorReadout, BasicMotorSummary, BasicMotorSummaryBuilder, Correction, Direction, DmpCalibrationSnapshot,
-    DmpCheckFail, DmpCheckState, DmpHint, FloorState, HeaderStatus, Hit, Item, LinkAction, Procedure, PromptAction,
-    PromptView, ProtectionState, RangeStatusName, RangefinderTestReadout, ScreenEntry, SensorReadout, SensorState,
-    StepIndex, Submenu, SummaryStatus, TAP_MAX_MOVE, TAP_MIN_DURATION_MS, TestLeg, Track, Ui,
+    BasicMotorReadout, BasicMotorSummary, BasicMotorSummaryBuilder, CorrectedCheck, CorrectedMax, Correction,
+    Direction, DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint, FloorState, HeaderStatus, Hit, Item,
+    LinkAction, Procedure, PromptAction, PromptView, ProtectionState, RangeStatusName, RangefinderTestReadout,
+    ScreenEntry, SensorReadout, SensorState, StepIndex, Submenu, SummaryStatus, TAP_MAX_MOVE, TAP_MIN_DURATION_MS,
+    TestLeg, Track, Ui,
     basic_motor::{SUMMARY_POWERS, SUMMARY_TABLE_ROWS, SummaryRow},
     buffer::{TEXT_BUF_LEN, TextBuf},
     geometry::{
@@ -2513,10 +2514,10 @@ fn the_breakaway_requires_sustained_motion() {
     assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
 }
 
-/// Test that each side latches its own `Breakaway`, and that a direction change
-/// clears both so each direction reports its own.
+/// Test that each side latches its own `Breakaway`, and that each direction keeps
+/// its own so a direction change shows the values measured in that direction.
 #[test]
-fn the_breakaway_latches_per_side_and_clears_when_the_direction_changes() {
+fn the_breakaway_latches_per_side_and_per_direction() {
     let mut readout = BasicMotorReadout::waiting();
     readout.start_pair(
         Direction::Forward,
@@ -2757,6 +2758,116 @@ fn the_readout_survives_completion_and_a_new_run_starts_blank() {
     assert!(fresh.rows().iter().all(|(_, value)| value.as_str() == "--"));
 }
 
+/// Test that the corrected verification cycle labels its pairs and leaves the
+/// raw Breakaway alone: the Breakaway is a drivetrain fact, not a corrected one.
+#[test]
+fn a_corrected_pair_is_labelled_and_keeps_the_raw_breakaway() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_pair(
+        Direction::Forward,
+        20,
+        step(2),
+        Correction::Factor(950),
+        Correction::Identity,
+    );
+    readout.complete(Some(240), Some(235), true, true);
+    assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
+
+    readout.start_corrected_pair(
+        Direction::Forward,
+        60,
+        step(6),
+        Correction::Factor(930),
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[0].1.as_str(), "Corr Fwd 60%");
+    readout.sample(583, 585);
+    readout.complete(Some(583), Some(585), true, true);
+
+    let rows = readout.rows();
+    assert_eq!(rows[2].1.as_str(), "Corr Fwd 60% L 583 R 585");
+    assert_eq!(
+        rows[3].1.as_str(),
+        "L 20% R 20%",
+        "the corrected cycle must not relabel the raw Breakaway"
+    );
+}
+
+/// Test that a corrected pass shows the raw Breakaway of the direction it is
+/// currently running, not the direction the raw cycle finished on.
+#[test]
+fn a_corrected_pass_shows_each_directions_raw_breakaway() {
+    let mut readout = BasicMotorReadout::waiting();
+    readout.start_pair(
+        Direction::Forward,
+        20,
+        step(2),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.complete(Some(240), Some(235), true, true);
+    readout.start_pair(
+        Direction::Reverse,
+        30,
+        step(4),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    readout.complete(Some(330), Some(325), true, true);
+
+    readout.start_corrected_pair(
+        Direction::Forward,
+        60,
+        step(6),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[3].1.as_str(), "L 20% R 20%");
+
+    readout.start_corrected_pair(
+        Direction::Reverse,
+        60,
+        step(16),
+        Correction::Identity,
+        Correction::Identity,
+    );
+    assert_eq!(readout.rows()[3].1.as_str(), "L 30% R 30%");
+}
+
+/// Test that the Result Report's footer carries the corrected verification, and
+/// that the saved/not-saved status still wins when both are present.
+#[test]
+fn the_result_report_footer_reports_the_corrected_max() {
+    let measured = healthy_summary().with_corrected_check(CorrectedCheck::Measured(CorrectedMax {
+        tenths: 16,
+        direction: Direction::Forward,
+        power: 90,
+    }));
+    assert_eq!(
+        measured.footer_line().map(|line| line.as_str().to_owned()),
+        Some("Corr max 1.6% Fwd 90%".to_owned())
+    );
+
+    let no_curve = healthy_summary().with_corrected_check(CorrectedCheck::NoCurve);
+    assert_eq!(
+        no_curve.footer_line().map(|line| line.as_str().to_owned()),
+        Some("No curve - run Motor".to_owned())
+    );
+
+    let unavailable = healthy_summary().with_corrected_check(CorrectedCheck::Unavailable);
+    assert_eq!(
+        unavailable.footer_line().map(|line| line.as_str().to_owned()),
+        Some("Corr max --".to_owned())
+    );
+
+    let saved = measured.with_status(SummaryStatus::Saved);
+    assert_eq!(
+        saved.footer_line().map(|line| line.as_str().to_owned()),
+        Some("Saved".to_owned()),
+        "a Motor Calibration keeps its saved/not-saved footer"
+    );
+}
+
 /// Test that a running screen with the readout and the progress bar together
 /// renders into the existing discard target.
 #[test]
@@ -2859,7 +2970,7 @@ fn the_result_report_tables_name_every_leg_and_point() {
     let summary = healthy_summary();
     assert_eq!(SUMMARY_TABLE_ROWS, 10, "the two tables are a header and four legs each");
 
-    assert_eq!(summary.row(0).label(), "Counts");
+    assert_eq!(summary.row(0).label(), "Raw cnt");
     assert_eq!(
         summary_cells(&summary.row(0)).as_slice(),
         &["Brk", "40", "60", "80", "100"]
@@ -2908,11 +3019,11 @@ fn the_result_report_tables_name_every_leg_and_point() {
     );
 }
 
-/// Test that the Floor is the highest Breakaway and the Spread is the range at
-/// 100 % as a percent, with a worked example and a rounding case.
+/// Test that the Floor is the highest Breakaway and the raw spread is the range
+/// at 100 % as a percent, with a worked example and a rounding case.
 #[test]
-fn the_floor_and_spread_are_computed_from_the_sweep() {
-    assert_eq!(healthy_summary().floor_line().as_str(), "Floor 40%  Spread 12%");
+fn the_floor_and_raw_spread_are_computed_from_the_sweep() {
+    assert_eq!(healthy_summary().floor_line().as_str(), "Floor 40%  Raw spread 12%");
 
     // The highest Breakaway (10 %) and a 2.5 % spread, rounded to 3 %.
     let rounded = summary_from(
@@ -2925,11 +3036,11 @@ fn the_floor_and_spread_are_computed_from_the_sweep() {
         ],
         [Correction::Identity; 4],
     );
-    assert_eq!(rounded.floor_line().as_str(), "Floor 10%  Spread 3%");
+    assert_eq!(rounded.floor_line().as_str(), "Floor 10%  Raw spread 3%");
 }
 
 /// Test that an invalid point renders `--` and never `0`, and that a missing
-/// 100 % count leaves the Floor and Spread unjudged.
+/// 100 % count leaves the Floor and raw spread unjudged.
 #[test]
 fn a_missing_point_renders_a_placeholder_never_zero() {
     let summary = summary_from(
@@ -2949,14 +3060,14 @@ fn a_missing_point_renders_a_placeholder_never_zero() {
     assert_eq!(summary.row(4).cells()[4].as_str(), "--");
     assert_eq!(
         summary.floor_line().as_str(),
-        "Floor --  Spread --",
+        "Floor --  Raw spread --",
         "a missing 100 % count leaves the line unjudged"
     );
 }
 
 /// Test that a Test Leg that never moved renders `--` in its Breakaway and in
 /// every count cell, even though stray sub-threshold counts were measured, and
-/// that the Floor and Spread are then unjudged.
+/// that the Floor and raw spread are then unjudged.
 #[test]
 fn a_leg_that_never_moved_renders_placeholders_across_its_row() {
     let summary = summary_from(
@@ -2976,7 +3087,7 @@ fn a_leg_that_never_moved_renders_placeholders_across_its_row() {
         row.cells().iter().all(|cell| cell.as_str() == "--"),
         "a leg that never moved is a verdict, not a stray count"
     );
-    assert_eq!(summary.floor_line().as_str(), "Floor --  Spread --");
+    assert_eq!(summary.floor_line().as_str(), "Floor --  Raw spread --");
 }
 
 /// Test that the optional footer is absent by default, says `Saved` on a saved
@@ -3033,7 +3144,7 @@ fn a_summary_footer_renders_and_redraws_only_when_it_changes() {
 /// two rows or two cells in a row overlap.
 ///
 /// The summary area is 136 px high and now carries twelve rows: the two tables,
-/// the Floor/Spread line and the reserved saved/not-saved footer. The shared
+/// the Floor/raw-spread line and the reserved footer. The shared
 /// row-pitch helper must compress the pitch so all twelve still fit.
 #[test]
 fn every_summary_row_and_cell_fits_inside_the_panel() {
@@ -3146,7 +3257,7 @@ fn every_summary_cell_fits_its_column() {
         floor.as_str(),
         floor_rect.size.width
     );
-    assert_eq!(floor.as_str(), "Floor 100%  Spread 0%");
+    assert_eq!(floor.as_str(), "Floor 100%  Raw spread 0%");
 
     // The footer shares the full row width; even the longest reason label fits.
     let footer = summary.with_status(SummaryStatus::NotSaved("implausible correction"));

@@ -151,7 +151,7 @@ pub async fn run_motor_calibration(claim: &Claim) {
             results: &mut results,
             measurements: &mut measurements,
         };
-        motor_sweep::run_sweep(claim, &mut sink).await
+        motor_sweep::run_sweep(claim, &mut sink, motor_sweep::SweepMode::Raw).await
     };
 
     match end {

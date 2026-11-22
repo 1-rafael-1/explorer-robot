@@ -214,7 +214,7 @@ hits the pair 100 % step, so its measure phase also needs ≥ 2 A.
 
 ## 4. Reading the motor logs
 
-The Basic Motor Test logs both tracks of every pair:
+The Basic Motor Test logs both tracks of every raw pair:
 
 ```text
 basic-motor: Left forward 40% count=583 speed=291/s
@@ -222,10 +222,26 @@ basic-motor: Right forward 40% count=568 speed=284/s
 basic-motor: Left forward 50% invalid: stale sample
 ```
 
+When a curve is loaded it then runs two curve-applied verification passes and
+logs each corrected pair plus the averaged result:
+
+```text
+basic-motor: corrected pass 1/2
+basic-motor: corrected Forward 40% L=560 R=566 div=1.06
+basic-motor: corrected-mean Forward 40% div=1.06
+basic-motor: corrected low-power Forward 1.64% (informational, below 30%)
+basic-motor: corrected max=1.6
+```
+
+`div` is the **Track Divergence**: `|L − R| / min(L, R)` in percent. The
+`corrected-mean` values are the per-point means of the two passes; `corrected
+max` is the highest gated mean (30–100 %). The 20 % mean is information only.
+
 The live readout is a **pair readout**: the current direction and power, both
 live counts, the last completed pair and both counts, both Breakaways, both
 corrections and the step index within the twenty-step cycle. Rows read like
-`Fwd 40%`, `L 583 R 568`, `L 20% R 20%` and `L 0.97 R 1.00`.
+`Fwd 40%`, `L 583 R 568`, `L 20% R 20%` and `L 0.97 R 1.00`. During a corrected
+pass the `Step` and `Last` rows carry a `Corr` prefix, e.g. `Corr Fwd 40%`.
 
 The Motor Calibration logs the same per-track counts and speeds; on success it
 logs `Motor calibration curve saved successfully`, and the boot load logs
@@ -235,6 +251,7 @@ Useful greps:
 
 ```sh
 grep -c "basic-motor:.*invalid" /tmp/motor-bench-calibrate.log
+grep -n "basic-motor: corrected" /tmp/basic.log
 grep -n "motor-cal\|bench-calibrate\|bench-motor" /tmp/motor-bench-calibrate.log
 grep -n "Motor calibration curve loaded\|saved successfully" /tmp/motor-bench-calibrate.log
 grep -n "bench-precision\|bench-motor" /tmp/motor-bench-measure.log
@@ -246,11 +263,12 @@ inversion; the resolved and hardware values are per-mille (tenths of a percent,
 `0..=1000`). The requested sign and the curve stay logical; only the left
 hardware output is negated.
 
-Expected Basic Motor Test: **20 pair steps**, roughly 1 minute. A clean run has
-**0** `invalid` points. At 100 % the 2 s window reads roughly 1 500–1 800
-counts per track (the pair step loads the supply, so it can sit below the old
-single-track figure). A 100 % step returning ~11 000 counts means the encoder
-scale is wrong (960 pulses/rev), not 330.
+Expected Basic Motor Test: **one raw cycle and, with a curve, two corrected
+verification cycles**, so roughly **4 minutes** including the warm-up. A clean
+run has **0** `invalid` points. At 100 % the 2 s window reads roughly 1 500–1 800
+counts per track during the raw cycle (the pair step loads the supply, so it can
+sit below the old single-track figure). A 100 % step returning ~11 000 counts
+means the encoder scale is wrong (960 pulses/rev), not 330.
 
 The saved record is format version 4 and is pair-measured. Version 3 records are
 rejected, so a board with an old record reports no motor calibration until it is
@@ -258,20 +276,30 @@ re-run.
 
 ## 5. What the Basic Motor Test measures
 
-Before the measured cycle, the test runs the discarded 20-step raw pair warm-up
-described above. Then the sweep commands **raw** `SetTracksRaw` on purpose: it
-measures the drivetrain, not the curve. Both tracks run simultaneously, so the raw
-counts already show the same condition normal driving uses. The `Correction` row and
-the Result Report's correction table show the curve in force for each track.
+Before the measured cycles, the test runs the discarded 20-step raw pair warm-up
+described above. The **raw cycle** commands `SetTracksRaw` on purpose: it measures
+the drivetrain, not the curve. Both tracks run simultaneously, so the raw counts
+already show the same condition normal driving uses. The `Raw cnt` and `Corr`
+tables show the raw counts and the curve in force for each track.
 
 **Do not use the raw counts to judge calibration accuracy.** To judge the curve,
-command a corrected speed (normal `SetTracks`, curve applied) and compare the two
-tracks' measured counts. The `bench_motor_measure` regression does exactly that.
-Target: **< 5 %** left/right divergence after correction.
+the test then runs **two curve-applied verification cycles** through normal
+`SetTracks`. Each corrected pair's counts give a Track Divergence, the two passes
+are averaged per point, and the worst gated mean (30–100 %) appears in the Result
+Report footer as `Corr max 1.6% Fwd 90%`. The `Raw spread` line is the raw
+four-leg spread at 100 % and includes forward-versus-reverse; it is not the
+left/right calibration error. The automated bench regression
+(`bench_motor_measure`) applies the same curve and gates PASS at 30–90 %; it is
+the repeatable CI-side check, while this footer is the on-robot verification.
 
-The Result Report's `Spread` line is `(max − min) / min` over the four legs at
-100 %; it includes forward-vs-reverse, which the per-direction target does not
-equalise. A `Spread 12 %` is not the left/right calibration error.
+Target: **< 3 % optimal, < 5 % minimal** on `Corr max`. The observed
+2026-11-22 runs were 1.6–2.9 % gated in the two-boot bench; the in-boot footer
+can show a low-power knee residual near 3 % (see
+`.scratch/motor-calibration/issues/10-corrected-command-refinement.md`).
+
+A `Corr max` of `--` means the corrected pass produced no usable gated point;
+`No curve - run Motor` means no Motor Calibration Curve was loaded, so the
+verification was skipped.
 
 ## 6. Motor Calibration
 
@@ -368,6 +396,8 @@ other changes:
 ## 10. Human-only observations
 
 - Result Report contents, Back, and a second run with no stale numbers.
+- The Basic Motor Test's `Corr`-prefixed rows, the `Raw spread` line and the
+  `Corr max` footer on glass.
 - Distance Calibration with a tape measure on two legs.
 - The live pair readout on glass.
 - The physical brake after a floor-drop.
@@ -382,7 +412,10 @@ other changes:
   timestamps before changing the engine.
 - **Covered rangefinders** can still produce a floor-drop event; that is the
   sensor/environment, not the motor path.
-- The Basic Motor Test's raw counts are not the calibration error. Read the
-  corrected divergence from the `bench-precision:` regression.
+- The Basic Motor Test's raw counts are not the calibration error. Use its
+  `Corr max` footer (or the `bench-precision:` regression) for the corrected
+  residual; the `Raw spread` line includes forward-versus-reverse.
+- A `Corr max` near 3 % at forward 30 % is the known low-duty knee, not a
+  measurement fault; see `.scratch/motor-calibration/issues/10-corrected-command-refinement.md`.
 - An old version 3 calibration record is rejected. The boot log then reports no
   motor calibration; run Motor Calibration again to write a v4 record.

@@ -586,7 +586,7 @@ where
         style,
     )?;
 
-    if let Some(footer) = summary.status_line() {
+    if let Some(footer) = summary.footer_line() {
         draw_readout_line(
             &mut clipped,
             basic_motor_summary_row_rect(SUMMARY_TABLE_ROWS + 1),

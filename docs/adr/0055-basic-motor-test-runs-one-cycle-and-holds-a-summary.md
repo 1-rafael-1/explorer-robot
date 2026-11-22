@@ -11,8 +11,10 @@ was the only whole-cycle cue.
 **Status:** accepted. Partly supersedes ADR-0053: the test no longer cycles, and
 the progress bar is running-only. Partly superseded by ADR-0056: one cycle is
 twenty simultaneous-pair steps rather than forty single-track steps, the live
-readout carries the pair, and the run is about 1.1 minutes. The one-shot run, the
-held Result Report and the per-Test-Leg summary stand.
+readout carries the pair, and the run is about 1.1 minutes. Partly superseded by
+ADR-0057: with a loaded curve the test also runs two curve-applied verification
+cycles before the report. The one-shot run, the held Result Report and the
+per-Test-Leg summary stand.
 
 **Considered Options**
 

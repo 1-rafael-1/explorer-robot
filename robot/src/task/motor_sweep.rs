@@ -31,10 +31,14 @@
 //! schedule, the cycle position and the terminal classification are the same for
 //! both, so they live here rather than in two loops that must be kept in step.
 //!
-//! The command is [`crate::task::motor_driver::MotorCommand::SetTracksRaw`]: the
-//! sweep measures the raw drivetrain. A calibration that swept through the loaded
-//! curve would measure the corrected duty and re-derive a near-identity curve,
-//! and the Basic Motor Test and the Motor Calibration would no longer agree.
+//! A sweep's command is chosen by [`SweepMode`]. The Motor Calibration and the
+//! Basic Motor Test's raw cycle use [`SweepMode::Raw`]
+//! ([`crate::task::motor_driver::MotorCommand::SetTracksRaw`]), so the calibration
+//! measures the drivetrain rather than the curve it is about to replace. The
+//! Basic Motor Test's verification cycle uses [`SweepMode::Corrected`]
+//! ([`MotorCommand::SetTracks`]), so it measures the result the loaded curve
+//! actually produces. Both modes run the same schedule and the same engines; only
+//! the command differs.
 //!
 //! A point's count is never read as an absolute-since-reset value: each engine
 //! reports its Measurement Window delta, and an invalid point carries its
@@ -84,6 +88,34 @@ const RESET_CONFIRM_TIMEOUT_MS: u64 = 500;
 
 /// The directions a pair sweep runs, in cycle order.
 pub const DIRECTIONS: [Direction; 2] = [Direction::Forward, Direction::Reverse];
+
+/// Which command a pair sweep issues at each Power Step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepMode {
+    /// Raw `SetTracksRaw`: measure the drivetrain with the curve bypassed.
+    Raw,
+    /// Curve-applied `SetTracks`: measure the corrected pair the robot drives.
+    Corrected,
+}
+
+impl SweepMode {
+    /// Whether this mode applies the loaded Motor Calibration Curve.
+    #[must_use]
+    pub const fn applies_curve(self) -> bool {
+        matches!(self, Self::Corrected)
+    }
+
+    /// The operator-facing phase label for one direction of this mode.
+    #[must_use]
+    pub const fn stage_label(self, direction: Direction) -> &'static str {
+        match (self, direction) {
+            (Self::Raw, Direction::Forward) => "Forward",
+            (Self::Raw, Direction::Reverse) => "Reverse",
+            (Self::Corrected, Direction::Forward) => "Corrected forward",
+            (Self::Corrected, Direction::Reverse) => "Corrected reverse",
+        }
+    }
+}
 
 /// The Power Steps of one direction, in whole percent, in ascending order.
 ///
@@ -303,7 +335,7 @@ impl SampleStream {
 /// valid/invalid split is still possible when one engine had already finished a
 /// valid window before the other invalidated; the calibration fails on the
 /// invalid side.
-async fn run_power_pair<O>(claim: &Claim, direction: Direction, power: u8, observer: &mut O) -> StepEnd
+async fn run_power_pair<O>(claim: &Claim, direction: Direction, power: u8, mode: SweepMode, observer: &mut O) -> StepEnd
 where
     O: StepObserver,
 {
@@ -360,11 +392,18 @@ where
             // condition the correction will be applied in.
             let signed = signed_speed(direction, power);
             (rail_volts, compensation) = rail_at_command();
-            motor_driver::send_motor_command(MotorCommand::SetTracksRaw {
-                left_speed: signed,
-                right_speed: signed,
-            })
-            .await;
+            let command = if mode.applies_curve() {
+                MotorCommand::SetTracks {
+                    left_speed: signed,
+                    right_speed: signed,
+                }
+            } else {
+                MotorCommand::SetTracksRaw {
+                    left_speed: signed,
+                    right_speed: signed,
+                }
+            };
+            motor_driver::send_motor_command(command).await;
             let command_ms = now_ms();
             left.command_applied(command_ms);
             right.command_applied(command_ms);
@@ -480,7 +519,7 @@ async fn reset_and_confirm(
 /// latch and the floor-drop flag are checked before each step so a latched stop
 /// is never overridden by the next command. The caller's [`SweepSink`] owns
 /// everything specific to its Procedure.
-pub async fn run_sweep<S>(claim: &Claim, sink: &mut S) -> SweepEnd
+pub async fn run_sweep<S>(claim: &Claim, sink: &mut S, mode: SweepMode) -> SweepEnd
 where
     S: SweepSink,
 {
@@ -509,10 +548,10 @@ where
                 // so the last step reads 100 % while it runs; a finished view
                 // drops the bar entirely.
                 let percent = activity::percent_done(cycle_index + 1, TOTAL_STEPS);
-                claim.phase(direction_label(direction), Some(percent)).await;
+                claim.phase(mode.stage_label(direction), Some(percent)).await;
                 sink.step_started(step).await;
 
-                match run_power_pair(claim, direction, power, &mut *sink).await {
+                match run_power_pair(claim, direction, power, mode, &mut *sink).await {
                     StepEnd::Measured(outcome) => match sink.step_measured(step, outcome).await {
                         StepAction::Continue => {}
                         StepAction::Abort(reason) => break 'cycle SweepEnd::Aborted(reason),
@@ -605,6 +644,21 @@ fn rail_at_command() -> (Option<f32>, Option<f32>) {
         },
         |(volts, _)| (Some(volts), Some(motor_driver::voltage_compensation(volts))),
     )
+}
+
+/// `|left − right| / min(left, right)` in percent, or `None` when either count
+/// is zero and the ratio is undefined.
+///
+/// One implementation is shared by the Basic Motor Test's corrected cycle and
+/// the bench regression, so the two cannot report different definitions of the
+/// corrected divergence.
+#[must_use]
+pub fn divergence_percent(left: u16, right: u16) -> Option<f32> {
+    let min = left.min(right);
+    if min == 0 {
+        return None;
+    }
+    Some((f32::from(left.abs_diff(right)) / f32::from(min)) * 100.0)
 }
 
 /// The signed track command for both tracks of a pair step in `direction` at

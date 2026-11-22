@@ -30,7 +30,7 @@ rounds the compensated duty once to the nearest per-mille for
 showed the 30 % / 40 % residual was a cold-state (thermal/friction) effect, not
 the rounding floor.
 
-**Status:** accepted. Partly supersedes ADR-0054 (the measurement condition and the correction model) and ADR-0055 (the cycle length and the live readout).
+**Status:** accepted. Partly supersedes ADR-0054 (the measurement condition and the correction model) and ADR-0055 (the cycle length and the live readout). Extended by ADR-0057: the Basic Motor Test runs two curve-applied verification cycles after its raw cycle and reports the worst Track Divergence; the raw calibration and the stored curve are unchanged.
 
 **Considered Options**
 

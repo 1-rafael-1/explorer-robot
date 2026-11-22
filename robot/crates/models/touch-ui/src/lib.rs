@@ -78,8 +78,8 @@ pub mod ui;
 pub mod widgets;
 
 pub use basic_motor::{
-    BasicMotorReadout, BasicMotorSummary, BasicMotorSummaryBuilder, Correction, Direction, StepIndex, SummaryRow,
-    SummaryStatus, TestLeg, Track,
+    BasicMotorReadout, BasicMotorSummary, BasicMotorSummaryBuilder, CorrectedCheck, CorrectedMax, Correction,
+    Direction, StepIndex, SummaryRow, SummaryStatus, TestLeg, Track,
 };
 pub use dmp_cal::{DmpCalibrationSnapshot, DmpCheckFail, DmpCheckState, DmpHint};
 pub use embedded_graphics;

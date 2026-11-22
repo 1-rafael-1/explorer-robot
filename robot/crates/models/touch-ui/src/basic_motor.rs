@@ -19,8 +19,9 @@
 //! not clear the displayed counts: the encoder reset that precedes a pair empties
 //! the hardware, not the operator's reading, so the live counts hold until the
 //! next sample replaces them. Completing a pair latches each side's Breakaway at
-//! the lowest power whose Measurement Window showed sustained motion, and a
-//! direction change clears both, so each direction reports its own.
+//! the lowest power whose Measurement Window showed sustained motion, and each
+//! direction keeps its own, so the row reports the raw Breakaway of the direction
+//! currently running. A corrected pair never latches a Breakaway.
 //!
 //! # Rows
 //!
@@ -136,14 +137,45 @@ pub enum Correction {
 /// The Result Report's optional saved/not-saved footer.
 ///
 /// A Motor Calibration adds it to say whether the curve reached flash. The Basic
-/// Motor Test leaves it absent, because it never writes a curve. The reason is a
-/// short stable phrase, so the footer stays `Copy + Eq` and never allocates.
+/// Motor Test leaves it absent, because it never writes a curve; its footer
+/// instead carries the corrected verification through [`CorrectedCheck`]. The
+/// reason is a short stable phrase, so the footer stays `Copy + Eq` and never
+/// allocates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryStatus {
     /// The calibration was written to flash and is now the curve in force.
     Saved,
     /// The run was not saved, with the reason the operator needs to see.
     NotSaved(&'static str),
+}
+
+/// Where the Basic Motor Test's curve-applied verification cycle found its worst
+/// Track Divergence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CorrectedMax {
+    /// The divergence in tenths of a percent: `16` is `1.6 %`.
+    pub tenths: u16,
+    /// The direction of the worst gated pair.
+    pub direction: Direction,
+    /// The power of the worst gated pair, in percent.
+    pub power: u8,
+}
+
+/// The Basic Motor Test's curve-applied verification result.
+///
+/// The raw cycle measures the drivetrain; the verification cycles command the
+/// loaded curve and measure how closely the two tracks actually match. The panel
+/// shows the worst mean in the Result Report's footer, next to the raw tables, so
+/// the operator can tell the drivetrain difference apart from the residual the
+/// calibration leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorrectedCheck {
+    /// No curve was loaded, so the verification cycles were skipped.
+    NoCurve,
+    /// The verification cycles measured this worst gated pair.
+    Measured(CorrectedMax),
+    /// The verification cycles produced no gated point.
+    Unavailable,
 }
 
 /// The position of a Power Step within its cycle, as the task knows it.
@@ -159,9 +191,34 @@ pub struct StepIndex {
     pub total: u8,
 }
 
+/// Which measured pass a pair belongs to.
+///
+/// The Basic Motor Test runs a raw cycle and then, when a curve is loaded, two
+/// curve-applied verification cycles. The panel prefixes the latter so a
+/// corrected count can never be read as a raw one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    /// Raw `SetTracksRaw`: the drivetrain with the curve bypassed.
+    Raw,
+    /// Curve-applied `SetTracks`: the corrected pair the robot drives.
+    Corrected,
+}
+
+impl Pass {
+    /// The prefix the pair rows carry, or the empty string for the raw pass.
+    const fn prefix(self) -> &'static str {
+        match self {
+            Self::Raw => "",
+            Self::Corrected => "Corr ",
+        }
+    }
+}
+
 /// The pair the panel names: one direction at one power level, both tracks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CurrentPair {
+    /// The pass that commanded the pair.
+    pass: Pass,
     /// The direction both tracks turn.
     direction: Direction,
     /// The commanded power, in percent.
@@ -172,6 +229,8 @@ struct CurrentPair {
 /// track's Measurement Window count, or `None` when that side was invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CompletedPair {
+    /// The pass that commanded the pair.
+    pass: Pass,
     /// The direction both tracks turned.
     direction: Direction,
     /// The commanded power, in percent.
@@ -220,12 +279,13 @@ pub struct BasicMotorReadout {
     count_right: Option<u16>,
     /// The most recently completed pair, or `None` before the first completion.
     last: Option<CompletedPair>,
-    /// The lowest power of the current direction whose left Measurement Window
-    /// showed sustained motion, or `None` before the left track moved.
-    breakaway_left: Option<u8>,
-    /// The lowest power of the current direction whose right Measurement Window
-    /// showed sustained motion, or `None` before the right track moved.
-    breakaway_right: Option<u8>,
+    /// The lowest power of the left Measurement Window that showed sustained
+    /// motion, per direction (forward then reverse). A corrected pass reads these
+    /// but never writes them: the Breakaway is a raw drivetrain fact.
+    raw_breakaway_left: [Option<u8>; 2],
+    /// The lowest power of the right Measurement Window that showed sustained
+    /// motion, per direction.
+    raw_breakaway_right: [Option<u8>; 2],
     /// The corrections the curve in force applies to both tracks, or `None`
     /// before the first pair.
     correction: Option<CorrectionPair>,
@@ -248,8 +308,8 @@ impl BasicMotorReadout {
             count_left: None,
             count_right: None,
             last: None,
-            breakaway_left: None,
-            breakaway_right: None,
+            raw_breakaway_left: [None; 2],
+            raw_breakaway_right: [None; 2],
             correction: None,
             index: None,
             warming: false,
@@ -269,8 +329,8 @@ impl BasicMotorReadout {
         self.count_left = None;
         self.count_right = None;
         self.last = None;
-        self.breakaway_left = None;
-        self.breakaway_right = None;
+        self.raw_breakaway_left = [None; 2];
+        self.raw_breakaway_right = [None; 2];
         self.correction = None;
         self.index = None;
     }
@@ -280,8 +340,9 @@ impl BasicMotorReadout {
     ///
     /// The displayed counts are deliberately left alone: the encoder reset has
     /// already happened, and the operator's last reading must not flicker to a
-    /// placeholder while the new command settles. A direction change clears both
-    /// Breakaways, so each direction reports its own. This first measured pair
+    /// placeholder while the new command settles. Each direction keeps its own raw
+    /// Breakaways, so switching direction shows that direction's values. This first
+    /// measured pair
     /// also ends the discarded warm-up stage.
     pub const fn start_pair(
         &mut self,
@@ -291,15 +352,42 @@ impl BasicMotorReadout {
         correction_left: Correction,
         correction_right: Correction,
     ) {
-        let changed = match self.step {
-            Some(current) => !same_direction(current.direction, direction),
-            None => false,
-        };
-        if changed {
-            self.breakaway_left = None;
-            self.breakaway_right = None;
-        }
-        self.step = Some(CurrentPair { direction, power });
+        self.start_pair_in(Pass::Raw, direction, power, index, correction_left, correction_right);
+    }
+
+    /// Begin a pair of the curve-applied verification cycle.
+    ///
+    /// The rows are the same as [`start_pair`](Self::start_pair), with the pair
+    /// labelled `Corr` and the Breakaway row left as the raw cycle latched it.
+    pub const fn start_corrected_pair(
+        &mut self,
+        direction: Direction,
+        power: u8,
+        index: StepIndex,
+        correction_left: Correction,
+        correction_right: Correction,
+    ) {
+        self.start_pair_in(
+            Pass::Corrected,
+            direction,
+            power,
+            index,
+            correction_left,
+            correction_right,
+        );
+    }
+
+    /// Begin a pair of `pass`, sharing the row rules between both passes.
+    const fn start_pair_in(
+        &mut self,
+        pass: Pass,
+        direction: Direction,
+        power: u8,
+        index: StepIndex,
+        correction_left: Correction,
+        correction_right: Correction,
+    ) {
+        self.step = Some(CurrentPair { pass, direction, power });
         self.index = Some(index);
         self.correction = Some(CorrectionPair {
             left: correction_left,
@@ -339,16 +427,23 @@ impl BasicMotorReadout {
         };
 
         self.last = Some(CompletedPair {
+            pass: step.pass,
             direction: step.direction,
             power: step.power,
             left,
             right,
         });
-        if moved_left {
-            self.breakaway_left = Some(lower_power(self.breakaway_left, step.power));
-        }
-        if moved_right {
-            self.breakaway_right = Some(lower_power(self.breakaway_right, step.power));
+        // The Breakaway is a raw drivetrain property: the corrected pass must not
+        // relabel a corrected point as it.
+        if matches!(step.pass, Pass::Raw) {
+            let direction = direction_index(step.direction);
+            if moved_left {
+                self.raw_breakaway_left[direction] = Some(lower_power(self.raw_breakaway_left[direction], step.power));
+            }
+            if moved_right {
+                self.raw_breakaway_right[direction] =
+                    Some(lower_power(self.raw_breakaway_right[direction], step.power));
+            }
         }
         self.commanding = false;
     }
@@ -369,8 +464,9 @@ impl BasicMotorReadout {
         let step_cell = if warming {
             labelled("Warming up")
         } else {
-            self.step
-                .map_or_else(placeholder, |step| pair_step_value(step.direction, step.power))
+            self.step.map_or_else(placeholder, |step| {
+                pair_step_value(step.pass, step.direction, step.power)
+            })
         };
 
         let count_value = if active {
@@ -386,7 +482,8 @@ impl BasicMotorReadout {
         };
 
         let breakaway_value = if active {
-            side_powers(self.breakaway_left, self.breakaway_right)
+            let direction = self.step.map_or(0, |step| direction_index(step.direction));
+            side_powers(self.raw_breakaway_left[direction], self.raw_breakaway_right[direction])
         } else {
             placeholder()
         };
@@ -414,12 +511,12 @@ impl BasicMotorReadout {
     }
 }
 
-/// Whether two directions are the same.
-const fn same_direction(a: Direction, b: Direction) -> bool {
-    matches!(
-        (a, b),
-        (Direction::Forward, Direction::Forward) | (Direction::Reverse, Direction::Reverse)
-    )
+/// The index of `direction` in the readout's per-direction arrays.
+const fn direction_index(direction: Direction) -> usize {
+    match direction {
+        Direction::Forward => 0,
+        Direction::Reverse => 1,
+    }
 }
 
 /// The lower of `power` and an already latched power, so a later, higher step
@@ -447,10 +544,11 @@ const fn abbreviated_leg(leg: TestLeg) -> &'static str {
     }
 }
 
-/// Format the current pair: the direction and power, e.g. `Fwd 40%`.
-fn pair_step_value(direction: Direction, power: u8) -> TextBuf {
+/// Format the current pair: the direction and power, e.g. `Fwd 40%`, with a
+/// `Corr` prefix during the curve-applied verification cycle.
+fn pair_step_value(pass: Pass, direction: Direction, power: u8) -> TextBuf {
     let mut value = TextBuf::new();
-    value.fill(format_args!("{} {power}%", direction.short_label()));
+    value.fill(format_args!("{}{} {power}%", pass.prefix(), direction.short_label()));
     value
 }
 
@@ -470,13 +568,15 @@ fn count_side(count: Option<u16>) -> TextBuf {
 }
 
 /// Format the last completed pair: its direction, power and both counts, e.g.
-/// `Fwd 40% L 583 R 568`, with `--` for an invalid side.
+/// `Fwd 40% L 583 R 568`, with `--` for an invalid side and a `Corr` prefix for
+/// the verification cycle.
 fn completed_pair_value(pair: CompletedPair) -> TextBuf {
     let left = count_side(pair.left);
     let right = count_side(pair.right);
     let mut value = TextBuf::new();
     value.fill(format_args!(
-        "{} {}% L {} R {}",
+        "{}{} {}% L {} R {}",
+        pair.pass.prefix(),
         pair.direction.short_label(),
         pair.power,
         left.as_str(),
@@ -723,12 +823,13 @@ impl BasicMotorSummaryBuilder {
         } else {
             None
         };
-        let spread_percent = if complete { spread_percent(&legs) } else { None };
+        let spread_percent = if complete { raw_spread_percent(&legs) } else { None };
 
         BasicMotorSummary {
             legs,
             floor_percent,
-            spread_percent,
+            raw_spread_percent: spread_percent,
+            corrected: None,
             status: None,
         }
     }
@@ -742,12 +843,12 @@ impl Default for BasicMotorSummaryBuilder {
 
 /// The Result Report's summary of a completed Basic Motor Test.
 ///
-/// It carries, for each Test Leg, the Breakaway, the counts at 40, 60, 80 and
+/// It carries, for each Test Leg, the Breakaway, the raw counts at 40, 60, 80 and
 /// 100 % and the correction in force at those points, plus the Calibration Floor
-/// (the highest Breakaway) and the spread at 100 %. A Motor Calibration adds the
-/// optional [`SummaryStatus`] footer; the Basic Motor Test leaves it absent.
-/// Every value is `Copy + Eq`, so the finished status view's redraw comparison
-/// stays exact.
+/// (the highest Breakaway) and the raw spread at 100 %. A Motor Calibration adds
+/// the optional [`SummaryStatus`] footer; the Basic Motor Test adds the optional
+/// [`CorrectedCheck`] footer instead. Every value is `Copy + Eq`, so the finished
+/// status view's redraw comparison stays exact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BasicMotorSummary {
     /// The four Test Legs, in cycle order.
@@ -755,9 +856,12 @@ pub struct BasicMotorSummary {
     /// The highest Breakaway among the four legs, or `None` while the line is
     /// unjudged.
     floor_percent: Option<u8>,
-    /// The spread at 100 % as a whole percent, or `None` while the line is
+    /// The raw spread at 100 % as a whole percent, or `None` while the line is
     /// unjudged.
-    spread_percent: Option<u32>,
+    raw_spread_percent: Option<u32>,
+    /// The curve-applied verification, or `None` for a Motor Calibration and for
+    /// a Basic Motor Test that has not finished its corrected cycle.
+    corrected: Option<CorrectedCheck>,
     /// The optional saved/not-saved footer.
     status: Option<SummaryStatus>,
 }
@@ -770,7 +874,8 @@ impl BasicMotorSummary {
         Self {
             legs: [LegSummary::EMPTY; SUMMARY_LEGS],
             floor_percent: None,
-            spread_percent: None,
+            raw_spread_percent: None,
+            corrected: None,
             status: None,
         }
     }
@@ -785,6 +890,21 @@ impl BasicMotorSummary {
             status: Some(status),
             ..self
         }
+    }
+
+    /// The same summary with the Basic Motor Test's curve-applied verification.
+    #[must_use]
+    pub const fn with_corrected_check(self, corrected: CorrectedCheck) -> Self {
+        Self {
+            corrected: Some(corrected),
+            ..self
+        }
+    }
+
+    /// The curve-applied verification, or `None` when this summary has none.
+    #[must_use]
+    pub const fn corrected_check(&self) -> Option<CorrectedCheck> {
+        self.corrected
     }
 
     /// The saved/not-saved footer, or `None` when the summary carries none.
@@ -803,7 +923,7 @@ impl BasicMotorSummary {
     pub fn row(&self, index: usize) -> SummaryRow {
         match index {
             0 => SummaryRow::new(
-                labelled("Counts"),
+                labelled("Raw cnt"),
                 &[
                     labelled("Brk"),
                     labelled("40"),
@@ -851,8 +971,12 @@ impl BasicMotorSummary {
         )
     }
 
-    /// The one unjudged line carrying the Calibration Floor and the spread at
-    /// 100 %, e.g. `Floor 40%  Spread 12%`.
+    /// The one unjudged line carrying the Calibration Floor and the raw spread
+    /// at 100 %, e.g. `Floor 40%  Raw spread 12%`.
+    ///
+    /// The spread is over the four **raw** 100 % counts, so it includes
+    /// forward-versus-reverse as well as left-versus-right. It is not the
+    /// calibration error; the corrected verification is.
     ///
     /// Both values render `--` together while the line is unjudged: a leg that
     /// did not move, or a missing 100 % count, means the robot has no verdict to
@@ -862,10 +986,41 @@ impl BasicMotorSummary {
         let floor = self
             .floor_percent
             .map_or_else(placeholder, |percent| percent_value(u32::from(percent)));
-        let spread = self.spread_percent.map_or_else(placeholder, percent_value);
+        let spread = self.raw_spread_percent.map_or_else(placeholder, percent_value);
         let mut line = TextBuf::new();
-        line.fill(format_args!("Floor {}  Spread {}", floor.as_str(), spread.as_str()));
+        line.fill(format_args!("Floor {}  Raw spread {}", floor.as_str(), spread.as_str()));
         line
+    }
+
+    /// The footer row's line: the saved/not-saved status when there is one, else
+    /// the Basic Motor Test's corrected verification.
+    #[must_use]
+    pub fn footer_line(&self) -> Option<TextBuf> {
+        self.status_line().or_else(|| self.precision_line())
+    }
+
+    /// The corrected verification line, e.g. `Corr max 1.6% Fwd 90%`.
+    ///
+    /// `None` when this summary has no corrected result (a Motor Calibration, or
+    /// a Basic Motor Test that has not finished its second cycle).
+    #[must_use]
+    pub fn precision_line(&self) -> Option<TextBuf> {
+        let corrected = self.corrected?;
+        let mut line = TextBuf::new();
+        match corrected {
+            CorrectedCheck::NoCurve => line.fill(format_args!("No curve - run Motor")),
+            CorrectedCheck::Unavailable => line.fill(format_args!("Corr max --")),
+            CorrectedCheck::Measured(max) => {
+                let whole = max.tenths / 10;
+                let fraction = max.tenths % 10;
+                line.fill(format_args!(
+                    "Corr max {whole}.{fraction}% {} {}%",
+                    max.direction.short_label(),
+                    max.power
+                ));
+            }
+        }
+        Some(line)
     }
 
     /// The optional saved/not-saved footer line, e.g. `Saved` or
@@ -909,11 +1064,12 @@ const fn summary_point(power: u8) -> Option<usize> {
     None
 }
 
-/// The spread at 100 % as a whole percent: `(max - min) / min`, rounded half up.
+/// The raw spread at 100 % as a whole percent: `(max - min) / min`, rounded half
+/// up, over the four raw counts.
 ///
 /// `None` when the slowest leg measured zero counts, because the ratio is
 /// undefined and `--` is the honest answer.
-fn spread_percent(legs: &[LegSummary; SUMMARY_LEGS]) -> Option<u32> {
+fn raw_spread_percent(legs: &[LegSummary; SUMMARY_LEGS]) -> Option<u32> {
     let mut min = u16::MAX;
     let mut max = 0;
     for leg in legs {
