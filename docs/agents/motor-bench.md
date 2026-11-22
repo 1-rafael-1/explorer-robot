@@ -237,10 +237,15 @@ basic-motor: corrected max=1.6
 `corrected-mean` values are the per-point means of the two passes; `corrected
 max` is the highest gated mean (30–100 %). The 20 % mean is information only.
 
+Correction factors are displayed with the stored per-mille resolution, e.g.
+`0.970` or `1.000`, never rounded to hundredths like `0.97`.
+
 The live readout is a **pair readout**: the current direction and power, both
 live counts, the last completed pair and both counts, both Breakaways, both
-corrections and the step index within the twenty-step cycle. Rows read like
-`Fwd 40%`, `L 583 R 568`, `L 20% R 20%` and `L 0.97 R 1.00`. During a corrected
+corrections and the step index within the twenty-step cycle. One progress bar
+spans the whole test — the discarded warm-up, the raw cycle and both corrected
+cycles — so it advances once instead of resetting per stage. Rows read like
+`Fwd 40%`, `L 583 R 568`, `L 20% R 20%` and `L 0.970 R 1.000`. During a corrected
 pass the `Step` and `Last` rows carry a `Corr` prefix, e.g. `Corr Fwd 40%`.
 
 The Motor Calibration logs the same per-track counts and speeds; on success it

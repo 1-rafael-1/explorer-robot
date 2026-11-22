@@ -53,7 +53,10 @@ cycle) and extends ADR-0056 (the corrected verification uses the pair curve).
 - The live readout prefixes `Corr` on its `Step` and `Last` rows during a
   verification cycle and never latches the raw Breakaway from a corrected pair;
   the raw Breakaways are kept per direction, so a corrected pass shows the
-  direction it is running.
+  direction it is running. Correction factors are shown with the stored per-mille
+  resolution (`0.970`, not `0.97`). One progress bar spans the warm-up, the raw
+  cycle and both corrected cycles, so it advances once instead of resetting for
+  each sweep.
 - The verified **Track Divergence** and its aggregation live in `motor-cal`:
   `divergence_percent`, `divergence_tenths` and the host-tested `Verification`
   model are shared by the test and the bench regression. A gated point measured

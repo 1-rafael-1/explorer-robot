@@ -91,6 +91,23 @@ async fn basic_motor_test_task(claim: Claim) {
     // is built once on success and published for the finished view.
     let mut summary = BasicMotorSummaryBuilder::new();
 
+    // The curve in force for the whole run: one read, so the correction row names
+    // what the robot is actually applying at each Power Step. A missing curve is
+    // identity rather than an error (user story 24); the corrected verification is
+    // skipped because there is nothing to verify. Read it before the warm-up so the
+    // progress total knows whether those cycles will run.
+    let curve = calibration::get_motor_curve().await;
+
+    // One bar spans every stage: the discarded warm-up, the raw cycle, and — when
+    // a curve is loaded — both corrected cycles. It advances once instead of
+    // resetting on each sweep.
+    let total_steps = if curve.is_some() {
+        4 * motor_sweep::TOTAL_STEPS
+    } else {
+        2 * motor_sweep::TOTAL_STEPS
+    };
+    let mut progress = motor_sweep::SweepProgress::whole(total_steps);
+
     // Publish the readout before the warm-up so the panel says "Warming up" while
     // the progress bar advances instead of showing a blank readout. The measured
     // sweep's first `start_pair` ends the warm-up state.
@@ -100,15 +117,10 @@ async fn basic_motor_test_task(claim: Claim) {
     // Warm the drivetrain with a discarded raw pair sweep before measuring, so
     // cold low-duty friction does not bias the pair. A Stop or structural abort
     // here ends the run through the same terminal paths as the measured sweep.
-    if abandon(motor_sweep::run_warm_up(Some(&claim)).await, &claim).await {
+    if abandon(motor_sweep::run_warm_up(Some(&claim), progress).await, &claim).await {
         return;
     }
-
-    // The curve in force for the whole run: one read, so the correction row
-    // names what the robot is actually applying at each Power Step. A missing
-    // curve is identity rather than an error (user story 24); the corrected
-    // verification is skipped because there is nothing to verify.
-    let curve = calibration::get_motor_curve().await;
+    progress = progress.after(motor_sweep::TOTAL_STEPS);
 
     // First cycle: the raw drivetrain. This is the sweep the calibration also
     // measures, so the raw tables and the curve's inputs stay the same numbers.
@@ -120,17 +132,18 @@ async fn basic_motor_test_task(claim: Claim) {
             applied_left: Correction::Identity,
             applied_right: Correction::Identity,
         };
-        motor_sweep::run_sweep(&claim, &mut sink, SweepMode::Raw).await
+        motor_sweep::run_sweep(&claim, &mut sink, SweepMode::Raw, progress).await
     };
     if abandon(raw_end, &claim).await {
         return;
     }
+    progress = progress.after(motor_sweep::TOTAL_STEPS);
 
     // Second and third cycles: the same pairs through `SetTracks`, so the saved
     // curve is applied. Two repeats make the reported divergence robust against a
-    // single noisy window; the bench uses the same protocol. This is the number
-    // the operator can use to judge the calibration, while the raw counts above
-    // are the drivetrain, not the calibration error.
+    // single noisy window. This is the number the operator can use to judge the
+    // calibration, while the raw counts above are the drivetrain, not the
+    // calibration error.
     let corrected = if curve.is_some() {
         let mut verification = Verification::new();
         for pass in 1..=VERIFICATION_REPEATS {
@@ -140,10 +153,11 @@ async fn basic_motor_test_task(claim: Claim) {
                 curve,
                 verification: &mut verification,
             };
-            let corrected_end = motor_sweep::run_sweep(&claim, &mut sink, SweepMode::Corrected).await;
+            let corrected_end = motor_sweep::run_sweep(&claim, &mut sink, SweepMode::Corrected, progress).await;
             if abandon(corrected_end, &claim).await {
                 return;
             }
+            progress = progress.after(motor_sweep::TOTAL_STEPS);
         }
         finish_verification(verification)
     } else {

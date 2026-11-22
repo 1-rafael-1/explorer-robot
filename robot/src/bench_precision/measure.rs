@@ -61,7 +61,7 @@ const PASS_MIN_POWER: u8 = 30;
 async fn bench_measure_task() {
     wait_for_initialization().await;
     settle_at_menu().await;
-    let _ = motor_sweep::run_warm_up(None).await;
+    let _ = motor_sweep::run_warm_up(None, motor_sweep::SweepProgress::whole(motor_sweep::TOTAL_STEPS)).await;
 
     info!("bench-precision: starting corrected-divergence regression");
     run_regression().await;

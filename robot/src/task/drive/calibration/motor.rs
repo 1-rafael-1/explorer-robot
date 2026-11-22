@@ -117,7 +117,7 @@ pub async fn run_motor_calibration(claim: &Claim) {
     // Warm the drivetrain with a discarded raw pair sweep before measuring, so
     // cold low-duty friction does not bias the pair. A Stop or structural abort
     // here ends the run through the same helpers as the measured sweep.
-    match motor_sweep::run_warm_up(Some(claim)).await {
+    match motor_sweep::run_warm_up(Some(claim), motor_sweep::SweepProgress::whole(motor_sweep::TOTAL_STEPS)).await {
         SweepEnd::Complete => {}
         SweepEnd::Stopped => {
             stop(claim).await;
@@ -151,7 +151,13 @@ pub async fn run_motor_calibration(claim: &Claim) {
             results: &mut results,
             measurements: &mut measurements,
         };
-        motor_sweep::run_sweep(claim, &mut sink, motor_sweep::SweepMode::Raw).await
+        motor_sweep::run_sweep(
+            claim,
+            &mut sink,
+            motor_sweep::SweepMode::Raw,
+            motor_sweep::SweepProgress::whole(motor_sweep::TOTAL_STEPS),
+        )
+        .await
     };
 
     match end {

@@ -2154,7 +2154,7 @@ fn the_warm_up_stage_is_visible_and_the_first_measured_pair_ends_it() {
     assert_eq!(rows[1].1.as_str(), "L -- R --");
     assert_eq!(rows[2].1.as_str(), "--");
     assert_eq!(rows[3].1.as_str(), "L -- R --");
-    assert_eq!(rows[4].1.as_str(), "L 1.00 R 1.00");
+    assert_eq!(rows[4].1.as_str(), "L 1.000 R 1.000");
     assert_eq!(rows[5].1.as_str(), "1/20");
 }
 
@@ -2168,7 +2168,7 @@ fn a_running_basic_motor_readout_names_the_pair_and_counts() {
     assert_eq!(rows[1].0.as_str(), "Count");
     assert_eq!(rows[1].1.as_str(), "L 583 R 568");
     assert_eq!(rows[4].0.as_str(), "Correction");
-    assert_eq!(rows[4].1.as_str(), "L 0.93 R 1.00");
+    assert_eq!(rows[4].1.as_str(), "L 0.930 R 1.000");
     assert_eq!(rows[5].1.as_str(), "12/20");
 }
 
@@ -2186,7 +2186,7 @@ fn the_correction_row_shows_the_curve_in_force() {
         Correction::Identity,
         Correction::Identity,
     );
-    assert_eq!(readout.rows()[4].1.as_str(), "L 1.00 R 1.00");
+    assert_eq!(readout.rows()[4].1.as_str(), "L 1.000 R 1.000");
 
     readout.start_pair(Direction::Forward, 20, step(2), Correction::Raw, Correction::Raw);
     assert_eq!(readout.rows()[4].1.as_str(), "L raw R raw");
@@ -2198,7 +2198,7 @@ fn the_correction_row_shows_the_curve_in_force() {
         Correction::Factor(875),
         Correction::Identity,
     );
-    assert_eq!(readout.rows()[4].1.as_str(), "L 0.88 R 1.00");
+    assert_eq!(readout.rows()[4].1.as_str(), "L 0.875 R 1.000");
 
     readout.start_pair(
         Direction::Forward,
@@ -2207,7 +2207,7 @@ fn the_correction_row_shows_the_curve_in_force() {
         Correction::Factor(1000),
         Correction::Factor(930),
     );
-    assert_eq!(readout.rows()[4].1.as_str(), "L 1.00 R 0.93");
+    assert_eq!(readout.rows()[4].1.as_str(), "L 1.000 R 0.930");
 }
 
 /// Test that a pair that has been named but not yet sampled renders both sides
@@ -2222,7 +2222,7 @@ fn a_named_pair_without_a_sample_shows_both_sides_as_placeholders() {
     assert_eq!(rows[0].1.as_str(), "Fwd 30%");
     assert_eq!(rows[1].1.as_str(), "L -- R --");
     assert_eq!(rows[3].1.as_str(), "L -- R --");
-    assert_eq!(rows[4].1.as_str(), "L 1.00 R raw");
+    assert_eq!(rows[4].1.as_str(), "L 1.000 R raw");
 }
 
 /// Test that the live counts survive the encoder reset and the next pair's
@@ -2650,7 +2650,7 @@ fn every_basic_motor_row_fits_its_label_and_value_columns() {
     assert_eq!(rows[1].1.as_str(), "L 65535 R 65535");
     assert_eq!(rows[2].1.as_str(), "Fwd 100% L 65535 R 65535");
     assert_eq!(rows[3].1.as_str(), "L 100% R 100%");
-    assert_eq!(rows[4].1.as_str(), "L 0.88 R 0.88");
+    assert_eq!(rows[4].1.as_str(), "L 0.875 R 0.875");
     assert_eq!(rows[5].1.as_str(), "20/20");
 
     for (index, (label, value)) in rows.iter().enumerate() {
@@ -3003,19 +3003,19 @@ fn the_result_report_tables_name_every_leg_and_point() {
     assert_eq!(summary.row(6).label(), "L fwd");
     assert_eq!(
         summary_cells(&summary.row(6)).as_slice(),
-        &["1.00", "1.00", "1.00", "1.00"]
+        &["1.000", "1.000", "1.000", "1.000"]
     );
     assert_eq!(summary.row(7).label(), "L rev");
     assert_eq!(summary_cells(&summary.row(7)).as_slice(), &["raw", "raw", "raw", "raw"]);
     assert_eq!(summary.row(8).label(), "R fwd");
     assert_eq!(
         summary_cells(&summary.row(8)).as_slice(),
-        &["0.93", "0.93", "0.93", "0.93"]
+        &["0.930", "0.930", "0.930", "0.930"]
     );
     assert_eq!(summary.row(9).label(), "R rev");
     assert_eq!(
         summary_cells(&summary.row(9)).as_slice(),
-        &["1.00", "1.00", "1.00", "1.00"]
+        &["1.000", "1.000", "1.000", "1.000"]
     );
 }
 

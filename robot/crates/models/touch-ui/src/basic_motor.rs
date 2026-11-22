@@ -126,11 +126,11 @@ impl TestLeg {
 /// running screen's redraw comparison stays exact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Correction {
-    /// No curve is loaded, so the requested command is used unchanged (`1.00`).
+    /// No curve is loaded, so the requested command is used unchanged (`1.000`).
     Identity,
     /// The power is below the Calibration Floor, so the raw command is used.
     Raw,
-    /// The interpolated curve factor, in per-mille: `930` is `0.93`.
+    /// The interpolated curve factor, in per-mille: `930` is `0.930`.
     Factor(u16),
 }
 
@@ -595,7 +595,7 @@ fn side_powers(left: Option<u8>, right: Option<u8>) -> TextBuf {
     value
 }
 
-/// Format both corrections, e.g. `L 0.97 R 1.00`.
+/// Format both corrections, e.g. `L 0.970 R 1.000`.
 fn correction_pair_value(pair: CorrectionPair) -> TextBuf {
     let left = correction_value(pair.left);
     let right = correction_value(pair.right);
@@ -604,18 +604,20 @@ fn correction_pair_value(pair: CorrectionPair) -> TextBuf {
     value
 }
 
-/// Format the correction in force: the fixed-point factor, `raw` below the
-/// Calibration Floor, or `1.00` when no curve is loaded.
+/// Format the correction in force with the stored per-mille resolution: the
+/// fixed-point factor with three decimals, `raw` below the Calibration Floor, or
+/// `1.000` when no curve is loaded.
 fn correction_value(correction: Correction) -> TextBuf {
     let mut value = TextBuf::new();
     match correction {
-        Correction::Identity => value.fill(format_args!("1.00")),
+        Correction::Identity => value.fill(format_args!("1.000")),
         Correction::Raw => value.fill(format_args!("raw")),
         Correction::Factor(per_mille) => {
-            // Round to the nearest hundredth for display; the per-mille value
-            // itself stays the comparison token.
-            let hundredths = (per_mille.saturating_add(5)) / 10;
-            value.fill(format_args!("{}.{:02}", hundredths / 100, hundredths % 100));
+            // The model stores tenths of a percent, so the third decimal is real
+            // calibration data, not a rounded display artifact.
+            let whole = per_mille / 1000;
+            let thousandths = per_mille % 1000;
+            value.fill(format_args!("{whole}.{thousandths:03}"));
         }
     }
     value

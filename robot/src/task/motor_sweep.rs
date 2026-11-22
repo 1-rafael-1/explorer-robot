@@ -127,6 +127,47 @@ pub const STEP_POWERS: [u8; motor_cal::POWER_STEPS] = motor_cal::POWER_STEP_PERC
 /// Step.
 pub const TOTAL_STEPS: usize = DIRECTIONS.len() * motor_cal::POWER_STEPS;
 
+/// The share of a Procedure's overall progress one sweep stage covers.
+///
+/// A stage constructed with [`SweepProgress::whole`] owns the whole bar and
+/// advances 0–100 % on its own, which is the Motor Calibration's behaviour. The
+/// Basic Motor Test chains stages with [`SweepProgress::after`], so one bar
+/// spans the warm-up, the raw cycle and both corrected cycles instead of
+/// resetting for each one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SweepProgress {
+    /// Steps already completed before this stage.
+    base_steps: usize,
+    /// Steps in the whole Procedure.
+    total_steps: usize,
+}
+
+impl SweepProgress {
+    /// A progress bar covering `total_steps` in this stage.
+    #[must_use]
+    pub const fn whole(total_steps: usize) -> Self {
+        Self {
+            base_steps: 0,
+            total_steps,
+        }
+    }
+
+    /// The same bar advanced past `stage_steps` completed steps.
+    #[must_use]
+    pub const fn after(self, stage_steps: usize) -> Self {
+        Self {
+            base_steps: self.base_steps + stage_steps,
+            total_steps: self.total_steps,
+        }
+    }
+
+    /// The percent complete after `completed` steps of this stage.
+    #[must_use]
+    pub fn percent(self, completed: usize) -> u8 {
+        activity::percent_done(self.base_steps + completed, self.total_steps)
+    }
+}
+
 /// How long each warm-up step dwells before the next, in milliseconds.
 pub const WARMUP_DWELL_MS: u64 = 2500;
 
@@ -519,7 +560,7 @@ async fn reset_and_confirm(
 /// latch and the floor-drop flag are checked before each step so a latched stop
 /// is never overridden by the next command. The caller's [`SweepSink`] owns
 /// everything specific to its Procedure.
-pub async fn run_sweep<S>(claim: &Claim, sink: &mut S, mode: SweepMode) -> SweepEnd
+pub async fn run_sweep<S>(claim: &Claim, sink: &mut S, mode: SweepMode, progress: SweepProgress) -> SweepEnd
 where
     S: SweepSink,
 {
@@ -547,7 +588,7 @@ where
                 // The bar shows where the operator is in the twenty-step cycle,
                 // so the last step reads 100 % while it runs; a finished view
                 // drops the bar entirely.
-                let percent = activity::percent_done(cycle_index + 1, TOTAL_STEPS);
+                let percent = progress.percent(cycle_index + 1);
                 claim.phase(mode.stage_label(direction), Some(percent)).await;
                 sink.step_started(step).await;
 
@@ -581,7 +622,7 @@ where
 /// and the phase/progress updates apply; it is `None` for the bench regression,
 /// which runs outside a Procedure. A Stop is reported as [`SweepEnd::Stopped`]
 /// without braking here — the Procedure's stop path handles the terminal motion.
-pub async fn run_warm_up(claim: Option<&Claim>) -> SweepEnd {
+pub async fn run_warm_up(claim: Option<&Claim>, progress: SweepProgress) -> SweepEnd {
     motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
 
     let mut step_index = 0usize;
@@ -594,7 +635,7 @@ pub async fn run_warm_up(claim: Option<&Claim>) -> SweepEnd {
                 if perception::is_floor_drop_detected() {
                     return SweepEnd::Aborted(FLOOR_DROP_REASON);
                 }
-                let percent = activity::percent_done(step_index + 1, TOTAL_STEPS);
+                let percent = progress.percent(step_index + 1);
                 claim.phase(warm_up_label(direction), Some(percent)).await;
             }
 
