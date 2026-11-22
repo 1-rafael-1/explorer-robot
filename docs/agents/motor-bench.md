@@ -294,8 +294,12 @@ the repeatable CI-side check, while this footer is the on-robot verification.
 
 Target: **< 3 % optimal, < 5 % minimal** on `Corr max`. The observed
 2026-11-22 runs were 1.6–2.9 % gated in the two-boot bench; the in-boot footer
-can show a low-power knee residual near 3 % (see
-`.scratch/motor-calibration/issues/10-corrected-command-refinement.md`).
+can show a low-power knee residual near 3 %. A static corrected-command
+refinement was tried and HIL-tested on 2026-11-22: it reached 1.3–1.5 % in the
+calibration boot but measured 3.8–6.6 % after a fresh boot, so it was reverted.
+The base curve is the more robust static estimate; the cross-boot floor needs
+closed-loop trim. Evidence:
+`.scratch/motor-calibration/issues/10-corrected-command-refinement.md`.
 
 A `Corr max` of `--` means the corrected pass produced no usable gated point;
 `No curve - run Motor` means no Motor Calibration Curve was loaded, so the

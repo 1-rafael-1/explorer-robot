@@ -66,8 +66,11 @@ cycle) and extends ADR-0056 (the corrected verification uses the pair curve).
 - The worst in-boot residual observed on 2026-11-22 was **3.1 % at forward 30 %**
   (2.76 % and 3.52 % in the two repeats), while every other gated point was under
   2 %. The low-duty knee between the 20 % and 30 % calibration points is the
-  remaining inverse-interpolation error; a corrected-command refinement is
-  recorded as the next step in
+  remaining inverse-interpolation error. A corrected-command refinement was
+  implemented and HIL-tested on 2026-11-22: it reduced the in-boot maximum to
+  1.3–1.5 %, but the refined table measured 3.8–6.6 % after a fresh boot, worse
+  than the base curve's 1.6–2.9 %. The static refinement overfits one thermal
+  state and was reverted; the evidence is in
   `.scratch/motor-calibration/issues/10-corrected-command-refinement.md`.
 - The test still uses one measurement engine (`run_sweep` with a `SweepMode`) and
   one divergence definition, so the test and the bench cannot drift apart.
