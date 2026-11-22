@@ -11,6 +11,7 @@ of truth. Do not commit `graphify-out/`; it is generated, large and changes whol
 - `graph.html` — the interactive view.
 - `.graphify_labels.json` — semantic community names.
 - `.graphify_build.json` — whether the last build was code-only.
+- `.graphify_corpus` — the SHA-256 fingerprint of the code/docs corpus recorded by the last `update`/`full`; `check` compares it.
 - `cache/` — AST and semantic caches.
 
 The corpus excludes `.scratch/` (gitignored) and `target/`, so specs and tickets are not
@@ -20,15 +21,17 @@ codebase.
 ## One command
 
 ```sh
-scripts/graphify-update.sh check   # is the graph older than the working tree?
-scripts/graphify-update.sh code    # free, local AST refresh
-scripts/graphify-update.sh docs    # semantic pass over docs + code (needs a key)
-scripts/graphify-update.sh full    # extract + recluster + relabel + export
+scripts/graphify-update.sh check   # is the graph current for the corpus?
+scripts/graphify-update.sh update  # incremental docs + code refresh (needs a key)
+scripts/graphify-update.sh full    # forced full docs + code extract + relabel + export
 scripts/graphify-update.sh label   # rename communities only (cheap)
 ```
 
-`code` is free and offline. `docs` and `full` call DeepSeek and cost a small amount
-(well under a dollar per rebuild on this corpus).
+`update` and `full` always extract docs and code together. There is no code-only
+mode: a code-only graph omits the ADRs and glossary the repository relies on.
+`docs` is accepted as a deprecated alias for `update`; `code` is refused. `update`
+and `full` call DeepSeek and cost a small amount (well under a dollar per rebuild
+on this corpus); `label` also needs the key, while `check` is free.
 
 ## Known pitfalls
 
@@ -40,9 +43,14 @@ if you re-test.
 - **Never reach for `--allow-partial` first.** It overwrites a complete graph with the
 truncated one, deleting the missing concept nodes. Only use it after comparing the node
 counts and confirming the loss is genuinely stale content.
-- **A code-only update re-clusters.** `graphify update` warns when the community set
-changed and falls back to hub names for the new communities; run `scripts/graphify-update.sh
-label` to restore semantic names. `docs` already does this.
+- **Never run `graphify update` directly.** It re-extracts code only, drops the
+docs/ADRs from the semantic graph and re-clusters with hub names. The script has
+no code-only mode; use `update`. If `.graphify_build.json` says `"code_only":
+true`, recover with `update` (or `full` if the manifest refuses).
+- **`check` is content-based.** It compares a SHA-256 fingerprint of the corpus
+recorded by the last `update`/`full`; it does not trust file mtimes or the graph's
+timestamp. A graph rebuilt by another process without the fingerprint is reported
+stale, so run `update` once after cloning or restoring a graph.
 - **The aggregated HTML view.** Anything above 5000 nodes is exported as community nodes;
 `export html --node-limit 12000` (what the script runs) gives the node-level view.
 
@@ -60,14 +68,14 @@ label` to restore semantic names. `docs` already does this.
 
 | Change | Command |
 | --- | --- |
-| Rust/JS/shell code only | `code` |
-| `CONTEXT.md`, ADRs, architecture docs | `docs` |
+| Any code and/or docs change | `update` |
 | New corpus, changed clustering, first build | `full` |
+| Community names only | `label` |
 
-`docs` is incremental: the manifest gate re-extracts only changed files. If a rebuild
-refuses to overwrite because it produced fewer nodes, read the reason first. A code-only
-`update` may be forced (`graphify update --force`); a semantic shrink is almost always a
-truncated chunk, so lower the token budget rather than forcing the write.
+`update` is incremental: the manifest gate re-extracts only changed files. If a rebuild
+refuses to overwrite because it produced fewer nodes, read the reason first. `full` is the
+forced escape hatch; a semantic shrink is almost always a truncated chunk, so lower the
+token budget rather than forcing the write.
 
 ## Querying
 
@@ -75,7 +83,7 @@ Prefer `explain`, `path` and `affected` over `query`. `query` is keyword BFS: ge
 words seed on hub nodes and flood.
 
 ```sh
-graphify explain "robot/src/task/motor_driver.rs::MotorCalibration"
+graphify explain "robot/crates/models/motor-cal/src/apply.rs::resolve_track_speed"
 graphify path "A" "B" --undirected
 graphify affected "X" --depth 2
 graphify god-nodes --top 20
