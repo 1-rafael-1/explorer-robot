@@ -49,11 +49,13 @@
 #![no_std]
 #![warn(missing_docs)]
 
+pub mod apply;
 pub mod curve_maths;
 pub mod payload;
 pub mod scale;
 pub mod verification;
 
+pub use apply::resolve_track_speed;
 pub use curve_maths::{
     Curve, CurveCommand, CurveError, Direction, FIRST_POWER_STEP_PERCENT, LAST_POWER_STEP_PERCENT, LEG_ORDER, LegPoint,
     MAX_CORRECTION, MIN_PLAUSIBLE_CORRECTION, POWER_STEP_PERCENT, POWER_STEP_PERCENTS, POWER_STEPS, Sweep, TEST_LEGS,

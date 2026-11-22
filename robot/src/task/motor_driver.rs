@@ -65,7 +65,7 @@ use embassy_rp::{
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Timer};
-use motor_cal::{Curve, Direction, Track as CurveTrack};
+use motor_cal::{Track as CurveTrack, resolve_track_speed};
 
 use crate::system::state::{calibration, motion, power};
 
@@ -263,57 +263,6 @@ fn calculate_voltage_compensation(rail_voltage: f32) -> f32 {
 
 // ── Command processing ───────────────────────────────────────────────────────────
 
-/// Map a driver track onto the curve's track selector.
-const fn curve_track(track: Track) -> CurveTrack {
-    match track {
-        Track::Left => CurveTrack::Left,
-        Track::Right => CurveTrack::Right,
-    }
-}
-
-/// Resolve one requested track speed to the per-mille duty the driver applies.
-///
-/// The order is fixed: zero stays zero, a magnitude below the Calibration Floor
-/// is passed through raw, otherwise the curve resolves the command to the nearest
-/// per-mille (0.1 %) for (track, direction, magnitude), clamped to `0..=1000`.
-/// Voltage compensation is applied to that per-mille value, and the compensated
-/// duty is rounded once to the nearest per-mille for
-/// `set_duty_cycle_fraction(_, 1000)`, then clamped to `-1000..=1000` with the
-/// original sign. There are therefore two quantisations: the curve's resolution to
-/// the nearest per-mille, then the compensated duty's rounding to the nearest
-/// per-mille.
-///
-/// An absent curve is the identity: the raw magnitude goes straight to voltage
-/// compensation, so a missing or failed calibration never blocks driving.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
-fn resolve_track_speed(curve: Option<&Curve>, track: Track, speed: i8, voltage_comp: f32) -> i16 {
-    let magnitude = speed.unsigned_abs();
-    let direction = if speed < 0 {
-        Direction::Reverse
-    } else {
-        Direction::Forward
-    };
-    let per_mille = curve.map_or_else(
-        || u16::from(magnitude) * 10,
-        |curve| curve.resolve(curve_track(track), direction, magnitude).per_mille(),
-    );
-
-    let promised = i32::from(per_mille);
-    let signed = if speed < 0 { -promised } else { promised };
-    let compensated = signed as f32 * voltage_comp;
-    // Round half away from zero exactly once, after compensation.
-    let rounded = if compensated >= 0.0 {
-        (compensated + 0.5) as i32
-    } else {
-        (compensated - 0.5) as i32
-    };
-    rounded.clamp(-1000, 1000) as i16
-}
-
 /// Process a `SetTracks`-family command: resolve each track through the loaded
 /// curve when `apply_curve` is set, apply voltage compensation, set direction
 /// pins and PWM, then publish the requested speeds to motion state.
@@ -336,8 +285,8 @@ async fn process_set_tracks(
     } else {
         None
     };
-    let final_left = resolve_track_speed(curve.as_ref(), Track::Left, left, voltage_comp);
-    let final_right = resolve_track_speed(curve.as_ref(), Track::Right, right, voltage_comp);
+    let final_left = resolve_track_speed(curve.as_ref(), CurveTrack::Left, left, voltage_comp);
+    let final_right = resolve_track_speed(curve.as_ref(), CurveTrack::Right, right, voltage_comp);
 
     // The left leads are reversed relative to the right, so the physical output
     // is the negation of the logically resolved command. Apply it here, after
