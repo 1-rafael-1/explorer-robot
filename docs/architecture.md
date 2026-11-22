@@ -28,7 +28,7 @@ states a `version` ([ADR-0040](adr/0040-repo-and-build-layout.md)).
 | `robot/` | The robot firmware package: core0 tasks, the core1 LiDAR task, `src/`, `build.rs`, `memory.x` | `explorer-robot` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0032](adr/0032-remote-link-task.md) |
 | `robot/crates/link/` | The wire and the robot-side core: frame envelope, payload codecs, reliability mechanisms, `LinkCore` | `link-protocol`, `link-core` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0031](adr/0031-link-protocol-payloads.md), [ADR-0032](adr/0032-remote-link-task.md), [ADR-0041](adr/0041-reliability-mechanisms-in-protocol.md) |
 | `robot/crates/drivers/` | Hardware-facing async drivers: LiDAR, rangefinder, display, touch | `coin-d6`, `rangefinder`, `vl53l1x`, `st7789-async`, `touch-async` | `thumbv8m.main-none-eabihf`; host tests where the driver allows | [ADR-0001](adr/0001-async-st7789-display-driver.md), [ADR-0002](adr/0002-coin-d6-async-driver.md), [ADR-0004](adr/0004-touch-controller-on-shared-display-bus.md), [ADR-0048](adr/0048-vl53l0x-rangefinder-driver-and-lifecycle.md), [ADR-0049](adr/0049-vl53l1x-async-driver.md) |
-| `robot/crates/models/` | Pure, HAL-agnostic, host-testable logic: claim slot, LiDAR cloud grid, link state, panel model | `claim-slot`, `lidar-cloud`, `link-state`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md) |
+| `robot/crates/models/` | Pure, HAL-agnostic, `no_std`, host-testable logic: claim slot, LiDAR cloud grid, link state, panel model, and the motor Power Step measurement engine with its curve maths, counts/cm scale and versioned calibration record | `claim-slot`, `lidar-cloud`, `link-state`, `motor-cal`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md), [ADR-0054](adr/0054-motor-calibration-is-a-measured-speed-curve.md), [ADR-0056](adr/0056-simultaneous-pair-motor-calibration.md) |
 | `robot/crates/hardware-tests/` | Standalone, breadboard-scale HIL example binaries that run on the robot hardware | `hardware-tests` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md) |
 | `bridge/` | The Bridge workspace: network ⇄ UART1 firmware, credential record, Discovery Beacon, preamble gate | `bridge-firmware` (binaries `bridge`, `stack-soak`), `bridge-core` | `riscv32imc-unknown-none-elf` with `build-std` | [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
 | `bridge/bridge-core/` | The Bridge's HAL-agnostic pump and provisioning rules: coalescing, routing, flow, auth, Setup Mode, Credential Record | `bridge-core` | `riscv32imc-unknown-none-elf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0036](adr/0036-wifi-provisioning.md), [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
@@ -112,10 +112,10 @@ task ([CONTEXT.md § Architecture](../CONTEXT.md#architecture)).
 ### State modules
 
 The state modules live in `robot/src/system/state/`: `power`, `calibration`, `perception`, `motion`,
-`activity`, `imu_test`, `dmp_cal`, `rangefinder` and `rangefinder_test`. The lock order is
-**power → calibration → perception → motion → activity**; `imu_test`, `dmp_cal`, `rangefinder` and
-`rangefinder_test` are independent leaves that are never held with another state lock. The Link Task samples
-them one lock at a time. Hot-path readers use the lock-free mirrors, while the
+`activity`, `imu_test`, `dmp_cal`, `rangefinder`, `rangefinder_test` and `motor_readout`. The lock order is
+**power → calibration → perception → motion → activity**; `imu_test`, `dmp_cal`, `rangefinder`,
+`rangefinder_test` and `motor_readout` are independent leaves that are never held with another state
+lock. The Link Task samples them one lock at a time. Hot-path readers use the lock-free mirrors, while the
 touch UI is the only module that draws. The LiDAR cloud lives in `lidar-cloud` and the pose work is
 described by [ADR-0007](adr/0007-odometry-architecture.md) /
 [CONTEXT.md § Odometry](../CONTEXT.md#odometry).

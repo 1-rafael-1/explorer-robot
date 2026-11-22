@@ -1,0 +1,810 @@
+//! The measured pair sweep: twenty simultaneous Power Steps, driven end to end.
+//!
+//! This is the single driver of [`motor_cal::MeasurementEngine`], shared by the
+//! Basic Motor Test and the Motor Calibration Procedure. One Power Step commands
+//! **both** tracks at the same power and measures both encoder deltas over the same
+//! Measurement Window, so the calibration is derived in the load and supply
+//! condition it is applied in. One pair step is:
+//!
+//! 1. brake both tracks and wait for **Quiescence** — each track's engine sees no
+//!    pulses for the engine's hold window, with its timeout invalidating the point;
+//! 2. reset both counters, then wait for the encoder task to publish a fresh
+//!    all-zero sample — not a fixed sleep — and confirm the reset with that
+//!    sample's timestamp, dropping the stale drive-side copy;
+//! 3. command both tracks at the step power in the same direction;
+//! 4. discard the settle interval and count each Measurement Window as the
+//!    wrap-safe delta between the timestamped samples at each end.
+//!
+//! The engines own every rule and every timeout. This module only performs the
+//! actions they ask for (brake, reset, command), feeds them the timestamped
+//! samples, and reports both live counts to a [`StepObserver`] so the panel can
+//! follow the wheels. There is no second measurement implementation.
+//!
+//! # The sweep
+//!
+//! [`run_sweep`] is the whole cycle: forward and reverse, each over the ten
+//! [`STEP_POWERS`], with the Stop and floor-drop checks before each step and the
+//! encoder sampler started and stopped around it. That is [`TOTAL_STEPS`] = 20
+//! pair steps. The caller supplies only what is specific to its Procedure through
+//! [`SweepSink`]: the Basic Motor Test draws a readout and records a summary, the
+//! Motor Calibration stores the raw measurements and judges the rail. The
+//! schedule, the cycle position and the terminal classification are the same for
+//! both, so they live here rather than in two loops that must be kept in step.
+//!
+//! A sweep's command is chosen by [`SweepMode`]. The Motor Calibration and the
+//! Basic Motor Test's raw cycle use [`SweepMode::Raw`]
+//! ([`crate::task::motor_driver::MotorCommand::SetTracksRaw`]), so the calibration
+//! measures the drivetrain rather than the curve it is about to replace. The
+//! Basic Motor Test's verification cycle uses [`SweepMode::Corrected`]
+//! ([`MotorCommand::SetTracks`]), so it measures the result the loaded curve
+//! actually produces. Both modes run the same schedule and the same engines; only
+//! the command differs.
+//!
+//! A point's count is never read as an absolute-since-reset value: each engine
+//! reports its Measurement Window delta, and an invalid point carries its
+//! [`InvalidReason`] so the panel can show `--` instead of a silent zero.
+
+use defmt::{debug, info, warn};
+use embassy_time::{Duration, Instant, Timer};
+use motor_cal::{
+    Curve, Direction, EncoderSample, InvalidReason, MeasurementEngine, Phase, PointResult, TestLeg, Track,
+};
+use touch_ui::Correction;
+
+use crate::{
+    system::state::{activity, perception, power},
+    task::{
+        drive::{clear_encoder_measurement, get_latest_encoder_measurement},
+        motor_driver::{self, MotorCommand},
+        procedure::Claim,
+        sensors::encoders::{self, EncoderCommand, EncoderMeasurement},
+    },
+};
+
+/// The encoder sampling interval for the duration of a sweep, in milliseconds.
+pub const SAMPLE_INTERVAL_MS: u64 = 20;
+
+/// How long a Power Step waits for a fresh encoder sample before treating the
+/// encoder task as dead, in milliseconds.
+///
+/// The task samples every [`SAMPLE_INTERVAL_MS`], so half a second of repeated or
+/// missing samples is far beyond a scheduling hiccup. The engines' own timeouts
+/// only advance when samples arrive, so this wall-clock bound is the only thing
+/// that stops a dead encoder task from leaving a step waiting forever.
+pub const NO_SAMPLE_TIMEOUT_MS: u64 = 500;
+
+/// The reason a dead encoder task reports as a structural abort.
+const NO_SAMPLE_REASON: &str = "encoder timeout";
+
+/// The reason a floor drop trips, shared by both Procedures.
+const FLOOR_DROP_REASON: &str = "floor drop detected";
+
+/// The reason no fresh all-zero sample arrived to confirm the counter reset.
+const RESET_CONFIRM_REASON: &str = "reset unconfirmed: no fresh zero sample after Reset";
+
+/// How long a step waits for the encoder task to publish a fresh all-zero
+/// sample after a Reset, in milliseconds.
+const RESET_CONFIRM_TIMEOUT_MS: u64 = 500;
+
+/// The directions a pair sweep runs, in cycle order.
+pub const DIRECTIONS: [Direction; 2] = [Direction::Forward, Direction::Reverse];
+
+/// Which command a pair sweep issues at each Power Step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepMode {
+    /// Raw `SetTracksRaw`: measure the drivetrain with the curve bypassed.
+    Raw,
+    /// Curve-applied `SetTracks`: measure the corrected pair the robot drives.
+    Corrected,
+}
+
+impl SweepMode {
+    /// Whether this mode applies the loaded Motor Calibration Curve.
+    #[must_use]
+    pub const fn applies_curve(self) -> bool {
+        matches!(self, Self::Corrected)
+    }
+
+    /// The operator-facing phase label for one direction of this mode.
+    #[must_use]
+    pub const fn stage_label(self, direction: Direction) -> &'static str {
+        match (self, direction) {
+            (Self::Raw, Direction::Forward) => "Forward",
+            (Self::Raw, Direction::Reverse) => "Reverse",
+            (Self::Corrected, Direction::Forward) => "Corrected forward",
+            (Self::Corrected, Direction::Reverse) => "Corrected reverse",
+        }
+    }
+}
+
+/// The Power Steps of one direction, in whole percent, in ascending order.
+///
+/// Aliased from the measurement model so the schedule and the curve maths can
+/// never disagree.
+pub const STEP_POWERS: [u8; motor_cal::POWER_STEPS] = motor_cal::POWER_STEP_PERCENTS;
+
+/// The pair steps in a full one-cycle sweep: both directions over every Power
+/// Step.
+pub const TOTAL_STEPS: usize = DIRECTIONS.len() * motor_cal::POWER_STEPS;
+
+/// The share of a Procedure's overall progress one sweep stage covers.
+///
+/// A stage constructed with [`SweepProgress::whole`] owns the whole bar and
+/// advances 0–100 % on its own, which is the Motor Calibration's behaviour. The
+/// Basic Motor Test chains stages with [`SweepProgress::after`], so one bar
+/// spans the warm-up, the raw cycle and both corrected cycles instead of
+/// resetting for each one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SweepProgress {
+    /// Steps already completed before this stage.
+    base_steps: usize,
+    /// Steps in the whole Procedure.
+    total_steps: usize,
+}
+
+impl SweepProgress {
+    /// A progress bar covering `total_steps` in this stage.
+    #[must_use]
+    pub const fn whole(total_steps: usize) -> Self {
+        Self {
+            base_steps: 0,
+            total_steps,
+        }
+    }
+
+    /// The same bar advanced past `stage_steps` completed steps.
+    #[must_use]
+    pub const fn after(self, stage_steps: usize) -> Self {
+        Self {
+            base_steps: self.base_steps + stage_steps,
+            total_steps: self.total_steps,
+        }
+    }
+
+    /// The percent complete after `completed` steps of this stage.
+    #[must_use]
+    pub fn percent(self, completed: usize) -> u8 {
+        activity::percent_done(self.base_steps + completed, self.total_steps)
+    }
+}
+
+/// How long each warm-up step dwells before the next, in milliseconds.
+pub const WARMUP_DWELL_MS: u64 = 2500;
+
+/// Enable both drivers and (re)start the encoder sampler at [`SAMPLE_INTERVAL_MS`].
+///
+/// [`run_sweep`] calls this before its first step and [`stop_encoders`] after its
+/// last. Clearing the drive-side sample after the reset means the first read can
+/// only be a fresh one.
+pub async fn start_encoders() {
+    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
+    Timer::after(Duration::from_millis(10)).await;
+
+    encoders::send_command(EncoderCommand::Stop).await;
+    Timer::after(Duration::from_millis(100)).await;
+    encoders::send_command(EncoderCommand::Reset).await;
+    Timer::after(Duration::from_millis(100)).await;
+    clear_encoder_measurement().await;
+    encoders::send_command(EncoderCommand::Start {
+        interval_ms: SAMPLE_INTERVAL_MS,
+    })
+    .await;
+    Timer::after(Duration::from_millis(100)).await;
+}
+
+/// Stop the encoder sampler at the end of a sweep.
+///
+/// Idempotent, so the terminal paths can call it again to be sure a sampler that
+/// was started for an earlier run is not left publishing.
+pub async fn stop_encoders() {
+    encoders::send_command(EncoderCommand::Stop).await;
+}
+
+/// A sink for the live encoder counts while a Power Step runs.
+///
+/// The caller owns the readout; the sweep reports every fresh sample of both
+/// tracks so the panel can follow the wheels. The Motor Calibration uses a no-op
+/// sink.
+// `async fn` in a trait keeps the observer's publish in the caller's task; the
+// trait is crate-internal, so no public API promise is being made here.
+#[allow(async_fn_in_trait)]
+pub trait StepObserver {
+    /// Accept the current raw encoder counts for both tracks.
+    async fn sample(&mut self, left: u16, right: u16);
+}
+
+/// What one measured pair step leaves behind.
+#[derive(Clone, Copy)]
+pub struct PairOutcome {
+    /// The left engine's verdict: a valid Measurement Window or the reason it is
+    /// invalid, which the panel renders as `--`.
+    pub left: PointResult,
+    /// The right engine's verdict, with the same meaning as [`left`](Self::left).
+    pub right: PointResult,
+    /// The motor rail voltage read at the instant the command was made, or
+    /// `None` when no sample was available. Both tracks share the one rail.
+    pub rail_volts: Option<f32>,
+    /// The voltage compensation the driver's rule derives at that rail, or
+    /// `None` when the rail was unreadable.
+    pub compensation: Option<f32>,
+}
+
+/// Why a pair step ended.
+enum StepEnd {
+    /// Both engines reached a verdict, valid or invalid.
+    Measured(PairOutcome),
+    /// The operator pressed Stop.
+    Stopped,
+    /// Floor-drop protection tripped.
+    Fault,
+    /// A structural problem outside the engines' verdicts cut the step short.
+    ///
+    /// The reason is the short phrase the caller records, e.g. a dead encoder
+    /// task. The caller brakes and fails; this step has already given up.
+    Aborted(&'static str),
+}
+
+/// Where one pair step sits in the sweep.
+///
+/// The sweep hands this to the [`SweepSink`], which needs the direction and
+/// power to name the step and its position to store the outcome in cycle order.
+#[derive(Clone, Copy)]
+pub struct StepRef {
+    /// The direction both tracks turn.
+    pub direction: Direction,
+    /// The commanded power, in whole percent.
+    pub power: u8,
+    /// The pair step's zero-based position in the cycle.
+    pub index: u8,
+    /// The number of pair steps in a full cycle.
+    pub total: u8,
+}
+
+impl StepRef {
+    /// The one-based position of this step in the cycle.
+    #[must_use]
+    pub const fn position(self) -> u8 {
+        self.index.saturating_add(1)
+    }
+
+    /// The Power Step's position within its direction.
+    ///
+    /// The sweep runs the directions in order, each over the same ten powers, so
+    /// the position within a direction is the cycle index modulo the step count.
+    #[must_use]
+    pub const fn step_index(self) -> usize {
+        (self.index as usize) % motor_cal::POWER_STEPS
+    }
+}
+
+/// What a [`SweepSink`] wants after a measured pair step.
+pub enum StepAction {
+    /// Continue with the next pair step.
+    Continue,
+    /// Cut the sweep short, reporting this reason as the outcome.
+    Abort(&'static str),
+}
+
+/// What a Procedure adds to the sweep it runs.
+///
+/// The sweep owns the schedule, the cycle position, the encoder sampler and the
+/// terminal classification; a sink is only the Procedure-specific half. It also
+/// receives every fresh encoder count from both tracks, so a run that shows no
+/// live readout answers [`sample`](StepObserver::sample) with nothing.
+// `async fn` in a trait keeps the sink's work in the sweep's task; the trait is
+// crate-internal in practice, so no public API promise is being made here.
+#[allow(async_fn_in_trait)]
+pub trait SweepSink: StepObserver {
+    /// A pair step is about to command both tracks.
+    async fn step_started(&mut self, step: StepRef);
+
+    /// A pair step reached both engines' verdicts: valid or invalid.
+    ///
+    /// Returning [`StepAction::Abort`] ends the sweep before the next step, with
+    /// the reason the caller reports.
+    async fn step_measured(&mut self, step: StepRef, outcome: PairOutcome) -> StepAction;
+}
+
+/// Why a whole sweep ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SweepEnd {
+    /// Every pair step of every direction was measured, valid or invalid.
+    Complete,
+    /// The operator pressed Stop.
+    Stopped,
+    /// Floor-drop protection tripped, or a structural problem cut the sweep
+    /// short, with the reason the panel shows.
+    Aborted(&'static str),
+}
+
+/// A waiter for fresh encoder samples, polled once per pass of a measuring loop.
+///
+/// The encoder task republishes the latest measurement every
+/// [`SAMPLE_INTERVAL_MS`], so a loop must ignore a sample it has already seen and
+/// must notice when the task stops publishing altogether. Both rules live here so
+/// the sweep and the bench regression cannot disagree about what "fresh" means.
+pub struct SampleStream {
+    /// The timestamp of the last sample handed out, so a repeated publish is not
+    /// consumed twice.
+    last_timestamp: Option<u64>,
+    /// The wall-clock instant the last fresh sample arrived, for [`dead`](Self::dead).
+    last_fresh_ms: u64,
+}
+
+impl SampleStream {
+    /// Start a stream whose freshness clock reads `now_ms`.
+    pub const fn new(now_ms: u64) -> Self {
+        Self {
+            last_timestamp: None,
+            last_fresh_ms: now_ms,
+        }
+    }
+
+    /// The next fresh sample, or `None` when the latest is absent or a duplicate.
+    ///
+    /// A missing sample is not a zero count, and a repeated sample cannot advance
+    /// any window, so neither is handed out: the caller simply polls again.
+    pub async fn next(&mut self) -> Option<EncoderMeasurement> {
+        let measurement = get_latest_encoder_measurement().await?;
+        if self.last_timestamp == Some(measurement.timestamp_ms) {
+            return None;
+        }
+        self.last_timestamp = Some(measurement.timestamp_ms);
+        self.last_fresh_ms = now_ms();
+        Some(measurement)
+    }
+
+    /// True when no fresh sample has arrived for `timeout_ms`.
+    ///
+    /// A dead encoder task would otherwise leave a loop waiting forever, because
+    /// the engines only advance when samples arrive.
+    pub const fn dead(&self, now_ms: u64, timeout_ms: u64) -> bool {
+        now_ms.saturating_sub(self.last_fresh_ms) >= timeout_ms
+    }
+}
+
+/// Drive and measure one simultaneous pair step in `direction` at `power`.
+///
+/// Performs every caller action the engines ask for, feeds each engine its own
+/// track's timestamped samples, and reports each fresh pair of counts to
+/// `observer`. Returns both verdicts, or the reason the step was cut short.
+///
+/// The engines advance independently until they must act together: the reset is
+/// taken only when both are Quiescent, and the command only when both are
+/// `ReadyToCommand`. If either engine invalidates, the other is aborted with the
+/// same reason, so a bad point cannot be paired with a good one by accident. A
+/// valid/invalid split is still possible when one engine had already finished a
+/// valid window before the other invalidated; the calibration fails on the
+/// invalid side.
+async fn run_power_pair<O>(claim: &Claim, direction: Direction, power: u8, mode: SweepMode, observer: &mut O) -> StepEnd
+where
+    O: StepObserver,
+{
+    let mut left = MeasurementEngine::new();
+    let mut right = MeasurementEngine::new();
+    let started_ms = now_ms();
+    left.begin_step(started_ms);
+    right.begin_step(started_ms);
+
+    // Quiescence is the precondition for attributing a count to a command, and a
+    // coast alone does not establish it: brake both tracks first.
+    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+
+    let mut stream = SampleStream::new(started_ms);
+
+    // The rail and compensation read at the instant the command is made. A
+    // sample taken at the end of the window is one the driver never used.
+    let mut rail_volts: Option<f32> = None;
+    let mut compensation: Option<f32> = None;
+
+    loop {
+        if claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
+            return StepEnd::Stopped;
+        }
+        if perception::is_floor_drop_detected() {
+            return StepEnd::Fault;
+        }
+        // The engines only advance on samples, so they cannot notice that the
+        // encoder task stopped producing them. A wall-clock bound turns that
+        // silence into a structural abort instead of an endless step.
+        if stream.dead(now_ms(), NO_SAMPLE_TIMEOUT_MS) {
+            return StepEnd::Aborted(NO_SAMPLE_REASON);
+        }
+
+        // One invalid track spoils the pair: abort the other with the same
+        // reason. The abort is a no-op on an engine that already finished, so a
+        // valid/invalid split is preserved rather than rewritten.
+        if let Some(reason) = invalid_reason(&left).or_else(|| invalid_reason(&right)) {
+            left.abort(reason);
+            right.abort(reason);
+            break;
+        }
+        if matches!(left.phase(), Phase::Finished) && matches!(right.phase(), Phase::Finished) {
+            break;
+        }
+
+        // Perform the action both engines need, so their rules stay their own.
+        if matches!(left.phase(), Phase::Quiescent) && matches!(right.phase(), Phase::Quiescent) {
+            if let Some(end) = reset_and_confirm(claim, &mut left, &mut right, &mut stream).await {
+                return end;
+            }
+        } else if matches!(left.phase(), Phase::ReadyToCommand) && matches!(right.phase(), Phase::ReadyToCommand) {
+            // Both tracks at the same requested power: this is the load/supply
+            // condition the correction will be applied in.
+            let signed = signed_speed(direction, power);
+            (rail_volts, compensation) = rail_at_command();
+            let command = if mode.applies_curve() {
+                MotorCommand::SetTracks {
+                    left_speed: signed,
+                    right_speed: signed,
+                }
+            } else {
+                MotorCommand::SetTracksRaw {
+                    left_speed: signed,
+                    right_speed: signed,
+                }
+            };
+            motor_driver::send_motor_command(command).await;
+            let command_ms = now_ms();
+            left.command_applied(command_ms);
+            right.command_applied(command_ms);
+        }
+
+        // A missing sample is not a zero count: leave the engines alone rather
+        // than credit pulses that did not happen. A repeated sample cannot
+        // advance any window, so it is not fed twice.
+        let Some(measurement) = stream.next().await else {
+            continue;
+        };
+
+        observer.sample(measurement.left, measurement.right).await;
+
+        left.observe(EncoderSample {
+            timestamp_ms: measurement.timestamp_ms,
+            count: measurement.left,
+        });
+        right.observe(EncoderSample {
+            timestamp_ms: measurement.timestamp_ms,
+            count: measurement.right,
+        });
+    }
+
+    // The window is over: brake both tracks before the caller publishes the
+    // result, so a wheel is never left commanded between Power Steps.
+    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+
+    let left = result_or_no_window(&left);
+    let right = result_or_no_window(&right);
+    debug!(
+        "sweep: {=str} {=u8}% L={=str} R={=str} rail={=bool}",
+        direction_label(direction),
+        power,
+        result_label(left),
+        result_label(right),
+        rail_volts.is_some()
+    );
+
+    StepEnd::Measured(PairOutcome {
+        left,
+        right,
+        rail_volts,
+        compensation,
+    })
+}
+
+/// Reset both counters and confirm the reset on both engines, or report why the
+/// step ended early.
+///
+/// The encoder task may be mid-interval (or delayed), so a fixed sleep can
+/// record the reset instant before the task has applied the reset and then see
+/// a stale pre-reset sample. Wait for a fresh all-zero sample instead: that is
+/// positive proof the reset took. Because quiescence was established first, the
+/// counters are stable, so a fresh nonzero sample can only be a pre-reset
+/// sample; it is ignored while the wait continues.
+///
+/// Returns `None` once the reset is confirmed, or the [`StepEnd`] that cuts the
+/// step short: stopped, floor drop, [`NO_SAMPLE_REASON`] when no fresh sample
+/// arrives at all (a dead encoder task), or [`RESET_CONFIRM_REASON`] when fresh
+/// samples keep arriving but never read zero.
+async fn reset_and_confirm(
+    claim: &Claim,
+    left: &mut MeasurementEngine,
+    right: &mut MeasurementEngine,
+    stream: &mut SampleStream,
+) -> Option<StepEnd> {
+    encoders::send_command(EncoderCommand::Reset).await;
+    let deadline = now_ms().saturating_add(RESET_CONFIRM_TIMEOUT_MS);
+    loop {
+        if claim.wait_or_stop(SAMPLE_INTERVAL_MS).await {
+            return Some(StepEnd::Stopped);
+        }
+        if perception::is_floor_drop_detected() {
+            return Some(StepEnd::Fault);
+        }
+        if stream.dead(now_ms(), NO_SAMPLE_TIMEOUT_MS) {
+            return Some(StepEnd::Aborted(NO_SAMPLE_REASON));
+        }
+        if now_ms() >= deadline {
+            return Some(StepEnd::Aborted(RESET_CONFIRM_REASON));
+        }
+        let Some(measurement) = stream.next().await else {
+            continue;
+        };
+        if measurement.left == 0 && measurement.right == 0 {
+            let reset_ms = measurement.timestamp_ms;
+            left.reset_now(reset_ms);
+            right.reset_now(reset_ms);
+            // Confirm with the zero sample we just consumed. Its timestamp is
+            // the reset instant, which observe_reset accepts.
+            left.observe(EncoderSample {
+                timestamp_ms: reset_ms,
+                count: 0,
+            });
+            right.observe(EncoderSample {
+                timestamp_ms: reset_ms,
+                count: 0,
+            });
+            clear_encoder_measurement().await;
+            return None;
+        }
+        // A nonzero sample taken after we asked for the reset is a pre-reset
+        // sample; the task has not applied the reset yet. Keep waiting.
+    }
+}
+
+/// Run one full sweep: forward and reverse, each over the ten Power Steps.
+///
+/// The cycle is the same for the Basic Motor Test and the Motor Calibration, so
+/// it lives here: the encoder sampler is started before the first step and
+/// stopped after the last, both tracks are braked between steps, and the Stop
+/// latch and the floor-drop flag are checked before each step so a latched stop
+/// is never overridden by the next command. The caller's [`SweepSink`] owns
+/// everything specific to its Procedure.
+pub async fn run_sweep<S>(claim: &Claim, sink: &mut S, mode: SweepMode, progress: SweepProgress) -> SweepEnd
+where
+    S: SweepSink,
+{
+    start_encoders().await;
+
+    let end = 'cycle: {
+        let total = u8::try_from(TOTAL_STEPS).unwrap_or(u8::MAX);
+        for direction in DIRECTIONS {
+            for (step_index, power) in STEP_POWERS.iter().copied().enumerate() {
+                if claim.is_stop_requested() {
+                    break 'cycle SweepEnd::Stopped;
+                }
+                if perception::is_floor_drop_detected() {
+                    break 'cycle SweepEnd::Aborted(FLOOR_DROP_REASON);
+                }
+
+                let cycle_index = direction.index() * motor_cal::POWER_STEPS + step_index;
+                let index = u8::try_from(cycle_index).unwrap_or(u8::MAX);
+                let step = StepRef {
+                    direction,
+                    power,
+                    index,
+                    total,
+                };
+                // The bar shows where the operator is in the twenty-step cycle,
+                // so the last step reads 100 % while it runs; a finished view
+                // drops the bar entirely.
+                let percent = progress.percent(cycle_index + 1);
+                claim.phase(mode.stage_label(direction), Some(percent)).await;
+                sink.step_started(step).await;
+
+                match run_power_pair(claim, direction, power, mode, &mut *sink).await {
+                    StepEnd::Measured(outcome) => match sink.step_measured(step, outcome).await {
+                        StepAction::Continue => {}
+                        StepAction::Abort(reason) => break 'cycle SweepEnd::Aborted(reason),
+                    },
+                    StepEnd::Stopped => break 'cycle SweepEnd::Stopped,
+                    StepEnd::Fault => break 'cycle SweepEnd::Aborted(FLOOR_DROP_REASON),
+                    StepEnd::Aborted(reason) => break 'cycle SweepEnd::Aborted(reason),
+                }
+            }
+        }
+        SweepEnd::Complete
+    };
+
+    stop_encoders().await;
+    end
+}
+
+/// Run a discarded 20-step raw pair sweep that warms the motors before measuring.
+///
+/// This mirrors the load of the measured sweep (forward and reverse, 10 to 100 %)
+/// for [`WARMUP_DWELL_MS`] × 20 ≈ 50 s, but it is discarded: nothing here feeds the
+/// calibration or the test. It commands raw `SetTracksRaw` on purpose, so no curve
+/// is applied — the point is to load the drivetrain, not to hit a corrected speed.
+/// The encoder sampler is not started; the measured sweep does that.
+///
+/// `claim` is `Some` inside a Procedure, where the Stop latch, the floor-drop gate
+/// and the phase/progress updates apply; it is `None` for the bench regression,
+/// which runs outside a Procedure. A Stop is reported as [`SweepEnd::Stopped`]
+/// without braking here — the Procedure's stop path handles the terminal motion.
+pub async fn run_warm_up(claim: Option<&Claim>, progress: SweepProgress) -> SweepEnd {
+    motor_driver::send_motor_command(MotorCommand::SetAllDriversEnable { enabled: true }).await;
+
+    let mut step_index = 0usize;
+    for direction in DIRECTIONS {
+        for power in STEP_POWERS {
+            if let Some(claim) = claim {
+                if claim.is_stop_requested() {
+                    return SweepEnd::Stopped;
+                }
+                if perception::is_floor_drop_detected() {
+                    return SweepEnd::Aborted(FLOOR_DROP_REASON);
+                }
+                let percent = progress.percent(step_index + 1);
+                claim.phase(warm_up_label(direction), Some(percent)).await;
+            }
+
+            let signed = signed_speed(direction, power);
+            motor_driver::send_motor_command(MotorCommand::SetTracksRaw {
+                left_speed: signed,
+                right_speed: signed,
+            })
+            .await;
+            info!("motor-warmup: {=str} {=u8}%", direction_label(direction), power);
+
+            match claim {
+                Some(claim) => {
+                    if claim.wait_or_stop(WARMUP_DWELL_MS).await {
+                        return SweepEnd::Stopped;
+                    }
+                }
+                None => Timer::after(Duration::from_millis(WARMUP_DWELL_MS)).await,
+            }
+            step_index += 1;
+        }
+    }
+
+    motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
+    info!("motor-warmup: complete");
+    SweepEnd::Complete
+}
+
+/// The operator-facing phase label for a warm-up step.
+const fn warm_up_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Forward => "Warm-up forward",
+        Direction::Reverse => "Warm-up reverse",
+    }
+}
+
+/// The motor rail and the compensation the driver's rule derives at it, read
+/// once at the instant the command is made.
+///
+/// A sample taken at the end of the window is one the driver never used, so the
+/// record carries these values instead.
+fn rail_at_command() -> (Option<f32>, Option<f32>) {
+    power::try_get_rail_sample().map_or_else(
+        || {
+            warn!("sweep: no rail sample at command time; recording none");
+            (None, None)
+        },
+        |(volts, _)| (Some(volts), Some(motor_driver::voltage_compensation(volts))),
+    )
+}
+
+/// The signed track command for both tracks of a pair step in `direction` at
+/// `power` percent.
+///
+/// Both tracks are commanded at the same requested power, which is what makes
+/// the measured condition match the condition a corrected `SetTracks` runs in.
+pub fn signed_speed(direction: Direction, power: u8) -> i8 {
+    // The caller only ever passes one of the ten Power Steps, all at most 100 %.
+    let magnitude = i8::try_from(power).unwrap_or(i8::MAX);
+    match direction {
+        Direction::Forward => magnitude,
+        Direction::Reverse => -magnitude,
+    }
+}
+
+/// The two Test Legs a pair step in `direction` writes: left then right.
+#[must_use]
+pub const fn legs(direction: Direction) -> [TestLeg; 2] {
+    [
+        TestLeg::new(Track::Left, direction),
+        TestLeg::new(Track::Right, direction),
+    ]
+}
+
+/// The curve in force for `track` and `direction` at `power`, as the panel shows
+/// it.
+///
+/// With no curve loaded the command is used unchanged (`1.00`); a curve that
+/// corrects nothing at or below its Calibration Floor yields `raw`. This is the
+/// single formatting of a correction for both the live readout and the summary.
+pub fn correction(curve: Option<&Curve>, track: Track, direction: Direction, power: u8) -> Correction {
+    let Some(curve) = curve else {
+        return Correction::Identity;
+    };
+    curve
+        .correction(track, direction, power)
+        .map_or(Correction::Raw, |factor| Correction::Factor(per_mille(factor)))
+}
+
+/// The operator-facing direction name for the phase line and the bench log.
+#[must_use]
+pub const fn direction_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Forward => "Forward",
+        Direction::Reverse => "Reverse",
+    }
+}
+
+/// Round a curve factor to per-mille for the readout's fixed-point cell.
+///
+/// The readout stays `Eq`-comparable because the factor crosses its boundary as
+/// an integer; the curve maths itself never leaves `motor-cal`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn per_mille(factor: f32) -> u16 {
+    let scaled = (factor * 1000.0) + 0.5;
+    if scaled <= 0.0 {
+        0
+    } else if scaled >= 1000.0 {
+        1000
+    } else {
+        scaled as u16
+    }
+}
+
+/// The current time, in milliseconds since boot.
+pub fn now_ms() -> u64 {
+    Instant::now().as_millis()
+}
+
+/// An engine's invalid verdict, or `None` while it is running or valid.
+const fn invalid_reason(engine: &MeasurementEngine) -> Option<InvalidReason> {
+    match engine.result() {
+        Some(PointResult::Invalid(reason)) => Some(reason),
+        Some(PointResult::Valid(_)) | None => None,
+    }
+}
+
+/// An engine's verdict, or the reason a step cut short leaves it with none.
+fn result_or_no_window(engine: &MeasurementEngine) -> PointResult {
+    engine.result().unwrap_or(PointResult::Invalid(InvalidReason::NoWindow))
+}
+
+/// The panel's Test Leg for the measurement model's.
+///
+/// The two models name the same four legs; this is the one translation between
+/// them, so the schedule, the phase line and the readout cannot disagree about
+/// which leg is running.
+pub const fn ui_leg(leg: TestLeg) -> touch_ui::TestLeg {
+    touch_ui::TestLeg {
+        track: match leg.track {
+            Track::Left => touch_ui::Track::Left,
+            Track::Right => touch_ui::Track::Right,
+        },
+        direction: ui_direction(leg.direction),
+    }
+}
+
+/// The panel's direction for the measurement model's.
+pub const fn ui_direction(direction: Direction) -> touch_ui::Direction {
+    match direction {
+        Direction::Forward => touch_ui::Direction::Forward,
+        Direction::Reverse => touch_ui::Direction::Reverse,
+    }
+}
+
+/// The operator-facing name of a Test Leg, for the bench log.
+pub const fn leg_label(leg: TestLeg) -> &'static str {
+    match (leg.track, leg.direction) {
+        (Track::Left, Direction::Forward) => "left forward",
+        (Track::Left, Direction::Reverse) => "left reverse",
+        (Track::Right, Direction::Forward) => "right forward",
+        (Track::Right, Direction::Reverse) => "right reverse",
+    }
+}
+
+/// A short name for a point's verdict, for the bench log.
+const fn result_label(result: PointResult) -> &'static str {
+    match result {
+        PointResult::Valid(_) => "valid",
+        PointResult::Invalid(reason) => reason.label(),
+    }
+}

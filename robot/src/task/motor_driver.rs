@@ -29,8 +29,17 @@
 //!
 //! # Calibration
 //!
-//! `MotorCalibration` has `left_factor` and `right_factor` multipliers (0.5–1.5).
-//! Applied in `SetTracks` after voltage compensation to balance left/right tracks.
+//! `SetTracks` resolves each requested track through the loaded Motor
+//! Calibration Curve published in the calibration state leaf. Zero stays zero, a
+//! magnitude below the Calibration Floor is passed through raw, and everything
+//! else is the interpolated per-track, per-direction correction. An absent curve
+//! is the identity, so an uncalibrated robot drives on the raw request. Voltage
+//! compensation is applied afterwards.
+//!
+//! `SetTracksRaw` takes the same path but never reads the curve. The Motor
+//! Calibration sweep uses it so it measures the raw drivetrain: a sweep that ran
+//! through the loaded curve would measure the corrected duty and re-derive a
+//! near-identity curve.
 //!
 //! # Architecture
 //!
@@ -56,11 +65,22 @@ use embassy_rp::{
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Instant, Timer};
+use motor_cal::{Track as CurveTrack, resolve_track_speed};
 
-use crate::system::state::{motion, power};
+use crate::system::state::{calibration, motion, power};
 
 /// Target motor voltage (we compensate battery voltage down to this).
-const TARGET_MOTOR_VOLTAGE: f32 = 6.0;
+pub const TARGET_MOTOR_VOLTAGE: f32 = 6.0;
+
+/// The left motor's drive leads are reversed relative to the right, so the
+/// hardware output is the negation of the logically resolved left command.
+///
+/// The inversion is applied only to the left hardware output, after the curve
+/// and voltage compensation are resolved, so the logical speeds, the curve and
+/// the reported correction all stay logical. A curve saved under the old
+/// polarity must be re-derived; the v4 pair calibration does that on its next
+/// run.
+const LEFT_MOTOR_INVERTED: bool = true;
 
 /// Command queue depth — enough for drive task bursts without blocking.
 const COMMAND_QUEUE_SIZE: usize = 16;
@@ -98,13 +118,21 @@ pub enum MotorDirection {
 /// Motor control commands.
 ///
 /// `SetTracks` is the primary calibrated command for normal operation.
-/// Calibration and voltage compensation are applied.
+/// `SetTracksRaw` is the same command without the curve resolution, for a
+/// procedure that must measure the raw drivetrain.
 /// `BrakeAll`, `CoastAll` are raw/safety commands.
 #[derive(Debug, Clone, Copy, Format)]
 pub enum MotorCommand {
     /// Set both tracks at once (calibrated + voltage compensated).
     /// Speed range: -100 (full backward) to +100 (full forward).
     SetTracks { left_speed: i8, right_speed: i8 },
+
+    /// Set both tracks at once without consulting the calibration curve
+    /// (raw + voltage compensated). Speed range: -100 to +100.
+    ///
+    /// This is the sweep's command: the Motor Calibration must measure the raw
+    /// drivetrain, not the loaded curve it is about to replace.
+    SetTracksRaw { left_speed: i8, right_speed: i8 },
 
     /// Brake all motors (emergency stop).
     BrakeAll,
@@ -115,82 +143,6 @@ pub enum MotorCommand {
     /// Enable/disable the motor driver via standby pin.
     /// When disabled, all motor outputs are off (low power).
     SetAllDriversEnable { enabled: bool },
-
-    /// Load calibration data from flash storage.
-    LoadCalibration(MotorCalibration),
-
-    /// Update both calibration factors at once.
-    UpdateAllCalibration { left_factor: f32, right_factor: f32 },
-}
-
-/// Per-track calibration factors for speed balancing.
-///
-/// Each factor is a multiplier (0.5 to 1.5) applied to commanded speed.
-/// Default is 1.0 (no correction).
-#[derive(Debug, Clone, Copy, Format)]
-pub struct MotorCalibration {
-    pub left_factor: f32,
-    pub right_factor: f32,
-}
-
-impl Default for MotorCalibration {
-    fn default() -> Self {
-        Self {
-            left_factor: 1.0,
-            right_factor: 1.0,
-        }
-    }
-}
-
-impl MotorCalibration {
-    const MIN_FACTOR: f32 = 0.5;
-    const MAX_FACTOR: f32 = 1.5;
-
-    /// Create new calibration with specified factors (clamped to valid range).
-    pub const fn new(left_factor: f32, right_factor: f32) -> Self {
-        Self {
-            left_factor: left_factor.clamp(Self::MIN_FACTOR, Self::MAX_FACTOR),
-            right_factor: right_factor.clamp(Self::MIN_FACTOR, Self::MAX_FACTOR),
-        }
-    }
-
-    /// Get calibration factor for a track.
-    pub const fn get_factor(&self, track: Track) -> f32 {
-        match track {
-            Track::Left => self.left_factor,
-            Track::Right => self.right_factor,
-        }
-    }
-
-    /// Apply calibration to a commanded speed, clamping to [-100, 100].
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn apply(&self, track: Track, speed: i8) -> i8 {
-        let factor = self.get_factor(track);
-        let calibrated_f32 = f32::from(speed) * factor;
-        let calibrated = if calibrated_f32 >= 0.0 {
-            (calibrated_f32 + 0.5) as i8
-        } else {
-            (calibrated_f32 - 0.5) as i8
-        };
-        calibrated.clamp(-100, 100)
-    }
-
-    /// Apply calibration AND voltage compensation.
-    ///
-    /// Two corrections in sequence:
-    /// 1. Motor calibration factor (compensates for motor variations)
-    /// 2. Voltage compensation factor (compensates for battery voltage)
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn apply_with_voltage_compensation(&self, track: Track, speed: i8, voltage_comp: f32) -> i8 {
-        let calibrated = self.apply(track, speed);
-        let final_f32 = f32::from(calibrated) * voltage_comp;
-        let result = if final_f32 >= 0.0 {
-            (final_f32 + 0.5) as i8
-        } else {
-            (final_f32 - 0.5) as i8
-        };
-        result.clamp(-100, 100)
-    }
 }
 
 // ── Internal types ───────────────────────────────────────────────────────────────
@@ -231,15 +183,15 @@ struct PwmChannels {
 }
 
 impl PwmChannels {
-    fn set_speed(&mut self, track: Track, speed: i8) {
+    fn set_speed(&mut self, track: Track, speed: i16) {
         let pwm = match track {
             Track::Left => &mut self.left,
             Track::Right => &mut self.right,
         };
-        let _ = pwm.set_duty_cycle_percent(speed.unsigned_abs());
+        let _ = pwm.set_duty_cycle_fraction(speed.unsigned_abs(), 1000);
     }
 
-    fn set_both(&mut self, left_speed: i8, right_speed: i8) {
+    fn set_both(&mut self, left_speed: i16, right_speed: i16) {
         self.set_speed(Track::Left, left_speed);
         self.set_speed(Track::Right, right_speed);
     }
@@ -248,7 +200,7 @@ impl PwmChannels {
 // ── Helpers ──────────────────────────────────────────────────────────────────────
 
 /// Convert speed value to motor direction.
-const fn speed_to_direction(speed: i8) -> MotorDirection {
+const fn speed_to_direction(speed: i16) -> MotorDirection {
     match speed {
         s if s > 0 => MotorDirection::Forward,
         s if s < 0 => MotorDirection::Backward,
@@ -277,6 +229,20 @@ async fn wait_for_rail_voltage() -> f32 {
     }
 }
 
+/// The PWM scale the driver applies at `rail_volts`.
+///
+/// This is the single rule both the driver and the Motor Calibration record use:
+/// the 6 V target over the measured rail, or `1.0` when the rail is at or below
+/// the target and cannot be compensated. It is pure, so a caller can record the
+/// compensation for a rail it read at command time.
+pub fn voltage_compensation(rail_volts: f32) -> f32 {
+    if rail_volts < TARGET_MOTOR_VOLTAGE {
+        1.0
+    } else {
+        TARGET_MOTOR_VOLTAGE / rail_volts
+    }
+}
+
 /// Calculate the voltage compensation factor from the measured motor rail.
 ///
 /// Scales duty cycle to maintain 6V at the motors as the rail drains.
@@ -291,39 +257,68 @@ fn calculate_voltage_compensation(rail_voltage: f32) -> f32 {
             "Motor rail {}V below target {}V — cannot compensate",
             rail_voltage, TARGET_MOTOR_VOLTAGE
         );
-        1.0
-    } else {
-        TARGET_MOTOR_VOLTAGE / rail_voltage
     }
+    voltage_compensation(rail_voltage)
 }
 
 // ── Command processing ───────────────────────────────────────────────────────────
 
-/// Process a `SetTracks` command: apply calibration + voltage compensation,
-/// set direction pins and PWM, then publish speeds to motion state.
+/// Process a `SetTracks`-family command: resolve each track through the loaded
+/// curve when `apply_curve` is set, apply voltage compensation, set direction
+/// pins and PWM, then publish the requested speeds to motion state.
+///
 async fn process_set_tracks(
     pwm: &mut PwmChannels,
     left_pins: &mut MotorPins<'_>,
     right_pins: &mut MotorPins<'_>,
-    cal: &MotorCalibration,
     voltage_comp: f32,
+    apply_curve: bool,
     left: i8,
     right: i8,
 ) {
-    let final_left = cal.apply_with_voltage_compensation(Track::Left, left, voltage_comp);
-    let final_right = cal.apply_with_voltage_compensation(Track::Right, right, voltage_comp);
+    // Copy the curve out of the leaf; the lock is released before motion state
+    // is touched, so the documented lock order is never inverted. A raw command
+    // never consults the curve at all, so a calibration sweep measures the
+    // drivetrain rather than the curve it is about to replace.
+    let curve = if apply_curve {
+        calibration::get_motor_curve().await
+    } else {
+        None
+    };
+    let final_left = resolve_track_speed(curve.as_ref(), CurveTrack::Left, left, voltage_comp);
+    let final_right = resolve_track_speed(curve.as_ref(), CurveTrack::Right, right, voltage_comp);
+
+    // The left leads are reversed relative to the right, so the physical output
+    // is the negation of the logically resolved command. Apply it here, after
+    // the curve and voltage compensation, and only to the left output, so the
+    // curve, the reported correction and motion state all stay logical. A saved
+    // curve from the old polarity must be re-derived; the v4 pair calibration
+    // will do it.
+    let hardware_left = if LEFT_MOTOR_INVERTED { -final_left } else { final_left };
 
     debug!(
-        "SetTracks: [{}, {}] -> calibrated [{}, {}] (vcomp: {})",
-        left, right, final_left, final_right, voltage_comp
+        "SetTracks{}: logical [{}, {}] -> resolved_permille [{}, {}] (vcomp: {}); hardware_permille left {} (inverted={})",
+        if apply_curve { "" } else { " (raw)" },
+        left,
+        right,
+        final_left,
+        final_right,
+        voltage_comp,
+        hardware_left,
+        LEFT_MOTOR_INVERTED
+    );
+    #[cfg(any(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
+    info!(
+        "bench-motor: left requested={} resolved_permille={} hardware_permille={} inverted={}",
+        left, final_left, hardware_left, LEFT_MOTOR_INVERTED
     );
 
-    left_pins.set_direction(speed_to_direction(final_left));
+    left_pins.set_direction(speed_to_direction(hardware_left));
     right_pins.set_direction(speed_to_direction(final_right));
-    pwm.set_both(final_left, final_right);
+    pwm.set_both(hardware_left, final_right);
 
-    // Publish the commanded (pre-calibration) speeds to motion state
-    // so other tasks (drive, orchestrator) can read them.
+    // Publish the requested (pre-correction) speeds to motion state so other
+    // tasks (drive, orchestrator) see what was asked for, not the applied duty.
     motion::set_track_speeds(left, right).await;
 }
 
@@ -334,7 +329,6 @@ async fn process_command(
     left_pins: &mut MotorPins<'_>,
     right_pins: &mut MotorPins<'_>,
     standby: &mut Output<'_>,
-    cal: &mut MotorCalibration,
     voltage_comp: f32,
     command: MotorCommand,
 ) {
@@ -343,7 +337,13 @@ async fn process_command(
             left_speed,
             right_speed,
         } => {
-            process_set_tracks(pwm, left_pins, right_pins, cal, voltage_comp, left_speed, right_speed).await;
+            process_set_tracks(pwm, left_pins, right_pins, voltage_comp, true, left_speed, right_speed).await;
+        }
+        MotorCommand::SetTracksRaw {
+            left_speed,
+            right_speed,
+        } => {
+            process_set_tracks(pwm, left_pins, right_pins, voltage_comp, false, left_speed, right_speed).await;
         }
         MotorCommand::BrakeAll => {
             debug!("Braking all motors");
@@ -366,20 +366,6 @@ async fn process_command(
             } else {
                 standby.set_low();
             }
-        }
-        MotorCommand::LoadCalibration(new_cal) => {
-            info!(
-                "Loading calibration: left={}, right={}",
-                new_cal.left_factor, new_cal.right_factor
-            );
-            *cal = new_cal;
-        }
-        MotorCommand::UpdateAllCalibration {
-            left_factor,
-            right_factor,
-        } => {
-            info!("Updating all calibration: left={}, right={}", left_factor, right_factor);
-            *cal = MotorCalibration::new(left_factor, right_factor);
         }
     }
 }
@@ -439,9 +425,8 @@ pub async fn motor_driver(
     // Standby pin — start disabled for safety
     let mut standby = Output::new(standby_pin, Level::Low);
 
-    // Initialize calibration with defaults — will be updated when flash sends data
-    let mut calibration = MotorCalibration::default();
-    info!("Motor driver initialized with default calibration");
+    // The applied curve is read from the calibration state leaf on each
+    // `SetTracks`, so the driver holds no calibration copy of its own.
 
     // Ensure motion state is zeroed
     motion::set_track_speeds(0, 0).await;
@@ -475,6 +460,10 @@ pub async fn motor_driver(
             MotorCommand::SetTracks {
                 left_speed,
                 right_speed,
+            }
+            | MotorCommand::SetTracksRaw {
+                left_speed,
+                right_speed,
             } => *left_speed != 0 || *right_speed != 0,
             MotorCommand::BrakeAll | MotorCommand::CoastAll => false,
             MotorCommand::SetAllDriversEnable { enabled } => {
@@ -484,7 +473,6 @@ pub async fn motor_driver(
                     false
                 }
             }
-            MotorCommand::LoadCalibration(_) | MotorCommand::UpdateAllCalibration { .. } => was_motors_active,
         };
 
         // Record when the motors last became idle. A rail sample older than
@@ -517,7 +505,6 @@ pub async fn motor_driver(
             &mut left_pins,
             &mut right_pins,
             &mut standby,
-            &mut calibration,
             voltage_compensation,
             command,
         )

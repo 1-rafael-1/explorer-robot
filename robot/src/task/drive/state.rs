@@ -151,6 +151,8 @@ impl ActiveIntent {
                 super::types::CompletionTelemetry::DriveDistance {
                     achieved_left_revs: state.accumulated_left_revs,
                     achieved_right_revs: state.accumulated_right_revs,
+                    achieved_left_counts: state.accumulated_left_counts,
+                    achieved_right_counts: state.accumulated_right_counts,
                     target_left_revs: state.target_left_revs,
                     target_right_revs: state.target_right_revs,
                     duration_ms,

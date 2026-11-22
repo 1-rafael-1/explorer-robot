@@ -13,7 +13,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 
-use crate::{rangefinder::ROWS as RANGEFINDER_ROWS, screens::ValueFlow};
+use crate::{basic_motor::SUMMARY_TABLE_ROWS, rangefinder::ROWS as RANGEFINDER_ROWS, screens::ValueFlow};
 
 /// Framebuffer width in pixels (landscape after the orientation transform).
 pub const FB_W: usize = 320;
@@ -106,6 +106,34 @@ pub const READOUT_INSET: u32 = 4;
 /// A sparse readout grows its rows to fill the panel up to this pitch; a dense
 /// one compresses below it so every row still fits.
 pub const READOUT_MAX_PITCH: u32 = 26;
+
+/// Width of the Basic Motor Test Readout's label column, in pixels.
+///
+/// The longest label is `Correction` (ten glyphs, 60 px), so 88 px holds it
+/// with room to breathe and leaves 176 px of the panel's 264-pixel inner width
+/// for the value column. That fits the widest live rows, including a corrected
+/// `Last` row such as `Corr Fwd 100% L 65535 R 65535` (29 glyphs, 174 px).
+pub const BASIC_MOTOR_LABEL_W: u32 = 88;
+
+/// Width of the Basic Motor Test Result Report's label column, in pixels.
+///
+/// The rows name a table (`Counts`, `Corr`) or a Test Leg (`L fwd`), so eight
+/// glyphs of the six-pixel font leave the rest of the 264-pixel inner width for
+/// the value columns.
+pub const BASIC_MOTOR_SUMMARY_LABEL_W: u32 = 48;
+
+/// The number of rows the Basic Motor Test Result Report draws: the two tables,
+/// the Floor/Spread line and the optional saved/not-saved footer.
+///
+/// The footer row is reserved even when the summary carries no footer, so the
+/// Basic Motor Test and a Motor Calibration place their tables identically.
+pub const BASIC_MOTOR_SUMMARY_ROWS: usize = SUMMARY_TABLE_ROWS + 2;
+
+/// Vertical gap between the Basic Motor Test Readout and the progress bar, in
+/// pixels.
+///
+/// The readout band stops short of the bar's top edge so the two never touch.
+pub const BASIC_MOTOR_BAR_GAP: u32 = 4;
 
 /// Horizontal gap between the Rangefinder Test Readout's two sensor columns, in
 /// pixels.
@@ -434,15 +462,7 @@ pub const fn readout_area() -> Rectangle {
 /// crowded. Zero rows use a zero pitch.
 #[must_use]
 pub const fn readout_row_pitch(rows: usize) -> u32 {
-    if rows == 0 {
-        return 0;
-    }
-    let fill = readout_area().size.height / rows as u32;
-    if fill < READOUT_MAX_PITCH {
-        fill
-    } else {
-        READOUT_MAX_PITCH
-    }
+    row_pitch_in(readout_area(), rows)
 }
 
 /// The on-screen rectangle of readout row `index` of `rows`.
@@ -452,8 +472,26 @@ pub const fn readout_row_pitch(rows: usize) -> u32 {
 /// twelve rows fill it without touching the border.
 #[must_use]
 pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
-    let area = readout_area();
-    let pitch = readout_row_pitch(rows);
+    row_rect_in(readout_area(), index, rows)
+}
+
+/// The row pitch for `rows` rows inside `area`, capped at
+/// [`READOUT_MAX_PITCH`].
+const fn row_pitch_in(area: Rectangle, rows: usize) -> u32 {
+    if rows == 0 {
+        return 0;
+    }
+    let fill = area.size.height / rows as u32;
+    if fill < READOUT_MAX_PITCH {
+        fill
+    } else {
+        READOUT_MAX_PITCH
+    }
+}
+
+/// The rectangle of row `index` of `rows` inside `area`, centred as a block.
+const fn row_rect_in(area: Rectangle, index: usize, rows: usize) -> Rectangle {
+    let pitch = row_pitch_in(area, rows);
     let block = (rows as u32).saturating_mul(pitch);
     let offset = area.size.height.saturating_sub(block) / 2;
     Rectangle::new(
@@ -462,6 +500,105 @@ pub const fn readout_row_rect(index: usize, rows: usize) -> Rectangle {
             area.top_left.y + (offset as i32) + (index as u32).saturating_mul(pitch) as i32,
         ),
         Size::new(area.size.width, pitch),
+    )
+}
+
+/// The on-screen rectangle of the Basic Motor Test Readout: the panel inset like
+/// the other readouts, ending above the progress bar.
+///
+/// The IMU and Rangefinder readouts fill [`readout_area`]. The Basic Motor Test
+/// keeps its cycle bar below the readout, so its band stops
+/// [`BASIC_MOTOR_BAR_GAP`] short of the bar's top edge and never overlaps it.
+#[must_use]
+pub const fn basic_motor_readout_area() -> Rectangle {
+    let area = readout_area();
+    let bar = progress_bar_rect();
+    let available = bar.top_left.y - area.top_left.y;
+    let height = if available > 0 { available as u32 } else { 0 };
+    Rectangle::new(
+        area.top_left,
+        Size::new(area.size.width, height.saturating_sub(BASIC_MOTOR_BAR_GAP)),
+    )
+}
+
+/// The on-screen rectangle of Basic Motor Test Readout row `index` among
+/// `rows`.
+///
+/// The rows share [`basic_motor_readout_area`] at up to [`READOUT_MAX_PITCH`]
+/// and the block is centred in the band, so a short block reads like the other
+/// readouts and the rows still fit above the bar.
+#[must_use]
+pub const fn basic_motor_row_rect(index: usize, rows: usize) -> Rectangle {
+    row_rect_in(basic_motor_readout_area(), index, rows)
+}
+
+/// The on-screen rectangle of the label cell in Basic Motor Test Readout row
+/// `index` among `rows`.
+#[must_use]
+pub const fn basic_motor_label_rect(index: usize, rows: usize) -> Rectangle {
+    let row = basic_motor_row_rect(index, rows);
+    Rectangle::new(row.top_left, Size::new(BASIC_MOTOR_LABEL_W, row.size.height))
+}
+
+/// The on-screen rectangle of the value cell in Basic Motor Test Readout row
+/// `index` among `rows`, starting after the label column.
+#[must_use]
+pub const fn basic_motor_value_rect(index: usize, rows: usize) -> Rectangle {
+    let row = basic_motor_row_rect(index, rows);
+    Rectangle::new(
+        Point::new(row.top_left.x + BASIC_MOTOR_LABEL_W as i32, row.top_left.y),
+        Size::new(row.size.width - BASIC_MOTOR_LABEL_W, row.size.height),
+    )
+}
+
+/// The on-screen rectangle of the Basic Motor Test Result Report: the full
+/// readout area, with no progress bar reserved.
+///
+/// The Result Report is a finished view, so the bar it shared the panel with
+/// while running is gone and both tables may use the whole band.
+#[must_use]
+pub const fn basic_motor_summary_area() -> Rectangle {
+    readout_area()
+}
+
+/// The on-screen rectangle of Result Report row `index`.
+///
+/// The twelve rows share [`basic_motor_summary_area`] at an even pitch, and the
+/// block is centred, so every row fits between the panel's top and bottom edges
+/// and no two rows overlap. The 136-pixel band compresses the pitch to eleven
+/// pixels, which still clears the ten-pixel glyph.
+#[must_use]
+pub const fn basic_motor_summary_row_rect(index: usize) -> Rectangle {
+    row_rect_in(basic_motor_summary_area(), index, BASIC_MOTOR_SUMMARY_ROWS)
+}
+
+/// The on-screen rectangle of the label cell in Result Report row `index`.
+#[must_use]
+pub const fn basic_motor_summary_label_rect(index: usize) -> Rectangle {
+    let row = basic_motor_summary_row_rect(index);
+    Rectangle::new(row.top_left, Size::new(BASIC_MOTOR_SUMMARY_LABEL_W, row.size.height))
+}
+
+/// The on-screen rectangle of value cell `column` of `columns` in Result Report
+/// row `index`, starting after the label column.
+///
+/// The cells split the row's remaining width evenly, so the counts table's five
+/// columns and the corrections table's four never overlap, and the widest value
+/// still fits its own column.
+#[must_use]
+pub const fn basic_motor_summary_cell_rect(column: usize, columns: usize, index: usize) -> Rectangle {
+    let row = basic_motor_summary_row_rect(index);
+    let width = if columns == 0 {
+        0
+    } else {
+        (row.size.width - BASIC_MOTOR_SUMMARY_LABEL_W) / columns as u32
+    };
+    Rectangle::new(
+        Point::new(
+            row.top_left.x + BASIC_MOTOR_SUMMARY_LABEL_W as i32 + (column as u32 * width) as i32,
+            row.top_left.y,
+        ),
+        Size::new(width, row.size.height),
     )
 }
 

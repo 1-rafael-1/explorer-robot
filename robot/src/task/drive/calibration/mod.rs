@@ -1,6 +1,6 @@
 //! Calibration procedures for the drive system.
 //!
-//! Holds the motor (track balance), DMP compass and distance calibration
+//! Holds the motor (curve), DMP compass and distance calibration
 //! routines. Each procedure publishes its phase, percent and result
 //! to [`crate::system::state::activity`]; nothing here formats display text.
 //!
@@ -15,10 +15,11 @@
 //! second claim or start.
 //!
 //! The distance calibration holds its claim across the drive step and the value
-//! entry, because the factor is forced to 1.0 for the drive: releasing the slot
-//! before the operator's commit or cancel would let another Procedure run on that
-//! forced factor. A stop of the drive restores the factor and finishes the claim,
-//! and the value entry ends it on the commit or cancel the panel offers there.
+//! entry, because the scale is forced to the nominal one for the drive: releasing
+//! the slot before the operator's commit or cancel would let another Procedure run
+//! on the forced scale. A stop of the drive restores the scale and finishes the
+//! claim, and the value entry ends it on the commit or cancel the panel offers
+//! there.
 //!
 //! # Stopping
 //!
@@ -46,7 +47,7 @@ use crate::task::{
 /// A calibration the controller can spawn.
 #[derive(Clone, Copy)]
 pub enum CalibrationCommand {
-    /// The motor (track balance) calibration.
+    /// The motor calibration curve.
     Motor,
     /// The DMP compass calibration, which guides the operator with the Prompt.
     DmpMag,
@@ -156,30 +157,42 @@ async fn dmp_calibration_task(claim: Claim) {
 /// Distance calibration task: the fixed-distance drive, then the value entry.
 ///
 /// The task owns the claim across both, so the slot stays held while the operator
-/// measures and no other Procedure can start with the forced factor of 1.0. The
-/// drive step makes its own terminal call when it stops or fails; on success the
-/// task publishes the value screen's phase, tells the UI to show it, and makes the
-/// terminal call once the operator's [`DistanceDecision`] arrives.
+/// measures and no other Procedure can start with the nominal scale in force. The
+/// drive step makes its own terminal call when it stops or fails; on success it
+/// returns the leg's raw counts, the task publishes the value screen's phase,
+/// tells the UI to show it, and makes the terminal call once the operator's
+/// [`DistanceDecision`] arrives. An out-of-band measurement fails the claim and
+/// saves nothing.
 #[embassy_executor::task]
 async fn distance_calibration_task(claim: Claim) {
     distance::begin().await;
 
-    match distance::run_drive_step(&claim).await {
-        DriveOutcome::Complete => {}
-        // The step already restored the factor and finished the claim, or failed
+    let (left_counts, right_counts) = match distance::run_drive_step(&claim).await {
+        DriveOutcome::Complete {
+            left_counts,
+            right_counts,
+        } => (left_counts, right_counts),
+        // The step already restored the scale and finished the claim, or failed
         // it with the reason on the running screen: a second terminal call here
         // would be a stale no-op, so the task simply ends.
         DriveOutcome::Stopped | DriveOutcome::Failed => return,
-    }
+    };
 
     claim.phase("Enter measured distance", None).await;
     send_ui_event(UiEvent::DistanceDriveFinished).await;
 
     match distance::wait_for_decision_or_stop(&claim).await {
         Some(DistanceDecision::Commit(measured_cm)) => {
-            distance::commit(measured_cm).await;
+            if let Err(error) = distance::commit(measured_cm, left_counts, right_counts).await {
+                // The model rejected the measurement: save nothing and put the
+                // previous scale back, then report why on the Result screen.
+                warn!("Distance calibration rejected: {}", error.label());
+                distance::abort().await;
+                claim.fail(error.label()).await;
+                return;
+            }
         }
-        // A cancel or a stop both restore the factor the run overrode.
+        // A cancel or a stop both restore the scale the run overrode.
         Some(DistanceDecision::Cancel) | None => distance::abort().await,
     }
     claim.finish().await;

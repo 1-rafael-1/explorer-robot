@@ -11,6 +11,9 @@ target/
 # scratch files used for handoffs and temp things for my agents
 .scratch/
 
+# graphify knowledge-graph output (generated: graph.json, graph.html, report, AST cache)
+graphify-out/
+
 # Python bytecode caches (the docs and bench scripts)
 __pycache__/
 *.pyc

@@ -39,15 +39,16 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use link_state::LinkPhase;
 use touch_ui::{
-    DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind, Item, Procedure, PromptAction,
-    RangefinderTestReadout, Readout, Screen, ScreenEntry, SensorState, StatusView, SystemInfo, TICK_MS, Ui, ValueFlow,
+    BasicMotorReadout, BasicMotorSummary, DRAG_RENDER_MS, DmpCalibrationSnapshot, Hit, ImuReadout, ImuReadoutKind,
+    Item, Procedure, PromptAction, RangefinderTestReadout, Readout, Screen, ScreenEntry, SensorState, StatusView,
+    SystemInfo, TICK_MS, Ui, ValueFlow,
 };
 
 use crate::{
     resources::PanelResources,
     system::state::{
         activity::{self, Activity, Snapshot, Stage},
-        calibration, dmp_cal, imu_test, link, perception, power, rangefinder_test,
+        calibration, dmp_cal, imu_test, link, motor_readout, perception, power, rangefinder_test,
     },
     task::{
         autonomous_mode::{attempt_straight_line, coast_obstacle_avoid},
@@ -663,15 +664,15 @@ async fn record_attempt_straight(value_cm: i32) {
     debug!("[ui] attempt-straight recorded {} cm", target_cm);
 }
 
-/// Send the measured distance to the calibration task, which stores the factor.
+/// Send the measured distance to the calibration task, which stores the scale.
 ///
 /// The task holds the claim across the value screen and makes the terminal call, so
-/// the UI sends only the decision: it never writes the factor or clears Activity.
+/// the UI sends only the decision: it never writes the scale or clears Activity.
 async fn save_distance_calibration(measured_cm: i32) {
     drive_calibration::distance::send_decision(DistanceDecision::Commit(measured_cm)).await;
 }
 
-/// Tell the calibration task to restore the factor in force before the run.
+/// Tell the calibration task to restore the scale in force before the run.
 ///
 /// The task restores it and abandons the claim; the UI's Cancel has already left the
 /// value screen, and nothing here touches Activity.
@@ -689,8 +690,9 @@ fn stop_running() {
     procedure::stop(StopOutcome::Operator, InterruptKind::Stop);
 }
 
-/// React to a finished calibration: leave a completed one, hold a failed one's
-/// reason on screen until the operator dismisses it.
+/// React to a finished calibration: hold the Motor Calibration's Result Report
+/// on either terminal stage, hold a DMP ceremony's report until Back, and leave a
+/// completed calibration that has nothing to show.
 async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
     if stale_completion(generation) {
         return;
@@ -706,6 +708,16 @@ async fn hold_or_leave_calibration(ui: &mut Ui, generation: u32) {
                 // Report until the operator's Back dismisses it. Ticket 04 keeps
                 // the same contract for a saved or failed snapshot.
                 ui.show_status(status_view(&snapshot, None));
+            } else if matches!(procedure, Procedure::MotorCalibration)
+                && matches!(snapshot.stage, Stage::Complete | Stage::Failed)
+            {
+                // The Motor Calibration holds its Result Report on success and on
+                // a measurement failure: the same two tables as the Basic Motor
+                // Test, with a saved/not-saved footer. The summary is panel-only,
+                // so it is read here and attached before the first draw. A
+                // structural abort published none, and the failure reason keeps
+                // the panel instead.
+                ui.set_status(status_view(&snapshot, procedure_readout(&snapshot).await));
             } else if snapshot.stage == Stage::Failed {
                 ui.set_status(status_view(&snapshot, None));
             } else {
@@ -734,7 +746,7 @@ async fn enter_distance_entry(ui: &mut Ui) {
 
     if snapshot.activity == Activity::Idle {
         // The panel already left and cleared Activity; the task still owns the
-        // claim and waits for the decision, so cancel it to restore the factor and
+        // claim and waits for the decision, so cancel it to restore the scale and
         // release.
         drive_calibration::distance::send_decision(DistanceDecision::Cancel).await;
         return;
@@ -756,10 +768,16 @@ async fn enter_distance_entry(ui: &mut Ui) {
 /// runs, then streaming once it settles, without the controller formatting text
 /// of its own.
 ///
-/// `readout` is the IMU Test Telemetry snapshot. An IMU Procedure attaches it to
-/// the view; every other Procedure ignores it. When no snapshot has been
-/// published yet the view carries an empty Waiting readout, so the panel shows
-/// placeholders from the moment the test starts.
+/// `readout` is the panel-only telemetry snapshot for a Procedure that
+/// publishes one. An IMU Procedure, the Rangefinder Test and the Basic Motor
+/// Test attach it to the view; every other Procedure ignores it. When no
+/// snapshot has been published yet the view carries an empty Waiting readout, so
+/// the panel shows placeholders from the moment the test starts. A failed Basic
+/// Motor Test attaches nothing, so its failure reason keeps the panel instead of
+/// being hidden behind telemetry; a completed one attaches its Result Report
+/// summary instead of the live readout. A Motor Calibration attaches its summary
+/// when it was published, on success or a measured failure, so a structural
+/// abort with no sweep keeps its reason.
 fn status_view(snapshot: &Snapshot, readout: Option<Readout>) -> StatusView {
     // A running Procedure names itself: its title and where Stop returns both come
     // from the Menu Entry that started it. The boot flow and the idle state have no
@@ -780,6 +798,27 @@ fn status_view(snapshot: &Snapshot, readout: Option<Readout>) -> StatusView {
         Some(Procedure::RangefinderTest) => view.with_readout(readout.unwrap_or(Readout::Rangefinder(
             RangefinderTestReadout::waiting(rangefinder::DROP_THRESHOLD_MM),
         ))),
+        Some(Procedure::BasicMotor) => match snapshot.stage {
+            // A failed Basic Motor Test keeps its reason on the panel: a safety
+            // stop is never hidden behind numbers.
+            Stage::Failed => view,
+            // The finished Result Report draws the two tables from the summary
+            // the task published before it completed. An empty summary still
+            // renders its placeholders rather than falling back to the live rows.
+            Stage::Complete => {
+                view.with_readout(readout.unwrap_or(Readout::BasicMotorSummary(BasicMotorSummary::empty())))
+            }
+            // While the test runs, the live six-row readout is the panel.
+            Stage::Running => view.with_readout(readout.unwrap_or(Readout::BasicMotor(BasicMotorReadout::waiting()))),
+        },
+        // A Motor Calibration shows its phases and progress while it runs, then
+        // the same two tables as the test, with a saved/not-saved footer. It
+        // attaches the summary only when the task published one, so a low-rail
+        // abort with no sweep keeps its reason on the panel.
+        Some(Procedure::MotorCalibration) => match snapshot.stage {
+            Stage::Complete | Stage::Failed => readout.map_or(view, |summary| view.with_readout(summary)),
+            Stage::Running => view,
+        },
         Some(procedure) => ImuReadoutKind::for_procedure(procedure).map_or(view, |kind| {
             view.with_readout(readout.unwrap_or_else(|| Readout::Imu(ImuReadout::waiting(kind))))
         }),
@@ -894,6 +933,33 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
     redraw
 }
 
+/// The panel-only telemetry a Procedure publishes, if any.
+///
+/// One rule, read by both the tick's refresh and the terminal event: while a
+/// Procedure runs it shows its live readout, and once it has finished it shows
+/// the Result Report summary instead. The Basic Motor Test's summary is published
+/// before it completes; the Motor Calibration's on success or a measured failure,
+/// so a structural abort with no sweep yields `None` and its reason stays on the
+/// panel. A Procedure with no panel-only telemetry reads nothing, so other
+/// screens never take those leaves.
+async fn procedure_readout(snapshot: &Snapshot) -> Option<Readout> {
+    match snapshot.procedure() {
+        Some(Procedure::RangefinderTest) => rangefinder_test::snapshot().await.map(Readout::Rangefinder),
+        Some(Procedure::BasicMotor) if snapshot.stage == Stage::Complete => {
+            motor_readout::summary().await.map(Readout::BasicMotorSummary)
+        }
+        Some(Procedure::BasicMotor) => motor_readout::snapshot().await.map(Readout::BasicMotor),
+        Some(Procedure::MotorCalibration) if snapshot.stage != Stage::Running => {
+            motor_readout::summary().await.map(Readout::BasicMotorSummary)
+        }
+        Some(Procedure::MotorCalibration) => None,
+        Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => {
+            imu_test::snapshot().await.map(Readout::Imu)
+        }
+        _ => None,
+    }
+}
+
 /// Re-render the running screen from `snapshot`, reporting a change.
 ///
 /// A no-op off the running screen, and while nothing is recorded — a producer
@@ -901,9 +967,8 @@ async fn refresh_room_scan(ui: &mut Ui) -> bool {
 /// caller has already read the snapshot, so the follow rule and this refresh
 /// share one Activity read.
 ///
-/// For an IMU Procedure the IMU Test Telemetry snapshot is read on the same
-/// tick, so the readout updates at the tick rate. Other screens never take that
-/// lock.
+/// The readout is the one [`procedure_readout`] names, so the tick and a
+/// terminal event cannot disagree about which snapshot a finished view draws.
 async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
     if snapshot.activity == Activity::Idle {
         return false;
@@ -925,13 +990,7 @@ async fn refresh_running_screen(ui: &mut Ui, snapshot: &Snapshot) -> bool {
         return false;
     }
 
-    let readout = match snapshot.procedure() {
-        Some(Procedure::RangefinderTest) => rangefinder_test::snapshot().await.map(Readout::Rangefinder),
-        Some(procedure) if ImuReadoutKind::for_procedure(procedure).is_some() => {
-            imu_test::snapshot().await.map(Readout::Imu)
-        }
-        _ => None,
-    };
+    let readout = procedure_readout(snapshot).await;
     ui.set_status(status_view(snapshot, readout))
 }
 

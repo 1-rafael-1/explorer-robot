@@ -98,27 +98,3 @@ pub async fn clear_encoder_measurement() {
     let mut latest = LATEST_ENCODER_MEASUREMENT.lock().await;
     *latest = None;
 }
-
-/// Wait for a fresh encoder measurement with a timeout.
-///
-/// Polls `get_latest_encoder_measurement` at 10 ms intervals until a value
-/// is available or `timeout_ms` elapses. Used during motor calibration to
-/// wait for the first sample after a counter reset.
-pub async fn wait_for_encoder_event_timeout(timeout_ms: u64) -> Option<EncoderMeasurement> {
-    use embassy_time::{Duration, Instant, Timer};
-
-    let start = Instant::now();
-    let timeout_duration = Duration::from_millis(timeout_ms);
-
-    loop {
-        if let Some(measurement) = get_latest_encoder_measurement().await {
-            return Some(measurement);
-        }
-
-        if start.elapsed() >= timeout_duration {
-            return None;
-        }
-
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}

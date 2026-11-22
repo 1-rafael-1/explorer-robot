@@ -7,6 +7,8 @@
 //! The data is stored in the `FLASH_STORAGE` section of flash memory defined in
 //! `memory.x` (last 8 KB = 2 sectors of 4 KB each).
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use defmt::{debug, error, info, warn};
 use dmp_cal::{DMP_BIAS_ENCODED_LEN, DmpBiasSnapshot};
 use embassy_futures::select::{Either, select};
@@ -14,19 +16,17 @@ use embassy_rp::{
     flash::{ERASE_SIZE, Flash},
     mode::Async,
 };
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Timer};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, mutex::Mutex};
+use embassy_time::{Duration, Instant, Timer};
+use motor_cal::{DistanceScale, MotorCalibrationRecord, RECORD_ENCODED_LEN};
 use sequential_storage::{
     cache::NoCache,
     map::{Key, MapConfig, MapStorage, SerializationError, Value},
 };
 
-use crate::{
-    system::{
-        event::{Events, raise_event},
-        state::{CalibrationStatus, calibration},
-    },
-    task::motor_driver::MotorCalibration,
+use crate::system::{
+    event::{Events, raise_event},
+    state::calibration,
 };
 
 /// Size of one flash sector (4 KB on RP2350).
@@ -50,15 +50,43 @@ static FLASH_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, FlashCommand, COM
 /// a late answer to a timed-out request is dropped rather than wedging the task.
 static DMP_BIAS_SAVE_REPLY: Channel<CriticalSectionRawMutex, bool, 1> = Channel::new();
 
+/// Reply slot for one in-flight Motor Calibration Curve save.
+///
+/// Capacity one and one writer match the DMP bias reply: a late answer to a
+/// timed-out request is dropped, and the next save drains it before dispatching
+/// its own command. Each reply carries the save's sequence number so a stale
+/// answer can never be mistaken for the current request.
+static MOTOR_CURVE_SAVE_REPLY: Channel<CriticalSectionRawMutex, (u32, Result<(), &'static str>), 1> = Channel::new();
+
+/// The sequence number of the most recent Motor Calibration Curve save.
+static MOTOR_CURVE_SAVE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// The sequence of the save whose caller is still waiting, or `0` for none.
+///
+/// The flash task publishes an applied curve only when this still matches the
+/// command's sequence, so a save that completed after its caller timed out does
+/// not change the leaf behind the caller's back.
+static MOTOR_CURVE_SAVE_ACTIVE: AtomicU32 = AtomicU32::new(0);
+
 /// How long [`save_dmp_bias`] waits for the flash task before reporting failure.
 ///
 /// A save erases and rewrites up to one 4 KB sector, which is well under this;
 /// the margin covers a queue that is still draining an earlier command.
 const DMP_BIAS_SAVE_TIMEOUT_MS: u64 = 5_000;
 
-/// Internal storage for calibration data (managed by `flash_storage` task only).
-static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Option<CalibrationData>> =
-    embassy_sync::mutex::Mutex::new(None);
+/// How long [`save_motor_curve`] waits for the flash task before reporting
+/// failure.
+///
+/// The record is one atomic `store_item` over the same 4 KB sector, so the bound
+/// and its reasoning match the DMP bias save.
+const MOTOR_CURVE_SAVE_TIMEOUT_MS: u64 = 5_000;
+
+/// The last durable DMP Bias Snapshot, managed by the `flash_storage` task only.
+///
+/// Set by the boot query when flash holds a valid snapshot, and by a save only
+/// after `store_item` succeeded. Never cleared, so a failed save leaves the
+/// previous durable snapshot here for the DMP calibration runner to restore.
+static DMP_BIAS_CACHE: Mutex<CriticalSectionRawMutex, Option<DmpBiasWords>> = Mutex::new(None);
 
 /// Return the latest cached DMP Bias Snapshot, if the boot query found one.
 ///
@@ -66,8 +94,7 @@ static CALIBRATION_DATA: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Opt
 /// before any save. The DMP calibration runner uses it to restore the DMP after
 /// a Stop or failure without writing flash again.
 pub async fn get_cached_dmp_bias() -> Option<DmpBiasWords> {
-    let data = CALIBRATION_DATA.lock().await;
-    data.as_ref().and_then(|cal| cal.dmp_bias)
+    *DMP_BIAS_CACHE.lock().await
 }
 
 /// Send a flash storage command.
@@ -88,7 +115,7 @@ pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
     while DMP_BIAS_SAVE_REPLY.try_receive().is_ok() {}
 
     if FLASH_COMMAND_CHANNEL
-        .try_send(FlashCommand::SaveData(CalibrationDataKind::DmpBias(words)))
+        .try_send(FlashCommand::SaveDmpBias(words))
         .is_err()
     {
         warn!("DMP bias save dropped — flash command queue full");
@@ -105,6 +132,96 @@ pub async fn save_dmp_bias(words: DmpBiasWords) -> bool {
         Either::Second(()) => {
             warn!("DMP bias save timed out after {}ms", DMP_BIAS_SAVE_TIMEOUT_MS);
             false
+        }
+    }
+}
+
+/// Save a Motor Calibration record and report what flash did with it.
+///
+/// [`send_flash_command`] only enqueues the write, so a caller that returns on
+/// the enqueue reports success before persistence has happened. This waits for
+/// the task's answer, matching it to this save's sequence number: `Ok(())` once
+/// `store_item` succeeded, and an error when the write failed, the command could
+/// not be enqueued, or the task did not answer within
+/// [`MOTOR_CURVE_SAVE_TIMEOUT_MS`].
+///
+/// A timeout is deliberately ambiguous: the task never published the record, so
+/// the applied curve is unchanged, but the write may still complete after the
+/// deadline, so a reboot may load it. Only [`MotorCurveSaveError::QueueFull`] and
+/// [`MotorCurveSaveError::WriteFailed`] prove nothing was written.
+///
+/// The write is one atomic `store_item` once dispatched: it cannot be
+/// interrupted, so a caller that wants to honour a Stop must check for it before
+/// calling this.
+///
+/// # Errors
+///
+/// Returns [`MotorCurveSaveError::WriteFailed`] when the task reports a failed
+/// write, [`MotorCurveSaveError::QueueFull`] when the command could not be
+/// enqueued, or [`MotorCurveSaveError::TimedOut`] when the deadline passes first.
+pub async fn save_motor_curve(record: MotorCalibrationRecord) -> Result<(), MotorCurveSaveError> {
+    // Allocate a sequence no earlier reply can carry, avoiding zero (the "none"
+    // sentinel for the active slot).
+    let seq = MOTOR_CURVE_SAVE_SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let seq = if seq == 0 {
+        MOTOR_CURVE_SAVE_SEQ.store(1, Ordering::Relaxed);
+        1
+    } else {
+        seq
+    };
+    MOTOR_CURVE_SAVE_ACTIVE.store(seq, Ordering::Relaxed);
+
+    // A late answer to an earlier request must not be mistaken for this one.
+    while MOTOR_CURVE_SAVE_REPLY.try_receive().is_ok() {}
+
+    if FLASH_COMMAND_CHANNEL
+        .try_send(FlashCommand::SaveMotorCurve(MotorCalibrationPayload(record), seq))
+        .is_err()
+    {
+        MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
+        warn!("Motor curve save dropped — flash command queue full");
+        return Err(MotorCurveSaveError::QueueFull);
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(MOTOR_CURVE_SAVE_TIMEOUT_MS);
+    loop {
+        match select(MOTOR_CURVE_SAVE_REPLY.receive(), Timer::at(deadline)).await {
+            Either::First((reply_seq, result)) => {
+                if reply_seq != seq {
+                    // A stale answer: discard it and keep waiting for ours.
+                    continue;
+                }
+                MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
+                return result.map_err(|_| MotorCurveSaveError::WriteFailed);
+            }
+            Either::Second(()) => {
+                MOTOR_CURVE_SAVE_ACTIVE.store(0, Ordering::Relaxed);
+                warn!("Motor curve save timed out after {}ms", MOTOR_CURVE_SAVE_TIMEOUT_MS);
+                return Err(MotorCurveSaveError::TimedOut);
+            }
+        }
+    }
+}
+
+/// Why [`save_motor_curve`] did not confirm the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub enum MotorCurveSaveError {
+    /// The command could not be enqueued: the flash command queue was full.
+    QueueFull,
+    /// The flash task reported that `store_item` failed.
+    WriteFailed,
+    /// The task did not answer before [`MOTOR_CURVE_SAVE_TIMEOUT_MS`].
+    TimedOut,
+}
+
+impl MotorCurveSaveError {
+    /// A short, operator-facing reason for the log and Result Report footer.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::QueueFull => "flash command queue full",
+            Self::WriteFailed => "flash write failed",
+            Self::TimedOut => "save timed out",
         }
     }
 }
@@ -130,52 +247,84 @@ pub enum CalibrationKind {
 /// Calibration data variants.
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub enum CalibrationDataKind {
-    /// Motor calibration data (2 track factors).
-    Motor(MotorCalibration),
-    /// Distance calibration factor.
+    /// A valid Motor Calibration Curve was loaded and published to the leaf.
+    ///
+    /// Only the record's identity travels here: the curve itself lives in the
+    /// calibration state leaf, so this event is never a second copy of what is
+    /// applied.
+    Motor(MotorCalSummary),
+    /// The measured Distance Calibration scale, in counts per centimetre.
+    ///
+    /// The value lives in the calibration state leaf already; this carries it to
+    /// the boot report so the operator sees what was loaded.
     Distance(f32),
     /// DMP Bias Snapshot (nine raw bias words).
     DmpBias(DmpBiasWords),
 }
 
+/// Identity of the Motor Calibration Curve record that was loaded.
+#[derive(Debug, Clone, Copy, defmt::Format, PartialEq, Eq)]
+pub struct MotorCalSummary {
+    /// The monotonic id of the run that produced the record.
+    pub run_id: u32,
+    /// The Calibration Floor, in whole percent.
+    pub floor_percent: u8,
+}
+
 /// Commands that can be sent to the flash storage task.
-#[derive(Debug, Clone, defmt::Format)]
+///
+/// The Motor Calibration Curve variant is deliberately one unit: a save carries
+/// the whole versioned record, which dwarfs the other commands. The channel
+/// holds only three, and `no_std` without an allocator leaves no box to hide
+/// the payload behind, so the size difference is accepted rather than papered
+/// over.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
 pub enum FlashCommand {
-    /// Save calibration data to flash.
-    SaveData(CalibrationDataKind),
+    /// Save the DMP Bias Snapshot.
+    SaveDmpBias(DmpBiasWords),
+
+    /// Save a Motor Calibration Curve record and publish it as the applied
+    /// curve.
+    ///
+    /// The Motor Calibration Procedure is the only writer; the storage plumbing
+    /// lives here so the record and the key are versioned and checksummed in one
+    /// place. `u32` is the save's sequence: the task publishes the record's curve,
+    /// scale and run id only while that sequence is still the active one, and
+    /// answers [`save_motor_curve`] with `Ok(())` only after `store_item`
+    /// succeeded.
+    SaveMotorCurve(MotorCalibrationPayload, u32),
+
+    /// Save a measured Distance Calibration scale.
+    ///
+    /// The scale is written into the same versioned Motor Calibration record:
+    /// an existing record keeps its measurements and only takes the new scale,
+    /// and a fresh robot gets a scale-only record (no curve).
+    SaveDistanceScale(DistanceScale),
 
     /// Request calibration data (responds via event).
     GetData(CalibrationKind),
 }
 
-// ── Persisted data structures ───────────────────────────────────────────────────
-
-/// Combined calibration data cached in RAM.
-#[derive(Debug, Clone, Copy, defmt::Format)]
-pub struct CalibrationData {
-    /// Motor calibration factors (2 × f32).
-    pub motor: MotorCalibration,
-    /// Distance calibration factor.
-    pub distance: f32,
-    /// DMP Bias Snapshot, if flash held a valid one.
-    pub dmp_bias: Option<DmpBiasWords>,
-}
-
-impl Default for CalibrationData {
-    fn default() -> Self {
-        Self {
-            motor: MotorCalibration::default(),
-            distance: 1.0,
-            dmp_bias: None,
+impl FlashCommand {
+    /// A short name for the command debug log, without the payload.
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::SaveDmpBias(_) => "SaveDmpBias",
+            Self::SaveMotorCurve(..) => "SaveMotorCurve",
+            Self::SaveDistanceScale(_) => "SaveDistanceScale",
+            Self::GetData(_) => "GetData",
         }
     }
 }
 
+// ── Persisted data structures ───────────────────────────────────────────────────
+
 /// The nine raw DMP bias words as the firmware carries them.
 ///
-/// `dmp-cal` is a pure model with no `defmt` dependency, and the flash command
-/// types derive `defmt::Format`, so the payload crosses the task boundary as
-/// this small firmware-local type. Encoding and validation stay in
+/// `dmp-cal` is a pure model with no `defmt` dependency, and the calibration
+/// data kinds derive `defmt::Format`, so the payload crosses the task boundary
+/// as this small firmware-local type. Encoding and validation stay in
 /// [`DmpBiasSnapshot`].
 #[derive(Debug, Clone, Copy, defmt::Format, PartialEq, Eq)]
 pub struct DmpBiasWords {
@@ -209,14 +358,25 @@ impl From<DmpBiasWords> for DmpBiasSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 enum StorageKey {
-    MotorCalibration = 0,
-    DistanceFactor = 1,
+    /// Retired motor calibration key (`2 × f32`). Never read, written or
+    /// migrated again, but kept so the numeric key is never reused and an old
+    /// flash entry stays a known, ignored record rather than corrupting the map.
+    #[allow(dead_code)]
+    RetiredMotorCalibration = 0,
+    /// Retired distance calibration key (a bare `f32` factor). Never read,
+    /// written or migrated again, but kept so the numeric key is never reused and
+    /// an old flash entry stays a known, ignored record rather than corrupting
+    /// the map. The measured scale lives in [`StorageKey::MotorCurve`].
+    #[allow(dead_code)]
+    RetiredDistanceFactor = 1,
     /// Retired host-calibration key. Never requested or written again, but kept
     /// so the numeric key is never reused and an old flash entry stays a known,
     /// ignored record rather than corrupting the map.
     #[allow(dead_code)]
     ImuFlags = 2,
     DmpBias = 3,
+    /// The versioned, checksummed Motor Calibration Curve record.
+    MotorCurve = 4,
 }
 
 impl Key for StorageKey {
@@ -236,64 +396,46 @@ impl Key for StorageKey {
             return Err(SerializationError::BufferTooSmall);
         }
         match buffer[0] {
-            0 => Ok((Self::MotorCalibration, 1)),
-            1 => Ok((Self::DistanceFactor, 1)),
+            0 => Ok((Self::RetiredMotorCalibration, 1)),
+            1 => Ok((Self::RetiredDistanceFactor, 1)),
             2 => Ok((Self::ImuFlags, 1)),
             3 => Ok((Self::DmpBias, 1)),
+            4 => Ok((Self::MotorCurve, 1)),
             _ => Err(SerializationError::InvalidFormat),
         }
     }
 }
 
-// ── Value impl for MotorCalibration (2 × f32 = 8 bytes) ─────────────────────────
+// ── Value impl for the Motor Calibration Curve record ───────────────────────────
 
-impl Value<'_> for MotorCalibration {
+/// A Motor Calibration Curve record as it crosses the task boundary and is
+/// stored in flash.
+///
+/// The firmware-local newtype exists because `sequential-storage`'s `Value`
+/// trait is foreign to both `motor-cal` and this crate (the orphan rule).
+/// Encoding stays in the model: [`Value::serialize_into`] delegates to
+/// [`MotorCalibrationRecord::encode_into`] and [`Value::deserialize_from`] to
+/// [`MotorCalibrationRecord::decode`], so the stored bytes are the versioned,
+/// checksummed payload rather than a firmware-specific layout.
+#[derive(Debug, Clone)]
+pub struct MotorCalibrationPayload(
+    /// The record to store or the record that was loaded.
+    pub MotorCalibrationRecord,
+);
+
+impl Value<'_> for MotorCalibrationPayload {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < 8 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        buffer[0..4].copy_from_slice(&self.left_factor.to_le_bytes());
-        buffer[4..8].copy_from_slice(&self.right_factor.to_le_bytes());
-        Ok(8)
+        self.0
+            .encode_into(buffer)
+            .map_err(|_| SerializationError::BufferTooSmall)
     }
 
     fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        if buffer.len() < 8 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        let left_factor = f32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
-        let right_factor = f32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
-        Ok((Self::new(left_factor, right_factor), 8))
-    }
-}
-
-// ── Value impl for f32 distance factor ──────────────────────────────────────────
-
-/// Wrapper to implement `Value` for a bare `f32`.
-#[derive(Debug, Clone, Copy)]
-struct DistanceFactor(f32);
-
-impl Value<'_> for DistanceFactor {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < 4 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        buffer[0..4].copy_from_slice(&self.0.to_le_bytes());
-        Ok(4)
-    }
-
-    fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError>
-    where
-        Self: Sized,
-    {
-        if buffer.len() < 4 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        let value = f32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
-        Ok((Self(value), 4))
+        let record = MotorCalibrationRecord::decode(buffer).map_err(|_| SerializationError::InvalidFormat)?;
+        Ok((Self(record), RECORD_ENCODED_LEN))
     }
 }
 
@@ -324,6 +466,36 @@ impl Value<'_> for DmpBiasWords {
     }
 }
 
+// ── Storage handles ────────────────────────────────────────────────────────────
+
+/// The one `sequential-storage` map this task owns.
+type CalibrationStorage = MapStorage<StorageKey, Flash<'static, Async, { 2048 * 1024 }>, NoCache>;
+
+/// The error a fetch or store on that map returns.
+type StorageError = sequential_storage::Error<embassy_rp::flash::Error>;
+
+/// Fetch the one Motor Calibration record, or `None` when flash holds none.
+async fn fetch_motor_record(
+    storage: &mut CalibrationStorage,
+    buffer: &mut [u8],
+) -> Result<Option<MotorCalibrationRecord>, StorageError> {
+    Ok(storage
+        .fetch_item::<MotorCalibrationPayload>(buffer, &StorageKey::MotorCurve)
+        .await?
+        .map(|payload| payload.0))
+}
+
+/// Publish an encoder scale, or retire it, and raise the Distance boot event.
+///
+/// The scale lives inside the one Motor Calibration record, so both the motor
+/// and distance boot queries publish through here rather than keeping two copies
+/// of the scale-to-state step.
+async fn publish_distance_scale(scale: Option<DistanceScale>) {
+    calibration::set_distance_scale(scale).await;
+    let detail = scale.map(|scale| CalibrationDataKind::Distance(scale.counts_per_cm()));
+    raise_event(Events::CalibrationDataLoaded(CalibrationKind::Distance, detail)).await;
+}
+
 // ── Flash storage task ──────────────────────────────────────────────────────────
 
 /// Flash storage task.
@@ -350,97 +522,100 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
     // Create storage instance (owns flash and cache).
     let mut storage = MapStorage::<StorageKey, _, _>::new(flash, MapConfig::new(flash_range.clone()), NoCache::new());
 
-    // Scratch buffer for serialization/deserialization. Motor calibration needs
-    // 8 bytes, distance factor 4 bytes, and the DMP Bias Snapshot 39 bytes. 64
-    // bytes leaves headroom.
-    let mut data_buffer: [u8; 64] = [0; 64];
+    // Scratch buffer for serialization/deserialization. The Motor Calibration
+    // record is the largest item at `RECORD_ENCODED_LEN` (856) bytes; the key byte
+    // and flash word alignment need a little headroom. The DMP Bias Snapshot
+    // (39 bytes) fits easily.
+    let mut data_buffer: [u8; RECORD_ENCODED_LEN + 8] = [0; RECORD_ENCODED_LEN + 8];
 
     // Main command processing loop
     loop {
         let command = receive_flash_command().await;
-        debug!("Flash command received: {:?}", command);
+        debug!("Flash command received: {}", command.label());
 
         match command {
             FlashCommand::GetData(kind) => match kind {
                 CalibrationKind::Motor => {
-                    info!("Loading motor calibration from flash...");
-                    match storage
-                        .fetch_item::<MotorCalibration>(&mut data_buffer, &StorageKey::MotorCalibration)
-                        .await
-                    {
-                        Ok(Some(motor_cal)) => {
-                            info!(
-                                "Motor calibration loaded: left={}, right={}",
-                                motor_cal.left_factor, motor_cal.right_factor
-                            );
+                    info!("Loading motor calibration record from flash...");
+                    match fetch_motor_record(&mut storage, &mut data_buffer).await {
+                        Ok(Some(record)) => {
+                            let scale = record.scale();
+                            let measured_scale = record.scale_measured().then_some(scale);
 
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.motor = motor_cal;
+                            if let Some(curve) = record.curve() {
+                                info!(
+                                    "Motor calibration curve loaded: run={}, floor={}%, counts_per_cm={}",
+                                    record.run_id(),
+                                    curve.floor_percent(),
+                                    scale.counts_per_cm()
+                                );
+
+                                // Publish the derived curve to the one calibration
+                                // leaf; the driver reads it from there on SetTracks.
+                                calibration::set_motor_calibration(Some(curve), measured_scale).await;
+                                calibration::set_motor_run_id(record.run_id()).await;
+
+                                raise_event(Events::CalibrationDataLoaded(
+                                    CalibrationKind::Motor,
+                                    Some(CalibrationDataKind::Motor(MotorCalSummary {
+                                        run_id: record.run_id(),
+                                        floor_percent: curve.floor_percent(),
+                                    })),
+                                ))
+                                .await;
                             } else {
-                                *data = Some(CalibrationData {
-                                    motor: motor_cal,
-                                    ..CalibrationData::default()
-                                });
+                                // A scale-only record: Distance Calibration ran but
+                                // no motor sweep has yet. The scale is real; the
+                                // curve is the identity.
+                                info!(
+                                    "Motor calibration record has no curve; counts_per_cm={}",
+                                    scale.counts_per_cm()
+                                );
+                                calibration::set_motor_calibration(None, record.scale_measured().then_some(scale))
+                                    .await;
+                                calibration::set_motor_run_id(0).await;
+                                raise_event(Events::CalibrationDataLoaded(CalibrationKind::Motor, None)).await;
                             }
-                            drop(data);
-
-                            calibration::CALIBRATION_STATE.lock().await.motor_cal_status = CalibrationStatus::Loaded;
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::Motor,
-                                Some(CalibrationDataKind::Motor(motor_cal)),
-                            ))
-                            .await;
                         }
                         Ok(None) => {
-                            info!("No motor calibration found in flash");
+                            info!("No motor calibration record found in flash");
+                            calibration::set_motor_calibration(None, None).await;
+                            calibration::set_motor_run_id(0).await;
                             raise_event(Events::CalibrationDataLoaded(CalibrationKind::Motor, None)).await;
                         }
                         Err(e) => {
-                            error!("Failed to load motor calibration: {}", defmt::Debug2Format(&e));
+                            error!("Failed to load motor calibration record: {}", defmt::Debug2Format(&e));
+                            calibration::set_motor_calibration(None, None).await;
+                            calibration::set_motor_run_id(0).await;
                             raise_event(Events::CalibrationDataLoaded(CalibrationKind::Motor, None)).await;
                         }
                     }
                 }
 
                 CalibrationKind::Distance => {
+                    // The encoder scale travels inside the one Motor Calibration
+                    // record, so this query reads the same key rather than the
+                    // retired bare-factor key.
                     info!("Loading distance calibration from flash...");
-                    match storage
-                        .fetch_item::<DistanceFactor>(&mut data_buffer, &StorageKey::DistanceFactor)
-                        .await
-                    {
-                        Ok(Some(df)) => {
-                            info!("Distance calibration loaded: factor={}", df.0);
-
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.distance = df.0;
+                    match fetch_motor_record(&mut storage, &mut data_buffer).await {
+                        Ok(Some(record)) => {
+                            let scale = record.scale();
+                            if record.scale_measured() {
+                                info!("Distance calibration loaded: counts_per_cm={}", scale.counts_per_cm());
                             } else {
-                                *data = Some(CalibrationData {
-                                    distance: df.0,
-                                    ..CalibrationData::default()
-                                });
+                                info!(
+                                    "Motor calibration record carries an unmeasured scale; distance remains uncalibrated"
+                                );
                             }
-                            drop(data);
-
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                s.distance_factor = df.0;
-                                s.distance_cal_status = CalibrationStatus::Loaded;
-                            }
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::Distance,
-                                Some(CalibrationDataKind::Distance(df.0)),
-                            ))
-                            .await;
+                            publish_distance_scale(record.scale_measured().then_some(scale)).await;
                         }
                         Ok(None) => {
-                            info!("No distance calibration found in flash");
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::Distance, None)).await;
+                            info!("No distance calibration found in flash - nominal scale in force");
+                            publish_distance_scale(None).await;
                         }
                         Err(e) => {
                             error!("Failed to load distance calibration: {}", defmt::Debug2Format(&e));
-                            raise_event(Events::CalibrationDataLoaded(CalibrationKind::Distance, None)).await;
+                            publish_distance_scale(None).await;
                         }
                     }
                 }
@@ -452,17 +627,7 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                     {
                         Ok(Some(words)) => {
                             info!("DMP bias snapshot loaded: {}", words);
-
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.dmp_bias = Some(words);
-                            } else {
-                                *data = Some(CalibrationData {
-                                    dmp_bias: Some(words),
-                                    ..CalibrationData::default()
-                                });
-                            }
-                            drop(data);
+                            *DMP_BIAS_CACHE.lock().await = Some(words);
 
                             raise_event(Events::CalibrationDataLoaded(
                                 CalibrationKind::DmpBias,
@@ -482,117 +647,118 @@ pub async fn flash_storage(flash: Flash<'static, Async, { 2048 * 1024 }>) {
                 }
             },
 
-            FlashCommand::SaveData(data_kind) => match data_kind {
-                CalibrationDataKind::Motor(motor_cal) => {
-                    info!("Saving motor calibration to flash...");
+            FlashCommand::SaveDmpBias(words) => {
+                info!("Saving DMP bias snapshot to flash...");
 
-                    // Update shared state first
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    if let Some(ref mut cal) = *data {
-                        cal.motor = motor_cal;
-                    } else {
-                        *data = Some(CalibrationData {
-                            motor: motor_cal,
-                            ..CalibrationData::default()
-                        });
+                let saved = match storage.store_item(&mut data_buffer, &StorageKey::DmpBias, &words).await {
+                    Ok(()) => {
+                        // Cache the snapshot only once flash holds it, so a failed
+                        // write leaves the last durable snapshot in the cache for a
+                        // Stop to restore. The save keeps the cache and the log
+                        // only. Raising `CalibrationDataLoaded` here would re-enter
+                        // the boot path and could discard the "Calibration saved"
+                        // Result Report; only `GetData(DmpBias)` produces that
+                        // event.
+                        *DMP_BIAS_CACHE.lock().await = Some(words);
+                        info!("DMP bias snapshot saved successfully");
+                        true
                     }
-                    drop(data);
+                    Err(e) => {
+                        error!("Failed to save DMP bias snapshot: {}", defmt::Debug2Format(&e));
+                        false
+                    }
+                };
 
-                    match storage
-                        .store_item(&mut data_buffer, &StorageKey::MotorCalibration, &motor_cal)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!("Motor calibration saved successfully");
-                            calibration::CALIBRATION_STATE.lock().await.motor_cal_status = CalibrationStatus::Loaded;
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::Motor,
-                                Some(CalibrationDataKind::Motor(motor_cal)),
-                            ))
+                // A late answer to a timed-out request must not wedge the task, so
+                // a full reply slot drops this one.
+                if DMP_BIAS_SAVE_REPLY.try_send(saved).is_err() {
+                    warn!("DMP bias save result dropped — no waiter");
+                }
+            }
+
+            FlashCommand::SaveMotorCurve(payload, seq) => {
+                let record = &payload.0;
+                info!("Saving motor calibration curve to flash (run {})...", record.run_id());
+
+                match storage
+                    .store_item(&mut data_buffer, &StorageKey::MotorCurve, &payload)
+                    .await
+                {
+                    Ok(()) => {
+                        // Publish only once flash holds the record and the caller is
+                        // still waiting, so a timed-out caller's late write cannot
+                        // change the leaf behind its back. The reply below is the
+                        // save confirmation; the run id is still published so the
+                        // leaf names the durable record, but it is not the
+                        // confirmation.
+                        if MOTOR_CURVE_SAVE_ACTIVE.load(Ordering::Relaxed) == seq {
+                            calibration::set_motor_calibration(
+                                record.curve(),
+                                record.scale_measured().then_some(record.scale()),
+                            )
                             .await;
+                            calibration::set_motor_run_id(record.run_id()).await;
+                            info!("Motor calibration curve saved successfully");
+                        } else {
+                            info!(
+                                "Motor calibration curve saved to flash but the caller is gone; applied curve unchanged"
+                            );
                         }
-                        Err(e) => {
-                            error!("Failed to save motor calibration: {}", defmt::Debug2Format(&e));
+                        if MOTOR_CURVE_SAVE_REPLY.try_send((seq, Ok(()))).is_err() {
+                            warn!("Motor curve save result dropped — no waiter");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to save motor calibration curve: {}", defmt::Debug2Format(&e));
+                        // Do not publish: the previous record is still the durable
+                        // one. A full reply slot drops the answer rather than
+                        // wedging the task; the caller then reports its bounded
+                        // timeout.
+                        if MOTOR_CURVE_SAVE_REPLY
+                            .try_send((seq, Err("flash write failed")))
+                            .is_err()
+                        {
+                            warn!("Motor curve save result dropped — no waiter");
                         }
                     }
                 }
+            }
 
-                CalibrationDataKind::Distance(factor) => {
-                    info!("Saving distance calibration to flash...");
+            FlashCommand::SaveDistanceScale(scale) => {
+                info!("Saving distance calibration ({} counts/cm)...", scale.counts_per_cm());
 
-                    let mut data = CALIBRATION_DATA.lock().await;
-                    if let Some(ref mut cal) = *data {
-                        cal.distance = factor;
-                    } else {
-                        *data = Some(CalibrationData {
-                            distance: factor,
-                            ..CalibrationData::default()
-                        });
+                // One record holds both: a full record keeps its measurements and
+                // only takes the new scale, so a distance run cannot discard a
+                // measured curve. A fresh robot gets a scale-only record under run
+                // id 0, because no sweep has produced a measurement run yet.
+                let record = match fetch_motor_record(&mut storage, &mut data_buffer).await {
+                    Ok(Some(record)) => record.with_scale(scale),
+                    Ok(None) => MotorCalibrationRecord::scale_only(0, scale),
+                    Err(e) => {
+                        warn!(
+                            "Existing motor record unreadable ({}); writing a scale-only record",
+                            defmt::Debug2Format(&e)
+                        );
+                        MotorCalibrationRecord::scale_only(0, scale)
                     }
-                    drop(data);
+                };
+                let payload = MotorCalibrationPayload(record);
 
-                    let df = DistanceFactor(factor);
-
-                    match storage
-                        .store_item(&mut data_buffer, &StorageKey::DistanceFactor, &df)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!("Distance calibration saved successfully");
-                            {
-                                let mut s = calibration::CALIBRATION_STATE.lock().await;
-                                s.distance_factor = factor;
-                                s.distance_cal_status = CalibrationStatus::Loaded;
-                            }
-                            raise_event(Events::CalibrationDataLoaded(
-                                CalibrationKind::Distance,
-                                Some(CalibrationDataKind::Distance(factor)),
-                            ))
-                            .await;
-                        }
-                        Err(e) => {
-                            error!("Failed to save distance calibration: {}", defmt::Debug2Format(&e));
-                        }
+                match storage
+                    .store_item(&mut data_buffer, &StorageKey::MotorCurve, &payload)
+                    .await
+                {
+                    Ok(()) => {
+                        // Publish only once flash holds the record, so a failed
+                        // write leaves the previous scale in force.
+                        calibration::set_distance_scale(Some(scale)).await;
+                        info!("Distance calibration saved: {} counts/cm", scale.counts_per_cm());
+                    }
+                    Err(e) => {
+                        error!("Failed to save distance calibration: {}", defmt::Debug2Format(&e));
                     }
                 }
-                CalibrationDataKind::DmpBias(words) => {
-                    info!("Saving DMP bias snapshot to flash...");
-
-                    let saved = match storage.store_item(&mut data_buffer, &StorageKey::DmpBias, &words).await {
-                        Ok(()) => {
-                            // Cache the snapshot only once flash holds it, so a
-                            // failed write leaves the last durable snapshot in
-                            // the cache for a Stop to restore. The save keeps the
-                            // cache and the log only. Raising
-                            // `CalibrationDataLoaded` here would re-enter the boot
-                            // path and could discard the "Calibration saved" Result
-                            // Report; only `GetData(DmpBias)` produces that event.
-                            let mut data = CALIBRATION_DATA.lock().await;
-                            if let Some(ref mut cal) = *data {
-                                cal.dmp_bias = Some(words);
-                            } else {
-                                *data = Some(CalibrationData {
-                                    dmp_bias: Some(words),
-                                    ..CalibrationData::default()
-                                });
-                            }
-                            drop(data);
-                            info!("DMP bias snapshot saved successfully");
-                            true
-                        }
-                        Err(e) => {
-                            error!("Failed to save DMP bias snapshot: {}", defmt::Debug2Format(&e));
-                            false
-                        }
-                    };
-
-                    // A late answer to a timed-out request must not wedge the
-                    // task, so a full reply slot drops this one.
-                    if DMP_BIAS_SAVE_REPLY.try_send(saved).is_err() {
-                        warn!("DMP bias save result dropped — no waiter");
-                    }
-                }
-            },
+            }
         }
 
         // Small delay to prevent tight loop

@@ -81,6 +81,9 @@ jobs:
       - name: Test touch-ui (host)
         run: cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests
 
+      - name: Test motor-cal (host)
+        run: cargo test -p motor-cal --features std --target x86_64-unknown-linux-gnu --tests
+
       - name: Test rangefinder (host)
         run: cargo test -p rangefinder --features std --target x86_64-unknown-linux-gnu --tests
 

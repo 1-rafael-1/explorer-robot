@@ -48,6 +48,8 @@ use crate::resources::{
     RgbLedResources, StorageResources,
 };
 
+#[cfg(any(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
+mod bench_precision;
 mod resources;
 mod system;
 mod task;
@@ -508,5 +510,7 @@ fn main() -> ! {
         init_testing(spawner);
         init_calibration(spawner);
         init_startup(spawner);
+        #[cfg(any(feature = "bench_motor_calibrate", feature = "bench_motor_measure"))]
+        bench_precision::init(spawner);
     });
 }
