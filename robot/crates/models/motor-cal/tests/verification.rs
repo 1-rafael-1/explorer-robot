@@ -136,6 +136,37 @@ fn the_max_is_chosen_before_rounding() {
 }
 
 #[test]
+fn divergence_is_symmetric_because_the_slower_track_is_the_denominator() {
+    // The denominator is `min(left, right)`, so a 100/150 pair must read 50 %
+    // whichever track it is recorded on. Dividing by `left` would break one
+    // order.
+    assert_eq!(divergence_percent(150, 100), Some(50.0));
+    assert_eq!(divergence_percent(100, 150), Some(50.0));
+}
+
+#[test]
+fn the_worst_point_is_a_slower_right_track() {
+    let mut verification = Verification::new();
+    fill_gated_zero(&mut verification, &[(Direction::Forward, 50)]);
+
+    // The right track is slower. The denominator must be the slower track, not
+    // the left one: 50 / 100 is 50 %, whereas 50 / 150 would be 33 %.
+    full_repeats(&mut verification, Direction::Forward, 50, 150, 100);
+
+    let report = verification.finish();
+    assert!(report.complete);
+    assert_eq!(
+        report.max,
+        Some(VerificationMax {
+            tenths: 500,
+            direction: Direction::Forward,
+            power: 50,
+        })
+    );
+    assert!(report.means[Direction::Forward.index()][step(50)].is_some_and(|mean| (mean - 50.0).abs() < 1e-3));
+}
+
+#[test]
 fn equal_counts_have_no_divergence() {
     assert!(divergence_percent(123, 123).is_some_and(|divergence| divergence.abs() < 1e-6));
 }
