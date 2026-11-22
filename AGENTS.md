@@ -16,8 +16,9 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents
 
 A graphify knowledge graph is generated into `graphify-out/` (gitignored). See
 `docs/agents/graphify.md` for what it contains, when to refresh it and how to query it;
-refresh with `scripts/graphify-update.sh check|code|docs`. Treat the code as the source
-of truth.
+refresh with `scripts/graphify-update.sh check|update|full`. Every build includes
+docs, ADRs and code; there is no code-only mode. Treat the code as the source of
+truth.
 
 ### Motor bench
 
