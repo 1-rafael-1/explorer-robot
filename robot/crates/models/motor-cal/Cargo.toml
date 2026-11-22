@@ -29,3 +29,7 @@ required-features = ["std"]
 [[test]]
 name = "payload"
 required-features = ["std"]
+
+[[test]]
+name = "verification"
+required-features = ["std"]

@@ -174,7 +174,7 @@ async fn measure_point(direction: Direction, power: u8) -> Option<PointReading> 
     Some(PointReading {
         left,
         right,
-        divergence: motor_sweep::divergence_percent(left, right).unwrap_or(FAILING_DIVERGENCE_PERCENT),
+        divergence: motor_cal::divergence_percent(left, right).unwrap_or(FAILING_DIVERGENCE_PERCENT),
     })
 }
 

@@ -52,6 +52,7 @@
 pub mod curve_maths;
 pub mod payload;
 pub mod scale;
+pub mod verification;
 
 pub use curve_maths::{
     Curve, CurveCommand, CurveError, Direction, FIRST_POWER_STEP_PERCENT, LAST_POWER_STEP_PERCENT, LEG_ORDER, LegPoint,
@@ -64,6 +65,10 @@ pub use payload::{
 pub use scale::{
     DistanceScale, INFERRED_COUNTS_PER_SPROCKET_REV, MAX_PLAUSIBLE_COUNTS_PER_CM, MIN_PLAUSIBLE_COUNTS_PER_CM,
     NOMINAL_COUNTS_PER_CM, SPROCKET_CIRCUMFERENCE_CM, ScaleError,
+};
+pub use verification::{
+    VERIFICATION_INFO_POWER, VERIFICATION_MIN_POWER, VERIFICATION_REPEATS, Verification, VerificationMax,
+    VerificationReport, divergence_percent, divergence_tenths,
 };
 
 /// The Quiescence hold window, in milliseconds: a track that has produced no

@@ -39,7 +39,7 @@
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use motor_cal::{Curve, PointResult, Track};
+use motor_cal::{Curve, PointResult, Track, VERIFICATION_MIN_POWER, VERIFICATION_REPEATS, Verification};
 use touch_ui::{BasicMotorReadout, BasicMotorSummaryBuilder, CorrectedCheck, CorrectedMax, Correction, StepIndex};
 
 use crate::{
@@ -132,20 +132,20 @@ async fn basic_motor_test_task(claim: Claim) {
     // the operator can use to judge the calibration, while the raw counts above
     // are the drivetrain, not the calibration error.
     let corrected = if curve.is_some() {
-        let mut readings = CorrectedReadings::new();
-        for pass in 1..=CORRECTED_REPEATS {
-            info!("basic-motor: corrected pass {=u8}/{=u8}", pass, CORRECTED_REPEATS);
+        let mut verification = Verification::new();
+        for pass in 1..=VERIFICATION_REPEATS {
+            info!("basic-motor: corrected pass {=u8}/{=u8}", pass, VERIFICATION_REPEATS);
             let mut sink = CorrectedSink {
                 readout: &mut readout,
                 curve,
-                readings: &mut readings,
+                verification: &mut verification,
             };
             let corrected_end = motor_sweep::run_sweep(&claim, &mut sink, SweepMode::Corrected).await;
             if abandon(corrected_end, &claim).await {
                 return;
             }
         }
-        readings.finish()
+        finish_verification(verification)
     } else {
         info!("basic-motor: no curve; corrected verification skipped");
         CorrectedCheck::NoCurve
@@ -300,7 +300,7 @@ fn log_step(leg: touch_ui::TestLeg, power: u8, result: PointResult) {
 /// curve is applied. Its purpose is not to measure the drivetrain — the raw cycle
 /// already did that — but to measure how closely the two tracks actually match
 /// once the calibration has corrected them. Each pass records every gated point
-/// in [`CorrectedReadings`], which averages the repeats for the Result Report's
+/// in [`Verification`], which averages the repeats for the Result Report's
 /// `Corr max` line.
 struct CorrectedSink<'a> {
     /// The readout the whole run drives and publishes.
@@ -308,111 +308,66 @@ struct CorrectedSink<'a> {
     /// The curve in force for the run, read once before the first pass.
     curve: Option<Curve>,
     /// The accumulated per-point divergences across the repeats.
-    readings: &'a mut CorrectedReadings,
+    verification: &'a mut Verification,
 }
 
-/// The per-point divergences of the curve-applied verification, summed across
-/// [`CORRECTED_REPEATS`] passes.
+/// Log the verified means and return the Result Report's verdict.
 ///
-/// A point that was invalid in one pass still contributes the passes that did
-/// measure it, so an intermittent measurement failure cannot erase a real gap.
-#[derive(Clone, Copy)]
-struct CorrectedReadings {
-    /// Summed divergence in percent, indexed by direction and Power Step.
-    sums: [[f32; motor_cal::POWER_STEPS]; 2],
-    /// Number of measured repeats at each point.
-    samples: [[u8; motor_cal::POWER_STEPS]; 2],
-    /// Summed 20 % divergence, indexed by direction.
-    low_sums: [f32; 2],
-    /// Number of measured 20 % repeats, indexed by direction.
-    low_samples: [u8; 2],
-}
+/// The report only names a maximum when every gated Power Step has both repeats;
+/// a point measured once cannot become the headline. Missing gated points are
+/// logged so an incomplete verification is visible in the bench log as well as
+/// the `--` footer.
+fn finish_verification(verification: Verification) -> CorrectedCheck {
+    let report = verification.finish();
 
-impl CorrectedReadings {
-    /// No points recorded yet.
-    const fn new() -> Self {
-        Self {
-            sums: [[0.0; motor_cal::POWER_STEPS]; 2],
-            samples: [[0; motor_cal::POWER_STEPS]; 2],
-            low_sums: [0.0; 2],
-            low_samples: [0; 2],
-        }
-    }
-
-    /// Add one measured point.
-    fn record(&mut self, direction: motor_cal::Direction, step_index: usize, power: u8, divergence: f32) {
-        let direction = direction.index();
-        if power >= CORRECTED_MIN_POWER {
-            self.sums[direction][step_index] += divergence;
-            self.samples[direction][step_index] = self.samples[direction][step_index].saturating_add(1);
-        } else if power == CORRECTED_INFO_POWER {
-            self.low_sums[direction] += divergence;
-            self.low_samples[direction] = self.low_samples[direction].saturating_add(1);
-        }
-    }
-
-    /// Average the repeats, log every point and the maxima, and return the Result
-    /// Report's verdict.
-    fn finish(self) -> CorrectedCheck {
-        let mut max: Option<CorrectedMax> = None;
-        for direction in motor_sweep::DIRECTIONS {
-            let direction_index = direction.index();
-            for step_index in 0..motor_cal::POWER_STEPS {
-                let samples = self.samples[direction_index][step_index];
-                if samples == 0 {
-                    continue;
-                }
-                let mean = self.sums[direction_index][step_index] / f32::from(samples);
-                let power = motor_cal::POWER_STEP_PERCENTS[step_index];
+    for direction in motor_sweep::DIRECTIONS {
+        let direction_index = direction.index();
+        for (step_index, mean) in report.means[direction_index].iter().enumerate() {
+            let power = motor_cal::POWER_STEP_PERCENTS[step_index];
+            if let Some(mean) = mean {
                 info!(
                     "basic-motor: corrected-mean {=str} {=u8}% div={=f32}",
                     motor_sweep::direction_label(direction),
                     power,
                     mean
                 );
-                let tenths = divergence_tenths(mean);
-                if max.is_none_or(|max| tenths > max.tenths) {
-                    max = Some(CorrectedMax {
-                        tenths,
-                        direction: motor_sweep::ui_direction(direction),
-                        power,
-                    });
-                }
-            }
-
-            if self.low_samples[direction_index] > 0 {
-                let mean = self.low_sums[direction_index] / f32::from(self.low_samples[direction_index]);
+            } else if power >= VERIFICATION_MIN_POWER {
                 info!(
-                    "basic-motor: corrected low-power {=str} {=f32}% (informational, below {=u8}%)",
+                    "basic-motor: corrected missing {=str} {=u8}%",
                     motor_sweep::direction_label(direction),
-                    mean,
-                    CORRECTED_MIN_POWER
+                    power
                 );
             }
         }
-
-        max.map_or_else(
-            || {
-                info!("basic-motor: corrected max unavailable");
-                CorrectedCheck::Unavailable
-            },
-            |max| {
-                info!("basic-motor: corrected max={=f32}", f32::from(max.tenths) / 10.0);
-                CorrectedCheck::Measured(max)
-            },
-        )
+        if let Some(mean) = report.low_power_means[direction_index] {
+            info!(
+                "basic-motor: corrected low-power {=str} {=f32}% (informational, below {=u8}%)",
+                motor_sweep::direction_label(direction),
+                mean,
+                VERIFICATION_MIN_POWER
+            );
+        }
     }
-}
 
-/// Round a divergence in percent to tenths of a percent, saturating.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn divergence_tenths(divergence: f32) -> u16 {
-    let rounded = divergence * 10.0 + 0.5;
-    if rounded >= f32::from(u16::MAX) {
-        u16::MAX
-    } else {
-        rounded as u16
+    if !report.complete {
+        info!("basic-motor: corrected verification incomplete; max unavailable");
+        return CorrectedCheck::Unavailable;
     }
+
+    report.max.map_or_else(
+        || {
+            info!("basic-motor: corrected max unavailable");
+            CorrectedCheck::Unavailable
+        },
+        |max| {
+            info!("basic-motor: corrected max={=f32}", f32::from(max.tenths) / 10.0);
+            CorrectedCheck::Measured(CorrectedMax {
+                tenths: max.tenths,
+                direction: motor_sweep::ui_direction(max.direction),
+                power: max.power,
+            })
+        },
+    )
 }
 
 impl StepObserver for CorrectedSink<'_> {
@@ -449,30 +404,38 @@ impl SweepSink for CorrectedSink<'_> {
         self.readout.complete(shown_left, shown_right, left_moved, right_moved);
         motor_readout::publish(*self.readout).await;
 
-        if let (Some(left_count), Some(right_count)) = (left_count, right_count) {
-            if let Some(divergence) = motor_sweep::divergence_percent(left_count, right_count) {
-                info!(
-                    "basic-motor: corrected {=str} {=u8}% L={=u16} R={=u16} div={=f32}",
-                    motor_sweep::direction_label(step.direction),
-                    step.power,
-                    left_count,
-                    right_count,
-                    divergence
-                );
-                self.readings
-                    .record(step.direction, step.step_index(), step.power, divergence);
+        if left_moved && right_moved {
+            if let (Some(left_count), Some(right_count)) = (left_count, right_count) {
+                if let Some(divergence) = motor_cal::divergence_percent(left_count, right_count) {
+                    info!(
+                        "basic-motor: corrected {=str} {=u8}% L={=u16} R={=u16} div={=f32}",
+                        motor_sweep::direction_label(step.direction),
+                        step.power,
+                        left_count,
+                        right_count,
+                        divergence
+                    );
+                    self.verification
+                        .record(step.direction, step.power, left_count, right_count);
+                } else {
+                    info!(
+                        "basic-motor: corrected {=str} {=u8}% L={=u16} R={=u16} no counts",
+                        motor_sweep::direction_label(step.direction),
+                        step.power,
+                        left_count,
+                        right_count
+                    );
+                }
             } else {
                 info!(
-                    "basic-motor: corrected {=str} {=u8}% L={=u16} R={=u16} no counts",
+                    "basic-motor: corrected {=str} {=u8}% invalid",
                     motor_sweep::direction_label(step.direction),
-                    step.power,
-                    left_count,
-                    right_count
+                    step.power
                 );
             }
         } else {
             info!(
-                "basic-motor: corrected {=str} {=u8}% invalid",
+                "basic-motor: corrected {=str} {=u8}% invalid: no sustained motion",
                 motor_sweep::direction_label(step.direction),
                 step.power
             );
@@ -481,19 +444,6 @@ impl SweepSink for CorrectedSink<'_> {
         StepAction::Continue
     }
 }
-
-/// The lowest power that gates the corrected verification. 20 % is the stiction
-/// band and is logged for information only.
-const CORRECTED_MIN_POWER: u8 = 30;
-
-/// The informational power below [`CORRECTED_MIN_POWER`].
-const CORRECTED_INFO_POWER: u8 = 20;
-
-/// How many curve-applied passes the verification runs. Two repeats let the
-/// reported divergence use the mean of two windows, so one noisy point cannot
-/// become the headline number on its own. The bench regression uses the same two
-/// repeats.
-const CORRECTED_REPEATS: u8 = 2;
 
 /// The one-based position of a pair step within the cycle, as the `Index` row
 /// shows it.

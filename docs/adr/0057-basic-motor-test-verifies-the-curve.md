@@ -37,20 +37,27 @@ cycle) and extends ADR-0056 (the corrected verification uses the pair curve).
 - The Basic Motor Test runs the raw 20-step pair cycle exactly as before. Its
   Result Report tables are headed `Raw cnt` and `Corr`.
 - When a Motor Calibration Curve is loaded, the test then runs **two** full
-  20-step pair cycles through normal `SetTracks`, so the curve is applied. The
-  two passes are averaged per Power Step; the worst mean over **30–100 %** is the
-  **Corrected Max**. The 20 % band is measured for information only, as in the
-  bench regression.
+  20-step pair cycles through normal `SetTracks`, so the curve is applied. Each
+  point is the mean of its two repeats, but only when both repeats produced a
+  sustained-motion window; a gated point missing a repeat makes the verification
+  incomplete and the footer reads `Corr max --`. The worst mean over **30–100 %**
+  is the **Corrected Max**. The 20 % band is measured for information only, as in
+  the bench regression.
 - The Result Report shows `Floor <p>%  Raw spread <p>%` and, in the reserved
   footer row, `Corr max <p>% <dir> <power>%`. `Raw spread` is the raw four-leg
   spread at 100 %; `Corr max` is the calibration's residual. A missing curve
-  yields `No curve - run Motor`; a verification with no usable gated point yields
-  `Corr max --`.
+  yields `No curve - run Motor`; a verification with no complete gated point
+  yields `Corr max --`. The summary model is shared with the Motor Calibration, so
+  its tables are headed `Raw cnt` and `Corr` and its spread line reads
+  `Raw spread` too; that is the same raw evidence, not a second meaning.
 - The live readout prefixes `Corr` on its `Step` and `Last` rows during a
-  verification cycle and never latches the raw Breakaway from a corrected pair.
-- The verified **Track Divergence** is one shared function,
-  `motor_sweep::divergence_percent`, used by both the test and the bench
-  regression.
+  verification cycle and never latches the raw Breakaway from a corrected pair;
+  the raw Breakaways are kept per direction, so a corrected pass shows the
+  direction it is running.
+- The verified **Track Divergence** and its aggregation live in `motor-cal`:
+  `divergence_percent`, `divergence_tenths` and the host-tested `Verification`
+  model are shared by the test and the bench regression. A gated point measured
+  only once is never the headline.
 - A Motor Calibration still measures and saves only the raw curve; the
   verification is read-only and never changes the saved curve.
 
@@ -62,7 +69,9 @@ cycle) and extends ADR-0056 (the corrected verification uses the pair curve).
 - The operator finally has a visible accuracy number on the robot, and the raw
   table and the `Raw spread` line can no longer be mistaken for it.
 - Two repeats cost more time but prevent a single noisy window from becoming the
-  headline number. The bench regression remains the automated gate.
+  headline number. The bench regression also takes two repeats, but it gates the
+  worst repeat; the test reports the mean of the two and refuses to name a maximum
+  when a gated point lacks a repeat.
 - The worst in-boot residual observed on 2026-11-22 was **3.1 % at forward 30 %**
   (2.76 % and 3.52 % in the two repeats), while every other gated point was under
   2 %. The low-duty knee between the 20 % and 30 % calibration points is the
@@ -73,4 +82,5 @@ cycle) and extends ADR-0056 (the corrected verification uses the pair curve).
   state and was reverted; the evidence is in
   `.scratch/motor-calibration/issues/10-corrected-command-refinement.md`.
 - The test still uses one measurement engine (`run_sweep` with a `SweepMode`) and
-  one divergence definition, so the test and the bench cannot drift apart.
+  the `motor-cal` verification model, so the test and the bench cannot drift
+  apart.

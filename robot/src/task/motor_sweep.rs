@@ -646,21 +646,6 @@ fn rail_at_command() -> (Option<f32>, Option<f32>) {
     )
 }
 
-/// `|left − right| / min(left, right)` in percent, or `None` when either count
-/// is zero and the ratio is undefined.
-///
-/// One implementation is shared by the Basic Motor Test's corrected cycle and
-/// the bench regression, so the two cannot report different definitions of the
-/// corrected divergence.
-#[must_use]
-pub fn divergence_percent(left: u16, right: u16) -> Option<f32> {
-    let min = left.min(right);
-    if min == 0 {
-        return None;
-    }
-    Some((f32::from(left.abs_diff(right)) / f32::from(min)) * 100.0)
-}
-
 /// The signed track command for both tracks of a pair step in `direction` at
 /// `power` percent.
 ///

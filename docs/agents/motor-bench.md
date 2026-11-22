@@ -301,9 +301,10 @@ The base curve is the more robust static estimate; the cross-boot floor needs
 closed-loop trim. Evidence:
 `.scratch/motor-calibration/issues/10-corrected-command-refinement.md`.
 
-A `Corr max` of `--` means the corrected pass produced no usable gated point;
-`No curve - run Motor` means no Motor Calibration Curve was loaded, so the
-verification was skipped.
+A `Corr max` of `--` means the corrected pass produced no usable gated point, or
+one of the two repeats for a gated point did not show sustained motion; the log
+names the missing point. `No curve - run Motor` means no Motor Calibration Curve
+was loaded, so the verification was skipped.
 
 ## 6. Motor Calibration
 

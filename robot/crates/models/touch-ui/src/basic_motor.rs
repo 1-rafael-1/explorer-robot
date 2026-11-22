@@ -883,7 +883,8 @@ impl BasicMotorSummary {
     /// The same summary with a saved/not-saved footer.
     ///
     /// The Motor Calibration sets it before publishing the Result Report; the
-    /// Basic Motor Test never does, so its footer row stays empty.
+    /// Basic Motor Test never does, so its footer carries the corrected
+    /// verification instead (see [`footer_line`](Self::footer_line)).
     #[must_use]
     pub const fn with_status(self, status: SummaryStatus) -> Self {
         Self {
@@ -899,12 +900,6 @@ impl BasicMotorSummary {
             corrected: Some(corrected),
             ..self
         }
-    }
-
-    /// The curve-applied verification, or `None` when this summary has none.
-    #[must_use]
-    pub const fn corrected_check(&self) -> Option<CorrectedCheck> {
-        self.corrected
     }
 
     /// The saved/not-saved footer, or `None` when the summary carries none.
@@ -1026,8 +1021,9 @@ impl BasicMotorSummary {
     /// The optional saved/not-saved footer line, e.g. `Saved` or
     /// `Not saved: implausible correction`.
     ///
-    /// `None` when the summary carries no footer, so the Basic Motor Test leaves
-    /// the footer row blank.
+    /// `None` when the summary carries no saved/not-saved status; the Basic Motor
+    /// Test's footer then carries the corrected verification through
+    /// [`footer_line`](Self::footer_line).
     #[must_use]
     pub fn status_line(&self) -> Option<TextBuf> {
         self.status.map(|status| {
