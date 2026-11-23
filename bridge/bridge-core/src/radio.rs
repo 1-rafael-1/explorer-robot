@@ -6,17 +6,22 @@
 //! effects. It returns typed actions for the firmware to execute, typed events to log and an
 //! edge-triggered publication for the shared statics.
 //!
-//! This slice owns the station link only: boot from a Credential Record, adopting an existing
-//! association, link loss and reconnect, the DHCP timeout, the join-failure backoff and the
-//! missing-credentials warning. Setup Mode, provisioning, portal status and the counters are later
-//! slices of the same session (ADR-0058).
+//! This slice owns the station link, Setup Mode and provisioning: boot from a Credential Record,
+//! adopting an existing association, link loss and reconnect, the DHCP timeout, the join-failure
+//! backoff, the missing-credentials warning, the bounded Setup Mode window, the portal and panel
+//! commands, and the fail-closed write-before-join persist gate. The scan gate, the decision
+//! counters and the Bridge Status derivation are later slices of the same session (ADR-0058).
 //!
 //! The session owns no HAL, socket, clock or allocator and never panics: everything it needs is
 //! passed in, and its time comparisons wrap like the rest of `bridge-core`.
 
 use link_protocol::StationSsid;
 
-use crate::{portal::Credentials, record::CredentialRecord};
+use crate::{
+    portal::{Credentials, Status},
+    record::CredentialRecord,
+    setup::{SetupEvent, SetupWindow},
+};
 
 /// The shortest reconnect wait after a link loss or a failed join (ADR-0036's 1 s).
 pub const MIN_BACKOFF_MS: u32 = 1_000;
@@ -76,9 +81,37 @@ pub enum JoinResult {
     Failed,
 }
 
-/// An ordered input for one step: the result of a blocking action the session asked for.
+/// A command from the setup portal's HTTP worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortalCommand {
+    /// The operator submitted a credential pair for the Station Network.
+    Provision(
+        /// The submitted credentials; they are not in force until the write succeeds.
+        Credentials,
+    ),
+    /// The operator forgot the Station Network, keeping the Pairing Token.
+    Forget,
+}
+
+/// A command from the robot's panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelCommand {
+    /// The operator forgot the Station Network; the token-only record was already stored.
+    Forget,
+}
+
+/// An ordered input for one step: a queued command or the result of a blocking action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
+    /// A queued portal command.
+    Portal(PortalCommand),
+    /// A queued panel command.
+    Panel(PanelCommand),
+    /// The result of the previous step's credential-record write.
+    Persist(
+        /// Whether the record was written.
+        bool,
+    ),
     /// The result of the previous step's join action.
     Join(JoinResult),
 }
@@ -102,13 +135,27 @@ pub enum Action {
         /// The credentials to associate with.
         Credentials,
     ),
+    /// Enter station mode with these credentials and keep the setup AP up (APSTA).
+    ApplyApStation(
+        /// The credentials to associate with.
+        Credentials,
+    ),
     /// Enter AP-only Setup Mode with a parked, never-associated station.
     ApplySetupParked,
+    /// Leave AP-only Setup Mode with a parked, never-associated station.
+    ApplyParkedStation,
     /// Scan for and join the Station Network with this SSID.
     Join(
         /// The target network's SSID.
         StationSsid,
     ),
+    /// Write this credential pair to the Credential Record and report the result.
+    Persist(
+        /// The credentials to store; they are not in force until the write succeeds.
+        Credentials,
+    ),
+    /// Rewrite the Credential Record with the Pairing Token and no credentials.
+    PersistTokenOnly,
 }
 
 /// A transition the caller may log or react to; no event carries a secret.
@@ -129,6 +176,13 @@ pub enum Event {
     },
     /// The Bridge has no credentials, so the setup portal is its only network surface.
     MissingCredentials,
+    /// The Setup Mode window opened or closed.
+    Setup(
+        /// The window transition.
+        SetupEvent,
+    ),
+    /// The pending credential write failed; the old credentials remain in force.
+    PersistFailed,
 }
 
 /// The derived values that changed this step and must be written to the shared statics.
@@ -145,8 +199,12 @@ pub struct Publication {
     pub station_ssid: Option<StationSsid>,
     /// Whether the Station Network's SSID changed to unset this step.
     pub station_ssid_cleared: bool,
+    /// Whether the Setup Mode window is open, when that changed.
+    pub setup_open: Option<bool>,
     /// The station-up flag, when it changed.
     pub station_up: Option<bool>,
+    /// The portal status, when it changed.
+    pub portal_status: Option<Status>,
 }
 
 /// A fixed-capacity, saturating list of items.
@@ -348,7 +406,9 @@ impl Publication {
             provisioned: None,
             station_ssid: None,
             station_ssid_cleared: false,
+            setup_open: None,
             station_up: None,
+            portal_status: None,
         }
     }
 }
@@ -364,15 +424,15 @@ enum PublishedSsid {
     Named(StationSsid),
 }
 
-/// The Bridge's station link: association, reconnect, retry and the missing-credentials warning.
+/// The Bridge's station link, Setup Mode, provisioning and the missing-credentials warning.
 ///
 /// The session is built once at boot from the boot Credential Record and driven by the
-/// supervisory loop. It owns the station link state and the Station Network's SSID; it never reads
-/// a published value back.
+/// supervisory loop. It owns the station link state, the Station Network's SSID, Setup Mode and the
+/// pending credential write; it never reads a published value back.
 #[derive(Clone, Copy, Debug)]
 #[allow(
     clippy::large_stack_frames,
-    reason = "the session holds the credential pair and the published edges inline by design; there is no allocator to move them to"
+    reason = "the session holds the credential pair, the setup window and the published edges inline by design; there is no allocator to move them to"
 )]
 pub struct RadioSession {
     /// The station credentials in force, `None` while the Bridge is unprovisioned.
@@ -393,12 +453,22 @@ pub struct RadioSession {
     retry_blocked: bool,
     /// The earliest time the missing-credentials warning may repeat.
     next_missing_warning: u32,
+    /// The bounded Setup Mode window.
+    setup: SetupWindow,
+    /// The credential pair awaiting a successful record write.
+    pending_provision: Option<Credentials>,
+    /// Why the last join failed, `None` before a failure and after a success.
+    last_failure: Option<JoinFailure>,
     /// The provisioned flag last published.
     published_provisioned: Option<bool>,
     /// The Station Network SSID last published.
     published_ssid: PublishedSsid,
+    /// Whether the Setup Mode window was last published open.
+    published_setup_open: Option<bool>,
     /// The station-up flag last published.
     published_station_up: Option<bool>,
+    /// The portal status last published.
+    published_portal_status: Option<Status>,
 }
 
 impl RadioSession {
@@ -416,6 +486,7 @@ impl RadioSession {
         let credentials = record
             .and_then(|record| record.credentials)
             .filter(Credentials::is_valid);
+        let (setup, setup_event) = SetupWindow::boot(credentials.is_some(), now_ms);
 
         let mut session = Self {
             credentials,
@@ -427,9 +498,14 @@ impl RadioSession {
             join_in_flight: false,
             retry_blocked: false,
             next_missing_warning: now_ms,
+            setup,
+            pending_provision: None,
+            last_failure: None,
             published_provisioned: None,
             published_ssid: PublishedSsid::Unpublished,
+            published_setup_open: None,
             published_station_up: None,
+            published_portal_status: None,
         };
 
         let mut outcome = Outcome::new();
@@ -437,15 +513,18 @@ impl RadioSession {
             Some(credentials) => outcome.actions.push(Action::ApplyStation(credentials)),
             None => outcome.actions.push(Action::ApplySetupParked),
         }
+        if let Some(event) = setup_event {
+            outcome.events.push(Event::Setup(event));
+        }
         session.publish(&mut outcome.publication);
         (session, outcome)
     }
 
-    /// Processes one step: the join results first, then the link policy at `observation.now_ms`.
+    /// Processes one step: the queued inputs, the Setup Mode tick, then the link policy.
     ///
-    /// The caller passes the result of the previous step's join, if any, and the radio facts it
-    /// observed. Every action must be executed to completion before the next step; its result
-    /// arrives as an input on the following step.
+    /// The caller passes the queued portal and panel commands and the results of the previous
+    /// step's blocking actions, plus the radio facts it observed. Every action must be executed to
+    /// completion before the next step; its result arrives as an input on the following step.
     #[must_use]
     #[allow(
         clippy::large_stack_frames,
@@ -454,21 +533,44 @@ impl RadioSession {
     pub fn step(&mut self, observation: &Observation, inputs: &[Input]) -> Outcome {
         let now_ms = observation.now_ms;
         let mut outcome = Outcome::new();
+        self.station_ip = observation.station_ip;
+
+        // The controller's association state as it will be after this step's inputs run. A
+        // `Disconnect` action clears the association before the next step, so the rest of this step
+        // must see the link as down. The blocking firmware loop observes exactly that.
+        let mut controller_connected = observation.controller_connected;
 
         for input in inputs {
-            let Input::Join(result) = *input;
-            self.join_in_flight = false;
-            match result {
-                JoinResult::Connected => self.on_connected(now_ms, &mut outcome),
-                JoinResult::WrongPassword => {
-                    self.on_join_failed(JoinFailure::WrongPassword, now_ms, &mut outcome);
+            match *input {
+                Input::Join(result) => {
+                    self.join_in_flight = false;
+                    match result {
+                        JoinResult::Connected => self.on_connected(now_ms, &mut outcome),
+                        JoinResult::WrongPassword => {
+                            self.on_join_failed(JoinFailure::WrongPassword, now_ms, &mut outcome);
+                        }
+                        JoinResult::Failed => {
+                            self.on_join_failed(JoinFailure::Failed, now_ms, &mut outcome);
+                        }
+                    }
                 }
-                JoinResult::Failed => self.on_join_failed(JoinFailure::Failed, now_ms, &mut outcome),
+                Input::Portal(command) => {
+                    self.on_portal(command, now_ms, &mut controller_connected, &mut outcome);
+                }
+                Input::Panel(command) => {
+                    self.on_panel(command, now_ms, &mut controller_connected, &mut outcome);
+                }
+                Input::Persist(succeeded) => {
+                    self.on_persist(succeeded, now_ms, &mut controller_connected, &mut outcome);
+                }
             }
         }
 
-        self.station_ip = observation.station_ip;
-        self.apply_link_policy(observation.controller_connected, now_ms, &mut outcome);
+        if let Some(event) = self.setup.tick(now_ms, self.station_up()) {
+            self.on_setup_event(event, &mut outcome);
+        }
+
+        self.apply_link_policy(controller_connected, now_ms, &mut outcome);
         self.publish(&mut outcome.publication);
         outcome
     }
@@ -492,26 +594,49 @@ impl RadioSession {
         self.station_connected && self.station_ip.is_some()
     }
 
+    /// Returns whether the Setup Mode window is open.
+    #[must_use]
+    pub const fn setup_open(&self) -> bool {
+        self.setup.is_open()
+    }
+
+    /// Returns the portal status this slice derives from the provisioned flag and the last failure.
+    ///
+    /// A later slice prepends [`Status::Connected`] while the station is up; here a failed join in
+    /// force wins over the connecting state.
+    #[must_use]
+    pub const fn portal_status(&self) -> Status {
+        match (self.last_failure, self.credentials.is_some()) {
+            (Some(JoinFailure::WrongPassword), _) => Status::WrongPassword,
+            (Some(JoinFailure::Failed), _) => Status::Failed,
+            (None, true) => Status::Connecting,
+            (None, false) => Status::Unprovisioned,
+        }
+    }
+
     /// Returns whether the last join failed and the operator must act before a retry.
     ///
-    /// This slice records the block but gates retries on time alone: there is no Setup Mode window
-    /// yet, so a block must not stop the steady-state backoff. Setup Mode suppresses retries inside
-    /// an open window in a later slice (ADR-0058).
+    /// The block gates retries only inside an open Setup Mode window, where every attempt
+    /// off-channels the AP; outside a window the steady-state backoff still applies (ADR-0036,
+    /// ADR-0058).
     #[must_use]
     pub const fn retry_blocked(&self) -> bool {
         self.retry_blocked
     }
 
-    /// Handles a successful join: the station is associated and the backoff is back at its minimum.
+    /// Handles a successful join: the station is associated, the backoff is back at its minimum and
+    /// any recorded failure is cleared.
     fn on_connected(&mut self, now_ms: u32, outcome: &mut Outcome) {
         self.station_connected = true;
         self.associated_at = now_ms;
         self.backoff = MIN_BACKOFF_MS;
         self.retry_blocked = false;
+        self.last_failure = None;
         outcome.events.push(Event::Associated);
     }
 
-    /// Handles a failed join: reports the wait that applies, then doubles the one after it.
+    /// Handles a failed join: records why, reports the wait that applies, then doubles the one
+    /// after it.
     fn on_join_failed(&mut self, kind: JoinFailure, now_ms: u32, outcome: &mut Outcome) {
         outcome.events.push(Event::JoinFailed {
             kind,
@@ -520,15 +645,14 @@ impl RadioSession {
         self.next_attempt = now_ms.wrapping_add(self.backoff);
         self.backoff = next_backoff(self.backoff);
         self.retry_blocked = true;
+        self.last_failure = Some(kind);
     }
 
     /// Applies the link policy at one timestamp.
-    fn apply_link_policy(&mut self, observed_connected: bool, now_ms: u32, outcome: &mut Outcome) {
-        // The controller's association state as it will be after this step's actions run. A
-        // `Disconnect` action clears the association before the next step, so the rest of this step
-        // must see the link as down. The blocking firmware loop observes exactly that.
-        let mut controller_connected = observed_connected;
-
+    ///
+    /// `controller_connected` is the association state after this step's inputs; an input that
+    /// disconnects the controller has already cleared it.
+    fn apply_link_policy(&mut self, mut controller_connected: bool, now_ms: u32, outcome: &mut Outcome) {
         if self.station_connected && !controller_connected {
             self.station_connected = false;
             outcome.events.push(Event::LinkLost);
@@ -542,6 +666,12 @@ impl RadioSession {
             self.station_connected = false;
             self.arm_retry(now_ms);
             controller_connected = false;
+            // The firmware reports a DHCP timeout as a failure only inside the window; outside it,
+            // the steady-state backoff retries without asking the operator.
+            if self.setup.is_open() {
+                self.retry_blocked = true;
+                self.last_failure = Some(JoinFailure::Failed);
+            }
         }
 
         // Dropping the station mode can leave an existing association in place; adopt it instead of
@@ -552,6 +682,128 @@ impl RadioSession {
 
         self.maybe_join(now_ms, outcome);
         self.maybe_warn_missing_credentials(now_ms, outcome);
+    }
+
+    /// Handles a queued portal command.
+    fn on_portal(
+        &mut self,
+        command: PortalCommand,
+        now_ms: u32,
+        controller_connected: &mut bool,
+        outcome: &mut Outcome,
+    ) {
+        match command {
+            PortalCommand::Provision(credentials) => {
+                // Persist before joining: the submitted pair is not in force until the write
+                // succeeds, so a failure cannot silently strand the Bridge.
+                if self.pending_provision.is_none() {
+                    self.pending_provision = Some(credentials);
+                    outcome.actions.push(Action::Persist(credentials));
+                }
+            }
+            PortalCommand::Forget => {
+                // ADR-0058's parity correction: the portal and the panel pass the same computed
+                // station-up fact, so the outage clock starts identically on both paths.
+                let station_up = self.station_up();
+                outcome.actions.push(Action::PersistTokenOnly);
+                Self::disconnect_if_connected(controller_connected, outcome);
+                self.forget_network(now_ms);
+                if let Some(event) = self.setup.forget(now_ms, station_up) {
+                    outcome.events.push(Event::Setup(event));
+                    outcome.actions.push(Action::ApplySetupParked);
+                }
+            }
+        }
+    }
+
+    /// Handles a queued panel command.
+    fn on_panel(&mut self, command: PanelCommand, now_ms: u32, controller_connected: &mut bool, outcome: &mut Outcome) {
+        match command {
+            PanelCommand::Forget => {
+                // The same computed station-up fact as the portal's Forget (ADR-0058).
+                let station_up = self.station_up();
+                Self::disconnect_if_connected(controller_connected, outcome);
+                self.forget_network(now_ms);
+                if let Some(event) = self.setup.forget(now_ms, station_up) {
+                    outcome.events.push(Event::Setup(event));
+                    outcome.actions.push(Action::ApplySetupParked);
+                }
+            }
+        }
+    }
+
+    /// Handles the result of the pending credential write.
+    fn on_persist(&mut self, succeeded: bool, now_ms: u32, controller_connected: &mut bool, outcome: &mut Outcome) {
+        let Some(credentials) = self.pending_provision else {
+            return;
+        };
+        if succeeded {
+            self.credentials = Some(credentials);
+            if let Some(event) = self.setup.set_provisioned(true, now_ms) {
+                outcome.events.push(Event::Setup(event));
+            }
+            self.pending_provision = None;
+            self.station_connected = false;
+            self.associated_at = now_ms;
+            self.next_attempt = now_ms;
+            self.backoff = MIN_BACKOFF_MS;
+            self.retry_blocked = false;
+            self.last_failure = None;
+            self.join_in_flight = false;
+            Self::disconnect_if_connected(controller_connected, outcome);
+            outcome.actions.push(Action::ApplyApStation(credentials));
+        } else {
+            // Fail closed: the old credentials, SSID, provisioned flag and join schedule stay in
+            // force, and the failure is reported through the portal status.
+            self.pending_provision = None;
+            self.last_failure = Some(JoinFailure::Failed);
+            outcome.events.push(Event::PersistFailed);
+        }
+    }
+
+    /// Handles a Setup Mode window transition.
+    fn on_setup_event(&mut self, event: SetupEvent, outcome: &mut Outcome) {
+        outcome.events.push(Event::Setup(event));
+        match event {
+            SetupEvent::Opened(_) => {
+                // A newly opened window forgives the operator block: the next attempt is the one
+                // the operator will submit.
+                self.retry_blocked = false;
+                match self.credentials {
+                    Some(credentials) => outcome.actions.push(Action::ApplyApStation(credentials)),
+                    None => outcome.actions.push(Action::ApplySetupParked),
+                }
+            }
+            SetupEvent::Closed(_) => {
+                if let Some(credentials) = self.credentials {
+                    outcome.actions.push(Action::ApplyStation(credentials));
+                } else {
+                    outcome.actions.push(Action::ApplyParkedStation);
+                    self.station_connected = false;
+                }
+            }
+        }
+    }
+
+    /// Emits a disconnect when the controller reports an association and marks the link down for the
+    /// rest of the step.
+    fn disconnect_if_connected(controller_connected: &mut bool, outcome: &mut Outcome) {
+        if *controller_connected {
+            outcome.actions.push(Action::Disconnect);
+            *controller_connected = false;
+        }
+    }
+
+    /// Forgets the network: clears the credentials and the pending write and resets the join state.
+    const fn forget_network(&mut self, now_ms: u32) {
+        self.credentials = None;
+        self.pending_provision = None;
+        self.station_connected = false;
+        self.join_in_flight = false;
+        self.next_attempt = now_ms;
+        self.backoff = MIN_BACKOFF_MS;
+        self.retry_blocked = false;
+        self.last_failure = None;
     }
 
     /// Adopts an association the controller already holds.
@@ -565,8 +817,15 @@ impl RadioSession {
 
     /// Emits the join action when the station is down, no result is pending and the retry gate is
     /// open.
+    ///
+    /// Inside an open Setup Mode window the operator block suppresses the retry; outside it the
+    /// steady-state backoff is the only gate.
     fn maybe_join(&mut self, now_ms: u32, outcome: &mut Outcome) {
-        if self.station_connected || self.join_in_flight || !reached(now_ms, self.next_attempt) {
+        if self.station_connected
+            || self.join_in_flight
+            || !reached(now_ms, self.next_attempt)
+            || (self.setup.is_open() && self.retry_blocked)
+        {
             return;
         }
         let Some(ssid) = self.station_ssid() else {
@@ -611,10 +870,23 @@ impl RadioSession {
             self.published_ssid = published_ssid;
         }
 
+        let setup_open = self.setup.is_open();
+        if self.published_setup_open != Some(setup_open) {
+            publication.setup_open = Some(setup_open);
+            self.published_setup_open = Some(setup_open);
+        }
+
         let station_up = self.station_up();
         if self.published_station_up != Some(station_up) {
             publication.station_up = Some(station_up);
             self.published_station_up = Some(station_up);
+        }
+
+        // Recomputed after the link policy so a failed join publishes its status in the same step.
+        let portal_status = self.portal_status();
+        if self.published_portal_status != Some(portal_status) {
+            publication.portal_status = Some(portal_status);
+            self.published_portal_status = Some(portal_status);
         }
     }
 }

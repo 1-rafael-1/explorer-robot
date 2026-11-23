@@ -47,7 +47,8 @@ pub use heartbeat::{CoveredTask, HeartbeatSet};
 pub use link_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
 pub use pump::{BridgePump, Decision, PumpStats};
 pub use radio::{
-    Action, ActionSet, Event, EventSet, Input, JoinFailure, JoinResult, Observation, Outcome, Publication, RadioSession,
+    Action, ActionSet, Event, EventSet, Input, JoinFailure, JoinResult, Observation, Outcome, PanelCommand,
+    PortalCommand, Publication, RadioSession,
 };
 pub use record::{CredentialRecord, RecordError};
 pub use routing::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
