@@ -6,16 +6,18 @@
 //! join waits for its retry gate, and the missing-credentials warning repeats once a minute. Setup
 //! Mode raises on a blank record or a five-minute outage, closes on the expiry or a stable
 //! association, and owns the portal and panel Forget paths. A portal provision persists before it
-//! joins and fails closed on a bad write. Every assertion goes through the public reducer: `boot`,
+//! joins and fails closed on a bad write. The derived portal status, the five-minute scan gate and
+//! its preserved clock quirks, the decision counters and the Bridge Status accessor's parity with
+//! the firmware are pinned here too. Every assertion goes through the public reducer: `boot`,
 //! `step`, the accessors and the returned outcome.
 
 use bridge_core::{
-    Action, CloseReason, CredentialRecord, Event, Input, JoinFailure, JoinResult, Observation, Outcome, PanelCommand,
-    PortalCommand, Publication, RadioSession, RaiseReason, SetupEvent,
+    Action, BridgeStatusView, CloseReason, CredentialRecord, Event, Input, JoinFailure, JoinResult, Observation,
+    Outcome, PanelCommand, PortalCommand, Publication, RadioSession, RaiseReason, SetupEvent, Stats,
     portal::{self, Credentials, Status},
     radio,
 };
-use link_protocol::StationSsid;
+use link_protocol::{BridgeStation, BridgeStatusFlags, StationSsid};
 
 /// The Station Network the fixture record names.
 const TEST_SSID: &[u8] = b"HomeNet";
@@ -426,7 +428,11 @@ fn the_missing_credentials_warning_repeats_every_minute() {
 
     let outcome = session.step(&observed(100, false, None), &[]);
     assert_eq!(events(&outcome), vec![Event::MissingCredentials]);
-    assert!(actions(&outcome).is_empty(), "an unprovisioned session never joins");
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::Scan],
+        "an unprovisioned session scans the open window and never joins"
+    );
 
     let outcome = session.step(&observed(60_099, false, None), &[]);
     assert!(events(&outcome).is_empty(), "one millisecond before the next warning");
@@ -589,7 +595,11 @@ fn a_portal_provision_persists_before_it_mutates_the_network() {
         &observed(0, true, None),
         &[Input::Portal(PortalCommand::Provision(credentials))],
     );
-    assert_eq!(actions(&outcome), vec![Action::Persist(credentials)]);
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::Persist(credentials), Action::Scan],
+        "staging the pair persists it, and the open window's first scan is due"
+    );
     assert_eq!(
         events(&outcome),
         vec![Event::MissingCredentials],
@@ -646,11 +656,76 @@ fn a_failed_persist_keeps_the_old_network_and_reports_failure() {
     let outcome = session.step(&observed(300, true, Some(STATION_IP)), &[Input::Persist(false)]);
     assert_eq!(events(&outcome), vec![Event::PersistFailed]);
     assert!(actions(&outcome).is_empty(), "a failed write joins nothing");
-    assert_eq!(outcome.publication.portal_status, Some(Status::Failed));
-    assert_eq!(session.portal_status(), Status::Failed);
+    // The old association is still up, and the Connected overwrite outranks the recorded failure
+    // (ADR-0058).
+    assert_eq!(outcome.publication.portal_status, None);
+    assert_eq!(session.portal_status(), Status::Connected(STATION_IP));
     assert!(session.provisioned(), "the old credentials remain in force");
     assert_eq!(session.station_ssid(), Some(old_ssid));
     assert!(session.station_up(), "the old association is untouched");
+
+    // The overwrite also clears the recorded failure, so the link-loss edge derives Connecting,
+    // exactly as the firmware does.
+    let outcome = session.step(&observed(400, false, None), &[]);
+    assert_eq!(events(&outcome), vec![Event::LinkLost]);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connecting));
+    assert_eq!(session.portal_status(), Status::Connecting);
+}
+
+/// A staged credential write suppresses the old network's due join until the write resolves.
+#[test]
+fn a_pending_write_suppresses_the_old_networks_join() {
+    let Some(replacement) = Credentials::from_slices(NEW_SSID, NEW_PASSPHRASE) else {
+        return;
+    };
+    let Some(replacement_ssid) = StationSsid::new(NEW_SSID) else {
+        return;
+    };
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+
+    // The join is in flight when the five-minute outage opens the window.
+    let _ = session.step(&observed(0, false, None), &[]);
+    let opening = session.step(&observed(300_000, false, None), &[]);
+    assert!(events(&opening).contains(&Event::Setup(SetupEvent::Opened(RaiseReason::StationOutage))));
+
+    // The association comes up and drops well before the stable close, so the window stays open
+    // and the retry gate opens on the one-second backoff.
+    let _ = session.step(
+        &observed(300_100, true, Some(STATION_IP)),
+        &[Input::Join(JoinResult::Connected)],
+    );
+    let lost = session.step(&observed(300_200, false, None), &[]);
+    assert_eq!(events(&lost), vec![Event::LinkLost]);
+    assert!(session.setup_open());
+
+    // Staging the pair persists it and suppresses the old network's join; no mode action is
+    // emitted either, because the window was already open.
+    let staging = session.step(
+        &observed(301_200, false, None),
+        &[Input::Portal(PortalCommand::Provision(replacement))],
+    );
+    let staged_actions = actions(&staging);
+    assert!(staged_actions.contains(&Action::Persist(replacement)));
+    assert!(
+        !staged_actions.iter().any(|action| matches!(action, Action::Join(_))),
+        "the old network is not rejoined while the write is pending"
+    );
+    assert!(
+        !staged_actions.iter().any(|action| matches!(
+            action,
+            Action::ApplyStation(_) | Action::ApplyApStation(_) | Action::ApplySetupParked | Action::ApplyParkedStation
+        )),
+        "a staged write changes no radio mode"
+    );
+
+    // The adopted write joins the new network, not the old one.
+    let adopted = session.step(&observed(301_210, false, None), &[Input::Persist(true)]);
+    assert_eq!(
+        actions(&adopted),
+        vec![Action::ApplyApStation(replacement), Action::Join(replacement_ssid)]
+    );
 }
 
 /// Both Forget paths clear the network and raise Setup Mode; only the portal keeps the token.
@@ -662,7 +737,12 @@ fn both_forget_paths_clear_the_network_and_open_setup_mode() {
     let outcome = portal.step(&observed(0, true, None), &[Input::Portal(PortalCommand::Forget)]);
     assert_eq!(
         actions(&outcome),
-        vec![Action::PersistTokenOnly, Action::Disconnect, Action::ApplySetupParked,]
+        vec![
+            Action::PersistTokenOnly,
+            Action::Disconnect,
+            Action::ApplySetupParked,
+            Action::Scan,
+        ]
     );
     assert_eq!(
         events(&outcome),
@@ -683,7 +763,10 @@ fn both_forget_paths_clear_the_network_and_open_setup_mode() {
         return;
     };
     let outcome = panel.step(&observed(0, true, None), &[Input::Panel(PanelCommand::Forget)]);
-    assert_eq!(actions(&outcome), vec![Action::Disconnect, Action::ApplySetupParked]);
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::Disconnect, Action::ApplySetupParked, Action::Scan]
+    );
     assert_eq!(
         events(&outcome),
         vec![
@@ -843,6 +926,445 @@ fn no_event_carries_the_passphrase() {
             "an event leaked the passphrase: {text}"
         );
     }
+}
+
+/// The portal status follows the provisioned, join-failure and station-up facts.
+#[test]
+fn the_portal_status_follows_the_provision_join_and_link_facts() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, boot) = RadioSession::boot(None, 0);
+    assert_eq!(boot.publication.portal_status, Some(Status::Unprovisioned));
+
+    // Staging a provision changes no status; the successful write moves to Connecting.
+    let outcome = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    assert_eq!(session.portal_status(), Status::Unprovisioned);
+    assert_eq!(outcome.publication.portal_status, None);
+    let outcome = session.step(&observed(10, false, None), &[Input::Persist(true)]);
+    assert_eq!(session.portal_status(), Status::Connecting);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connecting));
+
+    // A rejected passphrase wins until a later attempt associates.
+    let outcome = session.step(&observed(20, false, None), &[Input::Join(JoinResult::WrongPassword)]);
+    assert_eq!(session.portal_status(), Status::WrongPassword);
+    assert_eq!(outcome.publication.portal_status, Some(Status::WrongPassword));
+
+    let outcome = session.step(
+        &observed(1_020, true, Some(STATION_IP)),
+        &[Input::Join(JoinResult::Connected)],
+    );
+    assert_eq!(session.portal_status(), Status::Connected(STATION_IP));
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connected(STATION_IP)));
+
+    // A link loss falls back to Connecting.
+    let outcome = session.step(&observed(2_000, false, None), &[]);
+    assert_eq!(events(&outcome), vec![Event::LinkLost]);
+    assert_eq!(session.portal_status(), Status::Connecting);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connecting));
+}
+
+/// A generic join failure reports Failed, as a failed persist does when the station is down.
+#[test]
+fn a_generic_join_failure_and_a_failed_persist_report_failed() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let _ = session.step(&observed(0, false, None), &[]);
+    let outcome = session.step(&observed(10, false, None), &[Input::Join(JoinResult::Failed)]);
+    assert_eq!(session.portal_status(), Status::Failed);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Failed));
+
+    // A failed write with no association in force reports Failed directly.
+    let Some(credentials) = Credentials::from_slices(NEW_SSID, NEW_PASSPHRASE) else {
+        return;
+    };
+    let (mut unprovisioned, _boot) = RadioSession::boot(None, 0);
+    let _ = unprovisioned.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let outcome = unprovisioned.step(&observed(10, false, None), &[Input::Persist(false)]);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Failed));
+    assert_eq!(unprovisioned.portal_status(), Status::Failed);
+}
+
+/// Connected is reported only while the station is up; an association without a lease is not.
+#[test]
+fn connected_is_reported_only_while_the_station_is_up() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+
+    // Adopting an association that holds a lease is Connected.
+    let outcome = session.step(&observed(0, true, Some(STATION_IP)), &[]);
+    assert!(session.station_up());
+    assert_eq!(session.portal_status(), Status::Connected(STATION_IP));
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connected(STATION_IP)));
+
+    // The link loss drops the lease with it.
+    let outcome = session.step(&observed(1_000, false, None), &[]);
+    assert_eq!(events(&outcome), vec![Event::LinkLost]);
+    assert!(!session.station_up());
+    assert_eq!(session.portal_status(), Status::Connecting);
+
+    // A connected result without an IP stays Connecting until DHCP leases one.
+    let outcome = session.step(&observed(2_000, true, None), &[Input::Join(JoinResult::Connected)]);
+    assert!(!session.station_up());
+    assert_eq!(session.portal_status(), Status::Connecting);
+    assert_eq!(outcome.publication.portal_status, None);
+}
+
+/// An open window scans on the first step and again only after the refresh interval.
+#[test]
+fn an_open_window_scans_once_and_again_only_after_five_minutes() {
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    let outcome = session.step(&observed(0, false, None), &[]);
+    assert_eq!(actions(&outcome), vec![Action::Scan], "the first step scans");
+
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS - 1, false, None), &[]);
+    assert!(
+        !actions(&outcome).contains(&Action::Scan),
+        "one millisecond before the refresh"
+    );
+
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS, false, None), &[]);
+    assert_eq!(actions(&outcome), vec![Action::Scan], "exactly at the refresh");
+}
+
+/// A join in flight derives Connecting and suppresses the scan, even when the clock is due.
+#[test]
+fn the_scan_is_suppressed_while_a_join_is_in_flight() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let outcome = session.step(&observed(0, false, None), &[]);
+    assert!(matches!(actions(&outcome).as_slice(), [Action::Join(_)]));
+
+    // The five-minute outage raise opens the window while the join is still in flight.
+    let outcome = session.step(&observed(300_000, false, None), &[]);
+    assert!(events(&outcome).contains(&Event::Setup(SetupEvent::Opened(RaiseReason::StationOutage))));
+    assert_eq!(session.portal_status(), Status::Connecting);
+    assert!(
+        !actions(&outcome).contains(&Action::Scan),
+        "a sweep would disturb the association attempt"
+    );
+}
+
+/// A station that is up suppresses the scan even when the window and clock are due.
+#[test]
+fn the_scan_is_suppressed_while_the_station_is_up() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let _ = session.step(&observed(0, false, None), &[]);
+
+    // The window opens at five minutes and the adopted association is up on the same step.
+    let outcome = session.step(&observed(300_000, true, Some(STATION_IP)), &[]);
+    assert!(events(&outcome).contains(&Event::Setup(SetupEvent::Opened(RaiseReason::StationOutage))));
+    assert!(session.station_up());
+    assert_eq!(session.portal_status(), Status::Connected(STATION_IP));
+    assert!(!actions(&outcome).contains(&Action::Scan));
+}
+
+/// A failed join inside the open window lets the next due scan run.
+#[test]
+fn a_failed_join_inside_the_window_lets_the_next_scan_run() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    let _ = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(10, false, None), &[Input::Persist(true)]);
+    let outcome = session.step(&observed(20, false, None), &[Input::Join(JoinResult::Failed)]);
+    assert_eq!(session.portal_status(), Status::Failed);
+    assert!(
+        !actions(&outcome).contains(&Action::Scan),
+        "the scan clock is not yet due"
+    );
+
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS, false, None), &[]);
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::Scan],
+        "a recorded failure no longer suppresses the sweep"
+    );
+}
+
+/// A closed window never scans, even at the clock's deadline.
+#[test]
+fn a_closed_window_never_scans() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let outcome = session.step(&observed(0, false, None), &[]);
+    assert!(matches!(actions(&outcome).as_slice(), [Action::Join(_)]));
+    assert!(!actions(&outcome).contains(&Action::Scan));
+}
+
+/// A panel Forget that opens a closed window restarts the scan clock, so a sweep is due at once.
+#[test]
+fn a_panel_forget_that_opens_the_window_restarts_the_scan_clock() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    let _ = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(10, false, None), &[Input::Persist(true)]);
+    let _ = session.step(
+        &observed(20, true, Some(STATION_IP)),
+        &[Input::Join(JoinResult::Connected)],
+    );
+    let close = session.step(&observed(30_020, true, Some(STATION_IP)), &[]);
+    assert!(events(&close).contains(&Event::Setup(SetupEvent::Closed(CloseReason::StationStable))));
+    assert!(!session.setup_open());
+
+    // The window is closed, so the Forget opens it and resets the clock to now.
+    let outcome = session.step(&observed(40_000, false, None), &[Input::Panel(PanelCommand::Forget)]);
+    assert!(session.setup_open());
+    assert!(
+        actions(&outcome).contains(&Action::Scan),
+        "the restarted clock makes a sweep due at the Forget"
+    );
+}
+
+/// A portal Forget leaves the scan clock alone, even though it opens the window.
+#[test]
+fn a_portal_forget_does_not_restart_the_scan_clock() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    let _ = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(10, false, None), &[Input::Persist(true)]);
+    let _ = session.step(
+        &observed(20, true, Some(STATION_IP)),
+        &[Input::Join(JoinResult::Connected)],
+    );
+    let close = session.step(&observed(30_020, true, Some(STATION_IP)), &[]);
+    assert!(events(&close).contains(&Event::Setup(SetupEvent::Closed(CloseReason::StationStable))));
+
+    let outcome = session.step(
+        &observed(40_000, true, Some(STATION_IP)),
+        &[Input::Portal(PortalCommand::Forget)],
+    );
+    assert!(session.setup_open());
+    assert!(
+        !actions(&outcome).contains(&Action::Scan),
+        "the portal Forget keeps the scan schedule"
+    );
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS - 1, false, None), &[]);
+    assert!(!actions(&outcome).contains(&Action::Scan));
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS, false, None), &[]);
+    assert!(
+        actions(&outcome).contains(&Action::Scan),
+        "the original five-minute clock still governs"
+    );
+}
+
+/// A successful provision leaves the scan clock alone (ADR-0058's preserved quirk).
+#[test]
+fn a_successful_provision_does_not_restart_the_scan_clock() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    let _ = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(10, false, None), &[Input::Persist(true)]);
+    let _ = session.step(&observed(20, false, None), &[Input::Join(JoinResult::Failed)]);
+
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS - 1, false, None), &[]);
+    assert!(!actions(&outcome).contains(&Action::Scan));
+    let outcome = session.step(&observed(radio::SCAN_REFRESH_MS, false, None), &[]);
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::Scan],
+        "the clock still dates from the window open, not the provision"
+    );
+}
+
+/// Opening the window from the outage tick makes the first sweep due at the open.
+#[test]
+fn a_window_opened_by_the_outage_scans_at_once() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+
+    let _ = session.step(&observed(0, false, None), &[]);
+    let _ = session.step(&observed(10, false, None), &[Input::Join(JoinResult::Failed)]);
+    assert_eq!(session.portal_status(), Status::Failed);
+    // The backoff re-emits the join; leaving it in flight keeps the station down without a retry.
+    let _ = session.step(&observed(1_010, false, None), &[]);
+
+    let outcome = session.step(&observed(300_000, false, None), &[]);
+    assert!(events(&outcome).contains(&Event::Setup(SetupEvent::Opened(RaiseReason::StationOutage))));
+    assert_eq!(
+        actions(&outcome),
+        vec![Action::ApplyApStation(credentials), Action::Scan],
+        "the newly opened window scans immediately"
+    );
+}
+
+/// The portal status is published only when it changes.
+#[test]
+fn the_portal_status_is_published_only_when_it_changes() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+
+    let view: BridgeStatusView = session.bridge_status(false);
+    assert_eq!(view.station, BridgeStation::Connecting);
+
+    let outcome = session.step(&observed(0, true, Some(STATION_IP)), &[]);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connected(STATION_IP)));
+    assert_eq!(outcome.publication.station_up, Some(true));
+
+    let outcome = session.step(&observed(500, true, Some(STATION_IP)), &[]);
+    assert_eq!(outcome.publication, NOTHING, "a repeat snapshot publishes nothing");
+
+    let moved = [192, 168, 1, 43];
+    let outcome = session.step(&observed(1_000, true, Some(moved)), &[]);
+    assert_eq!(outcome.publication.portal_status, Some(Status::Connected(moved)));
+    assert_eq!(outcome.publication.station_up, None, "the station stayed up");
+}
+
+/// Every reconnect trigger increments the station-reconnect counter.
+#[test]
+fn the_reconnect_counter_counts_every_reconnect_trigger() {
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    assert_eq!(session.stats(), Stats::default());
+
+    // Both join failures count.
+    let _ = session.step(&observed(0, false, None), &[]);
+    let _ = session.step(&observed(10, false, None), &[Input::Join(JoinResult::WrongPassword)]);
+    assert_eq!(session.stats().station_reconnects, 1);
+    let _ = session.step(&observed(1_010, false, None), &[Input::Join(JoinResult::Failed)]);
+    assert_eq!(session.stats().station_reconnects, 2);
+
+    // A link loss counts.
+    let _ = session.step(&observed(3_010, false, None), &[]);
+    let _ = session.step(
+        &observed(3_020, true, Some(STATION_IP)),
+        &[Input::Join(JoinResult::Connected)],
+    );
+    assert!(session.station_up());
+    let outcome = session.step(&observed(4_000, false, None), &[]);
+    assert_eq!(events(&outcome), vec![Event::LinkLost]);
+    assert_eq!(session.stats().station_reconnects, 3);
+
+    // A DHCP timeout counts.
+    let _ = session.step(&observed(5_000, false, None), &[]);
+    let _ = session.step(&observed(5_010, true, None), &[Input::Join(JoinResult::Connected)]);
+    let outcome = session.step(&observed(35_010, true, None), &[]);
+    assert_eq!(events(&outcome), vec![Event::DhcpTimeout]);
+    assert_eq!(session.stats().station_reconnects, 4);
+}
+
+/// The portal counters count adopted writes and portal Forget commands only.
+#[test]
+fn the_portal_counters_count_provisions_and_portal_forgets_only() {
+    let Some(credentials) = Credentials::from_slices(TEST_SSID, PASSPHRASE) else {
+        return;
+    };
+    let (mut session, _boot) = RadioSession::boot(None, 0);
+
+    // A failed write is not a provision.
+    let _ = session.step(
+        &observed(0, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(10, false, None), &[Input::Persist(false)]);
+    assert_eq!(session.stats().portal_provisions, 0);
+
+    let _ = session.step(
+        &observed(20, false, None),
+        &[Input::Portal(PortalCommand::Provision(credentials))],
+    );
+    let _ = session.step(&observed(30, false, None), &[Input::Persist(true)]);
+    assert_eq!(session.stats().portal_provisions, 1);
+
+    let _ = session.step(&observed(40, false, None), &[Input::Portal(PortalCommand::Forget)]);
+    assert_eq!(session.stats().portal_forgets, 1);
+
+    // The panel's Forget is not a portal Forget.
+    let Some((mut panel, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let _ = panel.step(&observed(0, false, None), &[Input::Panel(PanelCommand::Forget)]);
+    assert_eq!(panel.stats().portal_forgets, 0);
+    assert_eq!(panel.stats().portal_provisions, 0);
+    assert_eq!(panel.stats().station_reconnects, 0);
+}
+
+/// The Bridge Status accessor reproduces the firmware's station and flag mapping.
+#[test]
+fn the_bridge_status_accessor_matches_the_firmware_mapping() {
+    // Provisioned and associated: Associated with PROVISIONED, no Setup Mode flag.
+    let Some((mut session, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let _ = session.step(&observed(0, true, Some(STATION_IP)), &[]);
+    let view: BridgeStatusView = session.bridge_status(false);
+    assert_eq!(view.station, BridgeStation::Associated);
+    assert_eq!(view.flags, BridgeStatusFlags::PROVISIONED);
+
+    // The caller's link-readiness argument adds LINK_READY.
+    let ready = session.bridge_status(true);
+    assert_eq!(ready.station, BridgeStation::Associated);
+    assert!(ready.flags.contains(BridgeStatusFlags::LINK_READY));
+
+    // A controller association without a lease is still Associated.
+    let Some((mut associated, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let _ = associated.step(&observed(0, true, None), &[]);
+    assert_eq!(associated.bridge_status(false).station, BridgeStation::Associated);
+
+    // Provisioned but down and out of Setup Mode: Connecting with PROVISIONED.
+    let Some((cold, _boot)) = provisioned_boot(0) else {
+        return;
+    };
+    let view = cold.bridge_status(false);
+    assert_eq!(view.station, BridgeStation::Connecting);
+    assert_eq!(view.flags, BridgeStatusFlags::PROVISIONED);
+
+    // Unprovisioned with the window open: Down with SETUP_OPEN only.
+    let (mut open, _boot) = RadioSession::boot(None, 0);
+    let view = open.bridge_status(false);
+    assert_eq!(view.station, BridgeStation::Down);
+    assert_eq!(view.flags, BridgeStatusFlags::SETUP_OPEN);
+
+    // Unprovisioned after the window expires: Down with no flags.
+    let _ = open.step(&observed(600_000, false, None), &[]);
+    assert!(!open.setup_open());
+    let view = open.bridge_status(false);
+    assert_eq!(view.station, BridgeStation::Down);
+    assert!(view.flags.is_empty(), "no flag is set while down and unprovisioned");
 }
 
 /// The ten-minute expiry and the thirty-second stable close fire exactly on their boundaries.

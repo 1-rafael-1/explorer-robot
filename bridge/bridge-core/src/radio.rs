@@ -6,16 +6,18 @@
 //! effects. It returns typed actions for the firmware to execute, typed events to log and an
 //! edge-triggered publication for the shared statics.
 //!
-//! This slice owns the station link, Setup Mode and provisioning: boot from a Credential Record,
+//! This module owns the station link, Setup Mode and provisioning: boot from a Credential Record,
 //! adopting an existing association, link loss and reconnect, the DHCP timeout, the join-failure
 //! backoff, the missing-credentials warning, the bounded Setup Mode window, the portal and panel
-//! commands, and the fail-closed write-before-join persist gate. The scan gate, the decision
-//! counters and the Bridge Status derivation are later slices of the same session (ADR-0058).
+//! commands, and the fail-closed write-before-join persist gate. It also derives the portal status
+//! and the Bridge Status station state and flags, gates the periodic portal scan and keeps the
+//! decision counters (ADR-0058). The scan cache, the RSSI, the channel and the payload encoding
+//! stay in the firmware.
 //!
 //! The session owns no HAL, socket, clock or allocator and never panics: everything it needs is
 //! passed in, and its time comparisons wrap like the rest of `bridge-core`.
 
-use link_protocol::StationSsid;
+use link_protocol::{BridgeStation, BridgeStatusFlags, StationSsid};
 
 use crate::{
     portal::{Credentials, Status},
@@ -34,6 +36,10 @@ pub const DHCP_TIMEOUT_MS: u32 = 30_000;
 
 /// How often the missing-credentials warning repeats while the Bridge is unprovisioned.
 pub const MISSING_CREDENTIALS_WARNING_MS: u32 = 60_000;
+
+/// How often the setup portal's scan list refreshes while the station is down (ADR-0058's five
+/// minutes).
+pub const SCAN_REFRESH_MS: u32 = 300_000;
 
 /// The number of actions one step can return; further actions are refused and flagged.
 const ACTION_CAPACITY: usize = 8;
@@ -156,6 +162,11 @@ pub enum Action {
     ),
     /// Rewrite the Credential Record with the Pairing Token and no credentials.
     PersistTokenOnly,
+    /// Scan for the Station Networks the setup portal lists.
+    ///
+    /// The scan is fire-and-forget: its result is not reported, and the session advances its own
+    /// scan clock when it emits the action.
+    Scan,
 }
 
 /// A transition the caller may log or react to; no event carries a secret.
@@ -183,6 +194,32 @@ pub enum Event {
     ),
     /// The pending credential write failed; the old credentials remain in force.
     PersistFailed,
+}
+
+/// The Radio Session's decision counters for the ten-second status line.
+///
+/// The session owns the counters whose triggers it decides; the adapter keeps the scan, AP, UART
+/// and ring counters (ADR-0058).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Reconnects after a link loss, a DHCP timeout or a failed join.
+    pub station_reconnects: u32,
+    /// Portal credential writes that succeeded and were adopted.
+    pub portal_provisions: u32,
+    /// Portal Forget commands that cleared the Station Network.
+    pub portal_forgets: u32,
+}
+
+/// The Bridge Status station state and flags the session derives for one snapshot.
+///
+/// The firmware supplies the RSSI, the channel and the counters and owns the payload encoding; the
+/// session decides only what the station and the flags byte carry (ADR-0058).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BridgeStatusView {
+    /// The station state the Bridge Status payload carries.
+    pub station: BridgeStation,
+    /// The flags the Bridge Status payload carries.
+    pub flags: BridgeStatusFlags,
 }
 
 /// The derived values that changed this step and must be written to the shared statics.
@@ -434,6 +471,10 @@ enum PublishedSsid {
     clippy::large_stack_frames,
     reason = "the session holds the credential pair, the setup window and the published edges inline by design; there is no allocator to move them to"
 )]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the station, join, Setup Mode and controller facts are independent observations, each needed as itself, not one encoded mode"
+)]
 pub struct RadioSession {
     /// The station credentials in force, `None` while the Bridge is unprovisioned.
     credentials: Option<Credentials>,
@@ -469,6 +510,12 @@ pub struct RadioSession {
     published_station_up: Option<bool>,
     /// The portal status last published.
     published_portal_status: Option<Status>,
+    /// The earliest time the next portal scan may be emitted.
+    next_scan_at: u32,
+    /// The decision counters for the status line.
+    stats: Stats,
+    /// The controller's association state after the last step, as the Bridge Status sees it.
+    controller_connected: bool,
 }
 
 impl RadioSession {
@@ -506,6 +553,9 @@ impl RadioSession {
             published_setup_open: None,
             published_station_up: None,
             published_portal_status: None,
+            next_scan_at: now_ms,
+            stats: Stats::default(),
+            controller_connected: false,
         };
 
         let mut outcome = Outcome::new();
@@ -567,10 +617,12 @@ impl RadioSession {
         }
 
         if let Some(event) = self.setup.tick(now_ms, self.station_up()) {
-            self.on_setup_event(event, &mut outcome);
+            self.on_setup_event(event, now_ms, &mut outcome);
         }
 
-        self.apply_link_policy(controller_connected, now_ms, &mut outcome);
+        self.apply_link_policy(&mut controller_connected, now_ms, &mut outcome);
+        self.controller_connected = controller_connected;
+        self.maybe_scan(now_ms, &mut outcome);
         self.publish(&mut outcome.publication);
         outcome
     }
@@ -600,12 +652,54 @@ impl RadioSession {
         self.setup.is_open()
     }
 
-    /// Returns the portal status this slice derives from the provisioned flag and the last failure.
+    /// Returns the decision counters for the status line.
+    #[must_use]
+    pub const fn stats(&self) -> Stats {
+        self.stats
+    }
+
+    /// Returns the Bridge Status station state and flags for one snapshot.
     ///
-    /// A later slice prepends [`Status::Connected`] while the station is up; here a failed join in
-    /// force wins over the connecting state.
+    /// The station is associated while the controller holds an association or the station is up,
+    /// connecting while the Bridge is provisioned and down otherwise. The flags carry
+    /// [`BridgeStatusFlags::PROVISIONED`], [`BridgeStatusFlags::SETUP_OPEN`] and, from the caller's
+    /// argument, [`BridgeStatusFlags::LINK_READY`]. This is the firmware's `emit_bridge_status`
+    /// mapping, moved out of the binary (ADR-0058).
+    #[must_use]
+    pub fn bridge_status(&self, link_ready: bool) -> BridgeStatusView {
+        let station = if self.controller_connected || self.station_up() {
+            BridgeStation::Associated
+        } else if self.provisioned() {
+            BridgeStation::Connecting
+        } else {
+            BridgeStation::Down
+        };
+
+        let mut flags = BridgeStatusFlags::default();
+        if self.provisioned() {
+            flags |= BridgeStatusFlags::PROVISIONED;
+        }
+        if self.setup.is_open() {
+            flags |= BridgeStatusFlags::SETUP_OPEN;
+        }
+        if link_ready {
+            flags |= BridgeStatusFlags::LINK_READY;
+        }
+        BridgeStatusView { station, flags }
+    }
+
+    /// Returns the portal status derived from the session's own station and join facts.
+    ///
+    /// A station that is up is [`Status::Connected`] at its leased address, and that wins over any
+    /// recorded failure (ADR-0058's preserved overwrite). Otherwise the last join failure decides,
+    /// then the provisioned flag.
     #[must_use]
     pub const fn portal_status(&self) -> Status {
+        if let Some(ip) = self.station_ip
+            && self.station_connected
+        {
+            return Status::Connected(ip);
+        }
         match (self.last_failure, self.credentials.is_some()) {
             (Some(JoinFailure::WrongPassword), _) => Status::WrongPassword,
             (Some(JoinFailure::Failed), _) => Status::Failed,
@@ -646,16 +740,18 @@ impl RadioSession {
         self.backoff = next_backoff(self.backoff);
         self.retry_blocked = true;
         self.last_failure = Some(kind);
+        self.stats.station_reconnects = self.stats.station_reconnects.saturating_add(1);
     }
 
     /// Applies the link policy at one timestamp.
     ///
     /// `controller_connected` is the association state after this step's inputs; an input that
     /// disconnects the controller has already cleared it.
-    fn apply_link_policy(&mut self, mut controller_connected: bool, now_ms: u32, outcome: &mut Outcome) {
-        if self.station_connected && !controller_connected {
+    fn apply_link_policy(&mut self, controller_connected: &mut bool, now_ms: u32, outcome: &mut Outcome) {
+        if self.station_connected && !*controller_connected {
             self.station_connected = false;
             outcome.events.push(Event::LinkLost);
+            self.stats.station_reconnects = self.stats.station_reconnects.saturating_add(1);
             self.arm_retry(now_ms);
         } else if self.station_connected
             && self.station_ip.is_none()
@@ -663,9 +759,10 @@ impl RadioSession {
         {
             outcome.events.push(Event::DhcpTimeout);
             outcome.actions.push(Action::Disconnect);
+            self.stats.station_reconnects = self.stats.station_reconnects.saturating_add(1);
             self.station_connected = false;
             self.arm_retry(now_ms);
-            controller_connected = false;
+            *controller_connected = false;
             // The firmware reports a DHCP timeout as a failure only inside the window; outside it,
             // the steady-state backoff retries without asking the operator.
             if self.setup.is_open() {
@@ -676,8 +773,16 @@ impl RadioSession {
 
         // Dropping the station mode can leave an existing association in place; adopt it instead of
         // scanning and re-associating the network the station is already on.
-        if self.credentials.is_some() && !self.station_connected && controller_connected {
+        if self.credentials.is_some() && !self.station_connected && *controller_connected {
             self.adopt(now_ms);
+        }
+
+        // The firmware's `Connected` overwrite while the station is up also clears any recorded
+        // failure: the status it replaces is `Connected`, so a later link loss derives
+        // `Connecting`, not the failure. The retry block is deliberately left alone (ADR-0058's
+        // adopt quirk).
+        if self.station_up() {
+            self.last_failure = None;
         }
 
         self.maybe_join(now_ms, outcome);
@@ -708,6 +813,7 @@ impl RadioSession {
                 outcome.actions.push(Action::PersistTokenOnly);
                 Self::disconnect_if_connected(controller_connected, outcome);
                 self.forget_network(now_ms);
+                self.stats.portal_forgets = self.stats.portal_forgets.saturating_add(1);
                 if let Some(event) = self.setup.forget(now_ms, station_up) {
                     outcome.events.push(Event::Setup(event));
                     outcome.actions.push(Action::ApplySetupParked);
@@ -725,6 +831,9 @@ impl RadioSession {
                 Self::disconnect_if_connected(controller_connected, outcome);
                 self.forget_network(now_ms);
                 if let Some(event) = self.setup.forget(now_ms, station_up) {
+                    // The panel's Forget restarts the scan clock only when it opened the window;
+                    // an already-open window keeps its schedule (ADR-0058).
+                    self.next_scan_at = now_ms;
                     outcome.events.push(Event::Setup(event));
                     outcome.actions.push(Action::ApplySetupParked);
                 }
@@ -739,6 +848,7 @@ impl RadioSession {
         };
         if succeeded {
             self.credentials = Some(credentials);
+            self.stats.portal_provisions = self.stats.portal_provisions.saturating_add(1);
             if let Some(event) = self.setup.set_provisioned(true, now_ms) {
                 outcome.events.push(Event::Setup(event));
             }
@@ -762,10 +872,13 @@ impl RadioSession {
     }
 
     /// Handles a Setup Mode window transition.
-    fn on_setup_event(&mut self, event: SetupEvent, outcome: &mut Outcome) {
+    fn on_setup_event(&mut self, event: SetupEvent, now_ms: u32, outcome: &mut Outcome) {
         outcome.events.push(Event::Setup(event));
         match event {
             SetupEvent::Opened(_) => {
+                // A newly opened window scans immediately: the sweep off-channels the AP, so the
+                // scan before the operator joins is the useful one (ADR-0058).
+                self.next_scan_at = now_ms;
                 // A newly opened window forgives the operator block: the next attempt is the one
                 // the operator will submit.
                 self.retry_blocked = false;
@@ -815,14 +928,17 @@ impl RadioSession {
         self.associated_at = now_ms;
     }
 
-    /// Emits the join action when the station is down, no result is pending and the retry gate is
-    /// open.
+    /// Emits the join action when the station is down, no result is pending, no credential write is
+    /// staged and the retry gate is open.
     ///
     /// Inside an open Setup Mode window the operator block suppresses the retry; outside it the
     /// steady-state backoff is the only gate.
     fn maybe_join(&mut self, now_ms: u32, outcome: &mut Outcome) {
         if self.station_connected
             || self.join_in_flight
+            // A staged write suppresses re-joining the old network until it resolves: the executor
+            // holds one blocking input at a time, and the pair is about to be replaced anyway.
+            || self.pending_provision.is_some()
             || !reached(now_ms, self.next_attempt)
             || (self.setup.is_open() && self.retry_blocked)
         {
@@ -833,6 +949,23 @@ impl RadioSession {
         };
         outcome.actions.push(Action::Join(ssid));
         self.join_in_flight = true;
+    }
+
+    /// Emits the periodic portal scan when the window is open and no association is in progress.
+    ///
+    /// A join in flight, and the connecting window before a DHCP lease, both derive
+    /// [`Status::Connecting`], so the one radio is never swept mid-association. The scan is
+    /// fire-and-forget, so the session advances its clock when it emits the action.
+    fn maybe_scan(&mut self, now_ms: u32, outcome: &mut Outcome) {
+        if !self.setup.is_open()
+            || self.station_up()
+            || !reached(now_ms, self.next_scan_at)
+            || self.portal_status() == Status::Connecting
+        {
+            return;
+        }
+        outcome.actions.push(Action::Scan);
+        self.next_scan_at = now_ms.wrapping_add(SCAN_REFRESH_MS);
     }
 
     /// Repeats the missing-credentials warning on its bounded cadence.
