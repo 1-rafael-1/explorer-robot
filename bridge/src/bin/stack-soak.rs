@@ -36,8 +36,14 @@
 //! connect to it directly. With no station credentials the binary still brings the AP up; it
 //! simply cannot exercise the station half of APSTA.
 
+use bridge_core::{
+    portal::Credentials,
+    radio::{Action, Input, JoinResult, Observation, Outcome, RadioSession},
+    record::CredentialRecord,
+};
+use bridge_firmware::wifi::{connect_station, scan_station_target};
 use bridge_net as _;
-use defmt::info;
+use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_net::{Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
@@ -54,8 +60,8 @@ use esp_hal::{
 };
 use esp_println as _;
 use esp_radio::wifi::{
-    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, Ssid, WifiController,
-    ap::AccessPointConfig, scan::ScanConfig, sta::StationConfig,
+    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
+    ap::AccessPointConfig, sta::StationConfig,
 };
 use heapless::spsc::{Consumer, Producer, Queue};
 use link_protocol as _;
@@ -194,9 +200,6 @@ const RECONNECT_PERIOD: Duration = Duration::from_secs(match option_env!("SPIKE_
 /// Status line cadence.
 const STATUS_PERIOD: Duration = Duration::from_secs(10);
 
-/// How long the station may take to associate before the spike gives up and retries.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
 // ---------------------------------------------------------------------------------------------
 // Statics
 // ---------------------------------------------------------------------------------------------
@@ -260,12 +263,25 @@ async fn main(spawner: Spawner) -> ! {
     let mut controller = WifiController::new(peripherals.WIFI, ControllerConfig::default())
         .expect("failed to initialize the Wi-Fi controller");
     controller
-        .set_config(&WifiConfig::AccessPointStation(station_config, access_point_config))
+        .set_config(&WifiConfig::AccessPointStation(
+            station_config.clone(),
+            access_point_config.clone(),
+        ))
         .expect("failed to enter APSTA");
 
-    if STA_SSID == "CHANGE_ME" {
-        info!("no SPIKE_STA_SSID was set; the setup AP will run but the station will not associate");
+    // The soak has no portal and no persisted credential record: its station credentials are the
+    // compile-time `SPIKE_*` inputs. A pair the session would refuse (for example a passphrase
+    // under eight bytes) boots unprovisioned; the AP still runs, so the soak can proceed over it.
+    let credentials = Credentials::from_slices(STA_SSID.as_bytes(), STA_PASSWORD.as_bytes());
+    if credentials.is_none() {
+        info!("sta: SPIKE_STA_SSID/SPIKE_STA_PASSWORD are not a usable WPA2 pair; the station will not associate");
     }
+    // The token is unused: without a portal there is no pairing code to keep.
+    let record = Some(CredentialRecord {
+        credentials,
+        token: [b'A'; 12],
+    });
+    let (mut session, boot_outcome) = RadioSession::boot(record.as_ref(), now_ms());
 
     // -- Network stacks ----------------------------------------------------------------------
 
@@ -352,8 +368,17 @@ async fn main(spawner: Spawner) -> ! {
 
     // -- Station association -----------------------------------------------------------------
 
-    scan_station_target(&mut controller).await;
-    connect_station(&mut controller).await;
+    // The session's boot outcome re-applies the same APSTA configuration set above; its first step
+    // emits the join for the compile-time SSID.
+    execute_actions(&mut controller, &boot_outcome, &station_config, &access_point_config).await;
+    drive_session(
+        &mut session,
+        &mut controller,
+        &station_stack,
+        &station_config,
+        &access_point_config,
+    )
+    .await;
     let station_has_address = station_stack.is_config_up()
         || with_timeout(Duration::from_secs(20), station_stack.wait_config_up())
             .await
@@ -427,8 +452,25 @@ async fn main(spawner: Spawner) -> ! {
             {
                 info!("station disconnect timed out");
             }
+            // Let the session see the loss now, so its 1 s retry gate has passed by the time the
+            // schedule's 3 s pause is over and the second step emits the join.
+            drive_session(
+                &mut session,
+                &mut controller,
+                &station_stack,
+                &station_config,
+                &access_point_config,
+            )
+            .await;
             Timer::after(Duration::from_secs(3)).await;
-            connect_station(&mut controller).await;
+            drive_session(
+                &mut session,
+                &mut controller,
+                &station_stack,
+                &station_config,
+                &access_point_config,
+            )
+            .await;
             if with_timeout(Duration::from_secs(20), station_stack.wait_config_up())
                 .await
                 .is_ok()
@@ -446,58 +488,101 @@ async fn main(spawner: Spawner) -> ! {
 // Wi-Fi helpers
 // ---------------------------------------------------------------------------------------------
 
-/// Scans for the configured station SSID and logs every BSS's auth mode before associating.
+/// Drives one Radio Session step and executes the actions it returns.
 ///
-/// The spike can only configure `Wpa2Personal` (esp-radio 1.0.0-beta.1 exposes nothing newer), so
-/// a WPA3-only or PMF-required home AP is the prime suspect for an association failure; the
-/// advertised auth mode settles that before any credentials are tried. `scan_async` on this
-/// beta can miss whole sweeps, so an empty result is retried a couple of times.
-async fn scan_station_target(controller: &mut WifiController<'_>) {
-    if STA_SSID == "CHANGE_ME" {
-        return;
+/// A join the session asked for produces a blocking result; it is fed back on a second step so the
+/// session records the association. A failed result only arms the session's backoff, so this does
+/// not introduce an autonomous retry loop: the soak's own forced-reconnect schedule stays the
+/// policy.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the bounded outcome and the two cloned radio configs live in this driver's frame, which runs on the main task's stack"
+)]
+async fn drive_session(
+    session: &mut RadioSession,
+    controller: &mut WifiController<'_>,
+    station_stack: &Stack<'_>,
+    station_config: &StationConfig,
+    access_point_config: &AccessPointConfig,
+) {
+    let outcome = session.step(&observe(controller, station_stack), &[]);
+    let join = execute_actions(controller, &outcome, station_config, access_point_config).await;
+    if let Some(result) = join {
+        // DHCP has not completed yet, so the second observation still reports no address.
+        let outcome = session.step(&observe(controller, station_stack), &[Input::Join(result)]);
+        execute_actions(controller, &outcome, station_config, access_point_config).await;
     }
-    let Ok(ssid) = Ssid::try_from(STA_SSID) else {
-        info!("sta: SSID too long to scan for; skipping scan");
-        return;
-    };
-    let config = ScanConfig::default().with_ssid(ssid);
-
-    for attempt in 1..=3 {
-        match controller.scan_async(&config).await {
-            Ok(aps) if !aps.is_empty() => {
-                for ap in &aps {
-                    info!(
-                        "sta: scan: bssid={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ch={} rssi={}dBm auth={}",
-                        ap.bssid[0],
-                        ap.bssid[1],
-                        ap.bssid[2],
-                        ap.bssid[3],
-                        ap.bssid[4],
-                        ap.bssid[5],
-                        ap.channel,
-                        ap.signal_strength,
-                        ap.auth_method
-                    );
-                }
-                return;
-            }
-            Ok(_) => info!("sta: scan: sweep {} found nothing; retrying", attempt),
-            Err(error) => info!("sta: scan failed: {:?}", error),
-        }
-        if attempt < 3 {
-            Timer::after(Duration::from_secs(1)).await;
-        }
-    }
-    info!("sta: scan: target SSID was not found in any sweep");
 }
 
-/// Associates the station, retrying once if the controller reports failure.
-async fn connect_station(controller: &mut WifiController<'_>) {
-    match with_timeout(CONNECT_TIMEOUT, controller.connect_async()).await {
-        Ok(Ok(info)) => info!("sta: associated ssid={} channel={}", info.ssid, info.channel),
-        Ok(Err(error)) => info!("sta: association failed: {:?}", error),
-        Err(_) => info!("sta: association timed out"),
+/// Executes every action the session returned, in order, and reports the join result, if any.
+///
+/// This is the soak's HAL-bound half of the seam. The match is exhaustive, so a new action cannot
+/// be ignored.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the re-applied radio configuration lives in this executor's frame, which runs on the main task's stack"
+)]
+async fn execute_actions(
+    controller: &mut WifiController<'_>,
+    outcome: &Outcome,
+    station_config: &StationConfig,
+    access_point_config: &AccessPointConfig,
+) -> Option<JoinResult> {
+    let mut join_result = None;
+    for action in &outcome.actions {
+        match *action {
+            Action::Join(ssid) => {
+                scan_station_target(controller, ssid.as_bytes()).await;
+                join_result = Some(connect_station(controller).await);
+            }
+            Action::Disconnect => {
+                if controller.is_connected() {
+                    let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
+                }
+            }
+            Action::ApplyStation(_)
+            | Action::ApplyApStation(_)
+            | Action::ApplySetupParked
+            | Action::ApplyParkedStation => {
+                // The soak always holds APSTA and has no Setup Mode: every mode action re-applies
+                // the same access-point-and-station configuration, so the AP never goes down and
+                // the soak's transport is unchanged.
+                if controller
+                    .set_config(&WifiConfig::AccessPointStation(
+                        station_config.clone(),
+                        access_point_config.clone(),
+                    ))
+                    .is_err()
+                {
+                    warn!("soak: could not reapply the APSTA configuration");
+                }
+            }
+            Action::Scan => info!("soak: the portal is not part of the soak; skipping the session scan"),
+            Action::Persist(_) | Action::PersistTokenOnly => {
+                warn!("soak: provisioning is not part of the soak; ignoring the credential write");
+            }
+        }
     }
+    if outcome.actions.overflowed() {
+        warn!("soak: the session action set overflowed; an action was dropped");
+    }
+    join_result
+}
+
+/// Builds the radio facts the session evaluates for one step.
+fn observe(controller: &WifiController<'_>, station_stack: &Stack<'_>) -> Observation {
+    Observation {
+        now_ms: now_ms(),
+        controller_connected: controller.is_connected(),
+        station_ip: station_stack
+            .config_v4()
+            .map(|config| config.address.address().octets()),
+    }
+}
+
+/// The caller's monotonic milliseconds, in the `u32` scale the session expects.
+fn now_ms() -> u32 {
+    u32::try_from(Instant::now().as_millis() & u64::from(u32::MAX)).unwrap_or(0)
 }
 
 /// Logs the station's DHCP address, if it has one.
