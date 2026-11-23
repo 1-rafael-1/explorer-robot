@@ -16,12 +16,13 @@
 //! broadcast on the station interface every 3 s with the pinned flags.
 //!
 //! Setup Mode (ADR-0036) is a bounded SoftAP with a hand-rolled userspace portal: DHCP, a DNS
-//! catch-all and one HTTP page, all over `embassy-net` on a second stack. `bridge-core` owns the
-//! window rules and the protocol codecs; this binary owns the radio states, the sockets and the
-//! join attempt. The window opens when the Bridge is unprovisioned at boot, after five continuous
-//! minutes without a station link (once per boot), or on the panel's request; it closes after ten
-//! minutes, or about 30 s after a stable station association. In APSTA the station Beacon carries
-//! `setup_mode` and `tcp_port = 0`; in AP-only there is no station Beacon.
+//! catch-all and one HTTP page, all over `embassy-net` on a second stack. `bridge-core::radio`
+//! owns the station link, the Setup Mode window and the provisioning policy; this binary observes
+//! the radio, queues the portal and panel commands, executes the returned actions and keeps every
+//! HAL call, socket and log line. The window opens when the Bridge is unprovisioned at boot, after
+//! five continuous minutes without a station link (once per boot), or on the panel's request; it
+//! closes after ten minutes, or about 30 s after a stable station association. In APSTA the station
+//! Beacon carries `setup_mode` and `tcp_port = 0`; in AP-only there is no station Beacon.
 //!
 //! The Bridge stores the station credentials and the 60-bit pairing token in one versioned,
 //! CRC-checked record on the `bridge_data` partition, written with `sequential-storage` through
@@ -79,8 +80,12 @@ use bridge_core::{
     heartbeat::{CoveredTask, HeartbeatSet},
     pairing::{self, GROUPED_LEN, write_grouped},
     portal::{self, Credentials, ScanCache, Status},
+    radio::{
+        self, Action, Event, EventSet, Input, JoinResult, Observation, Outcome, PanelCommand, PortalCommand,
+        Publication, RadioSession,
+    },
     record::{self, CredentialRecord},
-    setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow},
+    setup::{CloseReason, RaiseReason, SetupEvent},
 };
 use bridge_net::{
     beacon::{self, Beacon},
@@ -109,7 +114,7 @@ use esp_hal::{
     clock::CpuClock,
     dma_rx_stream_buffer,
     efuse::{InterfaceMacAddress, interface_mac_address},
-    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
+    gpio::{Input as GpioInput, InputConfig, Level, Output, OutputConfig, Pull},
     rng::{Rng, Trng, TrngSource},
     rtc_cntl::{Rtc, Rwdt, RwdtStage, RwdtStageAction},
     time::Duration as HalDuration,
@@ -127,10 +132,9 @@ use esp_radio::wifi::{
 };
 use heapless::spsc::Queue;
 use link_protocol::{
-    BridgeControlAction, BridgeControlReply, BridgeStation, BridgeStatus, BridgeStatusFlags, CHANNEL_UNKNOWN, Control,
-    ControlMessage, Direction, MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec,
-    PcToRobotParser, RobotToPcParser, SetupCredentials, StationSsid, ThrottleHint, encode_bridge_control_ack,
-    encode_control,
+    BridgeControlAction, BridgeControlReply, BridgeStatus, CHANNEL_UNKNOWN, Control, ControlMessage, Direction,
+    MAX_PC_TO_ROBOT_FRAME, MAX_ROBOT_TO_PC_FRAME, PROTOCOL_MAJOR, PairingCode, PayloadCodec, PcToRobotParser,
+    RobotToPcParser, SetupCredentials, StationSsid, ThrottleHint, encode_bridge_control_ack, encode_control,
 };
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use sequential_storage::{
@@ -315,15 +319,8 @@ const LOOP_PERIOD: Duration = Duration::from_millis(500);
 /// How long an association may take before the station task gives up and retries.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long DHCP may take after association before the link is treated as failed.
-const DHCP_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The smoltcp socket inactivity timeout.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The reconnect backoff bounds (ADR-0036's pattern: 1, 2, 4 … 60 s).
-const MIN_BACKOFF: Duration = Duration::from_secs(1);
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------------------------
 // Setup Mode constants (ADR-0036)
@@ -353,11 +350,6 @@ const PORTAL_COMMAND_QUEUE: usize = 4;
 
 /// Best-of-N: `scan_async` on this beta drops whole sweeps, so merge several.
 const SCAN_SWEEPS: usize = 3;
-
-/// How often a fresh best-of-N scan refreshes the portal's list while no join is in flight. A
-/// sweep off-channels the AP and can drop the laptop, so the first scan (at window open, before
-/// the operator joins) is the useful one; the field also accepts a typed SSID.
-const SCAN_REFRESH: Duration = Duration::from_secs(300);
 
 /// The portal's TCP socket buffers (the response pages are written in chunks).
 const PORTAL_TCP_RX_BUFFER: usize = 1024;
@@ -404,14 +396,6 @@ static SCAN_CACHE: Mutex<RefCell<ScanCache>> = Mutex::new(RefCell::new(ScanCache
 
 /// The portal actions queued for the supervisory loop, which owns the radio controller.
 static PORTAL_COMMANDS: Channel<CriticalSectionRawMutex, PortalCommand, PORTAL_COMMAND_QUEUE> = Channel::new();
-
-/// A panel action queued for the supervisory loop, which owns the radio and the RAM credentials.
-/// The record write itself happens in the UART task, before the acknowledgement.
-#[derive(Clone, Copy, Debug)]
-enum PanelCommand {
-    /// Clear the RAM credentials and raise Setup Mode; the record is already token-only.
-    Forget,
-}
 
 /// The panel actions queued for the supervisory loop.
 static PANEL_COMMANDS: Channel<CriticalSectionRawMutex, PanelCommand, PORTAL_COMMAND_QUEUE> = Channel::new();
@@ -597,7 +581,6 @@ static THROTTLE_SEQ: AtomicU32 = AtomicU32::new(0);
 /// The `BRIDGE_STATUS` sequence, shared by the robot control frame and the daemon stream so both
 /// peers see the same snapshot number.
 static BRIDGE_STATUS_SEQ: AtomicU32 = AtomicU32::new(0);
-static STATION_RECONNECTS: AtomicU32 = AtomicU32::new(0);
 static AUTH_ACCEPTED: AtomicU32 = AtomicU32::new(0);
 static AUTH_REJECTED: AtomicU32 = AtomicU32::new(0);
 static AUTH_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
@@ -612,21 +595,10 @@ static DHCP_OFFERS: AtomicU32 = AtomicU32::new(0);
 static DHCP_ACKS: AtomicU32 = AtomicU32::new(0);
 static DNS_ANSWERS: AtomicU32 = AtomicU32::new(0);
 static PORTAL_REQUESTS: AtomicU32 = AtomicU32::new(0);
-static PORTAL_PROVISIONS: AtomicU32 = AtomicU32::new(0);
-static PORTAL_FORGETS: AtomicU32 = AtomicU32::new(0);
 static SCAN_SWEEPS_RUN: AtomicU32 = AtomicU32::new(0);
 static SCAN_APS_SEEN: AtomicU32 = AtomicU32::new(0);
 static WATCHDOG_FEEDS: AtomicU32 = AtomicU32::new(0);
 static WATCHDOG_WITHHELD: AtomicU32 = AtomicU32::new(0);
-
-/// An action the portal queues for the supervisory loop, which owns the radio controller.
-#[derive(Clone, Copy)]
-enum PortalCommand {
-    /// Join the station with these credentials while the AP stays up.
-    Provision(Credentials),
-    /// Clear the in-flight credentials and return the portal to `unprovisioned`.
-    Forget,
-}
 
 /// Runs `action` with the portal's shared status line.
 fn with_portal_status<R>(action: impl FnOnce(&mut Status) -> R) -> R {
@@ -774,34 +746,31 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
-    let mut credentials = record.and_then(|record| record.credentials);
-    let mut station_config = credentials.as_ref().and_then(station_config_from);
-    let provisioned = station_config.is_some();
-    if credentials.is_some() && station_config.is_none() {
+    // The session owns the provisioning policy. A stored pair the radio cannot turn into a
+    // station config is unusable, so drop it before the session sees it: the Bridge fails closed
+    // into Setup Mode exactly as the record decoder does.
+    let mut boot_record = record;
+    if let Some(credentials) = boot_record.as_ref().and_then(|record| record.credentials)
+        && station_config_from(&credentials).is_none()
+    {
         warn!("sta: the stored credentials do not form a usable station config");
-        credentials = None;
-    }
-    PROVISIONED.store(provisioned, Ordering::Relaxed);
-    set_station_ssid(credentials.as_ref().map(|credentials| credentials.ssid()));
-
-    let (mut setup, boot_event) = SetupWindow::boot(provisioned, now_ms());
-    SETUP_OPEN.store(setup.is_open(), Ordering::Relaxed);
-    if let Some(event) = boot_event {
-        log_setup_event(event);
-    }
-
-    let mut radio_mode = if provisioned {
-        if let Some(station) = &station_config {
-            apply_station(&mut controller, station);
+        if let Some(record) = boot_record.as_mut() {
+            record.credentials = None;
         }
-        RadioMode::Station
-    } else {
-        // Bench finding: `scan_async` returns `Other` in AP-only mode on this beta, so an
-        // unprovisioned window runs APSTA with a parked station that is never associated. The AP
-        // and the portal are the only served surfaces; no station Beacon is sent (ADR-0037).
-        apply_setup_parked(&mut controller, &ap_config);
-        RadioMode::ApStation
-    };
+    }
+
+    let (mut session, boot_outcome) = RadioSession::boot(boot_record.as_ref(), now_ms());
+    let mut pending_input: Option<Input> = None;
+    execute_actions(
+        &mut controller,
+        &boot_outcome,
+        &ap_config,
+        &ap_ssid_bytes[..ap_ssid_len],
+        &mut pending_input,
+    )
+    .await;
+    apply_publication(&boot_outcome.publication);
+    log_events(&boot_outcome.events);
     info!(
         "ap: setup ssid={} password={} channel={} max_clients={} address={}.{}.{}.{}/{}",
         ap_ssid.as_str(),
@@ -918,7 +887,7 @@ async fn main(spawner: Spawner) -> ! {
     // The robot's `EXP_BOOT` is a spare robot→Bridge line, not this C3's BOOT strap (GPIO9). The
     // weak pull-down keeps it defined while the robot's output is high-Z; the firmware does not
     // read it yet.
-    let _spare_boot = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Down));
+    let _spare_boot = GpioInput::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Down));
     info!(
         "spare: EXP_BOOT input on GPIO{} (pull-down; reserved for a future robot→Bridge signal)",
         SPARE_BOOT_PIN
@@ -1015,139 +984,15 @@ async fn main(spawner: Spawner) -> ! {
     let mut last_uart_rx = 0u32;
     let mut last_tcp_rx = 0u32;
 
-    let mut station_connected = false;
-    let mut station_associated_at = started;
-    let mut next_station_attempt = started;
-    let mut backoff = MIN_BACKOFF;
     let mut logged_ip: Option<[u8; 4]> = None;
-    let mut next_missing_warning = started;
-    let mut next_scan_at = started;
-    // A failed join inside an open window waits for the operator's next submission or Forget
-    // instead of retrying on the steady-state backoff: every attempt off-channels the AP and
-    // makes the portal unreachable, and a known-bad pair cannot succeed by repetition.
-    let mut join_failed = false;
 
     loop {
         Timer::after(LOOP_PERIOD).await;
         let now = Instant::now();
         let now_ms = now_ms();
 
-        // -- Portal commands -----------------------------------------------------------------
-        // The HTTP workers only queue; the radio controller lives here so a join cannot race a
-        // mode change.
-        while let Ok(command) = PORTAL_COMMANDS.try_receive() {
-            match command {
-                PortalCommand::Provision(new_credentials) => {
-                    let Some(new_station) = station_config_from(&new_credentials) else {
-                        warn!("portal: the submitted credentials are not a usable station config");
-                        set_portal_status(Status::Failed);
-                        continue;
-                    };
-                    // The record is the source of truth: persist before joining, and fail closed
-                    // when it cannot be written rather than reporting a provisioning that a reset
-                    // would lose. The token is read inside the store lock, so a concurrent
-                    // rotation cannot be overwritten.
-                    if !persist_credentials(new_credentials).await {
-                        warn!("portal: the credential record could not be written");
-                        set_portal_status(Status::Failed);
-                        continue;
-                    }
-                    info!(
-                        "portal: joining ssid={} while the AP stays up",
-                        core::str::from_utf8(new_credentials.ssid()).unwrap_or("?")
-                    );
-                    credentials = Some(new_credentials);
-                    station_config = Some(new_station.clone());
-                    PROVISIONED.store(true, Ordering::Relaxed);
-                    set_station_ssid(Some(new_credentials.ssid()));
-                    if let Some(event) = setup.set_provisioned(true, now_ms) {
-                        log_setup_event(event);
-                    }
-                    SETUP_OPEN.store(setup.is_open(), Ordering::Relaxed);
-                    // A join must start from a clean link: the old association (if any) is not the
-                    // config being submitted.
-                    if controller.is_connected() {
-                        let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
-                    }
-                    // APSTA keeps the portal reachable while the station associates. If the mode
-                    // switch fails the AP-only portal remains the operator's surface.
-                    if apply_ap_station(&mut controller, &new_station, &ap_config) {
-                        radio_mode = RadioMode::ApStation;
-                    } else {
-                        warn!("portal: could not enter APSTA; leaving the radio in {:?}", radio_mode);
-                    }
-                    station_connected = false;
-                    station_associated_at = Instant::now();
-                    next_station_attempt = Instant::now();
-                    backoff = MIN_BACKOFF;
-                    join_failed = false;
-                    logged_ip = None;
-                    set_portal_status(Status::Connecting);
-                    PORTAL_PROVISIONS.fetch_add(1, Ordering::Relaxed);
-                }
-                PortalCommand::Forget => {
-                    // The portal's Forget keeps the pairing code (ADR-0037 assigns the token clear
-                    // to the panel's action 0); it clears only the network.
-                    match pairing_token() {
-                        Some(token) => {
-                            if persist_token_only(token, "the cleared credentials").await {
-                                info!("portal: the cleared record was stored");
-                            }
-                        }
-                        None => warn!("portal: no pairing token to keep in the cleared record"),
-                    }
-                    credentials = None;
-                    station_config = None;
-                    PROVISIONED.store(false, Ordering::Relaxed);
-                    set_station_ssid(None);
-                    let station_up = station_connected && station_stack.config_v4().is_some();
-                    let _ = setup.forget(now_ms, station_up);
-                    SETUP_OPEN.store(true, Ordering::Relaxed);
-                    // Leave the AP untouched: reapplying the mode would bounce the portal for the
-                    // laptop. Disconnecting the station is enough, and the parked/real station
-                    // config in the driver is unused while `credentials` is None.
-                    if controller.is_connected() {
-                        let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
-                    }
-                    station_connected = false;
-                    backoff = MIN_BACKOFF;
-                    next_station_attempt = Instant::now();
-                    join_failed = false;
-                    set_portal_status(Status::Unprovisioned);
-                    PORTAL_FORGETS.fetch_add(1, Ordering::Relaxed);
-                    info!("portal: forgot the network; the setup AP stays up");
-                }
-            }
-        }
-
-        // -- Panel commands ------------------------------------------------------------------
-        // The UART task already acknowledged the request and persisted the token-only record; this
-        // loop clears the RAM credentials and raises the window, because it owns the radio. The
-        // panel's two-second control timeout never waits on a join attempt.
-        while let Ok(PanelCommand::Forget) = PANEL_COMMANDS.try_receive() {
-            credentials = None;
-            station_config = None;
-            PROVISIONED.store(false, Ordering::Relaxed);
-            set_station_ssid(None);
-            if controller.is_connected() {
-                let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
-            }
-            station_connected = false;
-            backoff = MIN_BACKOFF;
-            next_station_attempt = Instant::now();
-            join_failed = false;
-            if let Some(event) = setup.forget(now_ms, false) {
-                apply_setup_parked(&mut controller, &ap_config);
-                radio_mode = RadioMode::ApStation;
-                next_scan_at = Instant::now();
-                log_setup_event(event);
-            }
-            SETUP_OPEN.store(true, Ordering::Relaxed);
-            set_portal_status(Status::Unprovisioned);
-            info!("panel: forgot the network and raised Setup Mode");
-        }
-
         // The pump's clock-driven transitions: an authentication deadline and the refusal window.
+        // It ticks before the radio actions so a 30 s join cannot delay the deadline.
         if let Some(event) = with_pump(|pump| pump.tick(now_ms)) {
             match event {
                 TimerEvent::AuthenticationExpired { connection } => {
@@ -1160,136 +1005,55 @@ async fn main(spawner: Spawner) -> ! {
         // Turn ring pressure into a robot-facing THROTTLE hint.
         emit_throttle(now_ms);
 
-        // -- Setup window ---------------------------------------------------------------------
-
-        let station_up = station_connected && station_stack.config_v4().is_some();
-        STATION_UP.store(station_up, Ordering::Relaxed);
-        if let Some(event) = setup.tick(now_ms, station_up) {
-            match event {
-                SetupEvent::Opened(_) => {
-                    SETUP_OPEN.store(true, Ordering::Relaxed);
-                    if let Some(station) = &station_config {
-                        if apply_ap_station(&mut controller, station, &ap_config) {
-                            radio_mode = RadioMode::ApStation;
-                        }
-                    } else {
-                        apply_setup_parked(&mut controller, &ap_config);
-                        radio_mode = RadioMode::ApStation;
-                    }
-                    next_scan_at = Instant::now();
-                    join_failed = false;
-                    log_setup_event(event);
-                }
-                SetupEvent::Closed(_) => {
-                    SETUP_OPEN.store(false, Ordering::Relaxed);
-                    if let Some(station) = &station_config {
-                        // Do not force a reconnect: dropping the AP mode may leave the station
-                        // association intact, and the normal `is_connected` check re-associates
-                        // only if it actually drops.
-                        apply_station(&mut controller, station);
-                    } else {
-                        apply_parked_station(&mut controller);
-                        station_connected = false;
-                    }
-                    radio_mode = RadioMode::Station;
-                    log_setup_event(event);
-                }
+        // -- Radio session -------------------------------------------------------------------
+        // The session owns every provisioning decision. This loop only gathers the observed facts,
+        // the queued commands and the previous step's blocking results, then runs the actions it
+        // returns; the HAL calls below are the only half that is not host-tested.
+        let mut inputs: heapless::Vec<Input, 16> = heapless::Vec::new();
+        // A blocking result belongs to the previous step and must be applied before a new command
+        // that may supersede it.
+        if let Some(input) = pending_input.take()
+            && inputs.push(input).is_err()
+        {
+            warn!("radio: the input set overflowed; a pending result was dropped");
+        }
+        while let Ok(command) = PORTAL_COMMANDS.try_receive() {
+            if inputs.push(Input::Portal(command)).is_err() {
+                warn!("radio: the input set overflowed; a portal command was dropped");
+            }
+        }
+        while let Ok(command) = PANEL_COMMANDS.try_receive() {
+            if inputs.push(Input::Panel(command)).is_err() {
+                warn!("radio: the input set overflowed; a panel command was dropped");
+            } else if matches!(command, PanelCommand::Forget) {
+                info!("panel: forgot the network and raised Setup Mode");
             }
         }
 
-        // -- Station association and reconnect ----------------------------------------------
-
-        if station_config.is_some() {
-            if station_connected {
-                if !controller.is_connected() {
-                    info!("sta: link lost; reconnecting");
-                    STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
-                    station_connected = false;
-                    backoff = MIN_BACKOFF;
-                    next_station_attempt = now + backoff;
-                    backoff = next_backoff(backoff);
-                    if matches!(portal_status(), Status::Connected(_)) {
-                        set_portal_status(Status::Connecting);
-                    }
-                } else if station_stack.config_v4().is_none()
-                    && now.duration_since(station_associated_at) >= DHCP_TIMEOUT
-                {
-                    warn!("sta: no DHCP address after {}s; reconnecting", DHCP_TIMEOUT.as_secs());
-                    STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
-                    let _ = with_timeout(Duration::from_secs(10), controller.disconnect_async()).await;
-                    station_connected = false;
-                    backoff = MIN_BACKOFF;
-                    next_station_attempt = Instant::now() + backoff;
-                    backoff = next_backoff(backoff);
-                    if setup.is_open() {
-                        join_failed = true;
-                        set_portal_status(Status::Failed);
-                    }
-                }
-            }
-
-            // Dropping the AP mode can leave an existing association in place; adopt it instead
-            // of scanning and re-associating the network the station is already on.
-            if !station_connected && controller.is_connected() {
-                station_connected = true;
-                station_associated_at = Instant::now();
-            }
-
-            if !station_connected && now >= next_station_attempt && !(setup.is_open() && join_failed) {
-                let target = credentials.as_ref().map_or(&[][..], |current| current.ssid());
-                scan_station_target(&mut controller, target).await;
-                match connect_station(&mut controller).await {
-                    JoinOutcome::Connected => {
-                        info!("sta: associated; DHCP runs in the background");
-                        station_connected = true;
-                        station_associated_at = Instant::now();
-                        backoff = MIN_BACKOFF;
-                        join_failed = false;
-                        logged_ip = None;
-                        if setup.is_open() {
-                            set_portal_status(Status::Connecting);
-                        }
-                    }
-                    JoinOutcome::WrongPassword => {
-                        STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
-                        join_failed = true;
-                        set_portal_status(Status::WrongPassword);
-                        warn!(
-                            "sta: association rejected; check the passphrase; retry in {}s",
-                            backoff.as_secs()
-                        );
-                        next_station_attempt = Instant::now() + backoff;
-                        backoff = next_backoff(backoff);
-                    }
-                    JoinOutcome::Failed => {
-                        STATION_RECONNECTS.fetch_add(1, Ordering::Relaxed);
-                        join_failed = true;
-                        set_portal_status(Status::Failed);
-                        warn!("sta: reconnect in {}s", backoff.as_secs());
-                        next_station_attempt = Instant::now() + backoff;
-                        backoff = next_backoff(backoff);
-                    }
-                }
-            }
-        } else if now >= next_missing_warning {
-            warn!("sta: no credentials; the setup portal is the only network surface");
-            next_missing_warning = now + Duration::from_secs(60);
+        let observation = Observation {
+            now_ms,
+            controller_connected: controller.is_connected(),
+            station_ip: station_stack
+                .config_v4()
+                .map(|config| config.address.address().octets()),
+        };
+        let outcome = session.step(&observation, &inputs);
+        apply_publication(&outcome.publication);
+        // The old loop cleared the logged address on a successful provision and join, so the
+        // status line re-logs it after every (re)association. The rising station-up edge is the
+        // session's equivalent.
+        if outcome.publication.station_up == Some(true) {
+            logged_ip = None;
         }
-
-        // The portal's status line follows the station, without a rejoin.
-        let station_up = station_connected && station_stack.config_v4().is_some();
-        STATION_UP.store(station_up, Ordering::Relaxed);
-        if station_up && let Some(config) = station_stack.config_v4() {
-            set_portal_status(Status::Connected(config.address.address().octets()));
-        }
-
-        // -- Portal scan list -----------------------------------------------------------------
-        // Skip while a join is in flight: a sweep on the one radio can disturb both the AP and
-        // the association attempt.
-        if setup.is_open() && !station_up && now >= next_scan_at && portal_status() != Status::Connecting {
-            run_scan_sweeps(&mut controller, &ap_ssid_bytes[..ap_ssid_len]).await;
-            next_scan_at = Instant::now() + SCAN_REFRESH;
-        }
+        log_events(&outcome.events);
+        execute_actions(
+            &mut controller,
+            &outcome,
+            &ap_config,
+            &ap_ssid_bytes[..ap_ssid_len],
+            &mut pending_input,
+        )
+        .await;
 
         // -- Status line ---------------------------------------------------------------------
 
@@ -1310,6 +1074,7 @@ async fn main(spawner: Spawner) -> ! {
             let tcp_rx = TCP_RX_BYTES.load(Ordering::Relaxed);
             let tcp_tx = TCP_TX_BYTES.load(Ordering::Relaxed);
             let stats = with_pump(|pump| pump.stats());
+            let session_stats = session.stats();
 
             info!(
                 "status: t={}s rssi={}dBm uart_rx={}B uart_tx={}B uart_kbps={} uart_drop={}B dma_stalls={} crc={} resync={} good={} bad={} tcp_rx={}B tcp_tx={}B tcp_kbps={} tcp_accepts={} tcp_tx_errors={} tcp_read_errors={} client_crc={} client_resync={} ring_used={}B ring_entries={} ring_reserved={}B drop_stream={} drop_no_client={} drop_reliable={} drop_bridge_control={} drop_on_close={} ring_encode_errors={} tx_q_drop={} reconnects={} auth_ok={} auth_bad={} auth_expired={} auth_superseded={} auth_failed={} deny_busy={} deny_refused={} deny_version={} beacons={} beacon_errors={} link_ready={} setup_open={} provisioned={} dhcp_offers={} dhcp_acks={} dns={} portal_reqs={} provisions={} forgets={} scan_sweeps={} scan_aps={} wdt_feeds={} wdt_withheld={}",
@@ -1342,7 +1107,7 @@ async fn main(spawner: Spawner) -> ! {
                 RING_DISCARDED_ON_CLOSE.load(Ordering::Relaxed),
                 RING_ENCODE_ERRORS.load(Ordering::Relaxed),
                 UART_TX_QUEUE_DROPS.load(Ordering::Relaxed),
-                STATION_RECONNECTS.load(Ordering::Relaxed),
+                session_stats.station_reconnects,
                 AUTH_ACCEPTED.load(Ordering::Relaxed),
                 AUTH_REJECTED.load(Ordering::Relaxed),
                 AUTH_TIMEOUTS.load(Ordering::Relaxed),
@@ -1354,14 +1119,14 @@ async fn main(spawner: Spawner) -> ! {
                 BEACONS_SENT.load(Ordering::Relaxed),
                 BEACON_SEND_ERRORS.load(Ordering::Relaxed),
                 link_ready(),
-                setup.is_open(),
-                PROVISIONED.load(Ordering::Relaxed),
+                session.setup_open(),
+                session.provisioned(),
                 DHCP_OFFERS.load(Ordering::Relaxed),
                 DHCP_ACKS.load(Ordering::Relaxed),
                 DNS_ANSWERS.load(Ordering::Relaxed),
                 PORTAL_REQUESTS.load(Ordering::Relaxed),
-                PORTAL_PROVISIONS.load(Ordering::Relaxed),
-                PORTAL_FORGETS.load(Ordering::Relaxed),
+                session_stats.portal_provisions,
+                session_stats.portal_forgets,
                 SCAN_SWEEPS_RUN.load(Ordering::Relaxed),
                 SCAN_APS_SEEN.load(Ordering::Relaxed),
                 WATCHDOG_FEEDS.load(Ordering::Relaxed),
@@ -1377,7 +1142,7 @@ async fn main(spawner: Spawner) -> ! {
         // -- Bridge status -------------------------------------------------------------------
 
         if now >= next_bridge_status {
-            emit_bridge_status(&controller, station_up);
+            emit_bridge_status(&controller, &session);
             next_bridge_status = now + BRIDGE_STATUS_PERIOD;
         }
     }
@@ -1386,26 +1151,6 @@ async fn main(spawner: Spawner) -> ! {
 // ---------------------------------------------------------------------------------------------
 // Wi-Fi helpers
 // ---------------------------------------------------------------------------------------------
-
-/// The radio's current mode, so a setup transition only reconfigures when it changes something.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, defmt::Format)]
-enum RadioMode {
-    /// Steady state: the station only, no setup AP.
-    Station,
-    /// Setup Mode: the portal plus the station (a parked one when unprovisioned).
-    ApStation,
-}
-
-/// The result of one association attempt, as the portal's status line reports it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum JoinOutcome {
-    /// Association succeeded; DHCP may still be pending.
-    Connected,
-    /// The network rejected the credential pair (a wrong WPA2 passphrase).
-    WrongPassword,
-    /// Any other failure (timeout, missing network, radio error).
-    Failed,
-}
 
 /// Builds a station configuration from a credential pair, or `None` when the radio rejects it.
 #[allow(
@@ -1538,6 +1283,143 @@ fn raise_reason(reason: RaiseReason) -> &'static str {
         RaiseReason::StationOutage => "station outage",
         RaiseReason::PanelRequest => "panel request",
         RaiseReason::Forgotten => "forgotten",
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Radio session adapter
+// ---------------------------------------------------------------------------------------------
+
+/// Executes every action the session returned, in order, and records a blocking result for the
+/// next step.
+///
+/// This is the only half of the radio seam that cannot run on the host: it owns the `esp-radio`
+/// calls. The match is exhaustive, so a new action cannot be ignored.
+#[allow(
+    clippy::large_stack_frames,
+    reason = "the station configuration and the borrowed action set live in this executor's frame, which runs on the main task's stack"
+)]
+async fn execute_actions(
+    controller: &mut WifiController<'_>,
+    outcome: &Outcome,
+    access_point: &AccessPointConfig,
+    own_ssid: &[u8],
+    pending: &mut Option<Input>,
+) {
+    for action in &outcome.actions {
+        match *action {
+            Action::Persist(credentials) => {
+                let succeeded = persist_credentials(credentials).await;
+                if succeeded {
+                    info!(
+                        "portal: joining ssid={} while the AP stays up",
+                        core::str::from_utf8(credentials.ssid()).unwrap_or("?")
+                    );
+                }
+                *pending = Some(Input::Persist(succeeded));
+            }
+            Action::PersistTokenOnly => {
+                // The portal's Forget keeps the pairing code (ADR-0037 assigns the token clear to
+                // the panel's action 0); it clears only the network.
+                match pairing_token() {
+                    Some(token) => {
+                        if persist_token_only(token, "the cleared credentials").await {
+                            info!("portal: the cleared record was stored");
+                        }
+                    }
+                    None => warn!("portal: no pairing token to keep in the cleared record"),
+                }
+                info!("portal: forgot the network; the setup AP stays up");
+            }
+            Action::Disconnect => {
+                // A join must start from a clean link, and a Forget leaves no association behind.
+                if controller.is_connected() {
+                    let _ = with_timeout(Duration::from_secs(5), controller.disconnect_async()).await;
+                }
+            }
+            Action::ApplyStation(credentials) => match station_config_from(&credentials) {
+                Some(station) => {
+                    apply_station(controller, &station);
+                }
+                None => warn!("sta: the credentials do not form a usable station config"),
+            },
+            Action::ApplyApStation(credentials) => match station_config_from(&credentials) {
+                Some(station) => {
+                    apply_ap_station(controller, &station, access_point);
+                }
+                None => warn!("sta: the credentials do not form a usable station config"),
+            },
+            Action::ApplySetupParked => {
+                apply_setup_parked(controller, access_point);
+            }
+            Action::ApplyParkedStation => {
+                apply_parked_station(controller);
+            }
+            Action::Join(ssid) => {
+                scan_station_target(controller, ssid.as_bytes()).await;
+                let result = connect_station(controller).await;
+                *pending = Some(Input::Join(result));
+            }
+            Action::Scan => {
+                run_scan_sweeps(controller, own_ssid).await;
+            }
+        }
+    }
+    if outcome.actions.overflowed() {
+        warn!("radio: the action set overflowed; an action was dropped");
+    }
+}
+
+/// Writes the session's changed derived values to the shared statics.
+///
+/// Publication is edge-triggered, so a value the session did not change this step keeps the portal
+/// worker's optimistic status hint and the Beacon's current view.
+fn apply_publication(publication: &Publication) {
+    if let Some(provisioned) = publication.provisioned {
+        PROVISIONED.store(provisioned, Ordering::Relaxed);
+    }
+    if publication.station_ssid_cleared {
+        set_station_ssid(None);
+    } else if let Some(ssid) = publication.station_ssid {
+        set_station_ssid(Some(ssid.as_bytes()));
+    }
+    if let Some(open) = publication.setup_open {
+        SETUP_OPEN.store(open, Ordering::Relaxed);
+    }
+    if let Some(up) = publication.station_up {
+        STATION_UP.store(up, Ordering::Relaxed);
+    }
+    if let Some(status) = publication.portal_status {
+        set_portal_status(status);
+    }
+}
+
+/// Logs every event the session returned, in occurrence order.
+fn log_events(events: &EventSet) {
+    for event in events {
+        match *event {
+            Event::LinkLost => info!("sta: link lost; reconnecting"),
+            Event::DhcpTimeout => warn!(
+                "sta: no DHCP address after {}s; reconnecting",
+                radio::DHCP_TIMEOUT_MS / 1_000
+            ),
+            Event::Associated => info!("sta: associated; DHCP runs in the background"),
+            Event::JoinFailed { kind, retry_in_ms } => match kind {
+                radio::JoinFailure::WrongPassword => warn!(
+                    "sta: association rejected; check the passphrase; retry in {}s",
+                    retry_in_ms / 1_000
+                ),
+                radio::JoinFailure::Failed => warn!("sta: reconnect in {}s", retry_in_ms / 1_000),
+            },
+            Event::MissingCredentials => {
+                warn!("sta: no credentials; the setup portal is the only network surface");
+            }
+            Event::Setup(event) => log_setup_event(event),
+            Event::PersistFailed => warn!("portal: the credential record could not be written"),
+        }
+    }
+    if events.overflowed() {
+        warn!("radio: the event set overflowed; an event was dropped");
     }
 }
 
@@ -1959,11 +1841,6 @@ fn open_record_store(flash: esp_hal::peripherals::FLASH<'static>) -> Option<Cred
     Some(CredentialStore { storage })
 }
 
-/// Doubles the reconnect backoff, capped at [`MAX_BACKOFF`].
-fn next_backoff(backoff: Duration) -> Duration {
-    (backoff * 2).min(MAX_BACKOFF)
-}
-
 /// Best-of-N 2.4 GHz scan for the portal: `scan_async` on this beta drops whole sweeps, so merge
 /// several and keep the strongest RSSI per SSID. The AP's own SSID is filtered out.
 async fn run_scan_sweeps(controller: &mut WifiController<'_>, own_ssid: &[u8]) {
@@ -2034,32 +1911,32 @@ async fn scan_station_target(controller: &mut WifiController<'_>, target: &[u8])
 
 /// Associates the station, classifying a WPA2 credential rejection so the portal can say
 /// "wrong password" instead of a generic failure.
-async fn connect_station(controller: &mut WifiController<'_>) -> JoinOutcome {
+async fn connect_station(controller: &mut WifiController<'_>) -> JoinResult {
     match with_timeout(CONNECT_TIMEOUT, controller.connect_async()).await {
         Ok(Ok(info)) => {
             info!("sta: associated ssid={} channel={}", info.ssid, info.channel);
-            JoinOutcome::Connected
+            JoinResult::Connected
         }
         Ok(Err(ConnectionError::Failed(info))) => {
             if auth_failure(info.reason) {
                 warn!("sta: association rejected: {:?}", info.reason);
-                JoinOutcome::WrongPassword
+                JoinResult::WrongPassword
             } else {
                 warn!("sta: association failed: {:?}", info.reason);
-                JoinOutcome::Failed
+                JoinResult::Failed
             }
         }
         Ok(Err(ConnectionError::WifiError(WifiError::InvalidPassword))) => {
             warn!("sta: the radio rejected the passphrase");
-            JoinOutcome::WrongPassword
+            JoinResult::WrongPassword
         }
         Ok(Err(error)) => {
             warn!("sta: association failed: {:?}", error);
-            JoinOutcome::Failed
+            JoinResult::Failed
         }
         Err(_) => {
             warn!("sta: association timed out");
-            JoinOutcome::Failed
+            JoinResult::Failed
         }
     }
 }
@@ -2405,7 +2282,7 @@ async fn client_task(
         }
         socket.set_timeout(Some(SOCKET_TIMEOUT));
         // The accept wait is sliced so an idle worker still checks in; a timeout is simply the
-        // next heartbeat slice, while a real accept error keeps the old one-second backoff.
+        // next heartbeat slice, while a real accept error keeps the old one-second retry delay.
         match with_timeout(HEARTBEAT_PERIOD, socket.accept(LINK_TCP_DEFAULT)).await {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
@@ -2868,38 +2745,19 @@ fn link_ready() -> bool {
 /// The robot gets an unacknowledged control frame whether or not a daemon is attached, because the
 /// panel needs the snapshot too. The daemon gets a latest-wins stream through the pump, which
 /// skips it silently while no client is authenticated.
-fn emit_bridge_status(controller: &WifiController<'_>, station_up: bool) {
+fn emit_bridge_status(controller: &WifiController<'_>, session: &RadioSession) {
     let rssi_dbm = controller.rssi().ok().and_then(|rssi| i8::try_from(rssi).ok());
     let channel = controller
         .channel()
         .ok()
         .and_then(|(primary, _)| (primary != CHANNEL_UNKNOWN).then_some(primary));
 
-    let provisioned = PROVISIONED.load(Ordering::Relaxed);
-    let station = if controller.is_connected() || station_up {
-        BridgeStation::Associated
-    } else if provisioned {
-        BridgeStation::Connecting
-    } else {
-        BridgeStation::Down
-    };
-
-    let mut flags = BridgeStatusFlags::default();
-    if provisioned {
-        flags |= BridgeStatusFlags::PROVISIONED;
-    }
-    if SETUP_OPEN.load(Ordering::Relaxed) {
-        flags |= BridgeStatusFlags::SETUP_OPEN;
-    }
-    if link_ready() {
-        flags |= BridgeStatusFlags::LINK_READY;
-    }
-
+    let view = session.bridge_status(link_ready());
     let status = BridgeStatus {
         rssi_dbm,
         channel,
-        station,
-        flags,
+        station: view.station,
+        flags: view.flags,
         uart_dropped_bytes: UART_DROPPED_BYTES.load(Ordering::Relaxed),
         dma_stalls: UART_DMA_STALLS.load(Ordering::Relaxed),
         crc_failures: UART_CRC_FAILURES.load(Ordering::Relaxed),
@@ -3107,8 +2965,8 @@ fn enqueue_bridge_ack(seq: Seq, reply: &BridgeControlReply<'_>) {
 ///
 /// The record write, the acknowledgement and the token change happen here, before the reply, so
 /// the panel is never told a change succeeded when the flash still holds the old record. The
-/// supervisory loop only clears the RAM credentials and raises the window for action 0, which keeps
-/// the panel's two-second control timeout independent of a station join or a scan.
+/// supervisory loop's radio session clears the network and raises the window for action 0, which
+/// keeps the panel's two-second control timeout independent of a station join or a scan.
 #[allow(
     clippy::large_stack_frames,
     reason = "the record and the persistence future live in the UART task's panel path"
