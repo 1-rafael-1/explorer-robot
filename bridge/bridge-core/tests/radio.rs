@@ -122,7 +122,7 @@ fn a_provisioned_boot_applies_the_station_config_and_publishes_the_network() {
     assert!(!session.station_up());
     assert!(!session.setup_open());
     assert_eq!(session.portal_status(), Status::Connecting);
-    assert!(!session.retry_blocked());
+    assert!(!session.operator_blocked());
 }
 
 /// An unprovisioned or unusable boot parks the station and publishes unprovisioned.
@@ -209,13 +209,16 @@ fn the_adopt_path_leaves_the_retry_block_alone() {
             retry_in_ms: radio::MIN_BACKOFF_MS,
         }]
     );
-    assert!(session.retry_blocked());
+    assert!(session.operator_blocked());
 
     // The controller still holds an association, so the session adopts it; the block survives.
     let outcome = session.step(&observed(200, true, None), &[]);
     assert!(actions(&outcome).is_empty(), "the adopt path does not rejoin");
     assert!(events(&outcome).is_empty(), "adopting is not an association edge");
-    assert!(session.retry_blocked(), "the adopt path must not reset the retry block");
+    assert!(
+        session.operator_blocked(),
+        "the adopt path must not reset the retry block"
+    );
 }
 
 /// A link loss is reported once, the rejoin waits for the one-second gate, and a connected result
@@ -870,7 +873,7 @@ fn an_open_window_blocks_a_failed_join_retry_until_a_provision_clears_it() {
             retry_in_ms: radio::MIN_BACKOFF_MS,
         }]
     );
-    assert!(session.retry_blocked());
+    assert!(session.operator_blocked());
     assert!(session.setup_open());
 
     // The one-second gate is reached, but the open window suppresses the retry.
@@ -890,7 +893,7 @@ fn an_open_window_blocks_a_failed_join_retry_until_a_provision_clears_it() {
         actions(&outcome),
         vec![Action::ApplyApStation(replacement), Action::Join(replacement_ssid)]
     );
-    assert!(!session.retry_blocked());
+    assert!(!session.operator_blocked());
 }
 
 /// No event carries the passphrase, whatever the provisioning outcome.
@@ -1235,7 +1238,7 @@ fn the_portal_status_is_published_only_when_it_changes() {
         return;
     };
 
-    let view: BridgeStatusView = session.bridge_status(false);
+    let view: BridgeStatusView = session.bridge_status(false, false);
     assert_eq!(view.station, BridgeStation::Connecting);
 
     let outcome = session.step(&observed(0, true, Some(STATION_IP)), &[]);
@@ -1329,12 +1332,12 @@ fn the_bridge_status_accessor_matches_the_firmware_mapping() {
         return;
     };
     let _ = session.step(&observed(0, true, Some(STATION_IP)), &[]);
-    let view: BridgeStatusView = session.bridge_status(false);
+    let view: BridgeStatusView = session.bridge_status(true, false);
     assert_eq!(view.station, BridgeStation::Associated);
     assert_eq!(view.flags, BridgeStatusFlags::PROVISIONED);
 
     // The caller's link-readiness argument adds LINK_READY.
-    let ready = session.bridge_status(true);
+    let ready = session.bridge_status(true, true);
     assert_eq!(ready.station, BridgeStation::Associated);
     assert!(ready.flags.contains(BridgeStatusFlags::LINK_READY));
 
@@ -1343,26 +1346,26 @@ fn the_bridge_status_accessor_matches_the_firmware_mapping() {
         return;
     };
     let _ = associated.step(&observed(0, true, None), &[]);
-    assert_eq!(associated.bridge_status(false).station, BridgeStation::Associated);
+    assert_eq!(associated.bridge_status(true, false).station, BridgeStation::Associated);
 
     // Provisioned but down and out of Setup Mode: Connecting with PROVISIONED.
     let Some((cold, _boot)) = provisioned_boot(0) else {
         return;
     };
-    let view = cold.bridge_status(false);
+    let view = cold.bridge_status(false, false);
     assert_eq!(view.station, BridgeStation::Connecting);
     assert_eq!(view.flags, BridgeStatusFlags::PROVISIONED);
 
     // Unprovisioned with the window open: Down with SETUP_OPEN only.
     let (mut open, _boot) = RadioSession::boot(None, 0);
-    let view = open.bridge_status(false);
+    let view = open.bridge_status(false, false);
     assert_eq!(view.station, BridgeStation::Down);
     assert_eq!(view.flags, BridgeStatusFlags::SETUP_OPEN);
 
     // Unprovisioned after the window expires: Down with no flags.
     let _ = open.step(&observed(600_000, false, None), &[]);
     assert!(!open.setup_open());
-    let view = open.bridge_status(false);
+    let view = open.bridge_status(false, false);
     assert_eq!(view.station, BridgeStation::Down);
     assert!(view.flags.is_empty(), "no flag is set while down and unprovisioned");
 }

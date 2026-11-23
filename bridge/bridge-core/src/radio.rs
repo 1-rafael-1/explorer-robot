@@ -136,19 +136,20 @@ pub enum JoinFailure {
 pub enum Action {
     /// Tear down the current association before rejoining.
     Disconnect,
-    /// Enter station mode with these credentials, keeping the setup AP up.
+    /// Enter station-only mode with these credentials; the setup AP goes down.
     ApplyStation(
         /// The credentials to associate with.
         Credentials,
     ),
-    /// Enter station mode with these credentials and keep the setup AP up (APSTA).
+    /// Enter APSTA with these credentials, keeping the setup AP up.
     ApplyApStation(
         /// The credentials to associate with.
         Credentials,
     ),
-    /// Enter AP-only Setup Mode with a parked, never-associated station.
+    /// Enter APSTA with a parked, never-associated station: the setup AP plus a station that is not
+    /// joined.
     ApplySetupParked,
-    /// Leave AP-only Setup Mode with a parked, never-associated station.
+    /// Park the radio in station-only mode on a network that does not exist.
     ApplyParkedStation,
     /// Scan for and join the Station Network with this SSID.
     Join(
@@ -491,7 +492,7 @@ pub struct RadioSession {
     /// Whether a join action is awaiting its result.
     join_in_flight: bool,
     /// Whether a failed join requires the operator to act before a retry.
-    retry_blocked: bool,
+    operator_blocked: bool,
     /// The earliest time the missing-credentials warning may repeat.
     next_missing_warning: u32,
     /// The bounded Setup Mode window.
@@ -514,8 +515,6 @@ pub struct RadioSession {
     next_scan_at: u32,
     /// The decision counters for the status line.
     stats: Stats,
-    /// The controller's association state after the last step, as the Bridge Status sees it.
-    controller_connected: bool,
 }
 
 impl RadioSession {
@@ -543,7 +542,7 @@ impl RadioSession {
             next_attempt: now_ms,
             backoff: MIN_BACKOFF_MS,
             join_in_flight: false,
-            retry_blocked: false,
+            operator_blocked: false,
             next_missing_warning: now_ms,
             setup,
             pending_provision: None,
@@ -555,7 +554,6 @@ impl RadioSession {
             published_portal_status: None,
             next_scan_at: now_ms,
             stats: Stats::default(),
-            controller_connected: false,
         };
 
         let mut outcome = Outcome::new();
@@ -621,7 +619,6 @@ impl RadioSession {
         }
 
         self.apply_link_policy(&mut controller_connected, now_ms, &mut outcome);
-        self.controller_connected = controller_connected;
         self.maybe_scan(now_ms, &mut outcome);
         self.publish(&mut outcome.publication);
         outcome
@@ -660,14 +657,15 @@ impl RadioSession {
 
     /// Returns the Bridge Status station state and flags for one snapshot.
     ///
-    /// The station is associated while the controller holds an association or the station is up,
-    /// connecting while the Bridge is provisioned and down otherwise. The flags carry
-    /// [`BridgeStatusFlags::PROVISIONED`], [`BridgeStatusFlags::SETUP_OPEN`] and, from the caller's
-    /// argument, [`BridgeStatusFlags::LINK_READY`]. This is the firmware's `emit_bridge_status`
-    /// mapping, moved out of the binary (ADR-0058).
+    /// The caller supplies the live controller association fact. The station is associated while
+    /// that fact is set or the station is up, connecting while the Bridge is provisioned and down
+    /// otherwise. The flags carry [`BridgeStatusFlags::PROVISIONED`],
+    /// [`BridgeStatusFlags::SETUP_OPEN`] and, from the caller's argument,
+    /// [`BridgeStatusFlags::LINK_READY`]. This is the firmware's `emit_bridge_status` mapping, moved
+    /// out of the binary (ADR-0058).
     #[must_use]
-    pub fn bridge_status(&self, link_ready: bool) -> BridgeStatusView {
-        let station = if self.controller_connected || self.station_up() {
+    pub fn bridge_status(&self, controller_connected: bool, link_ready: bool) -> BridgeStatusView {
+        let station = if controller_connected || self.station_up() {
             BridgeStation::Associated
         } else if self.provisioned() {
             BridgeStation::Connecting
@@ -714,8 +712,8 @@ impl RadioSession {
     /// off-channels the AP; outside a window the steady-state backoff still applies (ADR-0036,
     /// ADR-0058).
     #[must_use]
-    pub const fn retry_blocked(&self) -> bool {
-        self.retry_blocked
+    pub const fn operator_blocked(&self) -> bool {
+        self.operator_blocked
     }
 
     /// Handles a successful join: the station is associated, the backoff is back at its minimum and
@@ -724,7 +722,7 @@ impl RadioSession {
         self.station_connected = true;
         self.associated_at = now_ms;
         self.backoff = MIN_BACKOFF_MS;
-        self.retry_blocked = false;
+        self.operator_blocked = false;
         self.last_failure = None;
         outcome.events.push(Event::Associated);
     }
@@ -738,7 +736,7 @@ impl RadioSession {
         });
         self.next_attempt = now_ms.wrapping_add(self.backoff);
         self.backoff = next_backoff(self.backoff);
-        self.retry_blocked = true;
+        self.operator_blocked = true;
         self.last_failure = Some(kind);
         self.stats.station_reconnects = self.stats.station_reconnects.saturating_add(1);
     }
@@ -766,7 +764,7 @@ impl RadioSession {
             // The firmware reports a DHCP timeout as a failure only inside the window; outside it,
             // the steady-state backoff retries without asking the operator.
             if self.setup.is_open() {
-                self.retry_blocked = true;
+                self.operator_blocked = true;
                 self.last_failure = Some(JoinFailure::Failed);
             }
         }
@@ -857,7 +855,7 @@ impl RadioSession {
             self.associated_at = now_ms;
             self.next_attempt = now_ms;
             self.backoff = MIN_BACKOFF_MS;
-            self.retry_blocked = false;
+            self.operator_blocked = false;
             self.last_failure = None;
             self.join_in_flight = false;
             Self::disconnect_if_connected(controller_connected, outcome);
@@ -881,7 +879,7 @@ impl RadioSession {
                 self.next_scan_at = now_ms;
                 // A newly opened window forgives the operator block: the next attempt is the one
                 // the operator will submit.
-                self.retry_blocked = false;
+                self.operator_blocked = false;
                 match self.credentials {
                     Some(credentials) => outcome.actions.push(Action::ApplyApStation(credentials)),
                     None => outcome.actions.push(Action::ApplySetupParked),
@@ -915,7 +913,7 @@ impl RadioSession {
         self.join_in_flight = false;
         self.next_attempt = now_ms;
         self.backoff = MIN_BACKOFF_MS;
-        self.retry_blocked = false;
+        self.operator_blocked = false;
         self.last_failure = None;
     }
 
@@ -940,7 +938,7 @@ impl RadioSession {
             // holds one blocking input at a time, and the pair is about to be replaced anyway.
             || self.pending_provision.is_some()
             || !reached(now_ms, self.next_attempt)
-            || (self.setup.is_open() && self.retry_blocked)
+            || (self.setup.is_open() && self.operator_blocked)
         {
             return;
         }

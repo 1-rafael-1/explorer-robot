@@ -654,7 +654,8 @@ cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tes
 espflash partition-table partitions.csv
 ```
 
-`bridge-core` has 176 host tests: the pump/window/DHCP/DNS/portal suites, 7 `pairing` tests
+`bridge-core` has 215 host tests: the pump/window/DHCP/DNS/portal suites, 39 `radio` tests
+(the session reducer's link, Setup Mode, persist and Bridge Status rules), 7 `pairing` tests
 (length, alphabet, bit mapping, grouping), 12 `record` tests (round trips and every fail-closed
 case: magic, version, CRC, length, flags, token, credentials) and 11 `heartbeat` tests (the
 watchdog's coverage and liveness rule). `bridge-net` keeps its 18.

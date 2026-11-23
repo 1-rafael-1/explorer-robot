@@ -2661,7 +2661,7 @@ fn emit_bridge_status(controller: &WifiController<'_>, session: &RadioSession) {
         .ok()
         .and_then(|(primary, _)| (primary != CHANNEL_UNKNOWN).then_some(primary));
 
-    let view = session.bridge_status(link_ready());
+    let view = session.bridge_status(controller.is_connected(), link_ready());
     let status = BridgeStatus {
         rssi_dbm,
         channel,

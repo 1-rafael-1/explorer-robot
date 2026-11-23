@@ -68,6 +68,23 @@ on `x86_64-unknown-linux-gnu` behind the `std` feature, and the same crate compi
 The firmware implements the `sequential-storage` `Value`/`Key` glue and the `esp-storage`
 partition adapter; neither appears here, so the codec stays host-testable.
 
+## The Radio Session
+
+- **`radio`** — the pure station-link and provisioning policy (ADR-0058). `RadioSession::boot`
+  builds the session from a `CredentialRecord` and returns the initial `Outcome`; each `step`
+  takes an `Observation` (the caller's `u32` milliseconds, whether the controller reports an
+  association and the station's IPv4 address) plus the queued `Input`s (portal, panel, persist
+  and join results), and returns an `Outcome` of `Action`s to run to completion, `Event`s to log
+  and an edge-triggered `Publication`. It owns the reconnect backoff, the join-failure operator
+  block, the DHCP timeout, the bounded Setup Mode window, the persist-before-join gate, the portal
+  status, the `BridgeStatusView` station state and flags, and the `Stats` decision counters. It
+  owns policy only, not a radio device: every HAL call, socket, flash write and encoding stays in
+  the firmware. All time is the caller's wrapping `u32` milliseconds. The ADR-0058 parity ledger
+  names the only behaviour changes: the scan gate reads session state rather than the published
+  portal status, both Forget paths pass the same station-up fact, `join_failed` is renamed to say
+  the operator must act, `radio_mode` is removed, and the 1, 2, 4 … 60 s backoff is one
+  transition.
+
 ## The watchdog's liveness policy
 
 - **`heartbeat`** — a fixed set of covered tasks, each owning one slot, plus the rule that a task
@@ -133,7 +150,7 @@ cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tes
 ```
 
 The suites are
-`tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal,pairing,record,heartbeat}.rs`.
+`tests/{coalescing,routing,watermark,auth,pump,setup,dhcp,dns,portal,radio,pairing,record,heartbeat}.rs`.
 They exercise the crate's external contract — frames in, decisions and drained entries out — not
 its internals. The
 Bridge CI job also runs `cargo clippy -- -D warnings`, which applies this workspace's

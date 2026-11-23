@@ -272,6 +272,9 @@ async fn main(spawner: Spawner) -> ! {
     // The soak has no portal and no persisted credential record: its station credentials are the
     // compile-time `SPIKE_*` inputs. A pair the session would refuse (for example a passphrase
     // under eight bytes) boots unprovisioned; the AP still runs, so the soak can proceed over it.
+    if STA_SSID == "CHANGE_ME" {
+        info!("no SPIKE_STA_SSID was set; the setup AP will run but the station will not associate");
+    }
     let credentials = Credentials::from_slices(STA_SSID.as_bytes(), STA_PASSWORD.as_bytes());
     if credentials.is_none() {
         info!("sta: SPIKE_STA_SSID/SPIKE_STA_PASSWORD are not a usable WPA2 pair; the station will not associate");
@@ -532,7 +535,11 @@ async fn execute_actions(
     for action in &outcome.actions {
         match *action {
             Action::Join(ssid) => {
-                scan_station_target(controller, ssid.as_bytes()).await;
+                // The placeholder SSID is not a real network, so skip the scan the old soak skipped
+                // and still attempt the connect.
+                if STA_SSID != "CHANGE_ME" {
+                    scan_station_target(controller, ssid.as_bytes()).await;
+                }
                 join_result = Some(connect_station(controller).await);
             }
             Action::Disconnect => {
