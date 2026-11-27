@@ -30,6 +30,14 @@ name = "rotation"
 required-features = ["std"]
 
 [[test]]
+name = "distance"
+required-features = ["std"]
+
+[[test]]
+name = "continuous"
+required-features = ["std"]
+
+[[test]]
 name = "correction"
 required-features = ["std"]
 

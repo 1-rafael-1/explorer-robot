@@ -19,9 +19,16 @@
 #![warn(missing_docs)]
 
 mod correction;
+mod distance;
 mod rotation;
 
 // ── Drive vocabulary ──────────────────────────────────────────────────────────
+
+/// The resolved measured-or-nominal encoder scale a distance drive consumes.
+///
+/// The adapter resolves it before constructing the intent, so the model never
+/// reads calibration state.
+pub use motor_cal::DistanceScale;
 
 /// Drive direction for distance-based commands.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -231,8 +238,8 @@ pub enum DriveFault {
 
 /// The construction parameters of one drive intent.
 ///
-/// This is one enum so later tickets can add the distance, continuous,
-/// brake/coast and idle variants without changing [`Intent::new`].
+/// This is one enum so later tickets can add the brake/coast and idle variants
+/// without changing [`Intent::new`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntentParams {
     /// Rotate in place to an exact relative angle.
@@ -243,6 +250,27 @@ pub enum IntentParams {
         direction: RotationDirection,
         /// Whether the turn happens in place or while the tracks keep moving.
         motion: RotationMotion,
+    },
+    /// Drive a fixed distance, straight or along an arc.
+    DriveDistance {
+        /// Straight or curved distance specification.
+        kind: DriveDistanceKind,
+        /// Drive direction (forward or backward).
+        direction: DriveDirection,
+        /// Target speed magnitude (0-100).
+        speed: u8,
+        /// The resolved measured-or-nominal encoder scale.
+        scale: DistanceScale,
+    },
+    /// Drive at a speed and hold a heading until interrupted.
+    ///
+    /// There is no distance target, no ramp-down and no successful completion;
+    /// it ends only on a fault or a cancellation.
+    DriveContinuous {
+        /// Drive direction (forward or backward).
+        direction: DriveDirection,
+        /// Speed magnitude (0-100).
+        speed: u8,
     },
 }
 
@@ -291,6 +319,10 @@ pub struct Intent {
 enum IntentState {
     /// A precise rotation turn.
     RotateExact(rotation::RotationState),
+    /// A drive to a fixed straight or curved distance.
+    DriveDistance(distance::DistanceState),
+    /// A drive held at a speed and heading until interrupted.
+    DriveContinuous(distance::DistanceState),
 }
 
 impl Intent {
@@ -306,6 +338,17 @@ impl Intent {
                 direction,
                 motion,
             } => IntentState::RotateExact(rotation::RotationState::new(degrees, direction, motion, now_ms)),
+            IntentParams::DriveDistance {
+                kind,
+                direction,
+                speed,
+                scale,
+            } => IntentState::DriveDistance(distance::DistanceState::new_target(
+                kind, direction, speed, scale, now_ms,
+            )),
+            IntentParams::DriveContinuous { direction, speed } => {
+                IntentState::DriveContinuous(distance::DistanceState::new_continuous(direction, speed, now_ms))
+            }
         };
         Self { state }
     }
@@ -319,6 +362,7 @@ impl Intent {
     pub fn step(&mut self, obs: &Observation) -> Step {
         match &mut self.state {
             IntentState::RotateExact(state) => state.step(obs),
+            IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => state.step(obs),
         }
     }
 
@@ -327,6 +371,7 @@ impl Intent {
     pub fn outcome(&self) -> Option<DriveOutcome> {
         match &self.state {
             IntentState::RotateExact(state) => state.outcome(),
+            IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => state.outcome(),
         }
     }
 
@@ -338,6 +383,9 @@ impl Intent {
     pub fn cancellation_telemetry(&self, now_ms: u64) -> CompletionTelemetry {
         match &self.state {
             IntentState::RotateExact(state) => state.cancellation_telemetry(now_ms),
+            IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => {
+                state.cancellation_telemetry(now_ms)
+            }
         }
     }
 }
