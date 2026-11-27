@@ -18,6 +18,8 @@
 #![no_std]
 #![warn(missing_docs)]
 
+mod rotation;
+
 // ── Drive vocabulary ──────────────────────────────────────────────────────────
 
 /// Drive direction for distance-based commands.
@@ -222,6 +224,121 @@ pub enum DriveFault {
     CorrectionExhausted,
     /// The brake or coast command did not settle to rest inside the timeout.
     SettleTimeout,
+}
+
+// ── Intent parameters, steps and the in-flight intent ─────────────────────────
+
+/// The construction parameters of one drive intent.
+///
+/// This is one enum so later tickets can add the distance, continuous,
+/// brake/coast and idle variants without changing [`Intent::new`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntentParams {
+    /// Rotate in place to an exact relative angle.
+    RotateExact {
+        /// Relative angle to turn, in degrees (positive magnitude).
+        degrees: f32,
+        /// Sign of the turn.
+        direction: RotationDirection,
+        /// Whether the turn happens in place or while the tracks keep moving.
+        motion: RotationMotion,
+    },
+}
+
+/// A minimal, feature-gated snapshot of the decision behind one [`Step`].
+///
+/// The model never logs: when the `trace` feature is on it fills this in and the
+/// adapter decides what to do with it. When the feature is off, [`Step::trace`]
+/// is `None` and the model pays nothing for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Trace {
+    /// Last yaw used by the model, if a sample has been seen.
+    pub yaw_deg: Option<f32>,
+    /// Absolute target yaw, once the first sample has anchored it.
+    pub target_yaw_deg: Option<f32>,
+    /// Signed remaining angle to the target, in degrees.
+    pub remaining_deg: f32,
+    /// Left track speed when the action is `SetTracks`.
+    pub left: Option<i8>,
+    /// Right track speed when the action is `SetTracks`.
+    pub right: Option<i8>,
+    /// Absolute deadline when the action is `WaitUntil`.
+    pub deadline_ms: Option<u64>,
+}
+
+/// The result of one [`Intent::step`] call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Step {
+    /// The one action the adapter executes before stepping again.
+    pub action: IntentAction,
+    /// The decision snapshot; `None` unless the `trace` feature is on.
+    pub trace: Option<Trace>,
+}
+
+/// An in-flight drive intent.
+///
+/// The adapter constructs it with [`Intent::new`], repeatedly calls
+/// [`Intent::step`] with a fresh [`Observation`], executes each returned
+/// action and stops when the action is [`IntentAction::Finished`]. The intents
+/// are private state; the adapter never matches on them.
+pub struct Intent {
+    /// The private intent state.
+    state: IntentState,
+}
+
+/// The private intent states.
+enum IntentState {
+    /// A precise rotation turn.
+    RotateExact(rotation::RotationState),
+}
+
+impl Intent {
+    /// Construct an intent from its parameters, starting at `now_ms`.
+    ///
+    /// Pure: it stores the start time and emits nothing. The first
+    /// [`Intent::step`] emits the intent's initial action.
+    #[must_use]
+    pub const fn new(params: IntentParams, now_ms: u64) -> Self {
+        let state = match params {
+            IntentParams::RotateExact {
+                degrees,
+                direction,
+                motion,
+            } => IntentState::RotateExact(rotation::RotationState::new(degrees, direction, motion, now_ms)),
+        };
+        Self { state }
+    }
+
+    /// Advance the intent by one action.
+    ///
+    /// The adapter executes a non-blocking action (anything but `WaitUntil` and
+    /// `Finished`) and calls `step` again immediately. A `WaitUntil` sleeps to
+    /// the absolute deadline and then calls `step` with a fresh observation.
+    #[must_use]
+    pub fn step(&mut self, obs: &Observation) -> Step {
+        match &mut self.state {
+            IntentState::RotateExact(state) => state.step(obs),
+        }
+    }
+
+    /// The terminal outcome, present once the `Finished` action has been emitted.
+    #[must_use]
+    pub fn outcome(&self) -> Option<DriveOutcome> {
+        match &self.state {
+            IntentState::RotateExact(state) => state.outcome(),
+        }
+    }
+
+    /// Telemetry for the adapter to report if it cancels the intent at `now_ms`.
+    ///
+    /// `Cancelled` is never model output: the adapter constructs it on an
+    /// interrupt and asks the model for this snapshot.
+    #[must_use]
+    pub fn cancellation_telemetry(&self, now_ms: u64) -> CompletionTelemetry {
+        match &self.state {
+            IntentState::RotateExact(state) => state.cancellation_telemetry(now_ms),
+        }
+    }
 }
 
 impl DriveFault {

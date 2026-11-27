@@ -17,7 +17,17 @@ motor-cal = { path = "../motor-cal" }
 [features]
 # Host test harness only; the crate itself is always `no_std`.
 std = []
+# Fill in `Step::trace` with a decision snapshot; off means `Step::trace` is `None`.
+trace = []
 
 [[test]]
 name = "fault"
 required-features = ["std"]
+
+[[test]]
+name = "rotation"
+required-features = ["std"]
+
+[[test]]
+name = "trace"
+required-features = ["std", "trace"]
