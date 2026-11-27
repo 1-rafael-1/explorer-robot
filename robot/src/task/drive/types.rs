@@ -10,16 +10,9 @@
 
 // ── Geometry constants (shared across modules) ────────────────────────────
 
-/// The effective drive-sprocket circumference with the track installed, in
-/// centimetres.
-///
-/// The geometry lives with the encoder scale in `motor-cal`, which derives the
-/// counts per revolution from a measured counts/cm. Re-exported here so drive
-/// code keeps one import path for its geometry.
-pub use motor_cal::scale::SPROCKET_CIRCUMFERENCE_CM;
-
-/// Distance between left/right track centerlines (cm).
-pub const TRACK_WIDTH_CM: f32 = 14.5;
+// The physical geometry lives in `drive-geometry`; re-exported here so drive
+// code keeps one import path for its geometry.
+pub use drive_geometry::{SPROCKET_CIRCUMFERENCE_CM, TRACK_WIDTH_CM};
 
 /// Combined motor control and sensor feedback commands
 ///

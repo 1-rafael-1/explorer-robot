@@ -10,7 +10,8 @@
 //! Counts per sprocket revolution is then derived from that scale and the
 //! sprocket circumference, so the firmware no longer needs a
 //! pulses-per-revolution constant: the circumference is the only geometry input,
-//! and [`SPROCKET_CIRCUMFERENCE_CM`] holds the nominal value the drive types use.
+//! and [`SPROCKET_CIRCUMFERENCE_CM`] re-exports the shared figure from
+//! `drive-geometry`.
 //!
 //! Derivation is fallible. A zero or negative measured distance cannot be
 //! divided by, and a scale outside [`MIN_PLAUSIBLE_COUNTS_PER_CM`]..=
@@ -29,12 +30,10 @@ pub const MIN_PLAUSIBLE_COUNTS_PER_CM: f32 = 5.0;
 /// wrong track.
 pub const MAX_PLAUSIBLE_COUNTS_PER_CM: f32 = 100.0;
 
-/// The effective drive-sprocket circumference with the track installed, in
-/// centimetres.
-///
-/// This is the same figure the drive geometry uses; the model takes the
-/// circumference as an input so no pulses-per-revolution constant is baked in.
-pub const SPROCKET_CIRCUMFERENCE_CM: f32 = 19.01;
+// Re-exported so `motor_cal::scale::SPROCKET_CIRCUMFERENCE_CM` and the flat
+// `motor_cal::SPROCKET_CIRCUMFERENCE_CM` path keep working; the figure itself
+// lives in `drive-geometry`.
+pub use drive_geometry::SPROCKET_CIRCUMFERENCE_CM;
 
 /// The inferred encoder counts per sprocket revolution: 11 pulses per motor
 /// revolution behind a 30:1 gearbox.

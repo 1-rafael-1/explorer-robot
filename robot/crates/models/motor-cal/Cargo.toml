@@ -10,6 +10,9 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 [lints]
 workspace = true
 
+[dependencies]
+drive-geometry = { path = "../drive-geometry" }
+
 [features]
 # Host test harness only; the crate itself is always `no_std`.
 std = []

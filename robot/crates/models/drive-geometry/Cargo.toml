@@ -1,0 +1,19 @@
+[package]
+name = "drive-geometry"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Shared physical drive geometry: track width and sprocket circumference. no_std and host-tested."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+
+[[test]]
+name = "geometry"
+required-features = ["std"]
