@@ -1,17 +1,23 @@
 //! Shared types and geometry constants for drive control.
 //!
-//! This module owns the vocabulary shared across the drive subsystem — the
-//! command types, completion types, and geometry constants. Per-module control
-//! parameters (rotation tuning, distance tuning, drift tuning, etc.) live in
-//! their respective control modules.
+//! The hardware-independent drive vocabulary lives in `drive-core` and is
+//! re-exported here, so drive code keeps one import path. This module keeps the
+//! firmware-owned command envelope and completion plumbing — the command and
+//! action types, the queue completion and error types — and the geometry
+//! constants. Per-module control parameters (rotation tuning, distance tuning,
+//! drift tuning, etc.) live in their respective control modules.
 //!
 //! Also defines the [`IntentTeardown`] descriptor enum that forms the
 //! seam between the [`super::dispatch`] and the control modules.
 
-// ── Geometry constants (shared across modules) ────────────────────────────
+// ── Shared vocabulary and geometry ───────────────────────────────────────
 
-// The physical geometry lives in `drive-geometry`; re-exported here so drive
-// code keeps one import path for its geometry.
+// The hardware-independent vocabulary lives in `drive-core`; the physical
+// geometry lives in `drive-geometry`. Both are re-exported here so drive code
+// keeps one import path.
+pub use drive_core::{
+    CompletionTelemetry, DriveDirection, DriveDistanceKind, RotationDirection, RotationMotion, TurnDirection,
+};
 pub use drive_geometry::{SPROCKET_CIRCUMFERENCE_CM, TRACK_WIDTH_CM};
 
 /// Combined motor control and sensor feedback commands
@@ -94,44 +100,6 @@ pub enum DriveAction {
     },
 }
 
-/// Drive direction for distance-based commands
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum DriveDirection {
-    /// Forward motion
-    Forward,
-    /// Backward motion
-    Backward,
-}
-
-/// Turn direction for curved motion.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum TurnDirection {
-    /// Left turn (counter-clockwise yaw).
-    Left,
-    /// Right turn (clockwise yaw).
-    Right,
-}
-
-/// Distance command specification
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DriveDistanceKind {
-    /// Straight-line distance in centimeters.
-    Straight {
-        /// Target distance along the centerline (cm).
-        distance_cm: f32,
-    },
-    /// Curved distance specified by centerline radius and arc length (centimeters).
-    CurveArc {
-        /// Radius from robot centerline (cm).
-        radius_cm: f32,
-        /// Desired arc length along the robot centerline (cm).
-        arc_length_cm: f32,
-        /// Turn direction (left/right).
-        direction: TurnDirection,
-    },
-}
-
 /// Interrupt commands that preempt active drive intents.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -155,41 +123,6 @@ pub enum CompletionStatus {
     Cancelled,
     /// Command failed with a reason string.
     Failed(&'static str),
-}
-
-/// Completion telemetry for long-running commands.
-///
-/// Used by per-command completions to return command-specific details.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CompletionTelemetry {
-    /// No telemetry payload.
-    None,
-    /// Telemetry for `RotateExact`.
-    RotateExact {
-        /// IMU yaw at completion (degrees).
-        final_yaw_deg: f32,
-        /// Signed error (degrees): achieved - target.
-        angle_error_deg: f32,
-        /// Duration in milliseconds.
-        duration_ms: u64,
-    },
-    /// Telemetry for `DriveDistance`.
-    DriveDistance {
-        /// Achieved revolutions (left track sprocket).
-        achieved_left_revs: f32,
-        /// Achieved revolutions (right track sprocket).
-        achieved_right_revs: f32,
-        /// Raw encoder counts accumulated on the left track.
-        achieved_left_counts: u32,
-        /// Raw encoder counts accumulated on the right track.
-        achieved_right_counts: u32,
-        /// Target revolutions (left track sprocket).
-        target_left_revs: f32,
-        /// Target revolutions (right track sprocket).
-        target_right_revs: f32,
-        /// Duration in milliseconds.
-        duration_ms: u64,
-    },
 }
 
 /// Generic completion payload for drive commands.
@@ -246,34 +179,6 @@ impl DriveQueueSubmitError {
             Self::QueueBusy => "Drive busy",
         }
     }
-}
-
-/// Rotation direction for precise turning
-#[derive(Debug, Clone, Copy, Eq, PartialEq, defmt::Format)]
-pub enum RotationDirection {
-    /// Clockwise rotation (right turn)
-    Clockwise,
-    /// Counter-clockwise rotation (left turn)
-    CounterClockwise,
-}
-
-/// Combined motion options during rotation
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, defmt::Format)]
-pub enum RotationMotion {
-    /// Rotate in place at the given rotation speed (0-100)
-    ///
-    /// This is the "speed differential" input for turns-in-place:
-    /// the controller will command left/right tracks as equal-and-opposite
-    /// using this value as the magnitude.
-    Stationary {
-        /// Rotation speed (0-100)
-        speed: u8,
-    },
-
-    /// Rotate while moving at specified speed (-100 to +100)
-    /// Positive = forward, Negative = backward
-    WhileMoving(i8),
 }
 
 // ── Sensor teardown descriptors ───────────────────────────────────────────

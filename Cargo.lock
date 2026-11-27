@@ -428,6 +428,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "drive-core"
+version = "0.1.0"
+dependencies = [
+ "drive-geometry",
+ "motor-cal",
+]
+
+[[package]]
 name = "drive-geometry"
 version = "0.1.0"
 
@@ -732,6 +740,7 @@ dependencies = [
  "defmt 1.1.1",
  "defmt-rtt",
  "dmp-cal",
+ "drive-core",
  "drive-geometry",
  "embassy-embedded-hal",
  "embassy-executor",
