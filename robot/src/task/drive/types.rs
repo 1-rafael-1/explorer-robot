@@ -18,10 +18,7 @@
 pub use drive_core::{
     CompletionTelemetry, DriveDirection, DriveDistanceKind, RotationDirection, RotationMotion, TurnDirection,
 };
-// Both geometry values stay re-exported as the drive module's public surface;
-// `TRACK_WIDTH_CM` currently has no caller outside the model.
-#[allow(unused_imports)]
-pub use drive_geometry::{SPROCKET_CIRCUMFERENCE_CM, TRACK_WIDTH_CM};
+pub use drive_geometry::SPROCKET_CIRCUMFERENCE_CM;
 
 /// Combined motor control and sensor feedback commands
 ///
@@ -90,7 +87,6 @@ pub enum DriveAction {
         duration_ms: u64,
     },
     /// Enter low-power standby mode.
-    #[allow(dead_code)]
     Standby,
     /// Precise rotation with optional forward/backward motion
     RotateExact {

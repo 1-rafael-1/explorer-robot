@@ -213,10 +213,6 @@ pub struct DistanceState {
     last_yaw_deg: Option<f32>,
     /// Last time we observed forward progress (ms).
     last_progress_ms: u64,
-    /// Consecutive samples with zero progress. The firmware tracks it but never
-    /// reads it; it is kept so the port stays literal.
-    #[allow(dead_code)]
-    zero_progress_samples: u32,
     /// Timestamp of the last processed encoder measurement (ms).
     last_encoder_timestamp_ms: u64,
     /// Last time we saw a new encoder measurement (ms).
@@ -311,7 +307,6 @@ impl DistanceState {
             reference_yaw: None,
             last_yaw_deg: None,
             last_progress_ms: started_at_ms,
-            zero_progress_samples: 0,
             last_encoder_timestamp_ms: 0,
             last_encoder_seen_ms: started_at_ms,
             last_encoder_measurement: None,
@@ -511,7 +506,6 @@ impl DistanceState {
         self.last_encoder_measurement = Some(measurement);
 
         if left_delta == 0 && right_delta == 0 {
-            self.zero_progress_samples = self.zero_progress_samples.saturating_add(1);
             if now_ms.saturating_sub(self.last_progress_ms) >= STALL_TIMEOUT_MS {
                 return EncoderRead::Failed(DriveFault::Stall);
             }
@@ -524,7 +518,6 @@ impl DistanceState {
         }
 
         self.last_progress_ms = now_ms;
-        self.zero_progress_samples = 0;
         self.accumulated_left_revs += f32::from(left_delta) / self.counts_per_rev;
         self.accumulated_right_revs += f32::from(right_delta) / self.counts_per_rev;
         self.accumulated_left_counts = self.accumulated_left_counts.saturating_add(u32::from(left_delta));

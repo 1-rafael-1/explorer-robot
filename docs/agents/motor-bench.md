@@ -1,9 +1,10 @@
 # Motor HIL bench testing
 
-How an agent exercises the motor calibration, the Basic Motor Test and the
-corrected-divergence regression on the real board without touching the panel.
-The permanent harness is the non-default `bench_motor_calibrate` and
-`bench_motor_measure` firmware features plus `scripts/motor-bench-precision.sh`;
+How an agent exercises the motor calibration, the Basic Motor Test, the
+corrected-divergence regression and the drive-intent simulation on the real board
+without touching the panel. The permanent harness is the non-default
+`bench_motor_calibrate`, `bench_motor_measure` and `bench_drive_sim` firmware
+features plus `scripts/motor-bench-precision.sh` and `scripts/drive-bench-sim.sh`;
 the Stop and floor-drop checks below still use the normal Procedure seam and
 `defmt` logs over RTT.
 
@@ -38,9 +39,10 @@ do not start a precision pass while a calibration report is on screen.
   regression.
 - Secure the board. For a free-standing test, put the motors on their brackets
   with nothing in the tracks, and keep hands and cables clear of the wheels.
-- Cover the rangefinders if the tracks are free-standing. A floor-drop event
-  with a covered sensor is an environment problem; the real gate should be left
-  in place unless you are deliberately isolating it.
+- Keep the rangefinders covered if the tracks are free-standing: the cover
+  keeps the floor-drop gate clear, so it does not block motor motion. An
+  uncovered pair looking at the ceiling reports a floor drop. Leave the real
+  gate in place.
 - The LiDAR is not needed for a motor sweep. Disable it only if you are
   isolating a core1 fault; otherwise leave the real firmware intact.
 - Use a **release** build. Debug builds are large and slow and can change timing.
@@ -105,6 +107,9 @@ phase takes precedence and the measure phase is not compiled; enable exactly one
 for a bench run. Both are off by default, so the production firmware is unchanged.
 Do not add a Procedure or a panel screen for them: they are bench diagnostics,
 not normal Activities.
+
+**`bench_drive_sim`** is the drive-intent simulation; see §8. It follows the same
+rule: off by default, no Procedure and no panel screen.
 
 **`bench_motor_calibrate`** waits for `calibration::is_initialized()`, then:
 
@@ -374,7 +379,47 @@ already runs the pair 100 % step, so the whole bench needs a supply rated for
 `robot/src/bench_precision/measure.rs`. The earlier one-track sweep completed at
 1000 mA, but that result does not apply to the pair sweep's 100 % step.
 
-## 8. Stop, floor-drop, brake
+## 8. Drive simulation (`bench_drive_sim`)
+
+`bench_drive_sim` is the permanent bench diagnostic for the `drive-core` model. It is not a
+Procedure and has no panel screen. It lives in `robot/src/bench_drive_sim/`, compiled only under
+the feature. It runs the production `Intent::step` with a scripted observation feed and a recording
+action executor that mirrors the adapter's action set; it never calls `motor_driver`. It logs one
+`drive-sim:` line per scenario. Use a release build.
+
+```sh
+probe-rs list
+scripts/drive-bench-sim.sh
+```
+
+The script builds with `--features bench_drive_sim`, flashes, resets, captures RTT, extracts the
+`drive-sim:` lines and fails on the first `drive-sim: FAIL`.
+
+Each scenario is a worked example from the `drive-core` host tests: the same observation sequence,
+the same expected actions and the same terminal outcome. It covers the five intents, the fault paths
+and the correction transitions. Each run logs one `drive-sim: <name> PASS` line per scenario; the
+final line is `drive-sim: PASS` or `drive-sim: FAIL scenario=<name>`.
+
+Example lines:
+
+```text
+drive-sim: rotate_stationary_cw PASS
+drive-sim: distance_straight_forward PASS
+drive-sim: brake_settle PASS
+drive-sim: PASS
+```
+
+The simulation proves the compiled model and adapter agree with the host-tested sequences. It does
+not prove chassis motion: real distance, curve, turn and correction accuracy are recorded only after
+assembly. Confirm the real motor and encoder path with the **Basic Motor Test** (§5), which remains
+the gate for real motor commands.
+
+On the current bench the rangefinders are covered and cannot be uncovered. The cover keeps the
+floor-drop gate clear, so it does not block motor motion; an uncovered pair looking at the ceiling
+would report a floor drop. `bench_drive_sim` issues no motor commands, so it is unaffected. Leave the
+real gate in place.
+
+## 9. Stop, floor-drop, brake
 
 - **Stop:** dispatch a Procedure, wait mid-sweep, then call
   `procedure::stop(StopOutcome::Operator, InterruptKind::Stop)`. Expect the
@@ -385,11 +430,11 @@ already runs the pair 100 % step, so the whole bench needs a supply rated for
   environment issue; do not count it as a motor fault.
 - **Brake-after-fault:** the floor-drop path brakes and fails; verify on glass.
 
-## 9. Cleanup checklist
+## 10. Cleanup checklist
 
-The `bench_motor_calibrate` / `bench_motor_measure` features and
-`scripts/motor-bench-precision.sh` are permanent and stay. Before committing
-other changes:
+The `bench_motor_calibrate` / `bench_motor_measure` / `bench_drive_sim` features,
+`scripts/motor-bench-precision.sh` and `scripts/drive-bench-sim.sh` are permanent
+and stay. Before committing other changes:
 
 - [ ] Delete any temporary `robot/src/bench_auto.rs`.
 - [ ] Revert its `mod bench_auto;` / `bench_auto::init(spawner);` lines.
@@ -398,12 +443,15 @@ other changes:
 - [ ] Re-enable the LiDAR task and the real floor-drop gate.
 - [ ] `git --no-pager status --short` shows only the intended source changes.
 - [ ] `cargo check --workspace`, `cargo clippy --workspace`,
-      `cargo test -p motor-cal --features std --target x86_64-unknown-linux-gnu`,
-      `cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu`,
+      `cargo test -p drive-geometry --features std --target x86_64-unknown-linux-gnu --tests`,
+      `cargo test -p drive-core --features std --target x86_64-unknown-linux-gnu --tests`,
+      `cargo test -p motor-cal --features std --target x86_64-unknown-linux-gnu --tests`,
+      `cargo test -p touch-ui --features std --target x86_64-unknown-linux-gnu --tests`,
       `cargo fmt --all -- --check`.
 - [ ] Re-run `scripts/motor-bench-precision.sh` with the clean release build.
+- [ ] Re-run `scripts/drive-bench-sim.sh` and capture `drive-sim: PASS`.
 
-## 10. Human-only observations
+## 11. Human-only observations
 
 - Result Report contents, Back, and a second run with no stale numbers.
 - The Basic Motor Test's `Corr`-prefixed rows, the `Raw spread` line and the

@@ -143,10 +143,14 @@ anyone may stop; there is no owner or takeover mode.
 
 `robot/src/task/drive/` owns motion. `send_drive_command` and `send_drive_interrupt` in `api.rs` are
 the two public entry points; `queue.rs` runs one drive queue at a time; `dispatch.rs` routes each
-command to an intent in `distance.rs`, `rotation.rs`, `brake_coast.rs` or `differential.rs`. An
+command and constructs the active `drive-core` intent. `drive-core` is the `no_std`, HAL-free model
+that owns the control law of all five intents (rotation, distance, continuous, brake/coast and
+idle); the drive task is its adapter, supplying observations and executing its typed actions.
+`drive-geometry` owns the track width and sprocket circumference shared with calibration. An
 interrupt cancels the active intent, bumps the epoch and drains the queue, so stale queued commands
 cannot execute after it. The obstacle and floor-drop edges send `EmergencyBrake`, and the Deadman
-takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-deadman.md) /
+takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-deadman.md),
+[ADR-0059](adr/0059-drive-control-law-in-drive-core.md) /
 [CONTEXT.md § Driving](../CONTEXT.md#driving)).
 
 ### Link side
@@ -165,6 +169,8 @@ glossary entry for the [Link Task](../CONTEXT.md#remote-link) is the canonical d
 | Term | Where it lives | What it means here | Owning ADR and glossary |
 |---|---|---|---|
 | Robot | `robot/` | The RP2350B firmware package, `explorer-robot` | [ADR-0040](adr/0040-repo-and-build-layout.md) / [Architecture](../CONTEXT.md#architecture) |
+| Drive Core | `drive-core` | The `no_std` model that owns the drive intents' control law; the drive task is its adapter | [ADR-0059](adr/0059-drive-control-law-in-drive-core.md) / [Drive Core](../CONTEXT.md#driving) |
+| Drive Geometry | `drive-geometry` | Track width and sprocket circumference shared by the drive and calibration models | [ADR-0059](adr/0059-drive-control-law-in-drive-core.md) / [Driving](../CONTEXT.md#driving) |
 | Link Protocol | `link-protocol` | The framed binary contract on UART1, carried over the network to the Remote | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0031](adr/0031-link-protocol-payloads.md) / [Link Protocol](../CONTEXT.md#remote-link) |
 | LinkCore | `link-core` | The robot-side parser, stream slots, event ring, lease and Deadman over the protocol | [ADR-0032](adr/0032-remote-link-task.md), [ADR-0041](adr/0041-reliability-mechanisms-in-protocol.md) / [LinkCore](../CONTEXT.md#remote-link) |
 | Link Port | `robot/src/resources.rs` | The connector and switched 5 V branch carrying UART1 to the Bridge | [ADR-0032](adr/0032-remote-link-task.md), [ADR-0023](adr/0023-quiesce-uart-before-branch-power-off.md) / [Link Port](../CONTEXT.md#remote-link) |
