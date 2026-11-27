@@ -28,6 +28,8 @@ const REVERSE: RotationMotion = RotationMotion::WhileMoving(-50);
 const START_MS: u64 = 1_000;
 /// How many leading actions each run keeps for sequence assertions.
 const ACTION_PREFIX: usize = 32;
+/// How many non-zero track commands each run keeps for torque-ladder assertions.
+const PULSE_LOG: usize = 32;
 /// Upper bound on emitted actions before a scenario is declared stuck.
 const ACTION_GUARD: u32 = 20_000;
 
@@ -89,6 +91,26 @@ pub(super) const SCENARIOS: &[Scenario] = &[
         name: "rotate_no_sample_wait",
         run: rotate_no_sample_wait,
     },
+    Scenario {
+        name: "rotate_correction_mid_pulse",
+        run: rotate_correction_mid_pulse,
+    },
+    Scenario {
+        name: "rotate_correction_after_settle",
+        run: rotate_correction_after_settle,
+    },
+    Scenario {
+        name: "rotate_correction_ladder",
+        run: rotate_correction_ladder,
+    },
+    Scenario {
+        name: "rotate_correction_sign_flip",
+        run: rotate_correction_sign_flip,
+    },
+    Scenario {
+        name: "rotate_correction_exhausted",
+        run: rotate_correction_exhausted,
+    },
 ];
 
 // ── Simulation harness ────────────────────────────────────────────────────────
@@ -97,6 +119,8 @@ pub(super) const SCENARIOS: &[Scenario] = &[
 struct RunResult {
     /// The first [`ACTION_PREFIX`] actions, for sequence assertions.
     actions: Vec<IntentAction, ACTION_PREFIX>,
+    /// Every non-zero `SetTracks`, in order: the turn ramps and correction pulses.
+    pulses: Vec<(i8, i8), PULSE_LOG>,
     /// The total number of actions, including any beyond the prefix.
     count: usize,
     /// The last two actions, so long runs can still check their teardown.
@@ -127,6 +151,7 @@ fn run_sim(
         yaw: None,
     };
     let mut actions = Vec::new();
+    let mut pulses = Vec::new();
     let mut count = 0_usize;
     let mut last_two = [None, None];
     let mut guard = 0_u32;
@@ -141,7 +166,12 @@ fn run_sim(
         last_two[1] = Some(step.action);
 
         match step.action {
-            IntentAction::SetTracks { .. } | IntentAction::BrakeAll | IntentAction::CoastAll => {}
+            IntentAction::SetTracks { left, right } => {
+                if left != 0 || right != 0 {
+                    let _ = pulses.push((left, right));
+                }
+            }
+            IntentAction::BrakeAll | IntentAction::CoastAll => {}
             IntentAction::WaitUntil { deadline_ms } => {
                 if deadline_ms < now_ms {
                     return Err("wait deadline moved backwards");
@@ -159,6 +189,7 @@ fn run_sim(
                 };
                 return Ok(RunResult {
                     actions,
+                    pulses,
                     count,
                     last_two,
                     end_ms: now_ms,
@@ -222,6 +253,17 @@ fn table_sample(now_ms: u64, entries: &[(u64, f32)]) -> Option<YawSample> {
     })
 }
 
+/// A sample that exists only at exactly `time_ms`.
+///
+/// The correction scenarios use this so the poll cadence and the settle
+/// deadlines are explicit, mirroring the host worked examples.
+fn exact_sample(entries: &[(u64, f32)], now_ms: u64) -> Option<YawSample> {
+    entries
+        .iter()
+        .find(|(timestamp_ms, _)| *timestamp_ms == now_ms)
+        .map(|&(timestamp_ms, yaw_deg)| YawSample { yaw_deg, timestamp_ms })
+}
+
 /// Assert the run emitted exactly `expected` actions.
 fn expect_actions(run: &RunResult, expected: &[IntentAction]) -> Result<(), &'static str> {
     if run.count != expected.len() {
@@ -236,6 +278,19 @@ fn expect_prefix(run: &RunResult, expected: &[IntentAction]) -> Result<(), &'sta
         match run.actions.get(index) {
             Some(action) if action == expected_action => {}
             _ => return Err("unexpected action"),
+        }
+    }
+    Ok(())
+}
+
+/// Assert the run's non-zero track commands are exactly `expected`.
+fn expect_pulses(run: &RunResult, expected: &[(i8, i8)]) -> Result<(), &'static str> {
+    if run.pulses.len() != expected.len() {
+        return Err("unexpected pulse count");
+    }
+    for (actual, &want) in run.pulses.iter().zip(expected) {
+        if *actual != want {
+            return Err("unexpected pulse");
         }
     }
     Ok(())
@@ -349,10 +404,11 @@ fn rotate_stationary_cw() -> Result<(), &'static str> {
             set_tracks(48, -48),
             wait(1_100),
             set_tracks(0, 0),
+            wait(1_500),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, -90.0, 0.0, 100)
+    expect_completed(&run, -90.0, 0.0, 500)
 }
 
 /// Counter-clockwise stationary turn: the mirrored ramp law.
@@ -374,10 +430,11 @@ fn rotate_stationary_ccw() -> Result<(), &'static str> {
             set_tracks(-48, 48),
             wait(1_100),
             set_tracks(0, 0),
+            wait(1_500),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, 90.0, 0.0, 100)
+    expect_completed(&run, 90.0, 0.0, 500)
 }
 
 /// Forward while-moving turn: the differential stays on the inner track.
@@ -499,10 +556,11 @@ fn rotate_first_sample_anchoring() -> Result<(), &'static str> {
             set_tracks(47, -47),
             wait(1_060),
             set_tracks(0, 0),
+            wait(1_460),
             FINISHED,
         ],
     )?;
-    expect_completed(&cw, 150.0, 0.0, 60)?;
+    expect_completed(&cw, 150.0, 0.0, 460)?;
 
     let ccw = run_sim(rotate(20.0, CCW, SPEED_60), START_MS, |now| {
         table_sample(now, CCW_TABLE)
@@ -517,10 +575,11 @@ fn rotate_first_sample_anchoring() -> Result<(), &'static str> {
             set_tracks(-47, 47),
             wait(1_060),
             set_tracks(0, 0),
+            wait(1_460),
             FINISHED,
         ],
     )?;
-    expect_completed(&ccw, -170.0, 0.0, 60)
+    expect_completed(&ccw, -170.0, 0.0, 460)
 }
 
 /// The remaining error wraps across the ±180° seam.
@@ -539,10 +598,11 @@ fn rotate_yaw_wrap() -> Result<(), &'static str> {
             set_tracks(47, -47),
             wait(1_060),
             set_tracks(0, 0),
+            wait(1_460),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, 170.0, 0.0, 60)
+    expect_completed(&run, 170.0, 0.0, 460)
 }
 
 /// Ramp-down above, exactly at and below the 60° threshold.
@@ -576,10 +636,11 @@ fn rotate_ramp_down() -> Result<(), &'static str> {
             set_tracks(47, -47),
             wait(1_140),
             set_tracks(0, 0),
+            wait(1_540),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, -90.0, 0.0, 140)
+    expect_completed(&run, -90.0, 0.0, 540)
 }
 
 /// A sample inside the tolerance completes the turn.
@@ -595,10 +656,11 @@ fn rotate_tolerance_completion() -> Result<(), &'static str> {
             set_tracks(60, -60),
             wait(1_040),
             set_tracks(0, 0),
+            wait(1_440),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, -90.5, 0.5, 40)
+    expect_completed(&run, -90.5, 0.5, 440)
 }
 
 /// An overshoot reverses the effective rotation direction.
@@ -616,10 +678,11 @@ fn rotate_overshoot_reverse() -> Result<(), &'static str> {
             set_tracks(-46, 46),
             wait(1_060),
             set_tracks(0, 0),
+            wait(1_460),
             FINISHED,
         ],
     )?;
-    expect_completed(&run, -90.0, 0.0, 60)
+    expect_completed(&run, -90.0, 0.0, 460)
 }
 
 /// The turn fails after the twelfth corrective direction flip.
@@ -680,4 +743,141 @@ fn rotate_no_sample_wait() -> Result<(), &'static str> {
     )?;
     expect_teardown(&run)?;
     expect_failed(&run, DriveFault::RotationTimeout, 0.0, -90.0, 8_020)
+}
+
+// ── Correction scenarios ──────────────────────────────────────────────────────
+
+/// The first correction pulse converges mid-pulse and stops.
+fn rotate_correction_mid_pulse() -> Result<(), &'static str> {
+    // The turn stops at 1 040. The settle at 1 440 leaves 10° of error; the
+    // first pulse runs until the 1 460 sample lands inside tolerance.
+    const SAMPLES: &[(u64, f32)] = &[(1_020, 0.0), (1_040, -90.0), (1_440, -80.0), (1_460, -90.0)];
+    let run = run_sim(rotate(90.0, CW, SPEED_60), START_MS, |now| exact_sample(SAMPLES, now))?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(0, 0),
+            wait(1_020),
+            set_tracks(60, -60),
+            wait(1_040),
+            set_tracks(0, 0),
+            wait(1_440),
+            set_tracks(35, -35),
+            wait(1_445),
+            wait(1_450),
+            wait(1_455),
+            wait(1_460),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_completed(&run, -90.0, 0.0, 460)
+}
+
+/// The post-pulse settle converges without a second stop command.
+fn rotate_correction_after_settle() -> Result<(), &'static str> {
+    // The pulse overshoots at 1 450 and stops; the settle at 1 850 lands back
+    // inside tolerance.
+    const SAMPLES: &[(u64, f32)] = &[
+        (1_020, 0.0),
+        (1_040, -90.0),
+        (1_440, -80.0),
+        (1_450, -90.6),
+        (1_850, -90.2),
+    ];
+    let run = run_sim(rotate(90.0, CW, SPEED_60), START_MS, |now| exact_sample(SAMPLES, now))?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(0, 0),
+            wait(1_020),
+            set_tracks(60, -60),
+            wait(1_040),
+            set_tracks(0, 0),
+            wait(1_440),
+            set_tracks(35, -35),
+            wait(1_445),
+            wait(1_450),
+            set_tracks(0, 0),
+            wait(1_850),
+            FINISHED,
+        ],
+    )?;
+    expect_completed(&run, -90.2, 0.2, 850)
+}
+
+/// The torque ladder steps down while each pulse times out.
+fn rotate_correction_ladder() -> Result<(), &'static str> {
+    // Each pulse times out at `S + 405`; its settle finds the same 10° error at
+    // `S + 805`, so the next pulse starts there. The fourth pulse converges.
+    const SAMPLES: &[(u64, f32)] = &[
+        (1_020, 0.0),
+        (1_040, -90.0),
+        (1_440, -80.0),
+        (2_245, -80.0),
+        (3_050, -80.0),
+        (3_855, -80.0),
+        (3_860, -90.0),
+    ];
+    let run = run_sim(rotate(90.0, CW, SPEED_60), START_MS, |now| exact_sample(SAMPLES, now))?;
+
+    expect_pulses(&run, &[(60, -60), (35, -35), (33, -33), (31, -31), (29, -29)])?;
+    if run.end_ms != 3_860 {
+        return Err("unexpected ladder end time");
+    }
+    expect_completed(&run, -90.0, 0.0, 2_860)
+}
+
+/// A sign flip after the settle reverses the next pulse.
+fn rotate_correction_sign_flip() -> Result<(), &'static str> {
+    // The first pulse runs an undershoot (+10°) and times out. The settle
+    // sample at 1 845 is −5°, so the second pulse reverses direction and steps
+    // the ladder down to 28.
+    const SAMPLES: &[(u64, f32)] = &[
+        (1_020, 0.0),
+        (1_040, -90.0),
+        (1_440, -80.0),
+        (1_845, -95.0),
+        (1_850, -90.0),
+    ];
+    let run = run_sim(rotate(90.0, CW, SPEED_60), START_MS, |now| exact_sample(SAMPLES, now))?;
+
+    expect_pulses(&run, &[(60, -60), (35, -35), (-28, 28)])?;
+    expect_completed(&run, -90.0, 0.0, 850)
+}
+
+/// Fifteen failed pulses exhaust the correction.
+fn rotate_correction_exhausted() -> Result<(), &'static str> {
+    // The error never returns to tolerance: 15 pulses at `S + 805` spacing, and
+    // the fifteenth settle exhausts it at 13 515.
+    const SAMPLES: &[(u64, f32)] = &[(1_020, 0.0), (1_040, -90.0), (1_440, -80.0)];
+    let run = run_sim(rotate(90.0, CW, SPEED_60), START_MS, |now| exact_sample(SAMPLES, now))?;
+
+    expect_pulses(
+        &run,
+        &[
+            (60, -60),
+            (35, -35),
+            (33, -33),
+            (31, -31),
+            (29, -29),
+            (27, -27),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+            (25, -25),
+        ],
+    )?;
+    if run.end_ms != 13_515 {
+        return Err("unexpected exhaustion end time");
+    }
+    expect_failed(&run, DriveFault::CorrectionExhausted, -80.0, -10.0, 12_515)
 }

@@ -322,13 +322,18 @@ fn the_first_sample_anchors_the_absolute_target() {
         tick(&mut cw, 1_040, 160.0),
         IntentAction::SetTracks { left: 47, right: -47 }
     );
-    // Reaching 150° completes the turn.
+    // Reaching 150° completes the turn; the stationary turn then settles for
+    // 400 ms before the correction phase finishes.
     assert_eq!(
         tick(&mut cw, 1_060, 150.0),
         IntentAction::SetTracks { left: 0, right: 0 }
     );
-    assert_eq!(cw.step(&observation(1_060, None)).action, IntentAction::Finished);
-    assert_completed(&cw, 150.0, 0.0, 60);
+    assert_eq!(
+        cw.step(&observation(1_060, None)).action,
+        IntentAction::WaitUntil { deadline_ms: 1_460 }
+    );
+    assert_eq!(cw.step(&observation(1_460, None)).action, IntentAction::Finished);
+    assert_completed(&cw, 150.0, 0.0, 460);
 
     // Counter-clockwise 20° from 170°: target yaw wraps to −170°.
     let mut ccw = Intent::new(rotate(20.0, CCW, SPEED), 1_000);
@@ -345,8 +350,12 @@ fn the_first_sample_anchors_the_absolute_target() {
         tick(&mut ccw, 1_060, -170.0),
         IntentAction::SetTracks { left: 0, right: 0 }
     );
-    assert_eq!(ccw.step(&observation(1_060, None)).action, IntentAction::Finished);
-    assert_completed(&ccw, -170.0, 0.0, 60);
+    assert_eq!(
+        ccw.step(&observation(1_060, None)).action,
+        IntentAction::WaitUntil { deadline_ms: 1_460 }
+    );
+    assert_eq!(ccw.step(&observation(1_460, None)).action, IntentAction::Finished);
+    assert_completed(&ccw, -170.0, 0.0, 460);
 }
 
 #[test]
@@ -422,9 +431,15 @@ fn a_sample_within_tolerance_completes_the_turn() {
         "the outcome is published only with Finished"
     );
 
-    assert_eq!(intent.step(&observation(1_040, None)).action, IntentAction::Finished);
-    // final yaw −90.5, error 0.5, duration 40 ms.
-    assert_completed(&intent, -90.5, 0.5, 40);
+    // The stationary turn now runs the correction phase: a 400 ms settle with
+    // no fresh sample keeps the turn's final yaw, which is already converged.
+    assert_eq!(
+        intent.step(&observation(1_040, None)).action,
+        IntentAction::WaitUntil { deadline_ms: 1_440 }
+    );
+    assert_eq!(intent.step(&observation(1_440, None)).action, IntentAction::Finished);
+    // final yaw −90.5, error 0.5, duration 440 ms.
+    assert_completed(&intent, -90.5, 0.5, 440);
     assert_eq!(
         intent.step(&observation(1_999, None)).action,
         IntentAction::Finished,

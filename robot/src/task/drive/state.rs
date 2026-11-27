@@ -30,7 +30,7 @@
 //! - [`DriveLoop`]: top-level state struct — holds `standby_enabled` and the
 //!   active intent (if any).
 
-use drive_core::{Intent, RotationDirection, RotationMotion};
+use drive_core::Intent;
 use embassy_time::Instant;
 
 use super::brake_coast::BrakeCoastState;
@@ -40,16 +40,12 @@ use crate::task::drive::distance::DistanceDriveState;
 pub(super) enum ActiveIntent {
     /// An in-place or while-moving rotation towards a target angle.
     RotateExact {
-        /// The `drive-core` model that owns the turn control law.
+        /// The `drive-core` model that owns the turn and correction control law.
         model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
         /// Wall-clock start time used for duration telemetry (milliseconds).
         started_at_ms: u64,
-        /// Direction of the original turn.
-        direction: RotationDirection,
-        /// The turn's motion mode, used to gate the provisional correction phase.
-        motion: RotationMotion,
     },
     /// Active distance drive intent with state and optional completion sender.
     DriveDistance {

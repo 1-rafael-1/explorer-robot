@@ -50,17 +50,11 @@ pub(super) enum ActiveIntentOutcome {
 pub(super) async fn poll_active_intent(loop_state: &mut DriveLoop) -> Option<ActiveIntentOutcome> {
     match loop_state.active_intent.as_mut() {
         Some(super::state::ActiveIntent::RotateExact {
-            model,
-            started_at_ms,
-            direction,
-            motion,
-            ..
-        }) => Some(
-            match rotation::run_rotation_poll(model, *started_at_ms, *direction, *motion).await {
-                RotationPoll::Interrupt(kind) => ActiveIntentOutcome::Interrupt(kind),
-                RotationPoll::Step(result) => ActiveIntentOutcome::RotationStep(result),
-            },
-        ),
+            model, started_at_ms, ..
+        }) => Some(match rotation::run_rotation_poll(model, *started_at_ms).await {
+            RotationPoll::Interrupt(kind) => ActiveIntentOutcome::Interrupt(kind),
+            RotationPoll::Step(result) => ActiveIntentOutcome::RotationStep(result),
+        }),
         Some(
             super::state::ActiveIntent::DriveDistance { state, .. }
             | super::state::ActiveIntent::DriveContinuous { state, .. },

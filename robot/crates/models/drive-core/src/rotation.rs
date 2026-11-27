@@ -1,26 +1,23 @@
-//! The rotation turn control law, ported from the firmware drive task.
+//! The rotation control law, ported from the firmware drive task.
 //!
 //! This module owns the `RotateExact` intent: first-sample yaw anchoring, the
 //! absolute target, the remaining-sign handling, ±180° normalisation, the
 //! stationary and while-moving speed laws, ramp-down near the threshold,
 //! tolerance completion, overshoot reversal, the flip limit, the overall
-//! timeout and the turn's completion telemetry.
+//! timeout and the turn's completion telemetry. A stationary turn that reaches
+//! tolerance hands over to the provisional post-stop correction phase in
+//! [`crate::correction`], which owns the remaining policy and telemetry.
 //!
 //! It is a pure step machine. It never reads a clock, starts a sensor,
 //! commands a motor or allocates: every timestamp comes from the
 //! [`Observation`], and every action is returned to the adapter to execute.
 //! A sleep becomes [`IntentAction::WaitUntil`].
-//!
-//! The post-stop correction phase is deliberately absent. It is a blocking
-//! loop in the firmware today and is extracted as its own phase machine in a
-//! later ticket; this module stops at turn completion or failure, which is the
-//! same point at which the firmware would enter the correction phase.
 
 #[cfg(feature = "trace")]
 use crate::Trace;
 use crate::{
     CompletionTelemetry, DriveFault, DriveOutcome, IntentAction, Observation, RotationDirection, RotationMotion, Step,
-    YawSample,
+    YawSample, correction::Correction,
 };
 
 // ── Rotation control constants (ported verbatim from the firmware) ───────────
@@ -51,7 +48,7 @@ const SPEED_DIFF_MAX: i8 = 30;
 // ── Pure state / maths ────────────────────────────────────────────────────────
 
 /// Normalize an angle in degrees to the range (−180, +180].
-const fn normalize_angle(deg: f32) -> f32 {
+pub const fn normalize_angle(deg: f32) -> f32 {
     let d = deg % 360.0;
     if d > 180.0 {
         d - 360.0
@@ -92,6 +89,8 @@ enum Phase {
     },
     /// The stop command has been emitted; the terminal `Finished` follows.
     Stopping,
+    /// The turn reached tolerance; the stationary correction phase is running.
+    Correction,
     /// The terminal `Finished` action has been emitted.
     Finished,
 }
@@ -122,6 +121,9 @@ pub struct RotationState {
     started_at_ms: u64,
     /// Where the step machine is between adapter actions.
     phase: Phase,
+    /// The provisional post-stop correction, present once a stationary turn
+    /// has reached tolerance and stopped.
+    correction: Option<Correction>,
     /// The terminal outcome, recorded when the stop command is emitted and
     /// published when `Finished` is emitted.
     pending_outcome: Option<DriveOutcome>,
@@ -155,6 +157,7 @@ impl RotationState {
             last_error_sign: 0,
             started_at_ms,
             phase: Phase::Start,
+            correction: None,
             pending_outcome: None,
             outcome: None,
         }
@@ -177,6 +180,7 @@ impl RotationState {
                 }
             }
             Phase::RetrySample { tick_started_ms } => self.retry_sample(obs, tick_started_ms),
+            Phase::Correction => self.correction_step(obs),
             Phase::Stopping => {
                 self.outcome = self.pending_outcome.take();
                 self.phase = Phase::Finished;
@@ -194,26 +198,10 @@ impl RotationState {
     /// Telemetry for an intent that the adapter cancels at `now_ms`.
     pub fn cancellation_telemetry(&self, now_ms: u64) -> CompletionTelemetry {
         CompletionTelemetry::RotateExact {
-            final_yaw_deg: self.last_yaw.unwrap_or(0.0),
-            angle_error_deg: -self.remaining(),
+            final_yaw_deg: self.current_yaw().unwrap_or(0.0),
+            angle_error_deg: -self.current_remaining(),
             duration_ms: now_ms.saturating_sub(self.started_at_ms),
         }
-    }
-
-    /// The anchored absolute target yaw, once the first sample has set it.
-    ///
-    /// Temporary for ticket 04, which moves the post-stop correction phase out
-    /// of the firmware adapter; delete it once the correction is model-owned.
-    pub const fn target_yaw(&self) -> Option<f32> {
-        self.target_yaw
-    }
-
-    /// The corrective direction-flip count reached by the turn.
-    ///
-    /// Temporary for ticket 04, which moves the post-stop correction phase out
-    /// of the firmware adapter; delete it once the correction is model-owned.
-    pub const fn correction_flips(&self) -> u8 {
-        self.correction_flips
     }
 
     /// Begin a control tick at `obs.now_ms`, exactly as the firmware tick does.
@@ -277,8 +265,25 @@ impl RotationState {
         self.make_step(IntentAction::SetTracks { left, right })
     }
 
-    /// Record a successful completion and emit the stop command.
+    /// Record a successful turn and emit the stop command.
+    ///
+    /// A while-moving turn publishes its outcome and finishes. A stationary turn
+    /// hands over to the correction phase, which owns the terminal telemetry
+    /// from here on.
     fn complete(&mut self, sample: &YawSample, now_ms: u64) -> Step {
+        if matches!(self.motion, RotationMotion::Stationary { .. }) {
+            self.correction = Some(Correction::new(
+                self.target_yaw.unwrap_or(sample.yaw_deg),
+                self.direction,
+                sample.yaw_deg,
+                sample.timestamp_ms,
+                self.started_at_ms,
+                now_ms,
+            ));
+            self.phase = Phase::Correction;
+            return self.make_step(IntentAction::SetTracks { left: 0, right: 0 });
+        }
+
         self.pending_outcome = Some(DriveOutcome::Completed {
             telemetry: CompletionTelemetry::RotateExact {
                 final_yaw_deg: sample.yaw_deg,
@@ -288,6 +293,21 @@ impl RotationState {
         });
         self.phase = Phase::Stopping;
         self.make_step(IntentAction::SetTracks { left: 0, right: 0 })
+    }
+
+    /// Advance the correction phase and publish its terminal outcome.
+    fn correction_step(&mut self, obs: &Observation) -> Step {
+        let action = match self.correction.as_mut() {
+            Some(correction) => correction.step(obs),
+            None => return self.fail(DriveFault::RotationTimeout, obs.now_ms),
+        };
+
+        if matches!(action, IntentAction::Finished) {
+            self.outcome = self.correction.as_mut().and_then(Correction::take_outcome);
+            self.phase = Phase::Finished;
+        }
+
+        self.make_step(action)
     }
 
     /// Record a terminal failure at `now_ms` and emit the stop command.
@@ -333,13 +353,27 @@ impl RotationState {
         };
 
         Trace {
-            yaw_deg: self.last_yaw,
+            yaw_deg: self.current_yaw(),
             target_yaw_deg: self.target_yaw,
-            remaining_deg: self.remaining(),
+            remaining_deg: self.current_remaining(),
             left,
             right,
             deadline_ms,
         }
+    }
+
+    /// The newest yaw: the turn's until it hands over, the correction's after.
+    fn current_yaw(&self) -> Option<f32> {
+        self.correction
+            .as_ref()
+            .map_or(self.last_yaw, |correction| Some(correction.last_yaw()))
+    }
+
+    /// The live remaining error, including during the correction phase.
+    fn current_remaining(&self) -> f32 {
+        self.correction
+            .as_ref()
+            .map_or_else(|| self.remaining(), Correction::remaining_deg)
     }
 
     /// Updates rotation state with a new yaw sample.

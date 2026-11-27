@@ -18,6 +18,7 @@
 #![no_std]
 #![warn(missing_docs)]
 
+mod correction;
 mod rotation;
 
 // ── Drive vocabulary ──────────────────────────────────────────────────────────
@@ -337,29 +338,6 @@ impl Intent {
     pub fn cancellation_telemetry(&self, now_ms: u64) -> CompletionTelemetry {
         match &self.state {
             IntentState::RotateExact(state) => state.cancellation_telemetry(now_ms),
-        }
-    }
-
-    /// The anchored absolute target yaw for the firmware-owned post-stop
-    /// correction phase, once the first sample has set it.
-    ///
-    /// TEMPORARY (ticket 04): the correction phase moves into the model in the
-    /// next ticket and this accessor is deleted then.
-    #[must_use]
-    pub const fn rotation_target_yaw(&self) -> Option<f32> {
-        match &self.state {
-            IntentState::RotateExact(state) => state.target_yaw(),
-        }
-    }
-
-    /// The corrective direction-flip count reached by the turn.
-    ///
-    /// TEMPORARY (ticket 04): the correction phase moves into the model in the
-    /// next ticket and this accessor is deleted then.
-    #[must_use]
-    pub const fn rotation_flips(&self) -> u8 {
-        match &self.state {
-            IntentState::RotateExact(state) => state.correction_flips(),
         }
     }
 }
