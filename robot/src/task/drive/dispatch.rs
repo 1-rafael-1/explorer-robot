@@ -19,9 +19,7 @@ use crate::{
         drive::{
             api::{self, DriveCommandEnvelope},
             brake_coast::BrakeCoastState,
-            differential,
-            distance::DistanceDriveState,
-            rotation,
+            differential, distance, rotation,
             sensors::{control as lifecycle, data::IMU_FEEDBACK_CHANNEL},
             state::{ActiveIntent, DriveLoop},
             types::{self, CompletionStatus, DriveAction, DriveCommand, DriveCompletion, IntentTeardown},
@@ -212,7 +210,7 @@ impl DriveLoop {
         self.active_intent = Some(intent);
     }
 
-    /// Handle a `DriveDistance` command — delegates to `distance::init()`.
+    /// Handle a `DriveDistance` command — builds the `drive-core` intent.
     async fn handle_drive_distance(
         &mut self,
         kind: types::DriveDistanceKind,
@@ -220,19 +218,19 @@ impl DriveLoop {
         speed: u8,
         completion_requested: bool,
     ) {
-        if let Some(intent) = DistanceDriveState::init(kind, direction, speed, completion_requested).await {
+        if let Some(intent) = distance::init(kind, direction, speed, completion_requested).await {
             self.active_intent = Some(intent);
         }
     }
 
-    /// Handle a `DriveContinuous` command — delegates to `distance::init_continuous()`.
+    /// Handle a `DriveContinuous` command — builds the `drive-core` intent.
     async fn handle_drive_continuous(
         &mut self,
         direction: types::DriveDirection,
         speed: u8,
         completion_requested: bool,
     ) {
-        self.active_intent = Some(DistanceDriveState::init_continuous(direction, speed, completion_requested).await);
+        self.active_intent = Some(distance::init_continuous(direction, speed, completion_requested).await);
     }
 
     /// Handle a `Coast` command.

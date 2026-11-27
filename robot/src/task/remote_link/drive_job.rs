@@ -249,7 +249,7 @@ const fn outcome(status: &CompletionStatus) -> (WireCompletionStatus, &'static s
 
 /// The distance actually travelled, in signed centimetres.
 ///
-/// `DistanceDriveState` applies the distance calibration factor to its target
+/// The distance intent applies the distance calibration factor to its target
 /// revolutions, so converting achieved revolutions straight to centimetres
 /// would report `requested × factor`. Instead the achieved/target revolution
 /// ratio is scaled by the requested centimetres, which cancels the factor and

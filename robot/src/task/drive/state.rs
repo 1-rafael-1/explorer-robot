@@ -14,8 +14,8 @@
 //! runtime logic.
 //!
 //! Each intent carries:
-//! - A controller half (the `drive-core` model for rotation, `DistanceDriveState`
-//!   for distance, etc.)
+//! - A controller half: the `drive-core` model for rotation, distance and
+//!   continuous, or the brake/coast settle state.
 //! - A completion flag — whether the caller expects a [`DriveCompletion`]
 //! - A teardown descriptor — which sensors to stop on completion or interrupt
 //! - Cancellation telemetry — what data to report if interrupted
@@ -34,7 +34,6 @@ use drive_core::Intent;
 use embassy_time::Instant;
 
 use super::brake_coast::BrakeCoastState;
-use crate::task::drive::distance::DistanceDriveState;
 
 /// The drive intent currently being executed by the drive task.
 pub(super) enum ActiveIntent {
@@ -47,17 +46,17 @@ pub(super) enum ActiveIntent {
         /// Wall-clock start time used for duration telemetry (milliseconds).
         started_at_ms: u64,
     },
-    /// Active distance drive intent with state and optional completion sender.
+    /// A drive to a fixed straight or curved distance.
     DriveDistance {
-        /// Distance controller state (encoder progress, curve correction).
-        state: DistanceDriveState,
+        /// The `drive-core` model that owns the distance control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active continuous drive intent: a speed and heading held until interrupted.
+    /// A continuous drive: a speed and heading held until interrupted.
     DriveContinuous {
-        /// Straight controller state (encoder progress, heading hold).
-        state: DistanceDriveState,
+        /// The `drive-core` model that owns the continuous control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
@@ -134,24 +133,11 @@ impl ActiveIntent {
     /// Returns cancellation telemetry appropriate for this intent type.
     pub(super) fn cancellation_telemetry(&self) -> super::types::CompletionTelemetry {
         match self {
-            Self::RotateExact { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
-            Self::DriveDistance { state, .. } => {
-                let duration_ms = Instant::now().as_millis() - state.started_at_ms;
-                super::types::CompletionTelemetry::DriveDistance {
-                    achieved_left_revs: state.accumulated_left_revs,
-                    achieved_right_revs: state.accumulated_right_revs,
-                    achieved_left_counts: state.accumulated_left_counts,
-                    achieved_right_counts: state.accumulated_right_counts,
-                    target_left_revs: state.target_left_revs,
-                    target_right_revs: state.target_right_revs,
-                    duration_ms,
-                }
-            }
-            // A continuous drive has no target and no success telemetry, so an
-            // interrupt reports none rather than overloading `DriveDistance`.
-            Self::DriveContinuous { .. } | Self::Idle { .. } | Self::BrakeCoast { .. } => {
-                super::types::CompletionTelemetry::None
-            }
+            Self::RotateExact { model, .. }
+            | Self::DriveDistance { model, .. }
+            | Self::DriveContinuous { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
+            // Idle and brake/coast have no progress telemetry to report.
+            Self::Idle { .. } | Self::BrakeCoast { .. } => super::types::CompletionTelemetry::None,
         }
     }
 }

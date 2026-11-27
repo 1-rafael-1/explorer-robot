@@ -98,6 +98,7 @@ mod intent;
 mod state;
 
 // ── Control algorithms ────────────────────────────────────────────────────────
+mod adapter;
 mod brake_coast;
 mod differential;
 mod distance;
@@ -118,10 +119,8 @@ pub mod types;
 
 pub use api::{current_epoch, send_drive_command, send_drive_interrupt};
 use brake_coast::BrakeCoastStepResult;
-use distance::DistanceStepResult;
 use intent::{ActiveIntentOutcome, apply_completion, poll_active_intent, step_idle};
 pub use queue::{DriveQueueBuilder, drive_queue_executor};
-use rotation::RotationStepResult;
 pub use sensors::data::{
     clear_encoder_measurement, clear_imu_measurements, get_latest_encoder_measurement, try_send_encoder_measurement,
     try_send_imu_measurement,
@@ -165,20 +164,11 @@ pub async fn drive() {
                 ActiveIntentOutcome::Interrupt(kind) => {
                     loop_state.handle_interrupt(kind).await;
                 }
-                ActiveIntentOutcome::RotationStep(result) => match result {
-                    RotationStepResult::Completed { telemetry } => {
+                ActiveIntentOutcome::Step(result) => match result {
+                    adapter::IntentStepResult::Completed { telemetry } => {
                         apply_completion(&mut loop_state, CompletionStatus::Success, telemetry).await;
                     }
-                    RotationStepResult::Failed { reason, telemetry } => {
-                        apply_completion(&mut loop_state, CompletionStatus::Failed(reason), telemetry).await;
-                    }
-                },
-                ActiveIntentOutcome::DistanceStep(result) => match result {
-                    DistanceStepResult::InProgress => {}
-                    DistanceStepResult::Completed { telemetry } => {
-                        apply_completion(&mut loop_state, CompletionStatus::Success, telemetry).await;
-                    }
-                    DistanceStepResult::Failed { reason, telemetry } => {
+                    adapter::IntentStepResult::Failed { reason, telemetry } => {
                         apply_completion(&mut loop_state, CompletionStatus::Failed(reason), telemetry).await;
                     }
                 },

@@ -14,20 +14,17 @@
 //! model never logs and never depends on `defmt`.
 
 use drive_core::{
-    CompletionTelemetry, DriveFault, DriveOutcome, Intent, IntentAction, IntentParams, Observation, RotationDirection,
-    RotationMotion, YawSample,
+    DriveFault, Intent, IntentAction, IntentParams, Observation, RotationDirection, RotationMotion, YawSample,
 };
-use embassy_futures::select::{Either, select};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Instant;
 
 use crate::{
     system::state::motion,
     task::{
         drive::{
-            api::DRIVE_INTERRUPT,
+            adapter::{self, ActionGuard, IntentPoll, MAX_ACTIONS_PER_OBSERVATION},
             clear_imu_measurements,
             sensors::{control as lifecycle, data::IMU_FEEDBACK_CHANNEL},
-            types,
         },
         motor_driver::{self, MotorCommand},
         sensors::imu::ImuMeasurement,
@@ -36,43 +33,11 @@ use crate::{
 
 // ── Model adapter ─────────────────────────────────────────────────────────────
 
-/// Maximum non-blocking actions the adapter executes against one observation.
-///
-/// The model never needs more than a handful: the start command, a control
-/// command and the stop command are each followed by a `WaitUntil` or
-/// `Finished`. The guard turns a model defect into a terminal fault instead of
-/// a busy loop.
-const MAX_ACTIONS_PER_OBSERVATION: u8 = 8;
-
 /// Completion detail for the adapter's non-blocking action guard.
 ///
 /// Unreachable with the current model; it exists so a future defect cannot hang
 /// the drive task.
 const ACTION_LOOP_LABEL: &str = "RotationActionLoop";
-
-/// The intermediate outcome of polling the model.
-pub(super) enum RotationPoll {
-    /// A drive interrupt arrived while the adapter waited.
-    Interrupt(types::InterruptKind),
-    /// The intent reached a terminal result.
-    Step(RotationStepResult),
-}
-
-/// Result of running a rotation intent to a terminal outcome.
-pub(super) enum RotationStepResult {
-    /// Rotation completed successfully with final telemetry.
-    Completed {
-        /// Completion telemetry captured at success.
-        telemetry: CompletionTelemetry,
-    },
-    /// Rotation failed with a static reason and telemetry snapshot.
-    Failed {
-        /// Failure reason identifier.
-        reason: &'static str,
-        /// Completion telemetry captured at failure.
-        telemetry: CompletionTelemetry,
-    },
-}
 
 /// Initialise a rotation intent: start the IMU, zero the motors and build the
 /// model intent.
@@ -110,7 +75,7 @@ pub(super) async fn init(
 }
 
 /// Run the model until it finishes, fails or an interrupt preempts a wait.
-pub(super) async fn run_rotation_poll(model: &mut Intent, started_at_ms: u64) -> RotationPoll {
+pub(super) async fn run_rotation_poll(model: &mut Intent, started_at_ms: u64) -> IntentPoll {
     // The intent's start action must not consume a sample that arrives before the
     // first control tick; the host contract starts with an empty observation.
     let mut observation = Observation {
@@ -118,7 +83,7 @@ pub(super) async fn run_rotation_poll(model: &mut Intent, started_at_ms: u64) ->
         encoder: None,
         yaw: None,
     };
-    let mut non_blocking_actions: u8 = 0;
+    let mut guard = ActionGuard::new();
     #[cfg(feature = "telemetry_logs")]
     let mut first_sample_logged = false;
 
@@ -151,52 +116,25 @@ pub(super) async fn run_rotation_poll(model: &mut Intent, started_at_ms: u64) ->
         }
 
         match step.action {
-            IntentAction::SetTracks { left, right } => {
-                send_tracks(left, right).await;
-                non_blocking_actions = non_blocking_actions.saturating_add(1);
-                if non_blocking_actions > MAX_ACTIONS_PER_OBSERVATION {
-                    return RotationPoll::Step(action_loop_failure(model));
-                }
-            }
-            IntentAction::BrakeAll => {
-                motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-                motion::set_track_speeds(0, 0).await;
-                non_blocking_actions = non_blocking_actions.saturating_add(1);
-                if non_blocking_actions > MAX_ACTIONS_PER_OBSERVATION {
-                    return RotationPoll::Step(action_loop_failure(model));
-                }
-            }
-            IntentAction::CoastAll => {
-                motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-                motion::set_track_speeds(0, 0).await;
-                non_blocking_actions = non_blocking_actions.saturating_add(1);
-                if non_blocking_actions > MAX_ACTIONS_PER_OBSERVATION {
-                    return RotationPoll::Step(action_loop_failure(model));
-                }
-            }
             IntentAction::WaitUntil { deadline_ms } => {
-                non_blocking_actions = 0;
-                let wait_ms = deadline_ms.saturating_sub(Instant::now().as_millis());
-                match select(DRIVE_INTERRUPT.wait(), Timer::after(Duration::from_millis(wait_ms))).await {
-                    Either::First(kind) => return RotationPoll::Interrupt(kind),
-                    Either::Second(()) => {}
+                guard.reset();
+                match adapter::wait_until(deadline_ms).await {
+                    Some(kind) => return IntentPoll::Interrupt(kind),
+                    None => observation = build_observation(started_at_ms),
                 }
-                observation = build_observation(started_at_ms);
             }
             IntentAction::Finished => {
-                let Some(outcome) = model.outcome() else {
-                    return RotationPoll::Step(RotationStepResult::Failed {
-                        reason: DriveFault::RotationTimeout.label(),
-                        telemetry: model.cancellation_telemetry(Instant::now().as_millis()),
-                    });
-                };
-                return RotationPoll::Step(match outcome {
-                    DriveOutcome::Completed { telemetry } => RotationStepResult::Completed { telemetry },
-                    DriveOutcome::Failed { fault, telemetry } => RotationStepResult::Failed {
-                        reason: fault.label(),
-                        telemetry,
-                    },
-                });
+                return IntentPoll::Step(adapter::terminal(model, DriveFault::RotationTimeout.label()));
+            }
+            action => {
+                adapter::execute_non_blocking(action).await;
+                if !guard.record() {
+                    defmt::error!(
+                        "rotate_exact: more than {} non-blocking actions per observation",
+                        MAX_ACTIONS_PER_OBSERVATION
+                    );
+                    return IntentPoll::Step(adapter::adapter_failure(model, ACTION_LOOP_LABEL));
+                }
             }
         }
     }
@@ -218,28 +156,6 @@ fn build_observation(started_at_ms: u64) -> Observation {
             timestamp_ms: measurement.timestamp_ms,
         }),
     }
-}
-
-/// A terminal failure for the adapter's non-blocking action guard.
-fn action_loop_failure(model: &Intent) -> RotationStepResult {
-    defmt::error!(
-        "rotate_exact: more than {} non-blocking actions per observation",
-        MAX_ACTIONS_PER_OBSERVATION
-    );
-    RotationStepResult::Failed {
-        reason: ACTION_LOOP_LABEL,
-        telemetry: model.cancellation_telemetry(Instant::now().as_millis()),
-    }
-}
-
-/// Send a calibrated track command and publish the logical speeds.
-async fn send_tracks(left: i8, right: i8) {
-    motor_driver::send_motor_command(MotorCommand::SetTracks {
-        left_speed: left,
-        right_speed: right,
-    })
-    .await;
-    motion::set_track_speeds(left, right).await;
 }
 
 /// Drain the IMU feedback channel and return the newest sample since rotation start.

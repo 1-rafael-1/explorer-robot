@@ -7,8 +7,8 @@
 //! model's arithmetic.
 
 use drive_core::{
-    CompletionTelemetry, DriveFault, DriveOutcome, Intent, IntentAction, IntentParams, Observation, RotationDirection,
-    RotationMotion, YawSample,
+    CompletionTelemetry, DistanceScale, DriveDirection, DriveDistanceKind, DriveFault, DriveOutcome, EncoderSample,
+    Intent, IntentAction, IntentParams, Observation, RotationDirection, RotationMotion, TurnDirection, YawSample,
 };
 use heapless::Vec;
 
@@ -24,6 +24,10 @@ const SPEED_70: RotationMotion = RotationMotion::Stationary { speed: 70 };
 const FORWARD: RotationMotion = RotationMotion::WhileMoving(50);
 /// A reverse turn while moving at −50 %.
 const REVERSE: RotationMotion = RotationMotion::WhileMoving(-50);
+/// Forward distance motion.
+const DRIVE_FORWARD: DriveDirection = DriveDirection::Forward;
+/// Backward distance motion.
+const DRIVE_BACKWARD: DriveDirection = DriveDirection::Backward;
 /// The synthetic start time shared by every scenario.
 const START_MS: u64 = 1_000;
 /// How many leading actions each run keeps for sequence assertions.
@@ -111,6 +115,78 @@ pub(super) const SCENARIOS: &[Scenario] = &[
         name: "rotate_correction_exhausted",
         run: rotate_correction_exhausted,
     },
+    Scenario {
+        name: "distance_straight_forward",
+        run: distance_straight_forward,
+    },
+    Scenario {
+        name: "distance_straight_reverse",
+        run: distance_straight_reverse,
+    },
+    Scenario {
+        name: "distance_short_early_finish",
+        run: distance_short_early_finish,
+    },
+    Scenario {
+        name: "distance_ramp_down",
+        run: distance_ramp_down,
+    },
+    Scenario {
+        name: "distance_tolerance_completion",
+        run: distance_tolerance_completion,
+    },
+    Scenario {
+        name: "distance_wrap",
+        run: distance_wrap,
+    },
+    Scenario {
+        name: "distance_stale_sample",
+        run: distance_stale_sample,
+    },
+    Scenario {
+        name: "distance_encoder_timeout",
+        run: distance_encoder_timeout,
+    },
+    Scenario {
+        name: "distance_stall",
+        run: distance_stall,
+    },
+    Scenario {
+        name: "distance_encoder_anomaly",
+        run: distance_encoder_anomaly,
+    },
+    Scenario {
+        name: "distance_curve_left",
+        run: distance_curve_left,
+    },
+    Scenario {
+        name: "distance_curve_right",
+        run: distance_curve_right,
+    },
+    Scenario {
+        name: "distance_heading_correction",
+        run: distance_heading_correction,
+    },
+    Scenario {
+        name: "distance_no_imu",
+        run: distance_no_imu,
+    },
+    Scenario {
+        name: "continuous_hold",
+        run: continuous_hold,
+    },
+    Scenario {
+        name: "continuous_stall",
+        run: continuous_stall,
+    },
+    Scenario {
+        name: "continuous_encoder_timeout",
+        run: continuous_encoder_timeout,
+    },
+    Scenario {
+        name: "continuous_anomaly",
+        run: continuous_anomaly,
+    },
 ];
 
 // ── Simulation harness ────────────────────────────────────────────────────────
@@ -125,10 +201,78 @@ struct RunResult {
     count: usize,
     /// The last two actions, so long runs can still check their teardown.
     last_two: [Option<IntentAction>; 2],
-    /// The synthetic clock when `Finished` arrived.
+    /// The synthetic clock when `Finished` arrived or the run was bounded.
     end_ms: u64,
-    /// The terminal model outcome.
-    outcome: DriveOutcome,
+    /// The terminal model outcome, absent for a bounded run that never finished.
+    outcome: Option<DriveOutcome>,
+}
+
+/// Run one rotation intent with a scripted yaw feed and a recording executor.
+///
+/// The start step sees an empty observation, exactly like the rotation host
+/// `start` helper.
+fn run_sim(
+    params: IntentParams,
+    start_ms: u64,
+    mut sample_at: impl FnMut(u64) -> Option<YawSample>,
+) -> Result<RunResult, &'static str> {
+    let initial = Observation {
+        now_ms: start_ms,
+        encoder: None,
+        yaw: None,
+    };
+    run_sim_inner(
+        params,
+        start_ms,
+        initial,
+        move |now_ms| Observation {
+            now_ms,
+            encoder: None,
+            yaw: sample_at(now_ms),
+        },
+        None,
+    )
+}
+
+/// Run one distance or continuous intent with scripted encoder and yaw feeds.
+///
+/// The start observation is the feed's sample at `start_ms`, exactly like the
+/// distance host `start` helper.
+fn run_drive_sim(
+    params: IntentParams,
+    start_ms: u64,
+    observe: impl FnMut(u64) -> (Option<EncoderSample>, Option<YawSample>),
+) -> Result<RunResult, &'static str> {
+    run_drive_sim_limited(params, start_ms, None, observe)
+}
+
+/// Run a distance or continuous intent, optionally stopping after `action_limit`
+/// actions.
+///
+/// A bounded run that never reaches `Finished` reports `outcome: None`; it is how
+/// the bench checks a continuous drive that correctly never completes.
+fn run_drive_sim_limited(
+    params: IntentParams,
+    start_ms: u64,
+    action_limit: Option<usize>,
+    mut observe: impl FnMut(u64) -> (Option<EncoderSample>, Option<YawSample>),
+) -> Result<RunResult, &'static str> {
+    let (encoder, yaw) = observe(start_ms);
+    let initial = Observation {
+        now_ms: start_ms,
+        encoder,
+        yaw,
+    };
+    run_sim_inner(
+        params,
+        start_ms,
+        initial,
+        move |now_ms| {
+            let (encoder, yaw) = observe(now_ms);
+            Observation { now_ms, encoder, yaw }
+        },
+        action_limit,
+    )
 }
 
 /// Run one intent with a scripted observation feed and a recording executor.
@@ -136,20 +280,14 @@ struct RunResult {
 /// `SetTracks`, `BrakeAll` and `CoastAll` are recorded and execution continues
 /// immediately. `WaitUntil` advances the synthetic clock to its deadline; no
 /// real sleep happens. `Finished` ends the scenario.
-fn run_sim(
+fn run_sim_inner(
     params: IntentParams,
     start_ms: u64,
-    mut sample_at: impl FnMut(u64) -> Option<YawSample>,
+    mut observation: Observation,
+    mut observe: impl FnMut(u64) -> Observation,
+    action_limit: Option<usize>,
 ) -> Result<RunResult, &'static str> {
     let mut intent = Intent::new(params, start_ms);
-    let mut now_ms = start_ms;
-    // The start step must see an empty observation, exactly like the host
-    // `start` helper; samples begin at the first control tick.
-    let mut observation = Observation {
-        now_ms,
-        encoder: None,
-        yaw: None,
-    };
     let mut actions = Vec::new();
     let mut pulses = Vec::new();
     let mut count = 0_usize;
@@ -173,15 +311,10 @@ fn run_sim(
             }
             IntentAction::BrakeAll | IntentAction::CoastAll => {}
             IntentAction::WaitUntil { deadline_ms } => {
-                if deadline_ms < now_ms {
+                if deadline_ms < observation.now_ms {
                     return Err("wait deadline moved backwards");
                 }
-                now_ms = deadline_ms;
-                observation = Observation {
-                    now_ms,
-                    encoder: None,
-                    yaw: sample_at(now_ms),
-                };
+                observation = observe(deadline_ms);
             }
             IntentAction::Finished => {
                 let Some(outcome) = intent.outcome() else {
@@ -192,10 +325,23 @@ fn run_sim(
                     pulses,
                     count,
                     last_two,
-                    end_ms: now_ms,
-                    outcome,
+                    end_ms: observation.now_ms,
+                    outcome: Some(outcome),
                 });
             }
+        }
+
+        if let Some(limit) = action_limit
+            && count >= limit
+        {
+            return Ok(RunResult {
+                actions,
+                pulses,
+                count,
+                last_two,
+                end_ms: observation.now_ms,
+                outcome: intent.outcome(),
+            });
         }
 
         guard = guard.saturating_add(1);
@@ -234,6 +380,62 @@ const fn sample(now_ms: u64, yaw_deg: f32) -> YawSample {
     YawSample {
         yaw_deg,
         timestamp_ms: now_ms,
+    }
+}
+
+/// An absolute encoder sample stamped at the observation time.
+///
+/// The `Option` mirrors the host tests' `enc` helper: a feed composes this with
+/// `None` for ticks without a sample.
+#[allow(clippy::unnecessary_wraps)]
+const fn encoder(left: u16, right: u16, timestamp_ms: u64) -> Option<EncoderSample> {
+    Some(EncoderSample {
+        left,
+        right,
+        timestamp_ms,
+    })
+}
+
+/// The ten-counts-per-centimetre scale the distance host tests use.
+fn scale() -> Result<DistanceScale, &'static str> {
+    DistanceScale::from_counts_per_cm(10.0).map_err(|_| "10 counts/cm outside the plausibility band")
+}
+
+/// A straight distance parameter set.
+fn straight(distance_cm: f32, direction: DriveDirection, speed: u8) -> Result<IntentParams, &'static str> {
+    Ok(IntentParams::DriveDistance {
+        kind: DriveDistanceKind::Straight { distance_cm },
+        direction,
+        speed,
+        scale: scale()?,
+    })
+}
+
+/// A curve-arc parameter set.
+fn curve(
+    radius_cm: f32,
+    arc_length_cm: f32,
+    turn: TurnDirection,
+    direction: DriveDirection,
+    speed: u8,
+) -> Result<IntentParams, &'static str> {
+    Ok(IntentParams::DriveDistance {
+        kind: DriveDistanceKind::CurveArc {
+            radius_cm,
+            arc_length_cm,
+            direction: turn,
+        },
+        direction,
+        speed,
+        scale: scale()?,
+    })
+}
+
+/// A continuous drive parameter set.
+const fn continuous(speed: u8) -> IntentParams {
+    IntentParams::DriveContinuous {
+        direction: DRIVE_FORWARD,
+        speed,
     }
 }
 
@@ -314,11 +516,11 @@ fn expect_completed(
     angle_error_deg: f32,
     duration_ms: u64,
 ) -> Result<(), &'static str> {
-    match &run.outcome {
-        DriveOutcome::Completed { telemetry } => {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Completed { telemetry }) => {
             expect_rotate_telemetry(telemetry, final_yaw_deg, angle_error_deg, duration_ms)
         }
-        DriveOutcome::Failed { .. } => Err("expected Completed"),
+        _ => Err("expected Completed"),
     }
 }
 
@@ -330,17 +532,103 @@ fn expect_failed(
     angle_error_deg: f32,
     duration_ms: u64,
 ) -> Result<(), &'static str> {
-    match &run.outcome {
-        DriveOutcome::Failed {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Failed {
             fault: actual,
             telemetry,
-        } => {
+        }) => {
             if *actual != fault {
                 return Err("unexpected fault");
             }
             expect_rotate_telemetry(telemetry, final_yaw_deg, angle_error_deg, duration_ms)
         }
-        DriveOutcome::Completed { .. } => Err("expected Failed"),
+        _ => Err("expected Failed"),
+    }
+}
+
+/// Assert a distance run completed with the worked-example telemetry.
+fn expect_distance_completed(
+    run: &RunResult,
+    achieved: (f32, f32),
+    counts: (u32, u32),
+    targets: (f32, f32),
+    duration_ms: u64,
+) -> Result<(), &'static str> {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Completed { telemetry }) => {
+            expect_distance_telemetry(telemetry, achieved, counts, targets, duration_ms)
+        }
+        _ => Err("expected Completed"),
+    }
+}
+
+/// Assert a distance run failed with `fault` and the worked-example telemetry.
+fn expect_distance_failed(
+    run: &RunResult,
+    fault: DriveFault,
+    achieved: (f32, f32),
+    counts: (u32, u32),
+    targets: (f32, f32),
+    duration_ms: u64,
+) -> Result<(), &'static str> {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Failed {
+            fault: actual,
+            telemetry,
+        }) => {
+            if *actual != fault {
+                return Err("unexpected fault");
+            }
+            expect_distance_telemetry(telemetry, achieved, counts, targets, duration_ms)
+        }
+        _ => Err("expected Failed"),
+    }
+}
+
+/// Assert a continuous run failed with `fault` and no telemetry.
+fn expect_failed_without_telemetry(run: &RunResult, fault: DriveFault) -> Result<(), &'static str> {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Failed {
+            fault: actual,
+            telemetry,
+        }) if *actual == fault && *telemetry == CompletionTelemetry::None => Ok(()),
+        _ => Err("unexpected failure"),
+    }
+}
+
+/// Assert distance telemetry matches the worked example.
+fn expect_distance_telemetry(
+    telemetry: &CompletionTelemetry,
+    achieved: (f32, f32),
+    counts: (u32, u32),
+    targets: (f32, f32),
+    duration_ms: u64,
+) -> Result<(), &'static str> {
+    match telemetry {
+        CompletionTelemetry::DriveDistance {
+            achieved_left_revs,
+            achieved_right_revs,
+            achieved_left_counts,
+            achieved_right_counts,
+            target_left_revs,
+            target_right_revs,
+            duration_ms: actual_duration,
+        } => {
+            if !close(*achieved_left_revs, achieved.0) || !close(*achieved_right_revs, achieved.1) {
+                return Err("unexpected achieved revolutions");
+            }
+            if (*achieved_left_counts, *achieved_right_counts) != counts {
+                return Err("unexpected achieved counts");
+            }
+            if !close(*target_left_revs, targets.0) || !close(*target_right_revs, targets.1) {
+                return Err("unexpected target revolutions");
+            }
+            if *actual_duration != duration_ms {
+                return Err("unexpected duration");
+            }
+            Ok(())
+        }
+        _ => Err("expected DriveDistance telemetry"),
     }
 }
 
@@ -880,4 +1168,407 @@ fn rotate_correction_exhausted() -> Result<(), &'static str> {
         return Err("unexpected exhaustion end time");
     }
     expect_failed(&run, DriveFault::CorrectionExhausted, -80.0, -10.0, 12_515)
+}
+
+// ── Distance scenarios ────────────────────────────────────────────────────────
+
+/// Straight forward: baseline, two progress ticks and a completed target.
+fn distance_straight_forward() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(500, 500, now),
+            1_040 => encoder(1_000, 1_000, now),
+            1_060 => encoder(1_500, 1_500, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(60, 60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(60, 60),
+            wait(1_060),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_distance_completed(&run, (5.2604, 5.2604), (1_000, 1_000), (5.2604, 5.2604), 60)
+}
+
+/// Straight reverse: the same progress with negative track commands.
+fn distance_straight_reverse() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_BACKWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(500, 500, now),
+            1_040 => encoder(1_000, 1_000, now),
+            1_060 => encoder(1_500, 1_500, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(-60, -60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(-60, -60),
+            wait(1_060),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_distance_completed(&run, (5.2604, 5.2604), (1_000, 1_000), (5.2604, 5.2604), 60)
+}
+
+/// A target inside the tolerance finishes on the first step, with no motor command.
+fn distance_short_early_finish() -> Result<(), &'static str> {
+    let params = straight(0.1, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| (None, Some(sample(now, 0.0))))?;
+
+    expect_actions(&run, &[FINISHED])?;
+    expect_distance_completed(&run, (0.0, 0.0), (0, 0), (0.0053, 0.0053), 0)
+}
+
+/// The speed ramps down inside the final quarter revolution.
+fn distance_ramp_down() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim_limited(params, START_MS, Some(4), |now| {
+        let encoder = match now {
+            1_020 => encoder(500, 500, now),
+            1_040 => encoder(1_460, 1_460, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[set_tracks(60, 60), wait(1_020), wait(1_040), set_tracks(50, 50)],
+    )
+}
+
+/// One more count inside the tolerance completes the drive.
+fn distance_tolerance_completion() -> Result<(), &'static str> {
+    let params = straight(19.01, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(288, 288, now),
+            1_060 => encoder(289, 289, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(60, 60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(40, 40),
+            wait(1_060),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_distance_completed(&run, (0.9942, 0.9942), (189, 189), (1.0, 1.0), 60)
+}
+
+/// A 16-bit counter wrap counts the wrapped delta and completes the drive.
+fn distance_wrap() -> Result<(), &'static str> {
+    let params = straight(10.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(65_500, 65_500, now),
+            1_040 => encoder(100, 100, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[set_tracks(60, 60), wait(1_020), wait(1_040), set_tracks(0, 0), FINISHED],
+    )?;
+    expect_distance_completed(&run, (0.7154, 0.7154), (136, 136), (0.5260, 0.5260), 40)
+}
+
+/// A repeated sample timestamp never commands the tracks again.
+fn distance_stale_sample() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim_limited(params, START_MS, Some(7), |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(200, 200, now),
+            1_060 | 1_080 | 1_100 => encoder(200, 200, 1_040),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(60, 60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(60, 60),
+            wait(1_060),
+            wait(1_080),
+            wait(1_100),
+        ],
+    )?;
+    expect_pulses(&run, &[(60, 60), (60, 60)])
+}
+
+/// No fresh encoder sample fails with the encoder-timeout label.
+fn distance_encoder_timeout() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(200, 200, now),
+            _ if now >= 1_060 => encoder(200, 200, 1_040),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_distance_failed(
+        &run,
+        DriveFault::EncoderTimeout,
+        (0.5260, 0.5260),
+        (100, 100),
+        (5.2604, 5.2604),
+        340,
+    )
+}
+
+/// Fresh timestamps with unchanged counts fail at the stall timeout.
+fn distance_stall() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            _ if now >= 1_040 => encoder(100, 100, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_distance_failed(&run, DriveFault::Stall, (0.0, 0.0), (0, 0), (5.2604, 5.2604), 1_500)
+}
+
+/// One moving track while the other stands still fails as an encoder anomaly.
+fn distance_encoder_anomaly() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(100, 200, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_distance_failed(
+        &run,
+        DriveFault::EncoderAnomaly,
+        (0.0, 0.0),
+        (0, 0),
+        (5.2604, 5.2604),
+        40,
+    )
+}
+
+/// A left curve slows the inner track and completes on its progress.
+fn distance_curve_left() -> Result<(), &'static str> {
+    let params = curve(20.0, 50.0, TurnDirection::Left, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(150, 800, now),
+            1_060 => encoder(420, 830, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(28, 60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(13, 60),
+            wait(1_060),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_distance_completed(&run, (1.6833, 3.8401), (320, 730), (1.6767, 3.5836), 60)
+}
+
+/// A right curve mirrors the left geometry and completes on the right track.
+fn distance_curve_right() -> Result<(), &'static str> {
+    let params = curve(20.0, 50.0, TurnDirection::Right, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim(params, START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(800, 150, now),
+            1_060 => encoder(830, 420, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            set_tracks(60, 28),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(60, 13),
+            wait(1_060),
+            set_tracks(0, 0),
+            FINISHED,
+        ],
+    )?;
+    expect_distance_completed(&run, (3.8401, 1.6833), (730, 320), (3.5836, 1.6767), 60)
+}
+
+/// A straight drive holds the heading captured at start.
+fn distance_heading_correction() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim_limited(params, START_MS, Some(4), |now| {
+        let encoder = match now {
+            1_020 => encoder(500, 500, now),
+            1_040 => encoder(1_000, 1_000, now),
+            _ => None,
+        };
+        let yaw_deg = if now == 1_040 { 15.0 } else { 10.0 };
+        (encoder, Some(sample(now, yaw_deg)))
+    })?;
+
+    expect_actions(
+        &run,
+        &[set_tracks(60, 60), wait(1_020), wait(1_040), set_tracks(68, 52)],
+    )
+}
+
+/// Without a yaw sample the drive waits its 50 ms bound then runs open loop.
+fn distance_no_imu() -> Result<(), &'static str> {
+    let params = straight(100.0, DRIVE_FORWARD, 60)?;
+    let run = run_drive_sim_limited(params, START_MS, Some(9), |now| {
+        let encoder = match now {
+            1_070 => encoder(500, 500, now),
+            1_090 => encoder(1_000, 1_000, now),
+            _ => None,
+        };
+        (encoder, None)
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            wait(1_010),
+            wait(1_020),
+            wait(1_030),
+            wait(1_040),
+            wait(1_050),
+            set_tracks(60, 60),
+            wait(1_070),
+            wait(1_090),
+            set_tracks(60, 60),
+        ],
+    )
+}
+
+// ── Continuous scenarios ──────────────────────────────────────────────────────
+
+/// A continuous drive holds its speed and never ramps or completes.
+fn continuous_hold() -> Result<(), &'static str> {
+    let run = run_drive_sim_limited(continuous(60), START_MS, Some(8), |now| {
+        let encoder = match now {
+            1_020 => encoder(500, 500, now),
+            1_040 => encoder(1_500, 1_500, now),
+            1_060 => encoder(2_500, 2_500, now),
+            1_080 => encoder(3_500, 3_500, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_prefix(
+        &run,
+        &[
+            set_tracks(60, 60),
+            wait(1_020),
+            wait(1_040),
+            set_tracks(60, 60),
+            wait(1_060),
+            set_tracks(60, 60),
+            wait(1_080),
+            set_tracks(60, 60),
+        ],
+    )?;
+    expect_pulses(&run, &[(60, 60), (60, 60), (60, 60), (60, 60)]).and_then(|()| {
+        if run.outcome.is_none() {
+            Ok(())
+        } else {
+            Err("continuous drive completed")
+        }
+    })
+}
+
+/// A continuous drive fails on a stall without telemetry.
+fn continuous_stall() -> Result<(), &'static str> {
+    let run = run_drive_sim(continuous(60), START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            _ if now >= 1_040 => encoder(100, 100, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_failed_without_telemetry(&run, DriveFault::Stall)
+}
+
+/// A continuous drive fails on an encoder timeout without telemetry.
+fn continuous_encoder_timeout() -> Result<(), &'static str> {
+    let run = run_drive_sim(continuous(60), START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(200, 200, now),
+            _ if now >= 1_060 => encoder(200, 200, 1_040),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_failed_without_telemetry(&run, DriveFault::EncoderTimeout)
+}
+
+/// A continuous drive fails on a single-motor-zero anomaly without telemetry.
+fn continuous_anomaly() -> Result<(), &'static str> {
+    let run = run_drive_sim(continuous(60), START_MS, |now| {
+        let encoder = match now {
+            1_020 => encoder(100, 100, now),
+            1_040 => encoder(100, 200, now),
+            _ => None,
+        };
+        (encoder, Some(sample(now, 0.0)))
+    })?;
+
+    expect_failed_without_telemetry(&run, DriveFault::EncoderAnomaly)
 }
