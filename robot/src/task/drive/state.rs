@@ -14,7 +14,8 @@
 //! runtime logic.
 //!
 //! Each intent carries:
-//! - A controller state (`RotationState`, `DistanceDriveState`, etc.)
+//! - A controller half (the `drive-core` model for rotation, `DistanceDriveState`
+//!   for distance, etc.)
 //! - A completion flag — whether the caller expects a [`DriveCompletion`]
 //! - A teardown descriptor — which sensors to stop on completion or interrupt
 //! - Cancellation telemetry — what data to report if interrupted
@@ -29,21 +30,26 @@
 //! - [`DriveLoop`]: top-level state struct — holds `standby_enabled` and the
 //!   active intent (if any).
 
+use drive_core::{Intent, RotationDirection, RotationMotion};
 use embassy_time::Instant;
 
-use super::{brake_coast::BrakeCoastState, rotation::RotationState};
+use super::brake_coast::BrakeCoastState;
 use crate::task::drive::distance::DistanceDriveState;
 
 /// The drive intent currently being executed by the drive task.
 pub(super) enum ActiveIntent {
     /// An in-place or while-moving rotation towards a target angle.
     RotateExact {
-        /// Rotation controller state (angle tracking, speed calculation).
-        state: RotationState,
+        /// The `drive-core` model that owns the turn control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
         /// Wall-clock start time used for duration telemetry (milliseconds).
         started_at_ms: u64,
+        /// Direction of the original turn.
+        direction: RotationDirection,
+        /// The turn's motion mode, used to gate the provisional correction phase.
+        motion: RotationMotion,
     },
     /// Active distance drive intent with state and optional completion sender.
     DriveDistance {
@@ -132,20 +138,7 @@ impl ActiveIntent {
     /// Returns cancellation telemetry appropriate for this intent type.
     pub(super) fn cancellation_telemetry(&self) -> super::types::CompletionTelemetry {
         match self {
-            Self::RotateExact {
-                state, started_at_ms, ..
-            } => {
-                let last_yaw_deg = state.last_yaw.unwrap_or_else(|| {
-                    defmt::warn!("rotation cancelled before first IMU sample — telemetry yaw is 0");
-                    0.0
-                });
-                let duration_ms = Instant::now().as_millis() - started_at_ms;
-                super::types::CompletionTelemetry::RotateExact {
-                    final_yaw_deg: last_yaw_deg,
-                    angle_error_deg: -state.remaining(),
-                    duration_ms,
-                }
-            }
+            Self::RotateExact { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
             Self::DriveDistance { state, .. } => {
                 let duration_ms = Instant::now().as_millis() - state.started_at_ms;
                 super::types::CompletionTelemetry::DriveDistance {

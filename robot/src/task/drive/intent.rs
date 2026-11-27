@@ -27,7 +27,7 @@ use crate::task::drive::{
     brake_coast::{self, BrakeCoastStepResult, run_brake_coast_step},
     dispatch::execute_intent_teardown,
     distance::{self, DistanceStepResult, run_distance_control_step},
-    rotation::{self, RotationStepResult, run_rotation_control_step},
+    rotation::{self, RotationPoll, RotationStepResult},
     state::DriveLoop,
     types::{self, CompletionStatus, DriveCompletion, IntentTeardown},
 };
@@ -36,7 +36,7 @@ use crate::task::drive::{
 pub(super) enum ActiveIntentOutcome {
     /// An interrupt arrived while an intent was active.
     Interrupt(types::InterruptKind),
-    /// A control step completed for the active rotation intent.
+    /// A rotation intent reached a terminal result.
     RotationStep(RotationStepResult),
     /// A control step completed for the active distance intent.
     DistanceStep(DistanceStepResult),
@@ -50,17 +50,17 @@ pub(super) enum ActiveIntentOutcome {
 pub(super) async fn poll_active_intent(loop_state: &mut DriveLoop) -> Option<ActiveIntentOutcome> {
     match loop_state.active_intent.as_mut() {
         Some(super::state::ActiveIntent::RotateExact {
-            state, started_at_ms, ..
-        }) => {
-            let interrupt_or_tick = select(DRIVE_INTERRUPT.wait(), rotation_tick_ms()).await;
-            match interrupt_or_tick {
-                Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),
-                Either::Second(()) => {
-                    let result = run_rotation_control_step(state, *started_at_ms).await;
-                    Some(ActiveIntentOutcome::RotationStep(result))
-                }
-            }
-        }
+            model,
+            started_at_ms,
+            direction,
+            motion,
+            ..
+        }) => Some(
+            match rotation::run_rotation_poll(model, *started_at_ms, *direction, *motion).await {
+                RotationPoll::Interrupt(kind) => ActiveIntentOutcome::Interrupt(kind),
+                RotationPoll::Step(result) => ActiveIntentOutcome::RotationStep(result),
+            },
+        ),
         Some(
             super::state::ActiveIntent::DriveDistance { state, .. }
             | super::state::ActiveIntent::DriveContinuous { state, .. },
@@ -132,11 +132,6 @@ pub(super) async fn step_idle(loop_state: &mut DriveLoop) {
         Either::First(envelope) => loop_state.handle_envelope(envelope).await,
         Either::Second(kind) => loop_state.handle_interrupt(kind).await,
     }
-}
-
-/// Rotation control tick interval.
-async fn rotation_tick_ms() {
-    Timer::after(Duration::from_millis(rotation::ROTATION_CONTROL_INTERVAL_MS)).await;
 }
 
 /// Brake/coast settle tick interval.

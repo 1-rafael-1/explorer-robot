@@ -21,7 +21,7 @@ use crate::{
             brake_coast::BrakeCoastState,
             differential,
             distance::DistanceDriveState,
-            rotation::RotationState,
+            rotation,
             sensors::{control as lifecycle, data::IMU_FEEDBACK_CHANNEL},
             state::{ActiveIntent, DriveLoop},
             types::{self, CompletionStatus, DriveAction, DriveCommand, DriveCompletion, IntentTeardown},
@@ -200,7 +200,7 @@ impl DriveLoop {
         motion::set_track_speeds(left_adjusted, right_adjusted).await;
     }
 
-    /// Handle a `RotateExact` command — delegates to `rotation::init()`.
+    /// Handle a `RotateExact` command — builds the `drive-core` intent.
     async fn handle_rotate_exact(
         &mut self,
         degrees: f32,
@@ -208,7 +208,7 @@ impl DriveLoop {
         motion: types::RotationMotion,
         completion_requested: bool,
     ) {
-        let intent = RotationState::init(degrees, direction, motion, completion_requested).await;
+        let intent = rotation::init(degrees, direction, motion, completion_requested).await;
         self.active_intent = Some(intent);
     }
 

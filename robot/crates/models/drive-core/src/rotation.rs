@@ -200,6 +200,22 @@ impl RotationState {
         }
     }
 
+    /// The anchored absolute target yaw, once the first sample has set it.
+    ///
+    /// Temporary for ticket 04, which moves the post-stop correction phase out
+    /// of the firmware adapter; delete it once the correction is model-owned.
+    pub const fn target_yaw(&self) -> Option<f32> {
+        self.target_yaw
+    }
+
+    /// The corrective direction-flip count reached by the turn.
+    ///
+    /// Temporary for ticket 04, which moves the post-stop correction phase out
+    /// of the firmware adapter; delete it once the correction is model-owned.
+    pub const fn correction_flips(&self) -> u8 {
+        self.correction_flips
+    }
+
     /// Begin a control tick at `obs.now_ms`, exactly as the firmware tick does.
     fn begin_tick(&mut self, obs: &Observation) -> Step {
         let now_ms = obs.now_ms;

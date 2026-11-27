@@ -166,7 +166,6 @@ pub async fn drive() {
                     loop_state.handle_interrupt(kind).await;
                 }
                 ActiveIntentOutcome::RotationStep(result) => match result {
-                    RotationStepResult::InProgress => {}
                     RotationStepResult::Completed { telemetry } => {
                         apply_completion(&mut loop_state, CompletionStatus::Success, telemetry).await;
                     }
