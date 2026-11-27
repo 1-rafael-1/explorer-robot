@@ -1,10 +1,10 @@
-//! Rotation scenarios that mirror the `drive-core` host worked examples.
+//! Drive-intent scenarios that mirror the `drive-core` host worked examples.
 //!
 //! Each scenario runs the compiled model through [`run_sim`], which substitutes
 //! a synthetic clock and observation feed for the adapter's sensors. The
 //! expected actions and terminal telemetry are the literal worked examples from
-//! `robot/crates/models/drive-core/tests/rotation.rs`, never a re-run of the
-//! model's arithmetic.
+//! the matching `robot/crates/models/drive-core/tests/*.rs` files, never a
+//! re-run of the model's arithmetic.
 
 use drive_core::{
     CompletionTelemetry, DistanceScale, DriveDirection, DriveDistanceKind, DriveFault, DriveOutcome, EncoderSample,

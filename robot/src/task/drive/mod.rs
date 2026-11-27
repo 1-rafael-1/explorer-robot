@@ -78,9 +78,9 @@
 //! - [`dispatch`]: `impl DriveLoop` command handlers (envelope dispatch, action handling, interrupts).
 //! - [`intent`]: Active intent polling, result application, and idle stepping.
 //!
-//! ## Control algorithms
-//! - [`rotation`]: Rotation state machine and async control step.
-//! - [`distance`]: Distance state machine and async control step.
+//! ## Control adapters
+//! - [`rotation`]: Rotation model adapter (observations, actions, completion).
+//! - [`distance`]: Distance and continuous model adapter.
 //! - [`brake_coast`]: Brake/coast and idle model adapters.
 //! - [`differential`]: Differential drive speed passthrough.
 //!

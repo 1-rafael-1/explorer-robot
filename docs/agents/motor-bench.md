@@ -409,7 +409,8 @@ drive-sim: brake_settle PASS
 drive-sim: PASS
 ```
 
-The simulation proves the compiled model and adapter agree with the host-tested sequences. It does
+The simulation proves the compiled model produces the host-tested sequences through the same
+`Intent::step` seam the adapter uses. It does not exercise the firmware adapter itself, and it does
 not prove chassis motion: real distance, curve, turn and correction accuracy are recorded only after
 assembly. Confirm the real motor and encoder path with the **Basic Motor Test** (§5), which remains
 the gate for real motor commands.

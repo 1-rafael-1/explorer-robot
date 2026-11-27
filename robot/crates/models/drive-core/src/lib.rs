@@ -275,8 +275,12 @@ pub enum IntentParams {
         speed: u8,
     },
     /// Brake both tracks electrically and wait for the encoder to settle.
+    ///
+    /// Selects the `BrakeCoast` intent state, as does [`Self::Coast`].
     Brake,
     /// Let both tracks freewheel and wait for the encoder to settle.
+    ///
+    /// Selects the `BrakeCoast` intent state, as does [`Self::Brake`].
     Coast,
     /// Park the robot for a fixed duration; zero completes immediately.
     Idle {
