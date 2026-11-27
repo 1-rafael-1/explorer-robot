@@ -81,7 +81,7 @@
 //! ## Control algorithms
 //! - [`rotation`]: Rotation state machine and async control step.
 //! - [`distance`]: Distance state machine and async control step.
-//! - [`brake_coast`]: Brake/coast settle detection.
+//! - [`brake_coast`]: Brake/coast and idle model adapters.
 //! - [`differential`]: Differential drive speed passthrough.
 //!
 //! ## Sensor infrastructure
@@ -118,7 +118,6 @@ pub mod types;
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use api::{current_epoch, send_drive_command, send_drive_interrupt};
-use brake_coast::BrakeCoastStepResult;
 use intent::{ActiveIntentOutcome, apply_completion, poll_active_intent, step_idle};
 pub use queue::{DriveQueueBuilder, drive_queue_executor};
 pub use sensors::data::{
@@ -170,33 +169,6 @@ pub async fn drive() {
                     }
                     adapter::IntentStepResult::Failed { reason, telemetry } => {
                         apply_completion(&mut loop_state, CompletionStatus::Failed(reason), telemetry).await;
-                    }
-                },
-                ActiveIntentOutcome::IdleElapsed => {
-                    apply_completion(
-                        &mut loop_state,
-                        CompletionStatus::Success,
-                        types::CompletionTelemetry::None,
-                    )
-                    .await;
-                }
-                ActiveIntentOutcome::BrakeCoastStep(result) => match result {
-                    BrakeCoastStepResult::InProgress => {}
-                    BrakeCoastStepResult::Completed => {
-                        apply_completion(
-                            &mut loop_state,
-                            CompletionStatus::Success,
-                            types::CompletionTelemetry::None,
-                        )
-                        .await;
-                    }
-                    BrakeCoastStepResult::Failed(reason) => {
-                        apply_completion(
-                            &mut loop_state,
-                            CompletionStatus::Failed(reason),
-                            types::CompletionTelemetry::None,
-                        )
-                        .await;
                     }
                 },
             }

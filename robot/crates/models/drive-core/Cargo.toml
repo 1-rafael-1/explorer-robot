@@ -38,6 +38,10 @@ name = "continuous"
 required-features = ["std"]
 
 [[test]]
+name = "brake_coast"
+required-features = ["std"]
+
+[[test]]
 name = "correction"
 required-features = ["std"]
 

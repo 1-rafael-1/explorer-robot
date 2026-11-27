@@ -187,6 +187,30 @@ pub(super) const SCENARIOS: &[Scenario] = &[
         name: "continuous_anomaly",
         run: continuous_anomaly,
     },
+    Scenario {
+        name: "brake_settle",
+        run: brake_settle,
+    },
+    Scenario {
+        name: "coast_non_zero_reset",
+        run: coast_non_zero_reset,
+    },
+    Scenario {
+        name: "brake_wrap",
+        run: brake_wrap,
+    },
+    Scenario {
+        name: "brake_timeout",
+        run: brake_timeout,
+    },
+    Scenario {
+        name: "idle_zero",
+        run: idle_zero,
+    },
+    Scenario {
+        name: "idle_duration",
+        run: idle_duration,
+    },
 ];
 
 // ── Simulation harness ────────────────────────────────────────────────────────
@@ -439,6 +463,21 @@ const fn continuous(speed: u8) -> IntentParams {
     }
 }
 
+/// A brake parameter set.
+const fn brake() -> IntentParams {
+    IntentParams::Brake
+}
+
+/// A coast parameter set.
+const fn coast() -> IntentParams {
+    IntentParams::Coast
+}
+
+/// An idle parameter set.
+const fn idle(duration_ms: u64) -> IntentParams {
+    IntentParams::Idle { duration_ms }
+}
+
 /// A step table: the yaw holds at the last entry at or before `now_ms`.
 fn table_sample(now_ms: u64, entries: &[(u64, f32)]) -> Option<YawSample> {
     let mut yaw_deg = None;
@@ -593,6 +632,14 @@ fn expect_failed_without_telemetry(run: &RunResult, fault: DriveFault) -> Result
             telemetry,
         }) if *actual == fault && *telemetry == CompletionTelemetry::None => Ok(()),
         _ => Err("unexpected failure"),
+    }
+}
+
+/// Assert a run completed with no telemetry.
+fn expect_completed_without_telemetry(run: &RunResult) -> Result<(), &'static str> {
+    match run.outcome.as_ref() {
+        Some(DriveOutcome::Completed { telemetry }) if *telemetry == CompletionTelemetry::None => Ok(()),
+        _ => Err("unexpected completion"),
     }
 }
 
@@ -1571,4 +1618,136 @@ fn continuous_anomaly() -> Result<(), &'static str> {
     })?;
 
     expect_failed_without_telemetry(&run, DriveFault::EncoderAnomaly)
+}
+
+// ── Brake, coast and idle scenarios ──────────────────────────────────────────
+
+/// Brake emits `BrakeAll` and settles after three consecutive zero deltas.
+fn brake_settle() -> Result<(), &'static str> {
+    let run = run_drive_sim(brake(), START_MS, |now| {
+        let encoder = match now {
+            1_100 | 1_200 | 1_300 | 1_400 => encoder(100, 100, now),
+            _ => None,
+        };
+        (encoder, None)
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            IntentAction::BrakeAll,
+            wait(1_100),
+            wait(1_200),
+            wait(1_300),
+            wait(1_400),
+            FINISHED,
+        ],
+    )?;
+    expect_completed_without_telemetry(&run)
+}
+
+/// Coast resets the zero-delta count on motion before settling.
+fn coast_non_zero_reset() -> Result<(), &'static str> {
+    let run = run_drive_sim(coast(), START_MS, |now| {
+        let encoder = match now {
+            1_100 => encoder(100, 100, now),
+            1_200 | 1_300 | 1_400 | 1_500 => encoder(110, 90, now),
+            _ => None,
+        };
+        (encoder, None)
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            IntentAction::CoastAll,
+            wait(1_100),
+            wait(1_200),
+            wait(1_300),
+            wait(1_400),
+            wait(1_500),
+            FINISHED,
+        ],
+    )?;
+    expect_completed_without_telemetry(&run)
+}
+
+/// A wrapped counter delta is treated as motion, then equal counts settle.
+fn brake_wrap() -> Result<(), &'static str> {
+    let run = run_drive_sim(brake(), START_MS, |now| {
+        let encoder = match now {
+            1_100 => encoder(65_500, 65_500, now),
+            1_200 | 1_300 | 1_400 | 1_500 => encoder(100, 100, now),
+            _ => None,
+        };
+        (encoder, None)
+    })?;
+
+    expect_actions(
+        &run,
+        &[
+            IntentAction::BrakeAll,
+            wait(1_100),
+            wait(1_200),
+            wait(1_300),
+            wait(1_400),
+            wait(1_500),
+            FINISHED,
+        ],
+    )?;
+    expect_completed_without_telemetry(&run)
+}
+
+/// No encoder sample ever arrives: the settle times out with the exact label.
+fn brake_timeout() -> Result<(), &'static str> {
+    let run = run_drive_sim(brake(), START_MS, |_now| (None, None))?;
+
+    expect_actions(
+        &run,
+        &[
+            IntentAction::BrakeAll,
+            wait(1_100),
+            wait(1_200),
+            wait(1_300),
+            wait(1_400),
+            wait(1_500),
+            wait(1_600),
+            wait(1_700),
+            wait(1_800),
+            wait(1_900),
+            wait(2_000),
+            wait(2_100),
+            wait(2_200),
+            wait(2_300),
+            wait(2_400),
+            wait(2_500),
+            wait(2_600),
+            wait(2_700),
+            wait(2_800),
+            wait(2_900),
+            wait(3_000),
+            FINISHED,
+        ],
+    )?;
+    expect_failed_without_telemetry(&run, DriveFault::SettleTimeout)?;
+    if DriveFault::SettleTimeout.label() != "encoder settle timeout" {
+        return Err("unexpected settle fault label");
+    }
+    Ok(())
+}
+
+/// Zero-duration idle coasts and finishes on the next step.
+fn idle_zero() -> Result<(), &'static str> {
+    let run = run_drive_sim(idle(0), START_MS, |_now| (None, None))?;
+
+    expect_actions(&run, &[IntentAction::CoastAll, FINISHED])?;
+    expect_completed_without_telemetry(&run)
+}
+
+/// A non-zero idle coasts, waits its absolute deadline, then finishes.
+fn idle_duration() -> Result<(), &'static str> {
+    let run = run_drive_sim(idle(500), START_MS, |_now| (None, None))?;
+
+    expect_actions(&run, &[IntentAction::CoastAll, wait(1_500), FINISHED])?;
+    expect_completed_without_telemetry(&run)
 }

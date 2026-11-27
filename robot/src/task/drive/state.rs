@@ -14,8 +14,7 @@
 //! runtime logic.
 //!
 //! Each intent carries:
-//! - A controller half: the `drive-core` model for rotation, distance and
-//!   continuous, or the brake/coast settle state.
+//! - A controller half: the `drive-core` model that owns the control law.
 //! - A completion flag — whether the caller expects a [`DriveCompletion`]
 //! - A teardown descriptor — which sensors to stop on completion or interrupt
 //! - Cancellation telemetry — what data to report if interrupted
@@ -32,8 +31,6 @@
 
 use drive_core::Intent;
 use embassy_time::Instant;
-
-use super::brake_coast::BrakeCoastState;
 
 /// The drive intent currently being executed by the drive task.
 pub(super) enum ActiveIntent {
@@ -60,19 +57,17 @@ pub(super) enum ActiveIntent {
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active idle intent with a fixed duration.
+    /// Active idle intent backed by the `drive-core` model.
     Idle {
-        /// Duration to remain idle (milliseconds).
-        duration_ms: u64,
-        /// Wall-clock start time used for duration tracking (milliseconds).
-        started_at_ms: u64,
+        /// The `drive-core` model that owns the coast and duration timing.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active brake/coast settle intent with encoder settle tracking.
+    /// Active brake/coast settle intent backed by the `drive-core` model.
     BrakeCoast {
-        /// Brake/coast settle state.
-        state: BrakeCoastState,
+        /// The `drive-core` model that owns the settle control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
@@ -135,9 +130,9 @@ impl ActiveIntent {
         match self {
             Self::RotateExact { model, .. }
             | Self::DriveDistance { model, .. }
-            | Self::DriveContinuous { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
-            // Idle and brake/coast have no progress telemetry to report.
-            Self::Idle { .. } | Self::BrakeCoast { .. } => super::types::CompletionTelemetry::None,
+            | Self::DriveContinuous { model, .. }
+            | Self::Idle { model, .. }
+            | Self::BrakeCoast { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
         }
     }
 }

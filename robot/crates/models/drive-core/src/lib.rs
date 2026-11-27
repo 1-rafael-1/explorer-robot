@@ -18,8 +18,10 @@
 #![no_std]
 #![warn(missing_docs)]
 
+mod brake_coast;
 mod correction;
 mod distance;
+mod idle;
 mod rotation;
 
 // ── Drive vocabulary ──────────────────────────────────────────────────────────
@@ -272,6 +274,15 @@ pub enum IntentParams {
         /// Speed magnitude (0-100).
         speed: u8,
     },
+    /// Brake both tracks electrically and wait for the encoder to settle.
+    Brake,
+    /// Let both tracks freewheel and wait for the encoder to settle.
+    Coast,
+    /// Park the robot for a fixed duration; zero completes immediately.
+    Idle {
+        /// How long to stay idle, in milliseconds.
+        duration_ms: u64,
+    },
 }
 
 /// A minimal, feature-gated snapshot of the decision behind one [`Step`].
@@ -323,6 +334,10 @@ enum IntentState {
     DriveDistance(distance::DistanceState),
     /// A drive held at a speed and heading until interrupted.
     DriveContinuous(distance::DistanceState),
+    /// A brake or coast settle.
+    BrakeCoast(brake_coast::BrakeCoastState),
+    /// A fixed-duration park.
+    Idle(idle::IdleState),
 }
 
 impl Intent {
@@ -349,6 +364,13 @@ impl Intent {
             IntentParams::DriveContinuous { direction, speed } => {
                 IntentState::DriveContinuous(distance::DistanceState::new_continuous(direction, speed, now_ms))
             }
+            IntentParams::Brake => {
+                IntentState::BrakeCoast(brake_coast::BrakeCoastState::new(brake_coast::Action::Brake, now_ms))
+            }
+            IntentParams::Coast => {
+                IntentState::BrakeCoast(brake_coast::BrakeCoastState::new(brake_coast::Action::Coast, now_ms))
+            }
+            IntentParams::Idle { duration_ms } => IntentState::Idle(idle::IdleState::new(duration_ms, now_ms)),
         };
         Self { state }
     }
@@ -363,6 +385,8 @@ impl Intent {
         match &mut self.state {
             IntentState::RotateExact(state) => state.step(obs),
             IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => state.step(obs),
+            IntentState::BrakeCoast(state) => state.step(obs),
+            IntentState::Idle(state) => state.step(obs),
         }
     }
 
@@ -372,6 +396,8 @@ impl Intent {
         match &self.state {
             IntentState::RotateExact(state) => state.outcome(),
             IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => state.outcome(),
+            IntentState::BrakeCoast(state) => state.outcome(),
+            IntentState::Idle(state) => state.outcome(),
         }
     }
 
@@ -386,6 +412,8 @@ impl Intent {
             IntentState::DriveDistance(state) | IntentState::DriveContinuous(state) => {
                 state.cancellation_telemetry(now_ms)
             }
+            IntentState::BrakeCoast(state) => state.cancellation_telemetry(now_ms),
+            IntentState::Idle(state) => state.cancellation_telemetry(now_ms),
         }
     }
 }
