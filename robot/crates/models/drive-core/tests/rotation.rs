@@ -5,9 +5,9 @@
 //! literal worked examples (start yaw, sample yaw and the resulting track
 //! speeds), never a re-run of the model's arithmetic.
 //!
-//! The adapter contract these tests follow is the same one the firmware uses:
-//! execute a non-blocking action and step again immediately, and sleep to the
-//! absolute deadline of a `WaitUntil` before the next observation.
+//! The tests drive the model the way the drive task does: execute a
+//! non-blocking action and step again immediately, and sleep to the absolute
+//! deadline of a `WaitUntil` before the next observation.
 
 use drive_core::{
     CompletionTelemetry, DriveFault, DriveOutcome, Intent, IntentAction, IntentParams, Observation, RotationDirection,
@@ -199,7 +199,7 @@ fn a_missing_sample_waits_the_sample_bound_then_keeps_the_previous_command() {
     let again = intent.step(&observation(1_060, None));
     assert_eq!(again.action, IntentAction::WaitUntil { deadline_ms: 1_080 });
 
-    // A sample older than the intent start is ignored, just like the firmware drain.
+    // A sample older than the intent start is ignored by the freshness filter.
     let stale = intent.step(&observation(1_080, yaw(0.0, 999)));
     assert_eq!(stale.action, IntentAction::WaitUntil { deadline_ms: 1_100 });
 }

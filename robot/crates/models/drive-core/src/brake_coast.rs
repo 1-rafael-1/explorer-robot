@@ -1,4 +1,4 @@
-//! The brake and coast settle control law, ported from the firmware.
+//! The brake and coast settle control law.
 //!
 //! This module owns the `Brake` and `Coast` intents. Both emit their initial
 //! motor action, then sample the encoder deltas at a fixed cadence until both
@@ -13,7 +13,7 @@
 
 use crate::{CompletionTelemetry, DriveFault, DriveOutcome, EncoderSample, IntentAction, Observation, Step};
 
-// ── Brake/coast control constants (ported verbatim from the firmware) ────────
+// ── Brake/coast control constants ────────────────────────────────────────────
 
 /// Encoder settle interval for brake/coast completion (milliseconds).
 const SETTLE_INTERVAL_MS: u64 = 100;
@@ -161,8 +161,8 @@ impl BrakeCoastState {
     }
 }
 
-/// Build a step with no trace snapshot: brake/coast has no decision state the
-/// firmware logs.
+/// Build a step with no trace snapshot: brake/coast decides nothing the trace
+/// records.
 const fn make_step(action: IntentAction) -> Step {
     Step { action, trace: None }
 }

@@ -1,4 +1,4 @@
-//! The distance and continuous drive control law, ported from the firmware.
+//! The distance and continuous drive control law.
 //!
 //! This module owns the `DriveDistance` and `DriveContinuous` intents, which
 //! share one controller: encoder progress, the stall/encoder-timeout/anomaly
@@ -47,7 +47,7 @@ use crate::{
     Observation, Step, TurnDirection, YawSample,
 };
 
-// ── Distance control constants (ported verbatim from the firmware) ───────────
+// ── Distance control constants ───────────────────────────────────────────────
 
 /// Distance drive ramp-down begins when remaining revolutions drop below this value.
 const RAMP_DOWN_START_REVS: f32 = 0.25;
@@ -83,8 +83,9 @@ const HEADING_REFERENCE_POLL_MS: u64 = 10;
 /// Convert a travelled distance in centimetres into sprocket revolutions.
 ///
 /// The scale cancels algebraically: `cm × counts/cm / (counts/cm × C) = cm / C`.
-/// It is kept in the same shape as the firmware so the scale still enters the
-/// accumulated-progress divisor identically.
+/// Keeping it in the expression ties this conversion to the same counts-per-rev
+/// divisor that turns accumulated counts into revolutions, so both sides of a
+/// drive use one figure.
 const fn to_revs(cm: f32, counts_per_cm: f32, counts_per_rev: f32) -> f32 {
     cm * counts_per_cm / counts_per_rev
 }
@@ -369,8 +370,8 @@ impl DistanceState {
     /// Emit the initial action: finish a trivial target, or start the tracks
     /// after waiting up to the heading-reference bound for a yaw sample.
     fn start(&mut self, obs: &Observation) -> Step {
-        // Early exit for trivially short distances, before any motor command,
-        // exactly like the firmware's `init`.
+        // Early exit for a target inside the completion tolerance: finish with
+        // zero progress before any motor command.
         if self.mode == Mode::Target && self.target_inner_revs <= TOLERANCE_REVS {
             self.outcome = Some(DriveOutcome::Completed {
                 telemetry: CompletionTelemetry::DriveDistance {
@@ -405,8 +406,9 @@ impl DistanceState {
 
     /// Drain one poll of the heading-reference wait and start when it ends.
     ///
-    /// At the deadline the firmware's wait loop has already exited, so a sample
-    /// that arrives at exactly the bound is left for the first control tick.
+    /// The deadline is checked first, so the wait ends without reading a sample
+    /// that arrives at exactly the bound; that sample is left for the first
+    /// control tick.
     fn heading_wait(&mut self, obs: &Observation, deadline_ms: u64) -> Step {
         if obs.now_ms >= deadline_ms {
             return self.apply_initial_tracks(obs.now_ms);
@@ -528,9 +530,8 @@ impl DistanceState {
 
     /// Fold the newest yaw sample into the heading or curve state.
     ///
-    /// The firmware drains a queue and keeps only its newest sample, which is
-    /// exactly the one observation carries. Returns that sample for the
-    /// correction.
+    /// The observation carries only the newest sample, so there is nothing to
+    /// drain. Returns that sample for the correction.
     fn drain_imu(&mut self, sample: Option<YawSample>) -> Option<YawSample> {
         let sample = sample?;
         self.last_yaw_deg = Some(sample.yaw_deg);
@@ -633,8 +634,8 @@ impl DistanceState {
 
     /// Record a terminal failure and emit `Finished`.
     ///
-    /// The firmware returns the fault without a motor command and the adapter's
-    /// teardown stops the tracks, so the model emits no stop here.
+    /// The model emits no stop: the adapter's teardown stops the tracks after a
+    /// terminal fault, so a fault needs no motor command here.
     fn fail(&mut self, fault: DriveFault, now_ms: u64) -> Step {
         self.outcome = Some(DriveOutcome::Failed {
             fault,

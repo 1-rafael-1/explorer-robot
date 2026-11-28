@@ -1,8 +1,8 @@
 //! Host-side tests pinning the operator-facing fault labels.
 //!
-//! The labels are the completion details on the wire. They are preserved
-//! byte-for-byte from the firmware drive code, including the lowercase settle
-//! timeout, so an accidental rename fails loudly.
+//! The labels are the completion details on the wire. They must not change,
+//! including the lowercase settle timeout, so an accidental rename fails
+//! loudly.
 
 use drive_core::DriveFault;
 

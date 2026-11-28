@@ -8,9 +8,9 @@
 //! Every scenario uses a ten-counts-per-centimetre scale, so one centimetre is
 //! ten counts and one sprocket revolution (19.01 cm) is 190.1 counts.
 //!
-//! The adapter contract these tests follow is the same one the firmware uses:
-//! execute a non-blocking action and step again immediately, and sleep to the
-//! absolute deadline of a `WaitUntil` before the next observation.
+//! These tests drive the model the way the drive task does: execute a
+//! non-blocking action and step again immediately, and sleep to the absolute
+//! deadline of a `WaitUntil` before the next observation.
 
 use drive_core::{
     CompletionTelemetry, DistanceScale, DriveDirection, DriveDistanceKind, DriveFault, DriveOutcome, EncoderSample,

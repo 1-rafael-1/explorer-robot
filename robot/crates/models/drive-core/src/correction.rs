@@ -1,26 +1,25 @@
 //! The provisional post-stop rotation correction policy.
 //!
-//! This is the firmware drive task's correction phase, extracted as an explicit
-//! phase machine: settle after the turn stops, a torque-ladder pulse, a
-//! post-pulse settle, then the next iteration or a terminal result. It runs only
-//! for a stationary turn that reached the target tolerance; a while-moving turn
-//! never enters it.
+//! An explicit phase machine: settle after the turn stops, a torque-ladder
+//! pulse, a post-pulse settle, then the next iteration or a terminal result. It
+//! runs only for a stationary turn that reached the target tolerance; a
+//! while-moving turn never enters it.
 //!
 //! The module is pure. It reads only [`Observation::now_ms`] and
 //! [`Observation::yaw`], never reads a clock, starts a sensor, commands a motor
 //! or allocates, and it returns [`IntentAction`]s for the adapter to execute. A
-//! firmware sleep becomes [`IntentAction::WaitUntil`].
+//! sleep becomes [`IntentAction::WaitUntil`].
 //!
-//! The policy is provisional: the physical result is recorded on the bench, not
-//! gated. The transitions, the torque ladder, the overshoot accounting, the
-//! per-iteration timeout and the exhaustion path are pinned by host tests.
+//! The policy is provisional and isolated: the physical result is recorded on
+//! the bench, not gated. The transitions, the torque ladder, the overshoot
+//! accounting, the per-iteration timeout and the exhaustion path are pinned by
+//! host tests.
 //!
 //! # Policy
 //!
 //! 1. **Settle** — after the turn stop, wait up to [`SETTLE_MS`] for a fresh
 //!    yaw sample. A sample that is already available ends the wait immediately;
-//!    otherwise the previous sample is kept, exactly like the firmware's
-//!    drain-first wait.
+//!    otherwise the wait runs to its deadline and the previous sample is kept.
 //! 2. **Iteration entry** — converge if `|error| <= TOLERANCE_DEG`. Otherwise
 //!    count an overshoot when the error sign flipped since the previous
 //!    iteration, and emit the next pulse.
@@ -39,7 +38,7 @@ use crate::{
     rotation::normalize_angle,
 };
 
-// ── Correction policy constants (carried verbatim from the firmware) ─────────
+// ── Correction policy constants ──────────────────────────────────────────────
 
 /// Acceptable angle error in degrees.
 const TOLERANCE_DEG: f32 = 0.5;
@@ -117,7 +116,8 @@ impl Correction {
     /// Seed the correction from the stopped turn.
     ///
     /// `anchor_yaw` and `anchor_sample_ms` are the turn's final sample; they seed
-    /// the phase's angle state exactly like the firmware's pre-stop update.
+    /// the phase's angle state and stale-sample check, so the correction continues
+    /// from the turn's last measurement.
     pub const fn new(
         target_yaw: f32,
         direction: RotationDirection,
@@ -269,8 +269,9 @@ impl Correction {
         self.remaining_deg().abs() <= TOLERANCE_DEG
     }
 
-    /// The current error sign; exactly zero counts as negative, as in the
-    /// firmware's overshoot comparison.
+    /// The current error sign: positive while the turn must still move in the
+    /// commanded direction, otherwise negative. Exactly zero reads as negative,
+    /// so an on-target sample is never counted as an undershoot.
     fn error_sign(&self) -> i8 {
         if self.remaining_deg() > 0.0 { 1 } else { -1 }
     }

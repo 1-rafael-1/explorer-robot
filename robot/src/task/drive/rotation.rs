@@ -5,7 +5,7 @@
 //! adapter half: it starts and stops the rotation IMU, drains the IMU feedback
 //! channel, builds an [`Observation`], executes the model's [`IntentAction`]s,
 //! keeps the drive interrupt selected around every `WaitUntil`, and maps the
-//! model's terminal outcome onto the firmware's completion.
+//! model's terminal outcome onto the drive task's completion.
 //!
 //! # Telemetry logging
 //!

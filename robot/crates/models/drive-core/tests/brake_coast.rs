@@ -1,13 +1,13 @@
 //! Host-side tests for brake, coast and idle behind `Intent::step`.
 //!
 //! Brake and coast emit their initial motor action and then watch encoder deltas
-//! at the firmware's 100 ms settle cadence: three consecutive zero deltas on both
-//! tracks settle, any motion resets the count, and two seconds without settling
-//! fails with the exact lowercase `encoder settle timeout` detail. Idle coasts
-//! and completes on its duration, or immediately at zero.
+//! at the 100 ms settle cadence: three consecutive zero deltas on both tracks
+//! settle, any motion resets the count, and two seconds without settling fails
+//! with the exact lowercase `encoder settle timeout` detail. Idle coasts and
+//! completes on its duration, or immediately at zero.
 //!
-//! Every assertion goes through the public `Intent` surface and uses the
-//! firmware's adapter contract: execute a non-blocking action and step again
+//! Every assertion goes through the public `Intent` surface, driven the way the
+//! drive task drives the model: execute a non-blocking action and step again
 //! immediately, and sleep to the absolute deadline of a `WaitUntil`.
 
 use drive_core::{

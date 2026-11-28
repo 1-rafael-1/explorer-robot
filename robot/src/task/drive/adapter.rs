@@ -4,7 +4,7 @@
 //! [`Intent::step`](drive_core::Intent::step), execute the returned action, and
 //! step again. This module owns the parts that are identical between them — the
 //! motor commands, the interrupt-safe absolute wait and the mapping from the
-//! model's terminal outcome to the firmware's step result — so there is one
+//! model's terminal outcome to the adapter's step result — so there is one
 //! implementation of the adapter contract rather than two subtly different
 //! copies.
 //!
@@ -112,7 +112,7 @@ pub(super) async fn wait_until(deadline_ms: u64) -> Option<types::InterruptKind>
     }
 }
 
-/// Map the model's terminal outcome to a firmware step result.
+/// Map the model's terminal outcome to an adapter step result.
 ///
 /// A model defect that emits `Finished` without an outcome becomes a terminal
 /// failure with `missing_reason` and cancellation telemetry.

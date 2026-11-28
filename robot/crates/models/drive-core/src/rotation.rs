@@ -1,4 +1,4 @@
-//! The rotation control law, ported from the firmware drive task.
+//! The rotation control law.
 //!
 //! This module owns the `RotateExact` intent: first-sample yaw anchoring, the
 //! absolute target, the remaining-sign handling, ±180° normalisation, the
@@ -20,7 +20,7 @@ use crate::{
     YawSample, correction::Correction,
 };
 
-// ── Rotation control constants (ported verbatim from the firmware) ───────────
+// ── Rotation control constants ───────────────────────────────────────────────
 
 /// Maximum rotation speed (0-100%).
 const SPEED_MAX: u8 = 100;
@@ -204,7 +204,8 @@ impl RotationState {
         }
     }
 
-    /// Begin a control tick at `obs.now_ms`, exactly as the firmware tick does.
+    /// Begin a control tick at `obs.now_ms`: check the overall timeout, then take
+    /// a fresh sample or wait for one.
     fn begin_tick(&mut self, obs: &Observation) -> Step {
         let now_ms = obs.now_ms;
         if now_ms.saturating_sub(self.started_at_ms) > TIMEOUT_MS {
@@ -240,7 +241,7 @@ impl RotationState {
     }
 
     /// Process one control sample at `now_ms`; `tick_started_ms` is the tick's
-    /// start, used for the failure checks exactly as the firmware does.
+    /// start, which the flip-limit and correction-timeout checks measure from.
     fn process(&mut self, sample: YawSample, tick_started_ms: u64, now_ms: u64) -> Step {
         let done = self.update(&sample);
 

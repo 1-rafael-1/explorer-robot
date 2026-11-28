@@ -1,4 +1,4 @@
-//! The idle intent, ported from the firmware.
+//! The idle intent.
 //!
 //! Idle parks the robot: it emits [`IntentAction::CoastAll`] once and then
 //! completes. A non-zero duration waits on an absolute deadline; a zero duration
@@ -92,8 +92,7 @@ impl IdleState {
     }
 }
 
-/// Build a step with no trace snapshot: idle has no decision state the firmware
-/// logs.
+/// Build a step with no trace snapshot: idle decides nothing the trace records.
 const fn make_step(action: IntentAction) -> Step {
     Step { action, trace: None }
 }

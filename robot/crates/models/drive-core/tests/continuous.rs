@@ -6,7 +6,7 @@
 //! completion) or on an interrupt (which the adapter cancels).
 //!
 //! Every assertion goes through the public `Intent` surface and uses literal
-//! worked examples, and the adapter contract is the same one the firmware uses.
+//! worked examples, driven the way the drive task drives the model.
 
 use drive_core::{
     CompletionTelemetry, DriveDirection, DriveFault, DriveOutcome, EncoderSample, Intent, IntentAction, IntentParams,

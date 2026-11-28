@@ -9,7 +9,7 @@
 //! brake/coast (idle starts no sensors), builds an [`Observation`] from the
 //! latest encoder sample and the adapter clock, executes the model's
 //! [`IntentAction`]s, keeps the drive interrupt selected around every
-//! `WaitUntil`, and maps the model's terminal outcome onto the firmware's
+//! `WaitUntil`, and maps the model's terminal outcome onto the drive task's
 //! completion and `fault.label()`.
 
 use drive_core::{EncoderSample, Intent, IntentAction, IntentParams, Observation};

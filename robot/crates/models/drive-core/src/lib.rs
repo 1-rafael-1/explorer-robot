@@ -214,8 +214,8 @@ pub enum DriveOutcome {
 
 /// The typed terminal cause of a failed drive intent.
 ///
-/// The adapter turns [`DriveFault::label`] into the firmware's completion
-/// detail string; the labels are wire detail and must not change.
+/// The adapter turns [`DriveFault::label`] into the completion detail string;
+/// the labels are wire detail and must not change.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DriveFault {
     /// No fresh encoder sample arrived inside the timeout.
@@ -425,8 +425,8 @@ impl Intent {
 impl DriveFault {
     /// The exact operator-facing completion detail for this cause.
     ///
-    /// These strings are wire detail and are preserved byte-for-byte: the first
-    /// seven are unchanged and the settle timeout is lowercase.
+    /// These strings are wire detail and must not change: seven are CamelCase and
+    /// the settle timeout is lowercase.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {

@@ -13,7 +13,7 @@
 //!   `S + 400`;
 //! - the settle after it gives up at `S + 405 + 400`.
 //!
-//! The adapter contract is the same one the firmware uses: execute a
+//! The tests drive the model the way the drive task does: execute a
 //! non-blocking action and step again immediately, and sleep to the absolute
 //! deadline of a `WaitUntil` before the next observation.
 

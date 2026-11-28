@@ -8,7 +8,7 @@
 //! the distance IMU and encoder sampling, drains their feedback, builds an
 //! [`Observation`], executes the model's [`IntentAction`]s, keeps the drive
 //! interrupt selected around every `WaitUntil`, and maps the model's terminal
-//! outcome onto the firmware's completion.
+//! outcome onto the drive task's completion.
 //!
 //! The model decides freshness and timeouts; the adapter only drains and maps.
 //!
@@ -61,9 +61,8 @@ const OUTCOME_MISSING_LABEL: &str = "DistanceOutcomeMissing";
 ///
 /// Resolves the encoder scale, constructs the model intent and starts the
 /// distance sensors. A target inside the completion tolerance finishes on the
-/// model's first step before any sensor starts or motor command, exactly like
-/// the old controller's early exit; in that case the completion is sent here
-/// and `None` is returned.
+/// model's first step, before any sensor starts or motor command; in that case
+/// the completion is sent here and `None` is returned.
 pub(super) async fn init(
     kind: DriveDistanceKind,
     direction: DriveDirection,
