@@ -21,7 +21,7 @@
 //!
 //! The expected yaw follows from the encoder distances with the
 //! differential-drive approximation `expected_yaw_rad = ±(right_cm −
-//! left_cm) / track_width_cm`, negated when driving backward. The IMU yaw is
+//! left_cm) / track_width_cm`, negated when driving in reverse. The IMU yaw is
 //! accumulated (wrapped into `[-180, 180]` per sample) and compared against that
 //! expectation; the proportional correction is clamped and applied
 //! symmetrically to the two ratios.
@@ -104,7 +104,7 @@ const fn signed_speed(speed: u8, direction: DriveDirection) -> i8 {
     let magnitude = if speed < MAX_SPEED { speed } else { MAX_SPEED } as i8;
     match direction {
         DriveDirection::Forward => magnitude,
-        DriveDirection::Backward => -magnitude,
+        DriveDirection::Reverse => -magnitude,
     }
 }
 
@@ -174,7 +174,7 @@ pub struct DistanceState {
     mode: Mode,
     /// Straight or curved distance specification.
     kind: DriveDistanceKind,
-    /// Drive direction (forward or backward).
+    /// Drive direction (forward or reverse).
     direction: DriveDirection,
     /// Base speed magnitude (0-100).
     base_speed: u8,
@@ -569,7 +569,7 @@ impl DistanceState {
             let right_cm = self.accumulated_right_revs * SPROCKET_CIRCUMFERENCE_CM;
             let direction_sign = match self.direction {
                 DriveDirection::Forward => 1.0,
-                DriveDirection::Backward => -1.0,
+                DriveDirection::Reverse => -1.0,
             };
             let expected_yaw_rad = direction_sign * (right_cm - left_cm) / TRACK_WIDTH_CM;
             let actual_yaw_rad = self.curve_accumulated_yaw_deg.to_radians();

@@ -21,8 +21,8 @@ use drive_core::{
 const START_MS: u64 = 1_000;
 /// Forward motion.
 const FORWARD: DriveDirection = DriveDirection::Forward;
-/// Backward motion.
-const BACKWARD: DriveDirection = DriveDirection::Backward;
+/// Reverse motion.
+const REVERSE: DriveDirection = DriveDirection::Reverse;
 
 /// Ten counts per centimetre: one centimetre is ten counts, one revolution is
 /// 190.1 counts, so 100 cm is 5.2604 revolutions and 1000 counts.
@@ -193,7 +193,7 @@ fn a_straight_forward_drive_completes_on_its_target() {
 
 #[test]
 fn a_straight_reverse_drive_commands_negative_tracks() {
-    let mut intent = Intent::new(straight(100.0, BACKWARD, 60), START_MS);
+    let mut intent = Intent::new(straight(100.0, REVERSE, 60), START_MS);
     assert_eq!(
         start(&mut intent, 0.0),
         IntentAction::SetTracks { left: -60, right: -60 }
@@ -521,10 +521,10 @@ fn a_curve_commands_the_inner_track_slower() {
     let mut right = Intent::new(curve(20.0, 50.0, TurnDirection::Right, FORWARD, 60), START_MS);
     assert_eq!(start(&mut right, 0.0), IntentAction::SetTracks { left: 60, right: 28 });
 
-    // Backward the same geometry runs at the same ratios with negative signs.
-    let mut backward = Intent::new(curve(20.0, 50.0, TurnDirection::Left, BACKWARD, 60), START_MS);
+    // Reverse the same geometry runs at the same ratios with negative signs.
+    let mut reverse = Intent::new(curve(20.0, 50.0, TurnDirection::Left, REVERSE, 60), START_MS);
     assert_eq!(
-        start(&mut backward, 0.0),
+        start(&mut reverse, 0.0),
         IntentAction::SetTracks { left: -28, right: -60 }
     );
 }
@@ -624,8 +624,8 @@ fn accumulated_curve_yaw_wraps_across_the_seam() {
 }
 
 #[test]
-fn a_backward_curve_negates_the_expected_yaw() {
-    let mut intent = Intent::new(curve(20.0, 50.0, TurnDirection::Left, BACKWARD, 60), START_MS);
+fn a_reverse_curve_negates_the_expected_yaw() {
+    let mut intent = Intent::new(curve(20.0, 50.0, TurnDirection::Left, REVERSE, 60), START_MS);
     assert_eq!(
         start(&mut intent, 0.0),
         IntentAction::SetTracks { left: -28, right: -60 }
@@ -735,8 +735,8 @@ fn the_heading_correction_clamps_with_the_current_speed() {
 }
 
 #[test]
-fn a_backward_straight_drive_keeps_the_heading_sign() {
-    let mut intent = Intent::new(straight(100.0, BACKWARD, 60), START_MS);
+fn a_reverse_straight_drive_keeps_the_heading_sign() {
+    let mut intent = Intent::new(straight(100.0, REVERSE, 60), START_MS);
     assert_eq!(
         start(&mut intent, 0.0),
         IntentAction::SetTracks { left: -60, right: -60 }

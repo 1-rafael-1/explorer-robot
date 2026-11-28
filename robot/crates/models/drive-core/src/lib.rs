@@ -37,8 +37,8 @@ pub use motor_cal::DistanceScale;
 pub enum DriveDirection {
     /// Forward motion
     Forward,
-    /// Backward motion
-    Backward,
+    /// Reverse motion
+    Reverse,
 }
 
 /// Turn direction for curved motion.
@@ -92,7 +92,7 @@ pub enum RotationMotion {
     },
 
     /// Rotate while moving at specified speed (-100 to +100)
-    /// Positive = forward, Negative = backward
+    /// Positive = forward, negative = reverse
     WhileMoving(i8),
 }
 
@@ -257,7 +257,7 @@ pub enum IntentParams {
     DriveDistance {
         /// Straight or curved distance specification.
         kind: DriveDistanceKind,
-        /// Drive direction (forward or backward).
+        /// Drive direction (forward or reverse).
         direction: DriveDirection,
         /// Target speed magnitude (0-100).
         speed: u8,
@@ -269,7 +269,7 @@ pub enum IntentParams {
     /// There is no distance target, no ramp-down and no successful completion;
     /// it ends only on a fault or a cancellation.
     DriveContinuous {
-        /// Drive direction (forward or backward).
+        /// Drive direction (forward or reverse).
         direction: DriveDirection,
         /// Speed magnitude (0-100).
         speed: u8,

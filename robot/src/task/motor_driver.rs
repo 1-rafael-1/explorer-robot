@@ -109,9 +109,13 @@ pub enum Track {
 /// Motor direction states for the TB6612FNG.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Format)]
 pub enum MotorDirection {
+    /// Hardware forward direction pin.
     Forward,
+    /// Hardware backward direction pin; the drive vocabulary calls this `Reverse`.
     Backward,
+    /// Both direction pins low (freewheel).
     Coast,
+    /// Both direction pins high (electrical brake).
     Brake,
 }
 

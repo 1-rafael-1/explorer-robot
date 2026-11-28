@@ -7,7 +7,7 @@
 //! 1. Load calibration from flash (if available)
 //! 2. Wait five seconds
 //! 3. Drive forward 150 cm at speed 70, brake, settle
-//! 4. Drive backward 150 cm at speed 70, brake, settle, coast
+//! 4. Drive in reverse 150 cm at speed 70, brake, settle, coast
 //!
 //! Each direction is its own queue, so the running screen's phase and percent
 //! follow the test, and the operator's Stop cancels the drive in flight or lands
@@ -94,7 +94,7 @@ async fn run_straight_drive_test(claim: &Claim) -> bool {
 
     let legs = [
         ("Forward 150 cm", DriveDirection::Forward),
-        ("Backward 150 cm", DriveDirection::Backward),
+        ("Reverse 150 cm", DriveDirection::Reverse),
     ];
 
     for (index, (phase, direction)) in legs.iter().enumerate() {

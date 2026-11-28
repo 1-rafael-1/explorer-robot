@@ -63,7 +63,7 @@
 //! This module uses the same speed convention as `motor_driver`:
 //! - **-100 to +100**: Full range of motor control
 //! - **Positive values**: Forward motion
-//! - **Negative values**: Backward motion
+//! - **Negative values**: Reverse motion
 //! - **Zero**: Coast (freewheel)
 //!
 //! # Module Index

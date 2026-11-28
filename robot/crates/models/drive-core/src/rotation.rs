@@ -109,7 +109,7 @@ pub struct RotationState {
     direction: RotationDirection,
     /// Type of motion during rotation.
     motion: RotationMotion,
-    /// Base forward/backward speed when rotating while moving.
+    /// Base forward/reverse speed when rotating while moving.
     base_speed: i8,
     /// Count of corrective direction flips detected.
     correction_flips: u8,

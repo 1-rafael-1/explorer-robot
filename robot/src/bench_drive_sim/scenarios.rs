@@ -26,8 +26,8 @@ const FORWARD: RotationMotion = RotationMotion::WhileMoving(50);
 const REVERSE: RotationMotion = RotationMotion::WhileMoving(-50);
 /// Forward distance motion.
 const DRIVE_FORWARD: DriveDirection = DriveDirection::Forward;
-/// Backward distance motion.
-const DRIVE_BACKWARD: DriveDirection = DriveDirection::Backward;
+/// Reverse distance motion.
+const DRIVE_REVERSE: DriveDirection = DriveDirection::Reverse;
 /// The synthetic start time shared by every scenario.
 const START_MS: u64 = 1_000;
 /// How many leading actions each run keeps for sequence assertions.
@@ -1249,7 +1249,7 @@ fn distance_straight_forward() -> Result<(), &'static str> {
 
 /// Straight reverse: the same progress with negative track commands.
 fn distance_straight_reverse() -> Result<(), &'static str> {
-    let params = straight(100.0, DRIVE_BACKWARD, 60)?;
+    let params = straight(100.0, DRIVE_REVERSE, 60)?;
     let run = run_drive_sim(params, START_MS, |now| {
         let encoder = match now {
             1_020 => encoder(500, 500, now),

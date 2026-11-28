@@ -321,7 +321,7 @@ fn build_manoeuvre(degrees: f32, direction: RotationDirection) -> Result<DriveQu
         kind: DriveDistanceKind::Straight {
             distance_cm: BACKUP_DISTANCE_CM,
         },
-        direction: DriveDirection::Backward,
+        direction: DriveDirection::Reverse,
         speed: REVERSE_SPEED,
     }))?;
     queue.push_abort_on_fail(DriveCommand::Drive(DriveAction::RotateExact {

@@ -35,9 +35,9 @@ pub enum DriveCommand {
 pub enum DriveAction {
     /// Set motor speeds directly using `motor_driver` convention
     ///
-    /// Speed range: -100 (full backward) to +100 (full forward)
+    /// Speed range: -100 (full reverse) to +100 (full forward)
     /// - Positive values: Forward motion
-    /// - Negative values: Backward motion
+    /// - Negative values: Reverse motion
     /// - Zero: Coast (freewheel)
     ///
     /// This is intended for direct teleoperation or simple commands without feedback control.
@@ -52,7 +52,7 @@ pub enum DriveAction {
     DriveDistance {
         /// Straight or curved distance specification.
         kind: DriveDistanceKind,
-        /// Drive direction (forward or backward).
+        /// Drive direction (forward or reverse).
         direction: DriveDirection,
         /// Target speed magnitude (0-100).
         speed: u8,
@@ -64,7 +64,7 @@ pub enum DriveAction {
     /// on any drive interrupt, or `Failed` on a stall, encoder timeout/loss or
     /// IMU loss.
     DriveContinuous {
-        /// Drive direction (forward or backward).
+        /// Drive direction (forward or reverse).
         direction: DriveDirection,
         /// Speed magnitude (0-100).
         speed: u8,
@@ -88,7 +88,7 @@ pub enum DriveAction {
     },
     /// Enter low-power standby mode.
     Standby,
-    /// Precise rotation with optional forward/backward motion
+    /// Precise rotation with optional forward/reverse motion
     RotateExact {
         /// Rotation angle in degrees
         degrees: f32,
