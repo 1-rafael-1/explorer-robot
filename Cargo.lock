@@ -428,6 +428,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "drive-core"
+version = "0.1.0"
+dependencies = [
+ "drive-geometry",
+ "libm",
+ "motor-cal",
+]
+
+[[package]]
+name = "drive-geometry"
+version = "0.1.0"
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -728,6 +741,8 @@ dependencies = [
  "defmt 1.1.1",
  "defmt-rtt",
  "dmp-cal",
+ "drive-core",
+ "drive-geometry",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
@@ -1236,6 +1251,9 @@ checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 [[package]]
 name = "motor-cal"
 version = "0.1.0"
+dependencies = [
+ "drive-geometry",
+]
 
 [[package]]
 name = "moving_median"

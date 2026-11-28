@@ -1,0 +1,50 @@
+[package]
+name = "drive-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Rafael Koch <rafael.koch@gmx.net>"]
+description = "Hardware-independent drive control law: drive vocabulary, observations, intent actions and typed outcomes. no_std and host-tested."
+repository = "https://github.com/1-rafael-1/explorer-robot"
+
+[lints]
+workspace = true
+
+[dependencies]
+drive-geometry = { path = "../drive-geometry" }
+libm = "0.2"
+motor-cal = { path = "../motor-cal" }
+
+[features]
+# Host test harness only; the crate itself is always `no_std`.
+std = []
+# Fill in `Step::trace` with a decision snapshot; off means `Step::trace` is `None`.
+trace = []
+
+[[test]]
+name = "fault"
+required-features = ["std"]
+
+[[test]]
+name = "rotation"
+required-features = ["std"]
+
+[[test]]
+name = "distance"
+required-features = ["std"]
+
+[[test]]
+name = "continuous"
+required-features = ["std"]
+
+[[test]]
+name = "brake_coast"
+required-features = ["std"]
+
+[[test]]
+name = "correction"
+required-features = ["std"]
+
+[[test]]
+name = "trace"
+required-features = ["std", "trace"]

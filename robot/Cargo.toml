@@ -10,7 +10,8 @@ repository = "https://github.com/1-rafael-1/explorer-robot"
 [features]
 # Gate high-frequency diagnostic logging.
 # Keep this OFF by default so release runs without a log consumer don't spend time formatting/queuing logs.
-telemetry_logs = []
+# Turning it on also compiles `drive-core`'s decision trace so the adapter can log it.
+telemetry_logs = ["drive-core/trace"]
 # Start the IMU in Axis9 and print one orientation sample per second at INFO.
 # Off by default; useful for sensor bring-up.
 imu_debug = []
@@ -24,6 +25,10 @@ bench_motor_calibrate = []
 # left/right divergence from the menu with the saved v4 curve loaded.
 # Off by default; see `scripts/motor-bench-precision.sh`.
 bench_motor_measure = []
+# Permanent bench diagnostic for the drive-core model: run the compiled intents
+# against scripted synthetic observations with a recording, non-motor executor.
+# Off by default; no Procedure and no panel screen. See `scripts/drive-bench-sim.sh`.
+bench_drive_sim = []
 
 [lints]
 workspace = true
@@ -57,6 +62,8 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 nanorand = { version = "0.8.0", features = ["wyrand"], default-features = false }
 claim-slot = { path = "crates/models/claim-slot" }
 dmp-cal = { path = "crates/models/dmp-cal" }
+drive-core = { path = "crates/models/drive-core" }
+drive-geometry = { path = "crates/models/drive-geometry" }
 motor-cal = { path = "crates/models/motor-cal" }
 indicator-led = { path = "crates/models/indicator-led" }
 st7789-async = { path = "crates/drivers/st7789-async" }

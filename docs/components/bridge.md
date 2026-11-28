@@ -97,7 +97,7 @@ cd bridge
 cargo test -p bridge-core --features std --target x86_64-unknown-linux-gnu --tests
 ```
 
-Expected output is twelve suite runs, each ending `test result: ok`:
+Expected output is thirteen suite runs, each ending `test result: ok`:
 
 ```text
      Running tests/auth.rs (target/x86_64-unknown-linux-gnu/debug/deps/auth-…)
@@ -108,8 +108,8 @@ test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```
 
 The suites and their counts are `auth` (10), `coalescing` (10), `dhcp` (15),
-`dns` (11), `heartbeat` (11), `pairing` (7), `portal` (39), `pump` (11), `record`
-(12), `routing` (18), `setup` (23) and `watermark` (9): **176 passed, 0 failed**.
+`dns` (11), `heartbeat` (11), `pairing` (7), `portal` (39), `pump` (11), `radio` (39),
+`record` (12), `routing` (18), `setup` (23) and `watermark` (9): **215 passed, 0 failed**.
 The rules themselves are described in the
 [bridge-core README](../../bridge/bridge-core/README.md); this page does
 not restate them.

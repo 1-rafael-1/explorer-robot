@@ -10,7 +10,7 @@
 
 use defmt::info;
 use embassy_futures::select::{Either, select};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
 use rangefinder::{GateRefusal, gate};
 
 use crate::{
@@ -18,12 +18,9 @@ use crate::{
     task::{
         drive::{
             api::{self, DriveCommandEnvelope},
-            brake_coast::BrakeCoastState,
-            differential,
-            distance::DistanceDriveState,
-            rotation::RotationState,
+            brake_coast, differential, distance, rotation,
             sensors::{control as lifecycle, data::IMU_FEEDBACK_CHANNEL},
-            state::{ActiveIntent, DriveLoop},
+            state::DriveLoop,
             types::{self, CompletionStatus, DriveAction, DriveCommand, DriveCompletion, IntentTeardown},
         },
         motor_driver::{self, MotorCommand},
@@ -200,7 +197,7 @@ impl DriveLoop {
         motion::set_track_speeds(left_adjusted, right_adjusted).await;
     }
 
-    /// Handle a `RotateExact` command — delegates to `rotation::init()`.
+    /// Handle a `RotateExact` command — builds the `drive-core` intent.
     async fn handle_rotate_exact(
         &mut self,
         degrees: f32,
@@ -208,11 +205,11 @@ impl DriveLoop {
         motion: types::RotationMotion,
         completion_requested: bool,
     ) {
-        let intent = RotationState::init(degrees, direction, motion, completion_requested).await;
+        let intent = rotation::init(degrees, direction, motion, completion_requested).await;
         self.active_intent = Some(intent);
     }
 
-    /// Handle a `DriveDistance` command — delegates to `distance::init()`.
+    /// Handle a `DriveDistance` command — builds the `drive-core` intent.
     async fn handle_drive_distance(
         &mut self,
         kind: types::DriveDistanceKind,
@@ -220,67 +217,39 @@ impl DriveLoop {
         speed: u8,
         completion_requested: bool,
     ) {
-        if let Some(intent) = DistanceDriveState::init(kind, direction, speed, completion_requested).await {
+        if let Some(intent) = distance::init(kind, direction, speed, completion_requested).await {
             self.active_intent = Some(intent);
         }
     }
 
-    /// Handle a `DriveContinuous` command — delegates to `distance::init_continuous()`.
+    /// Handle a `DriveContinuous` command — builds the `drive-core` intent.
     async fn handle_drive_continuous(
         &mut self,
         direction: types::DriveDirection,
         speed: u8,
         completion_requested: bool,
     ) {
-        self.active_intent = Some(DistanceDriveState::init_continuous(direction, speed, completion_requested).await);
+        self.active_intent = Some(distance::init_continuous(direction, speed, completion_requested).await);
     }
 
-    /// Handle a `Coast` command.
+    /// Handle a `Coast` command — coasts through the `drive-core` intent.
     async fn handle_coast(&mut self, completion_requested: bool) {
         info!("coast");
-        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        motion::set_track_speeds(0, 0).await;
-
-        let intent = BrakeCoastState::init(completion_requested).await;
-        self.active_intent = Some(intent);
+        self.active_intent = Some(brake_coast::init_coast(completion_requested).await);
     }
 
-    /// Handle a `Brake` command.
+    /// Handle a `Brake` command — brakes through the `drive-core` intent.
     async fn handle_brake(&mut self, completion_requested: bool) {
         info!("brake");
-        motor_driver::send_motor_command(MotorCommand::BrakeAll).await;
-        motion::set_track_speeds(0, 0).await;
-
-        let intent = BrakeCoastState::init(completion_requested).await;
-        self.active_intent = Some(intent);
+        self.active_intent = Some(brake_coast::init_brake(completion_requested).await);
     }
 
-    /// Handle an `Idle` command.
+    /// Handle an `Idle` command — coasts and waits through the `drive-core` intent.
     async fn handle_idle(&mut self, duration_ms: u64, completion_requested: bool) {
         // An explicit idle disarms the pair: the robot is parked, and the next
         // movement re-arms it through the Floor-Drop Gate.
         crate::task::sensors::rangefinder::disable().await;
-        motor_driver::send_motor_command(MotorCommand::CoastAll).await;
-        motion::set_track_speeds(0, 0).await;
-
-        if duration_ms == 0 {
-            api::send_completion(
-                completion_requested,
-                DriveCompletion {
-                    status: CompletionStatus::Success,
-                    telemetry: types::CompletionTelemetry::None,
-                },
-            )
-            .await;
-            return;
-        }
-
-        let started_at_ms = Instant::now().as_millis();
-        self.active_intent = Some(ActiveIntent::Idle {
-            duration_ms,
-            started_at_ms,
-            completion_requested,
-        });
+        self.active_intent = Some(brake_coast::init_idle(duration_ms, completion_requested));
     }
 
     /// Handle a `Standby` command.

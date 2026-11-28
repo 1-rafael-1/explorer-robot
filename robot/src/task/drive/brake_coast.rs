@@ -1,114 +1,131 @@
-//! Brake/Coast settle control logic.
+//! Brake, coast and idle adapter: drives `drive-core`'s settle and idle intents.
 //!
-//! Handles the `Brake` and `Coast` drive actions. After issuing the motor
-//! command (brake or freewheel), the control loop waits for encoder readings
-//! to settle — N consecutive zero-delta samples within a timeout window.
+//! The control law itself lives in [`drive_core::Intent`]: brake and coast emit
+//! their initial motor action, sample encoder deltas at the 100 ms settle
+//! cadence, reset the zero-delta count on motion and fail at the two-second
+//! deadline; idle coasts and completes on its duration, or immediately at zero.
 //!
-//! # Lifecycle
-//!
-//! - `init()` creates the settle state, starts encoder sampling, and returns
-//!   an `ActiveIntent`. The dispatch stores the intent directly.
-//! - `run_brake_coast_step()` checks for settle or timeout each tick.
-//! - Completion teardown uses an `IntentTeardown::EncoderSettle` descriptor to
-//!   stop encoder sampling.
-//!
-//! # Constants
-//!
-//! - `SETTLE_INTERVAL_MS` (100 ms): time between settle checks
-//! - `SETTLE_CONSECUTIVE_SAMPLES` (3): consecutive zero-delta readings to declare settled
-//! - `SETTLE_TIMEOUT_MS` (2000 ms): maximum time before failing
+//! This module is the adapter half. It starts and stops the encoder sensor for
+//! brake/coast (idle starts no sensors), builds an [`Observation`] from the
+//! latest encoder sample and the adapter clock, executes the model's
+//! [`IntentAction`]s, keeps the drive interrupt selected around every
+//! `WaitUntil`, and maps the model's terminal outcome onto the drive task's
+//! completion and `fault.label()`.
 
-use embassy_time::{Duration, Instant};
+use drive_core::{EncoderSample, Intent, IntentAction, IntentParams, Observation};
+use embassy_time::Instant;
 
-use crate::task::{
-    drive::sensors::{control as lifecycle, data::get_latest_encoder_measurement},
-    sensors::encoders::EncoderMeasurement,
+use crate::task::drive::{
+    adapter::{self, ActionGuard, IntentPoll},
+    sensors::{control as lifecycle, data as feedback},
+    state::ActiveIntent,
 };
 
-/// Encoder settle interval for brake/coast completion (milliseconds).
-pub(super) const SETTLE_INTERVAL_MS: u64 = 100;
-/// Consecutive zero-delta samples required to declare settled.
-const SETTLE_CONSECUTIVE_SAMPLES: u8 = 3;
-/// Maximum time allowed to settle before failing completion (milliseconds).
-const SETTLE_TIMEOUT_MS: u64 = 2000;
+/// Encoder sampling interval while a brake/coast settle is in progress.
+const ENCODER_SAMPLING_INTERVAL_MS: u64 = 100;
 
-/// State for brake/coast settle detection.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct BrakeCoastState {
-    /// Deadline for encoder settle detection.
-    deadline: Instant,
-    /// Consecutive zero-delta samples observed.
-    consecutive: u8,
-    /// Previous encoder measurement for delta computation.
-    last_measurement: Option<EncoderMeasurement>,
-    /// Timestamp of the last processed encoder measurement (ms).
-    last_timestamp_ms: u64,
+/// Completion detail for the adapter's non-blocking action guard.
+///
+/// Unreachable with the current model; it exists so a future defect cannot hang
+/// the drive task.
+const ACTION_LOOP_LABEL: &str = "BrakeCoastActionLoop";
+
+/// Completion detail for a `Finished` action without a model outcome.
+///
+/// Unreachable with the current model; it exists so a model defect still
+/// resolves the completion.
+const OUTCOME_MISSING_LABEL: &str = "BrakeCoastOutcomeMissing";
+
+/// Initialise a brake settle intent and start encoder sampling.
+pub(super) async fn init_brake(completion_requested: bool) -> ActiveIntent {
+    init_settle(IntentParams::Brake, completion_requested).await
 }
 
-impl BrakeCoastState {
-    /// Initialise a brake/coast settle intent.
-    ///
-    /// Starts encoder sampling and returns the `ActiveIntent`.
-    pub(super) async fn init(completion_requested: bool) -> super::state::ActiveIntent {
-        lifecycle::start_encoder_sampling(SETTLE_INTERVAL_MS, true).await;
+/// Initialise a coast settle intent and start encoder sampling.
+pub(super) async fn init_coast(completion_requested: bool) -> ActiveIntent {
+    init_settle(IntentParams::Coast, completion_requested).await
+}
 
-        let state = Self::new();
-        super::state::ActiveIntent::BrakeCoast {
-            state,
-            completion_requested,
-        }
-    }
-
-    /// Create a new settle state with timeout applied.
-    pub(super) fn new() -> Self {
-        Self {
-            deadline: Instant::now() + Duration::from_millis(SETTLE_TIMEOUT_MS),
-            consecutive: 0,
-            last_measurement: None,
-            last_timestamp_ms: 0,
-        }
+/// Initialise an idle intent. Idle starts no sensors and needs no async setup.
+pub(super) fn init_idle(duration_ms: u64, completion_requested: bool) -> ActiveIntent {
+    let model = Intent::new(IntentParams::Idle { duration_ms }, Instant::now().as_millis());
+    ActiveIntent::Idle {
+        model,
+        completion_requested,
     }
 }
 
-/// Outcome of one brake/coast settle control step.
-pub(super) enum BrakeCoastStepResult {
-    /// Still waiting for encoder settle.
-    InProgress,
-    /// Encoder settle criteria met.
-    Completed,
-    /// Encoder settle failed with a reason string.
-    Failed(&'static str),
+/// Start encoder sampling and build a brake or coast intent.
+async fn init_settle(params: IntentParams, completion_requested: bool) -> ActiveIntent {
+    lifecycle::start_encoder_sampling(ENCODER_SAMPLING_INTERVAL_MS, true).await;
+    let model = Intent::new(params, Instant::now().as_millis());
+    ActiveIntent::BrakeCoast {
+        model,
+        completion_requested,
+    }
 }
 
-/// Run one brake/coast settle control step.
-pub(super) async fn run_brake_coast_step(state: &mut BrakeCoastState) -> BrakeCoastStepResult {
-    if Instant::now() >= state.deadline {
-        return BrakeCoastStepResult::Failed("encoder settle timeout");
-    }
+/// Run a brake or coast settle until it finishes, fails or is interrupted.
+pub(super) async fn run_brake_coast_poll(model: &mut Intent) -> IntentPoll {
+    run_model_poll(model, true).await
+}
 
-    if let Some(measurement) = get_latest_encoder_measurement()
-        .await
-        .filter(|measurement| measurement.timestamp_ms != 0 && measurement.timestamp_ms != state.last_timestamp_ms)
-    {
-        state.last_timestamp_ms = measurement.timestamp_ms;
+/// Run an idle intent until it finishes or is interrupted.
+pub(super) async fn run_idle_poll(model: &mut Intent) -> IntentPoll {
+    run_model_poll(model, false).await
+}
 
-        if let Some(previous) = state.last_measurement {
-            let delta_left = u32::from(measurement.left.wrapping_sub(previous.left));
-            let delta_right = u32::from(measurement.right.wrapping_sub(previous.right));
+/// Run the model until it finishes, fails or an interrupt preempts a wait.
+///
+/// `watch_encoder` is true for brake/coast, whose model reads settle deltas, and
+/// false for idle, which starts and reads no sensors.
+async fn run_model_poll(model: &mut Intent, watch_encoder: bool) -> IntentPoll {
+    let mut observation = build_observation(watch_encoder).await;
+    let mut guard = ActionGuard::new();
 
-            if delta_left == 0 && delta_right == 0 {
-                state.consecutive = state.consecutive.saturating_add(1);
-                if state.consecutive >= SETTLE_CONSECUTIVE_SAMPLES {
-                    state.last_measurement = Some(measurement);
-                    return BrakeCoastStepResult::Completed;
+    loop {
+        let step = model.step(&observation);
+
+        match step.action {
+            IntentAction::WaitUntil { deadline_ms } => {
+                guard.reset();
+                match adapter::wait_until(deadline_ms).await {
+                    Some(kind) => return IntentPoll::Interrupt(kind),
+                    None => observation = build_observation(watch_encoder).await,
                 }
-            } else {
-                state.consecutive = 0;
+            }
+            IntentAction::Finished => {
+                return IntentPoll::Step(adapter::terminal(model, OUTCOME_MISSING_LABEL));
+            }
+            action => {
+                adapter::execute_non_blocking(action).await;
+                if !guard.record() {
+                    return IntentPoll::Step(adapter::adapter_failure(model, ACTION_LOOP_LABEL));
+                }
             }
         }
-
-        state.last_measurement = Some(measurement);
     }
+}
 
-    BrakeCoastStepResult::InProgress
+/// Build an observation from the adapter clock and, for brake/coast, the newest
+/// encoder sample. Idle reads no sensor and always passes `encoder: None`.
+async fn build_observation(watch_encoder: bool) -> Observation {
+    let now_ms = Instant::now().as_millis();
+    let encoder = if watch_encoder {
+        feedback::get_latest_encoder_measurement()
+            .await
+            .map(|measurement| EncoderSample {
+                left: measurement.left,
+                right: measurement.right,
+                timestamp_ms: measurement.timestamp_ms,
+            })
+    } else {
+        None
+    };
+
+    Observation {
+        now_ms,
+        encoder,
+        yaw: None,
+    }
 }

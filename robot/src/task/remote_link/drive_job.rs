@@ -182,7 +182,7 @@ fn build_queue(action: RemoteDriveAction) -> Result<DriveQueueBuilder, DriveQueu
                 direction: if cm >= 0 {
                     DriveDirection::Forward
                 } else {
-                    DriveDirection::Backward
+                    DriveDirection::Reverse
                 },
                 speed,
             }))?;
@@ -249,12 +249,12 @@ const fn outcome(status: &CompletionStatus) -> (WireCompletionStatus, &'static s
 
 /// The distance actually travelled, in signed centimetres.
 ///
-/// `DistanceDriveState` applies the distance calibration factor to its target
+/// The distance intent applies the distance calibration factor to its target
 /// revolutions, so converting achieved revolutions straight to centimetres
 /// would report `requested × factor`. Instead the achieved/target revolution
 /// ratio is scaled by the requested centimetres, which cancels the factor and
 /// matches the distance the operator asked for. The command's sign is applied,
-/// so a backward command reports a negative distance. Missing telemetry reports
+/// so a reverse command reports a negative distance. Missing telemetry reports
 /// zero.
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]

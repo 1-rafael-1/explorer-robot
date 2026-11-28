@@ -20,14 +20,13 @@
 //! queued intents are cancelled when dequeued by comparing epochs.
 
 use embassy_futures::select::{Either, select};
-use embassy_time::{Duration, Instant, Timer};
 
 use crate::task::drive::{
+    adapter::{IntentPoll, IntentStepResult},
     api::{DRIVE_INTERRUPT, DRIVE_QUEUE, send_completion},
-    brake_coast::{self, BrakeCoastStepResult, run_brake_coast_step},
+    brake_coast,
     dispatch::execute_intent_teardown,
-    distance::{self, DistanceStepResult, run_distance_control_step},
-    rotation::{self, RotationStepResult, run_rotation_control_step},
+    distance, rotation,
     state::DriveLoop,
     types::{self, CompletionStatus, DriveCompletion, IntentTeardown},
 };
@@ -36,73 +35,37 @@ use crate::task::drive::{
 pub(super) enum ActiveIntentOutcome {
     /// An interrupt arrived while an intent was active.
     Interrupt(types::InterruptKind),
-    /// A control step completed for the active rotation intent.
-    RotationStep(RotationStepResult),
-    /// A control step completed for the active distance intent.
-    DistanceStep(DistanceStepResult),
-    /// The active idle intent reached its duration.
-    IdleElapsed,
-    /// A control step completed for the active brake/coast intent.
-    BrakeCoastStep(BrakeCoastStepResult),
+    /// A model-backed intent reached a terminal result.
+    Step(IntentStepResult),
 }
 
 /// Poll the active intent (if any) and return the next action to perform.
 pub(super) async fn poll_active_intent(loop_state: &mut DriveLoop) -> Option<ActiveIntentOutcome> {
     match loop_state.active_intent.as_mut() {
         Some(super::state::ActiveIntent::RotateExact {
-            state, started_at_ms, ..
-        }) => {
-            let interrupt_or_tick = select(DRIVE_INTERRUPT.wait(), rotation_tick_ms()).await;
-            match interrupt_or_tick {
-                Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),
-                Either::Second(()) => {
-                    let result = run_rotation_control_step(state, *started_at_ms).await;
-                    Some(ActiveIntentOutcome::RotationStep(result))
-                }
-            }
-        }
+            model, started_at_ms, ..
+        }) => Some(intent_poll_to_outcome(
+            rotation::run_rotation_poll(model, *started_at_ms).await,
+        )),
         Some(
-            super::state::ActiveIntent::DriveDistance { state, .. }
-            | super::state::ActiveIntent::DriveContinuous { state, .. },
-        ) => {
-            let interrupt_or_tick = select(DRIVE_INTERRUPT.wait(), distance_tick_ms()).await;
-            match interrupt_or_tick {
-                Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),
-                Either::Second(()) => {
-                    let result = run_distance_control_step(state).await;
-                    Some(ActiveIntentOutcome::DistanceStep(result))
-                }
-            }
+            super::state::ActiveIntent::DriveDistance { model, .. }
+            | super::state::ActiveIntent::DriveContinuous { model, .. },
+        ) => Some(intent_poll_to_outcome(distance::run_distance_poll(model).await)),
+        Some(super::state::ActiveIntent::BrakeCoast { model, .. }) => {
+            Some(intent_poll_to_outcome(brake_coast::run_brake_coast_poll(model).await))
         }
-        Some(super::state::ActiveIntent::Idle {
-            duration_ms,
-            started_at_ms,
-            ..
-        }) => {
-            let now_ms = Instant::now().as_millis();
-            let elapsed_ms = now_ms.saturating_sub(*started_at_ms);
-            let remaining_ms = duration_ms.saturating_sub(elapsed_ms);
-            let interrupt_or_idle = select(
-                DRIVE_INTERRUPT.wait(),
-                Timer::after(Duration::from_millis(remaining_ms)),
-            )
-            .await;
-            match interrupt_or_idle {
-                Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),
-                Either::Second(()) => Some(ActiveIntentOutcome::IdleElapsed),
-            }
-        }
-        Some(super::state::ActiveIntent::BrakeCoast { state, .. }) => {
-            let interrupt_or_tick = select(DRIVE_INTERRUPT.wait(), brake_coast_tick_ms()).await;
-            match interrupt_or_tick {
-                Either::First(kind) => Some(ActiveIntentOutcome::Interrupt(kind)),
-                Either::Second(()) => {
-                    let result = run_brake_coast_step(state).await;
-                    Some(ActiveIntentOutcome::BrakeCoastStep(result))
-                }
-            }
+        Some(super::state::ActiveIntent::Idle { model, .. }) => {
+            Some(intent_poll_to_outcome(brake_coast::run_idle_poll(model).await))
         }
         None => None,
+    }
+}
+
+/// Map a model adapter's poll result onto the loop's outcome.
+const fn intent_poll_to_outcome(poll: IntentPoll) -> ActiveIntentOutcome {
+    match poll {
+        IntentPoll::Interrupt(kind) => ActiveIntentOutcome::Interrupt(kind),
+        IntentPoll::Step(result) => ActiveIntentOutcome::Step(result),
     }
 }
 
@@ -132,19 +95,4 @@ pub(super) async fn step_idle(loop_state: &mut DriveLoop) {
         Either::First(envelope) => loop_state.handle_envelope(envelope).await,
         Either::Second(kind) => loop_state.handle_interrupt(kind).await,
     }
-}
-
-/// Rotation control tick interval.
-async fn rotation_tick_ms() {
-    Timer::after(Duration::from_millis(rotation::ROTATION_CONTROL_INTERVAL_MS)).await;
-}
-
-/// Brake/coast settle tick interval.
-async fn brake_coast_tick_ms() {
-    Timer::after(Duration::from_millis(brake_coast::SETTLE_INTERVAL_MS)).await;
-}
-
-/// Distance control tick interval.
-async fn distance_tick_ms() {
-    Timer::after(Duration::from_millis(distance::CONTROL_INTERVAL_MS)).await;
 }

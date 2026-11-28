@@ -28,10 +28,10 @@ states a `version` ([ADR-0040](adr/0040-repo-and-build-layout.md)).
 | `robot/` | The robot firmware package: core0 tasks, the core1 LiDAR task, `src/`, `build.rs`, `memory.x` | `explorer-robot` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0032](adr/0032-remote-link-task.md) |
 | `robot/crates/link/` | The wire and the robot-side core: frame envelope, payload codecs, reliability mechanisms, `LinkCore` | `link-protocol`, `link-core` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0031](adr/0031-link-protocol-payloads.md), [ADR-0032](adr/0032-remote-link-task.md), [ADR-0041](adr/0041-reliability-mechanisms-in-protocol.md) |
 | `robot/crates/drivers/` | Hardware-facing async drivers: LiDAR, rangefinder, display, touch | `coin-d6`, `rangefinder`, `vl53l1x`, `st7789-async`, `touch-async` | `thumbv8m.main-none-eabihf`; host tests where the driver allows | [ADR-0001](adr/0001-async-st7789-display-driver.md), [ADR-0002](adr/0002-coin-d6-async-driver.md), [ADR-0004](adr/0004-touch-controller-on-shared-display-bus.md), [ADR-0048](adr/0048-vl53l0x-rangefinder-driver-and-lifecycle.md), [ADR-0049](adr/0049-vl53l1x-async-driver.md) |
-| `robot/crates/models/` | Pure, HAL-agnostic, `no_std`, host-testable logic: claim slot, LiDAR cloud grid, link state, panel model, and the motor Power Step measurement engine with its curve maths, counts/cm scale and versioned calibration record | `claim-slot`, `lidar-cloud`, `link-state`, `motor-cal`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md), [ADR-0054](adr/0054-motor-calibration-is-a-measured-speed-curve.md), [ADR-0056](adr/0056-simultaneous-pair-motor-calibration.md) |
+| `robot/crates/models/` | Pure, HAL-agnostic, `no_std`, host-testable logic: claim slot, LiDAR cloud grid, link state, panel model, DMP compass calibration rules, the RGB indicator curve, the motor Power Step measurement engine with its curve maths, counts/cm scale and versioned calibration record, the drive control law, and the shared drive geometry | `claim-slot`, `dmp-cal`, `drive-core`, `drive-geometry`, `indicator-led`, `lidar-cloud`, `link-state`, `motor-cal`, `touch-ui` | `thumbv8m.main-none-eabihf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0034](adr/0034-one-active-claim.md), [ADR-0029](adr/0029-cloud-grid-wider-than-native-to-avoid-holes.md), [ADR-0013](adr/0013-menu-tree-and-procedure-identity-in-the-ui-model-crate.md), [ADR-0045](adr/0045-dmp-compass-calibration-replaces-host-mag-calibration.md), [ADR-0054](adr/0054-motor-calibration-is-a-measured-speed-curve.md), [ADR-0056](adr/0056-simultaneous-pair-motor-calibration.md), [ADR-0059](adr/0059-drive-control-law-in-drive-core.md) |
 | `robot/crates/hardware-tests/` | Standalone, breadboard-scale HIL example binaries that run on the robot hardware | `hardware-tests` | `thumbv8m.main-none-eabihf` | [ADR-0040](adr/0040-repo-and-build-layout.md) |
 | `bridge/` | The Bridge workspace: network ⇄ UART1 firmware, credential record, Discovery Beacon, preamble gate | `bridge-firmware` (binaries `bridge`, `stack-soak`), `bridge-core` | `riscv32imc-unknown-none-elf` with `build-std` | [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
-| `bridge/bridge-core/` | The Bridge's HAL-agnostic pump and provisioning rules: coalescing, routing, flow, auth, Setup Mode, Credential Record | `bridge-core` | `riscv32imc-unknown-none-elf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0036](adr/0036-wifi-provisioning.md), [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0042](adr/0042-bridge-telemetry.md) |
+| `bridge/bridge-core/` | The Bridge's HAL-agnostic pump and provisioning rules: coalescing, routing, flow, auth, Setup Mode, Credential Record, the Radio Session | `bridge-core` | `riscv32imc-unknown-none-elf`; host tests on `x86_64-unknown-linux-gnu` | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0036](adr/0036-wifi-provisioning.md), [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0042](adr/0042-bridge-telemetry.md), [ADR-0058](adr/0058-bridge-radio-session-in-bridge-core.md) |
 | `remote/` | Host workspace for the daemon, the shared network-edge crate, the bench stubs and the static Remote App | `remote-daemon`, `bridge-net`, `robot-stub`, `bridge-stub` | `x86_64-unknown-linux-gnu` | [ADR-0038](adr/0038-remote-app-boundary-and-rendering.md), [ADR-0039](adr/0039-remote-daemon-relay.md), [ADR-0040](adr/0040-repo-and-build-layout.md), [ADR-0043](adr/0043-remote-app-drive-policy.md) |
 | `remote/bridge-net/` | The Bridge↔daemon network edge: Discovery Beacon, HMAC preamble, fixed ports | `bridge-net` | `x86_64-unknown-linux-gnu`; also compiled for `riscv32imc` by the Bridge | [ADR-0037](adr/0037-reachability-and-trust.md), [ADR-0040](adr/0040-repo-and-build-layout.md) |
 | `remote/daemon/` | The Remote daemon: raw TCP Link Protocol to the Bridge, the Relay, one `/ws` JSON WebSocket | `remote-daemon` | `x86_64-unknown-linux-gnu` | [ADR-0038](adr/0038-remote-app-boundary-and-rendering.md), [ADR-0039](adr/0039-remote-daemon-relay.md) |
@@ -134,7 +134,7 @@ perception atomics, which is the three-way split in
 `robot/src/task/procedure/` owns the one **Active Claim** ([ADR-0034](adr/0034-one-active-claim.md)).
 A producer takes a `Claim` with `claim` or `start`, reports its phase and terminal outcome through
 it, and `stop` latches the stop for whichever claim holds the slot. The kinds are `Boot`,
-`Boot`, `Procedure(P)` and `Screen(RoomScan)`, and the claim's owner is the only writer of the
+`Procedure(P)`, `ManualDrive` and `Screen(RoomScan)`, and the claim's owner is the only writer of the
 `activity` state. A claim records its origin, `Panel` or `Remote`; the Deadman uses it to stop only
 Remote-originated work ([ADR-0035](adr/0035-failsafe-deadman.md)). A second claimant is `BUSY`;
 anyone may stop; there is no owner or takeover mode.
@@ -143,10 +143,14 @@ anyone may stop; there is no owner or takeover mode.
 
 `robot/src/task/drive/` owns motion. `send_drive_command` and `send_drive_interrupt` in `api.rs` are
 the two public entry points; `queue.rs` runs one drive queue at a time; `dispatch.rs` routes each
-command to an intent in `distance.rs`, `rotation.rs`, `brake_coast.rs` or `differential.rs`. An
+command and constructs the active `drive-core` intent. `drive-core` is the `no_std`, HAL-free model
+that owns the control law of all five intents (rotation, distance, continuous, brake/coast and
+idle); the drive task is its adapter, supplying observations and executing its typed actions.
+`drive-geometry` owns the track width and sprocket circumference shared with calibration. An
 interrupt cancels the active intent, bumps the epoch and drains the queue, so stale queued commands
 cannot execute after it. The obstacle and floor-drop edges send `EmergencyBrake`, and the Deadman
-takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-deadman.md) /
+takes the same path for a Remote-originated claim ([ADR-0035](adr/0035-failsafe-deadman.md),
+[ADR-0059](adr/0059-drive-control-law-in-drive-core.md) /
 [CONTEXT.md § Driving](../CONTEXT.md#driving)).
 
 ### Link side
@@ -165,6 +169,8 @@ glossary entry for the [Link Task](../CONTEXT.md#remote-link) is the canonical d
 | Term | Where it lives | What it means here | Owning ADR and glossary |
 |---|---|---|---|
 | Robot | `robot/` | The RP2350B firmware package, `explorer-robot` | [ADR-0040](adr/0040-repo-and-build-layout.md) / [Architecture](../CONTEXT.md#architecture) |
+| Drive Core | `drive-core` | The `no_std` model that owns the drive intents' control law; the drive task is its adapter | [ADR-0059](adr/0059-drive-control-law-in-drive-core.md) / [Drive Core](../CONTEXT.md#driving) |
+| Drive Geometry | `drive-geometry` | Track width and sprocket circumference shared by the drive and calibration models | [ADR-0059](adr/0059-drive-control-law-in-drive-core.md) / [Driving](../CONTEXT.md#driving) |
 | Link Protocol | `link-protocol` | The framed binary contract on UART1, carried over the network to the Remote | [ADR-0030](adr/0030-link-protocol-envelope.md), [ADR-0031](adr/0031-link-protocol-payloads.md) / [Link Protocol](../CONTEXT.md#remote-link) |
 | LinkCore | `link-core` | The robot-side parser, stream slots, event ring, lease and Deadman over the protocol | [ADR-0032](adr/0032-remote-link-task.md), [ADR-0041](adr/0041-reliability-mechanisms-in-protocol.md) / [LinkCore](../CONTEXT.md#remote-link) |
 | Link Port | `robot/src/resources.rs` | The connector and switched 5 V branch carrying UART1 to the Bridge | [ADR-0032](adr/0032-remote-link-task.md), [ADR-0023](adr/0023-quiesce-uart-before-branch-power-off.md) / [Link Port](../CONTEXT.md#remote-link) |

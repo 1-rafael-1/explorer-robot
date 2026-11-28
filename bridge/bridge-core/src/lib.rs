@@ -12,7 +12,8 @@
 //! - the watchdog's task-liveness policy ([`heartbeat`]),
 //! - the bounded Setup Mode window ([`setup`]),
 //! - the portal's DHCP, DNS and HTTP/HTML codecs ([`dhcp`], [`dns`], [`portal`]),
-//! - the credential record and the pairing token ([`record`], [`pairing`]).
+//! - the credential record and the pairing token ([`record`], [`pairing`]),
+//! - the station link's association, reconnect and retry policy ([`radio`]).
 //!
 //! [`pump`] composes them into the frame-level decisions the binary wires to its HAL. Enable the
 //! `std` feature only for host tests; it is a no-op on `no_std` targets so `--all-features` stays
@@ -34,6 +35,7 @@ pub mod heartbeat;
 pub mod pairing;
 pub mod portal;
 pub mod pump;
+pub mod radio;
 pub mod record;
 pub mod routing;
 pub mod setup;
@@ -44,6 +46,10 @@ pub use flow::WatermarkPolicy;
 pub use heartbeat::{CoveredTask, HeartbeatSet};
 pub use link_protocol::{Class, Direction, Flags, Frame, Seq, Status, crc16};
 pub use pump::{BridgePump, Decision, PumpStats};
+pub use radio::{
+    Action, ActionSet, BridgeStatusView, Event, EventSet, Input, JoinFailure, JoinResult, Observation, Outcome,
+    PanelCommand, PortalCommand, Publication, RadioSession, Stats,
+};
 pub use record::{CredentialRecord, RecordError};
 pub use routing::{BridgeControlRequest, BridgeReply, Destination, Route, Router, Side};
 pub use setup::{CloseReason, RaiseReason, SetupEvent, SetupWindow};

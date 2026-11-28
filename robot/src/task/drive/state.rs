@@ -14,7 +14,7 @@
 //! runtime logic.
 //!
 //! Each intent carries:
-//! - A controller state (`RotationState`, `DistanceDriveState`, etc.)
+//! - A controller half: the `drive-core` model that owns the control law.
 //! - A completion flag — whether the caller expects a [`DriveCompletion`]
 //! - A teardown descriptor — which sensors to stop on completion or interrupt
 //! - Cancellation telemetry — what data to report if interrupted
@@ -29,49 +29,45 @@
 //! - [`DriveLoop`]: top-level state struct — holds `standby_enabled` and the
 //!   active intent (if any).
 
+use drive_core::Intent;
 use embassy_time::Instant;
-
-use super::{brake_coast::BrakeCoastState, rotation::RotationState};
-use crate::task::drive::distance::DistanceDriveState;
 
 /// The drive intent currently being executed by the drive task.
 pub(super) enum ActiveIntent {
     /// An in-place or while-moving rotation towards a target angle.
     RotateExact {
-        /// Rotation controller state (angle tracking, speed calculation).
-        state: RotationState,
+        /// The `drive-core` model that owns the turn and correction control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
         /// Wall-clock start time used for duration telemetry (milliseconds).
         started_at_ms: u64,
     },
-    /// Active distance drive intent with state and optional completion sender.
+    /// A drive to a fixed straight or curved distance.
     DriveDistance {
-        /// Distance controller state (encoder progress, curve correction).
-        state: DistanceDriveState,
+        /// The `drive-core` model that owns the distance control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active continuous drive intent: a speed and heading held until interrupted.
+    /// A continuous drive: a speed and heading held until interrupted.
     DriveContinuous {
-        /// Straight controller state (encoder progress, heading hold).
-        state: DistanceDriveState,
+        /// The `drive-core` model that owns the continuous control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active idle intent with a fixed duration.
+    /// Active idle intent backed by the `drive-core` model.
     Idle {
-        /// Duration to remain idle (milliseconds).
-        duration_ms: u64,
-        /// Wall-clock start time used for duration tracking (milliseconds).
-        started_at_ms: u64,
+        /// The `drive-core` model that owns the coast and duration timing.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
-    /// Active brake/coast settle intent with encoder settle tracking.
+    /// Active brake/coast settle intent backed by the `drive-core` model.
     BrakeCoast {
-        /// Brake/coast settle state.
-        state: BrakeCoastState,
+        /// The `drive-core` model that owns the settle control law.
+        model: Intent,
         /// Whether this intent should emit a completion event when finished.
         completion_requested: bool,
     },
@@ -132,37 +128,11 @@ impl ActiveIntent {
     /// Returns cancellation telemetry appropriate for this intent type.
     pub(super) fn cancellation_telemetry(&self) -> super::types::CompletionTelemetry {
         match self {
-            Self::RotateExact {
-                state, started_at_ms, ..
-            } => {
-                let last_yaw_deg = state.last_yaw.unwrap_or_else(|| {
-                    defmt::warn!("rotation cancelled before first IMU sample — telemetry yaw is 0");
-                    0.0
-                });
-                let duration_ms = Instant::now().as_millis() - started_at_ms;
-                super::types::CompletionTelemetry::RotateExact {
-                    final_yaw_deg: last_yaw_deg,
-                    angle_error_deg: -state.remaining(),
-                    duration_ms,
-                }
-            }
-            Self::DriveDistance { state, .. } => {
-                let duration_ms = Instant::now().as_millis() - state.started_at_ms;
-                super::types::CompletionTelemetry::DriveDistance {
-                    achieved_left_revs: state.accumulated_left_revs,
-                    achieved_right_revs: state.accumulated_right_revs,
-                    achieved_left_counts: state.accumulated_left_counts,
-                    achieved_right_counts: state.accumulated_right_counts,
-                    target_left_revs: state.target_left_revs,
-                    target_right_revs: state.target_right_revs,
-                    duration_ms,
-                }
-            }
-            // A continuous drive has no target and no success telemetry, so an
-            // interrupt reports none rather than overloading `DriveDistance`.
-            Self::DriveContinuous { .. } | Self::Idle { .. } | Self::BrakeCoast { .. } => {
-                super::types::CompletionTelemetry::None
-            }
+            Self::RotateExact { model, .. }
+            | Self::DriveDistance { model, .. }
+            | Self::DriveContinuous { model, .. }
+            | Self::Idle { model, .. }
+            | Self::BrakeCoast { model, .. } => model.cancellation_telemetry(Instant::now().as_millis()),
         }
     }
 }
